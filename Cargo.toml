@@ -260,6 +260,9 @@ rustls-pki-types = "1"
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 thiserror = "2"
 base64 = "0.22"
+# The TUI rasterises the shared panel icons (spec 2026-10-05). No text, no
+# fonts, no raster images inside SVGs: the icons are strokes.
+resvg = { version = "0.48", default-features = false }
 bitflags = { version = "2", features = ["serde"] }
 anyhow = "1"
 

@@ -24,8 +24,8 @@ const H: u16 = 12;
 
 /// First listing row of a pane in this layout.
 ///
-/// FOUR since there are two chrome rows pinned by default: row 0 the menu
-/// bar (`[ui] menu_bar`), 1 the panel bar (`[ui] panel_bar`, #324), 2 the top
+/// FOUR since there are two chrome rows: row 0 the menu bar (`[ui]
+/// menu_bar`), 1 the panel bar as a row (`app_painted` pins `top`), 2 the top
 /// border and 3 the column header.
 ///
 /// That changing this constant FIXES every test in this file is the proof
@@ -64,6 +64,8 @@ fn app_painted(n: usize) -> App {
         Pane::new(dir.clone(), entries(&dir, n)),
         Pane::new(dir.clone(), entries(&dir, n)),
     );
+    // The row, not the default column: the numbers below count rows.
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Top);
     let _ = paint(&mut app);
     app
 }
@@ -638,6 +640,79 @@ fn every_bar_button_falls_into_its_place() {
         press(&mut app, 27),
         None,
         "past the last one there is no button"
+    );
+}
+
+/// A big column (spec 2026-10-05) is four cells wide with two rows per
+/// button: both rows click, the air between two does not, and the body
+/// starts after it.
+#[test]
+fn a_big_rail_reserves_two_by_two_and_clicks_land_on_both_rows() {
+    let mut app = app_painted(5);
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Left);
+    app.chrome.images = Some(norte_config::Images::Kitty);
+    let lines = paint_at(&mut app, 80, 40);
+    // Characters 1..=4 of a painted line are columns 0..=3 (quotes first).
+    let cells = |f: usize| lines[f].chars().skip(1).take(4).collect::<String>();
+    // places: the first slot, rows 2 and 3 with air on top; closed, so no
+    // rule; the icon's 2×2 left blank for the pixels.
+    assert_eq!(cells(2), "    ", "{:?}", lines[2]);
+    assert_eq!(cells(3), "    ", "{:?}", lines[3]);
+    let press = |app: &mut norte_tui::app::App, row: u16| {
+        app.pending_panel_command = None;
+        let _ = mouse::handle(app, ev(DOWN, 1, row));
+        app.pending_panel_command.clone()
+    };
+    assert_eq!(press(&mut app, 2).as_deref(), Some("layout.places"));
+    assert_eq!(press(&mut app, 3).as_deref(), Some("layout.places"));
+    assert_eq!(press(&mut app, 4), None, "the air between two is no button");
+    // And the body starts after the four-cell column.
+    assert!(mouse::hit_test(&app, 3, FILA0 - 1).is_none());
+    assert!(mouse::hit_test(&app, 5, FILA0 - 1).is_some());
+}
+
+/// A button with no SVG to rasterise (`terminal`, or a plugin's once they
+/// get buttons) keeps its LETTER in a big column, never a blank square.
+#[test]
+fn a_kind_without_svg_paints_its_letter_when_big() {
+    let mut app = app_painted(5);
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Left);
+    app.chrome.images = Some(norte_config::Images::Kitty);
+    let lines = paint_at(&mut app, 80, 40);
+    // Column 1 below the menu row: the only thing painted there.
+    let letters: String = lines[1..]
+        .iter()
+        .map(|l| l.chars().nth(2).expect("column 1"))
+        .filter(|c| *c != ' ')
+        .collect();
+    let terminal = norte_frontend::panelbar::buttons(
+        &app.kinds,
+        norte_frontend::panelbar::PanelBarInput::default(),
+    )
+    .into_iter()
+    .find(|b| b.kind == "terminal")
+    .expect("terminal is a button");
+    assert_eq!(
+        letters,
+        terminal.letter.to_string(),
+        "only the terminal's letter"
+    );
+}
+
+#[test]
+fn a_big_rail_rules_both_rows_of_an_open_panel() {
+    let mut app = app_painted(5);
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Left);
+    app.chrome.images = Some(norte_config::Images::Kitty);
+    app.toggle_places();
+    let lines = paint_at(&mut app, 80, 40);
+    let rule = |f: usize| lines[f].chars().nth(1).expect("column 0");
+    assert_eq!(
+        (rule(2), rule(3)),
+        ('▎', '▎'),
+        "{:?} {:?}",
+        lines[2],
+        lines[3]
     );
 }
 
@@ -1427,6 +1502,7 @@ fn marking_under_a_filter_does_not_reach_what_the_filter_hides() {
         Pane::new(dir.clone(), entries),
         Pane::new(dir.clone(), Vec::new()),
     );
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Top);
     app.panes[0].quick_start(norte_tui::nav::Mode::Filter);
     for c in "si".chars() {
         app.panes[0].quick_char(c);

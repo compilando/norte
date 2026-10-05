@@ -9,6 +9,11 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Big icons in the terminal's panel column** (ADR 0169). On a terminal
+  that speaks kitty's graphics protocol (kitty, Ghostty, WezTerm,
+  Konsole) the column draws the window's own icons at double size; tmux
+  and other terminals keep the one-cell icons. `[ui] images = "off"`
+  keeps them small anywhere.
 - **`norte journal compact --before <date>`** (#396, ADR 0167) drops the
   journal entries older than a day, so the journal stops growing forever.
   The chain stays verifiable: `norte audit verify` checks it from a base
@@ -49,8 +54,19 @@ independently through `PROTOCOL_VERSION`.
 
 ## [0.3.0-alpha.8] - 2026-10-04
 
+### Changed
+
+- **The terminal's panel bar is a column on the left by default**, like
+  the window's (ADR 0168). To keep the row on top, set
+  `[ui] panel_bar_position = "top"`.
+
 ### Fixed
 
+- **The panel bar shows which panels are open**, in the window and in
+  the terminal. Closed icons are dimmer, open ones carry a side line (an
+  underline in the window's row), and the one with the keyboard is marked
+  in the focus colour; before, open and closed differed by a barely
+  visible shade.
 - **A second `.rar` no longer shows the first one's contents** (#383).
   Opening `a.rar` and then `b.rar` in the same session listed and read
   `a.rar` again.

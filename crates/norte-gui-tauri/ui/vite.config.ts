@@ -30,4 +30,7 @@ export default defineConfig({
   },
   base: "./",
   clearScreen: false,
+  // The panel icons live in `norte-frontend`, shared with the terminal:
+  // that ONE folder outside the root is readable, nothing else.
+  server: { fs: { allow: [".", "../../norte-frontend/assets/panel-icons"] } },
 });

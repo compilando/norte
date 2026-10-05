@@ -643,8 +643,8 @@ const CATALOG: &[SettingDef] = &[
         applies_live: true,
     },
     SettingDef {
-        // Top in the terminal and left in the window (`auto`), or the same
-        // in both (spec 2026-09-21).
+        // Each frontend's own answer (`auto`, a column in both since ADR
+        // 0168), or a fixed place.
         id: "ui.panel-bar-position",
         kind: SettingKind::Enum(&["auto", "top", "left"]),
         applies_live: true,

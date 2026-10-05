@@ -200,7 +200,7 @@ body {
      themes the closed buttons came out invisible (2026-09-11). Closed =
      dimmed, as in the TUI. */
   color: var(--fg);
-  opacity: 0.7;
+  opacity: 0.5;
   background: none;
   border: 0;
   padding: 0 6px;
@@ -232,6 +232,9 @@ body {
 .panelbar-button[data-state="open"] {
   color: var(--title-fg, inherit);
   opacity: 1;
+  /* An inset underline, not a border: it must not move the row. Opacity
+     alone was too faint on dark themes to tell open from closed. */
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, currentcolor 45%, transparent);
 }
 
 .panelbar-button[data-state="focused"] {
@@ -268,24 +271,35 @@ body {
   width: 100%;
   height: var(--activity-size);
   padding: 0;
-  opacity: 0.55;
+  opacity: 0.4;
   /* The state indicator is a border on the left, not a background: the
-     icon still has to read over the panel. */
+     icon still has to read over the panel. Open and closed differ in the
+     border too, not only in opacity — 0.55 against 0.9 was invisible on
+     vscode-dark (2026-10-05). */
   border-left: 2px solid transparent;
+  box-shadow: none;
 }
 
 .panelbar[data-vertical="true"] .panelbar-button:hover {
-  opacity: 1;
+  opacity: 0.8;
+}
+
+.panelbar[data-vertical="true"] .panelbar-button[data-state="open"],
+.panelbar[data-vertical="true"] .panelbar-button[data-state="focused"] {
+  color: var(--fg);
+  /* `--fg` pushed AWAY from mid-grey: white on a dark theme, black on a
+     light one, with no theme flag to ask. A webview without relative
+     colours keeps the line above. */
+  color: oklch(from var(--fg) calc(l + (l - 0.5) * 0.8) c h);
 }
 
 .panelbar[data-vertical="true"] .panelbar-button[data-state="open"] {
-  color: var(--fg);
-  opacity: 0.9;
+  opacity: 1;
+  border-left-color: color-mix(in srgb, var(--fg) 40%, transparent);
 }
 
 .panelbar[data-vertical="true"] .panelbar-button[data-state="focused"] {
-  background: none;
-  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
   opacity: 1;
   border-left-color: var(--focus-border, var(--border-focus));
 }

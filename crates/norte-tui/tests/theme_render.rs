@@ -39,6 +39,7 @@ fn the_pane_bar_paints_names_with_the_underlined_letter_and_falls_back_to_letter
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
     let mut app = app_con_dir(ColorDepth::Truecolor);
     app.panel_bar = true;
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Top);
     app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Names);
 
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
@@ -227,6 +228,7 @@ fn a_closed_panel_is_not_painted_as_a_lit_block() {
             .expect("preset exists");
         app.theme = TuiTheme::new(theme, ColorDepth::Truecolor);
         app.panel_bar = true;
+        app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Top);
 
         let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
         terminal.draw(|f| ui::draw(f, &app)).expect("draw");
@@ -244,6 +246,160 @@ fn a_closed_panel_is_not_painted_as_a_lit_block() {
             "[{preset}] with every panel CLOSED, the bar paints color blocks \
              at {different:?} — the visual weight backward: what is off \
              standing out and what is open as normal text"
+        );
+    }
+}
+
+/// The default panel COLUMN tells open from closed without `bold` or `dim`,
+/// which many terminals ignore on a single glyph: an open panel carries a
+/// `▎` rule and a closed one paints in another colour. On vscode-dark
+/// `Title` and `Regular` are both `#cccccc`, so bold-vs-dim was all there
+/// was (2026-10-05).
+#[test]
+fn the_default_column_tells_an_open_panel_from_a_closed_one() {
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    let theme = Theme::preset("vscode-dark").unwrap().unwrap();
+    app.theme = TuiTheme::new(theme, ColorDepth::Truecolor);
+    app.panel_bar = true;
+    app.toggle_places();
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let buf = terminal.backend().buffer().clone();
+    let row_of = |icon: &str| {
+        (0..24)
+            .find(|y| buf[(1, *y)].symbol() == icon)
+            .unwrap_or_else(|| panic!("{icon} is not in the column"))
+    };
+    let (open, closed) = (row_of("★"), row_of("∿"));
+    assert_eq!(buf[(0, open)].symbol(), "▎", "the open panel has its rule");
+    assert_eq!(buf[(0, closed)].symbol(), " ", "a closed one has none");
+    assert_ne!(
+        buf[(1, open)].fg,
+        buf[(1, closed)].fg,
+        "open and closed icons paint in different colours"
+    );
+}
+
+/// A big column (`images = "kitty"`) over vscode-dark, places open.
+fn app_big_rail() -> App {
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.theme = TuiTheme::new(
+        Theme::preset("vscode-dark").unwrap().unwrap(),
+        ColorDepth::Truecolor,
+    );
+    app.panel_bar = true;
+    app.chrome.images = Some(norte_config::Images::Kitty);
+    app.toggle_places();
+    app
+}
+
+/// Kitty's pixels sit ABOVE the text: an icon left placed under a menu,
+/// help, the palette or which-key would cover them. Nothing is placed
+/// while anything is painted over the body.
+#[test]
+fn no_icons_under_an_overlay() {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 40);
+    let mut app = app_big_rail();
+    assert!(
+        !ui::rail_icons_to_place(&app, area, CELL).is_empty(),
+        "nothing over it"
+    );
+    app.menu = Some(norte_frontend::menu::MenuState::new());
+    assert!(
+        ui::rail_icons_to_place(&app, area, CELL).is_empty(),
+        "menu open"
+    );
+    app.menu = None;
+    app.help = Some(norte_tui::app::HelpView::new(
+        norte_i18n::Lang::En,
+        Vec::new(),
+    ));
+    assert!(
+        ui::rail_icons_to_place(&app, area, CELL).is_empty(),
+        "help open"
+    );
+}
+
+/// Each icon sits on the 2×2 cells `draw_rail` left blank — column 1, two
+/// rows — in the state's colour, and only kinds with an SVG get one.
+#[test]
+fn icons_sit_on_the_reserved_cells() {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 40);
+    let app = app_big_rail();
+    let icons = ui::rail_icons_to_place(&app, area, CELL);
+    let mut terminal = Terminal::new(TestBackend::new(80, 40)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let buf = terminal.backend().buffer().clone();
+    for i in &icons {
+        assert_eq!((i.rect.x, i.rect.width, i.rect.height), (1, 2, 2), "{i:?}");
+        for (x, y) in [(1, 0), (2, 0), (1, 1), (2, 1)] {
+            let cell = &buf[(i.rect.x + x - 1, i.rect.y + y)];
+            assert_eq!(cell.symbol(), " ", "{} at {:?}", i.kind, (x, y));
+        }
+        assert!(norte_frontend::panelbar::icon_svg(&i.kind).is_some());
+    }
+    assert!(
+        icons.iter().all(|i| i.kind != "terminal"),
+        "no svg, no pixels"
+    );
+    let places = icons.iter().find(|i| i.kind == "places").expect("places");
+    assert_eq!(places.rgb, [0xcc, 0xcc, 0xcc], "open: Title");
+    assert_eq!(
+        places.canvas,
+        norte_tui::rail_icons::canvas_for(CELL),
+        "the slot's proportions"
+    );
+}
+
+/// 9×19 px cells, a common monospace size.
+const CELL: (u16, u16) = (9, 19);
+
+/// Which-key, the go-to pop-up or the splash hide the pixels (they sit
+/// above the text) but do not hide the column: its slots then show the
+/// one-cell glyph instead of a blank square.
+#[test]
+fn a_big_column_with_its_pixels_hidden_shows_glyphs() {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 40);
+    let mut app = app_big_rail();
+    app.which_key = Some(norte_frontend::whichkey::WhichKeyRows::default());
+    assert!(ui::rail_icons_to_place(&app, area, CELL).is_empty());
+    let mut terminal = Terminal::new(TestBackend::new(80, 40)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let buf = terminal.backend().buffer().clone();
+    let star = norte_frontend::panelbar::icon("places", norte_frontend::panelbar::IconSet::Unicode)
+        .expect("icon");
+    assert!(
+        (0..40).any(|y| buf[(1, y)].symbol() == star),
+        "the places glyph is painted in its slot"
+    );
+}
+
+/// On every preset a closed icon reads dimmer than an open one: its colour
+/// sits closer to the background. Most presets define no `muted`, and the
+/// glyph column's `dim` does not reach pixels — the colour has to.
+#[test]
+fn closed_icons_are_dimmer_than_open_ones_on_every_preset() {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 40);
+    let dist = |a: [u8; 3], b: [u8; 3]| -> u32 {
+        a.iter().zip(b).map(|(x, y)| u32::from(x.abs_diff(y))).sum()
+    };
+    for name in norte_theme::preset_names() {
+        let mut app = app_big_rail();
+        let theme = Theme::preset(name).unwrap().unwrap();
+        let bg = theme
+            .style(norte_theme::Role::Background)
+            .bg
+            .map_or([0, 0, 0], |c| [c.r, c.g, c.b]);
+        app.theme = TuiTheme::new(theme, ColorDepth::Truecolor);
+        let icons = ui::rail_icons_to_place(&app, area, CELL);
+        let open = icons.iter().find(|i| i.kind == "places").expect("places");
+        let closed = icons.iter().find(|i| i.kind == "log").expect("log");
+        assert!(
+            dist(closed.rgb, bg) < dist(open.rgb, bg),
+            "{name}: closed {:?} vs open {:?} over {bg:?}",
+            closed.rgb,
+            open.rgb
         );
     }
 }

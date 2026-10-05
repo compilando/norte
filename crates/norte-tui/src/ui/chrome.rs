@@ -613,26 +613,6 @@ fn hidden_tab_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     out
 }
 
-/// The rows of the panel COLUMN (ADR 0140): one per button, and with air —
-/// a blank row between two, and another on top — if they all fit that way,
-/// like VS Code's activity bar; tight otherwise. One count for painting and
-/// for the mouse.
-fn rail_rows(n: usize, bar: Rect) -> Vec<u16> {
-    let height = usize::from(bar.height);
-    let (from, step) = if n > 0 && 2 * n <= height {
-        (1, 2)
-    } else if n > 0 && 2 * n - 1 <= height {
-        (0, 2)
-    } else {
-        (0, 1)
-    };
-    (0..n)
-        .map(|i| from + i * step)
-        .take_while(|f| *f < height)
-        .map(|f| bar.y.saturating_add(u16::try_from(f).unwrap_or(u16::MAX)))
-        .collect()
-}
-
 /// The panel bar's boxes, alone.
 fn panel_bar_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     let Some(bar) = crate::ui::geometry::panel_bar_visible(app, area) else {
@@ -641,16 +621,19 @@ fn panel_bar_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     let mut x = bar.x;
     let mut out = Vec::new();
     let buttons = panel_buttons(app, area);
-    // In a column, one button per row and the whole rail's width: the same
-    // rows `draw_panel_bar` paints.
+    // In a column, every row of a button's slot and the whole rail's width:
+    // the same slots `draw_rail` paints (`rail_layout`).
     if crate::ui::geometry::bar_in_column(app) {
-        for (y, b) in rail_rows(buttons.len(), bar).into_iter().zip(buttons) {
-            out.push(PanelZone {
-                row: y,
-                x0: bar.x,
-                x1: bar.x.saturating_add(bar.width).saturating_sub(1),
-                command: b.command,
-            });
+        let rail = crate::ui::geometry::rail_layout(app, bar.height, bar.y);
+        for (slot, b) in rail.slots.into_iter().zip(buttons) {
+            for row in slot.y..slot.y.saturating_add(slot.height) {
+                out.push(PanelZone {
+                    row,
+                    x0: bar.x,
+                    x1: bar.x.saturating_add(bar.width).saturating_sub(1),
+                    command: b.command.clone(),
+                });
+            }
         }
         return out;
     }
@@ -727,10 +710,7 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
             // The menu next to it never fell into this: it uses `Title` for
             // what is not open and `Selection` for what is, and never
             // another surface's role.
-            PanelState::Closed => app
-                .theme
-                .role(Role::Regular)
-                .add_modifier(ratatui::style::Modifier::DIM),
+            PanelState::Closed => closed_panel_style(app),
         };
         // The letter ALWAYS keeps its state's style, and the attention mark
         // is a separate span. Painting the whole button as a warning — as
@@ -770,11 +750,12 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
 
 /// The panel COLUMN (ADR 0140), the way VS Code's activity bar does it:
 /// three cells per row — the focus rule, the icon and the badge — and air
-/// between icons if it fits ([`rail_rows`]).
+/// between icons if it fits (`geometry::rail_layout`, which also decides
+/// the big 2×2 slots of spec 2026-10-05).
 ///
 /// - The panel with the KEYBOARD carries the `▎` rule in the focus color
-///   and a lit icon; an open one, the lit icon with no rule; a closed one,
-///   a dimmed icon. The same scale as the window.
+///   and a lit icon; an open one, the lit icon and a muted rule; a closed
+///   one, a dimmed icon. The same scale as the window.
 /// - The badge is the COUNT (tasks, warnings) in the warning color, and `+`
 ///   past nine: one cell does not allow for more.
 /// - The icon comes from `[ui] panel_bar_style`: Unicode with `names` or
@@ -792,13 +773,21 @@ fn draw_rail(frame: &mut Frame<'_>, app: &App, bar: Rect) {
             Some(IconSet::Unicode)
         }
     };
-    let rows = rail_rows(buttons.len(), bar);
-    for (y, b) in rows.into_iter().zip(buttons) {
-        let off = app.theme.role(Role::Regular).add_modifier(Modifier::DIM);
+    let rail = crate::ui::geometry::rail_layout(app, bar.height, bar.y);
+    // Blank cells only where pixels WILL land this frame; with which-key or
+    // another pop-up over the body they are withheld, and the slot shows
+    // the glyph instead of an empty square.
+    let pixels = crate::ui::rail_pixels_shown(app, frame.area()).is_some();
+    for (slot, b) in rail.slots.into_iter().zip(buttons) {
+        let y = slot.y;
+        let off = closed_panel_style(app);
         let on = app.theme.role(Role::Title).add_modifier(Modifier::BOLD);
+        // Open carries a rule too, in the muted color: a bold glyph against
+        // a dimmed one is all `dim` and `bold` give, and several terminals
+        // honour neither on a single symbol.
         let (rule, icon_style) = match b.state {
             PanelState::Focused => (Span::styled("▎", app.theme.role(Role::BorderFocus)), on),
-            PanelState::Open => (Span::raw(" "), on),
+            PanelState::Open => (Span::styled("▎", off.remove_modifier(Modifier::DIM)), on),
             PanelState::Closed => (Span::raw(" "), off),
         };
         let glyph = set
@@ -809,6 +798,37 @@ fn draw_rail(frame: &mut Frame<'_>, app: &App, bar: Rect) {
             n @ 1..=9 => Span::styled(n.to_string(), app.theme.role(Role::Warning)),
             _ => Span::styled("+", app.theme.role(Role::Warning)),
         };
+        if rail.big {
+            // 2×2: the icon's cells stay blank — the run loop places the
+            // pixels over them (`rail_icons`) — unless the kind has no SVG
+            // (`terminal`), which keeps its letter, or the pixels are
+            // withheld this frame, which shows the glyph. The rule covers
+            // both rows; the badge goes on the lower one.
+            let top = if pixels && norte_frontend::panelbar::icon_svg(&b.kind).is_some() {
+                "  ".to_owned()
+            } else if pixels {
+                format!("{} ", b.letter)
+            } else {
+                format!("{glyph} ")
+            };
+            let lines = vec![
+                Line::from(vec![
+                    rule.clone(),
+                    Span::styled(top, icon_style),
+                    Span::raw(" "),
+                ]),
+                Line::from(vec![rule, Span::raw("  "), badge]),
+            ];
+            frame.render_widget(
+                Paragraph::new(lines),
+                Rect {
+                    y,
+                    height: slot.height,
+                    ..bar
+                },
+            );
+            continue;
+        }
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 rule,
@@ -822,6 +842,16 @@ fn draw_rail(frame: &mut Frame<'_>, app: &App, bar: Rect) {
             },
         );
     }
+}
+
+/// A closed panel's button: `Muted`, dimmed. `Muted` is a colour of its own
+/// because many terminals ignore `dim`; a theme without it falls back to
+/// `Regular`, never to the terminal's foreground.
+fn closed_panel_style(app: &App) -> ratatui::style::Style {
+    app.theme
+        .role(Role::Regular)
+        .patch(app.theme.role(Role::Muted))
+        .add_modifier(ratatui::style::Modifier::DIM)
 }
 
 /// Paints the menu bar and its dropdown.

@@ -400,7 +400,7 @@ pub struct UiSection {
     pub panel_bar_style: Option<String>,
     /// Where the panel bar sits: `"top"`, a row under the menu bar;
     /// `"left"`, an activity rail on the left edge; `"auto"` (default), each
-    /// frontend's own answer — top in the terminal, left in the window.
+    /// frontend's own answer — today left in both (ADR 0168).
     ///
     /// [`crate::load::load`] rejects other values.
     #[serde(default)]

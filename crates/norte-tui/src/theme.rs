@@ -59,6 +59,19 @@ impl TuiTheme {
         self.convert(self.theme.style(role))
     }
 
+    /// A role's foreground as the theme states it, before degrading it to
+    /// the terminal's depth: what pixels are painted in (`rail_icons`).
+    #[must_use]
+    pub fn role_rgb(&self, role: Role) -> Option<[u8; 3]> {
+        self.theme.style(role).fg.map(|c| [c.r, c.g, c.b])
+    }
+
+    /// [`Self::role_rgb`] for the background.
+    #[must_use]
+    pub fn role_bg_rgb(&self, role: Role) -> Option<[u8; 3]> {
+        self.theme.style(role).bg.map(|c| [c.r, c.g, c.b])
+    }
+
     /// The ratatui style of a file ENTRY (colored by extension/kind,
     /// ADR 0020 D2).
     #[must_use]
@@ -140,6 +153,23 @@ pub fn depth_from(colorterm: Option<&str>, term: Option<&str>, windows: bool) ->
 /// Those of [`resolve_theme`].
 pub fn resolve(spec: Option<&str>, depth: ColorDepth) -> Result<TuiTheme, ResolveError> {
     Ok(TuiTheme::new(resolve_theme(spec)?, depth))
+}
+
+#[cfg(test)]
+mod rgb_tests {
+    use super::TuiTheme;
+    use norte_theme::{ColorDepth, Role, Theme};
+
+    /// The pixels are drawn in the THEME's colour, not the one degraded
+    /// for the terminal's depth: a raster has no palette to fit.
+    #[test]
+    fn role_rgb_is_the_themes_own_colour_at_any_depth() {
+        let theme = Theme::preset("vscode-dark").unwrap().unwrap();
+        let t = TuiTheme::new(theme, ColorDepth::Ansi16);
+        assert_eq!(t.role_rgb(Role::Title), Some([0xcc, 0xcc, 0xcc]));
+        assert_eq!(t.role_rgb(Role::Muted), Some([0x9d, 0x9d, 0x9d]));
+        assert_eq!(t.role_rgb(Role::Background), None, "a bg-only role");
+    }
 }
 
 #[cfg(test)]

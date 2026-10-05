@@ -349,15 +349,63 @@ pub(crate) fn body_area(app: &App, area: Rect) -> Rect {
     }
 }
 
-/// Width of the panel bar in a column: `" S·"`, a button's cell in letters
-/// (`panelbar::button_cell`), the same in a row or a column.
-pub(crate) const RAIL_W: u16 = 3;
+/// One button's rows in the panel column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RailSlot {
+    pub y: u16,
+    /// 1 for a glyph, 2 for a big icon.
+    pub height: u16,
+}
+
+/// The panel column's shape: ONE answer for painting, mouse zones, the
+/// body's offset and the pixels placed over it (spec 2026-10-05).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RailLayout {
+    /// Icons at 2×2 cells, painted by the terminal's graphics.
+    pub big: bool,
+    /// Rule, icon, badge: `3` with glyphs, `4` with big icons.
+    pub width: u16,
+    pub slots: Vec<RailSlot>,
+}
+
+/// The panel column for `height` rows starting at row `top`.
+///
+/// Big when the terminal can paint it (`rail_icons::backend`), the style is
+/// not `letters` and every button fits at two rows; otherwise today's
+/// glyphs. Either way with air — a blank row on top and between two, as in
+/// VS Code — when it fits, packed when it does not.
+#[must_use]
+pub(crate) fn rail_layout(app: &App, height: u16, top: u16) -> RailLayout {
+    let n = norte_frontend::panelbar::button_count(&app.kinds);
+    let h = usize::from(height);
+    let big = crate::rail_icons::backend(app) != crate::rail_icons::RailBackend::Glyph
+        && app.chrome.panel_bar_style() != norte_config::PanelBarStyle::Letters
+        && n > 0
+        && 2 * n <= h;
+    let (rows, width) = if big { (2, 4) } else { (1, 3) };
+    let (from, step) = if n > 0 && (rows + 1) * n <= h {
+        (1, rows + 1)
+    } else if n > 0 && (rows + 1) * n - 1 <= h {
+        (0, rows + 1)
+    } else {
+        (0, rows)
+    };
+    let slots = (0..n)
+        .map(|i| from + i * step)
+        .take_while(|f| f + rows <= h)
+        .map(|f| RailSlot {
+            y: top.saturating_add(u16::try_from(f).unwrap_or(u16::MAX)),
+            height: u16::try_from(rows).unwrap_or(1),
+        })
+        .collect();
+    RailLayout { big, width, slots }
+}
 
 /// Does the panel bar go in a COLUMN? `[ui] panel_bar_position`, with the
-/// terminal's answer for `auto`: on top, because width is short here.
+/// terminal's answer for `auto`: a column, as in the window (ADR 0168).
 #[must_use]
 pub(crate) fn bar_in_column(app: &App) -> bool {
-    app.panel_bar && app.chrome.panel_bar_position().vertical(false)
+    app.panel_bar && app.chrome.panel_bar_position().vertical(true)
 }
 
 /// How many top rows the panel bar eats: one in a row, none in a column.
@@ -410,13 +458,15 @@ pub(crate) fn panel_bar_area(app: &App, area: Rect) -> Option<Rect> {
             .height
             .saturating_sub(u16::from(app.menu_bar))
             .saturating_sub(bottom);
-        if area.width <= RAIL_W || height == 0 {
+        let y = area.y.saturating_add(u16::from(app.menu_bar));
+        let width = rail_layout(app, height, y).width;
+        if area.width <= width || height == 0 {
             return None;
         }
         return Some(Rect {
             x: area.x,
-            y: area.y.saturating_add(u16::from(app.menu_bar)),
-            width: RAIL_W,
+            y,
+            width,
             height,
         });
     }
@@ -862,5 +912,53 @@ pub(crate) fn centered(base: Rect, w: u16, h: u16) -> Rect {
         y: base.y + (base.height - h) / 2,
         width: w,
         height: h,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::Pane;
+    use crate::rail_icons::RailBackend;
+
+    fn test_app() -> App {
+        let dir = norte_proto::VPath::parse("file:///casa").expect("wire");
+        App::new(
+            Pane::new(dir.clone(), Vec::new()),
+            Pane::new(dir, Vec::new()),
+        )
+    }
+
+    #[test]
+    fn big_needs_the_backend_two_rows_each_and_not_letters() {
+        let mut app = test_app();
+        let n = u16::try_from(norte_frontend::panelbar::button_count(&app.kinds)).expect("few");
+        // `images = "kitty"` trusts the reader over the (absent) probe.
+        app.chrome.images = Some(norte_config::Images::Kitty);
+        assert_eq!(crate::rail_icons::backend(&app), RailBackend::KittyGraphics);
+
+        let roomy = rail_layout(&app, 3 * n, 1);
+        assert!(roomy.big && roomy.width == 4);
+        assert_eq!(roomy.slots.len(), usize::from(n));
+        assert!(roomy.slots.iter().all(|s| s.height == 2));
+        assert_eq!(roomy.slots[0].y, 2, "air on top when it fits");
+        assert_eq!(roomy.slots[1].y, 5, "and a blank row between two");
+
+        let tight = rail_layout(&app, 2 * n, 1);
+        assert!(tight.big);
+        assert_eq!((tight.slots[0].y, tight.slots[1].y), (1, 3), "packed");
+
+        assert!(!rail_layout(&app, 2 * n - 1, 1).big, "no room: small");
+
+        app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Letters);
+        assert!(!rail_layout(&app, 100, 1).big, "letters stay letters");
+        app.chrome.panel_bar_style = None;
+
+        // `auto` with no probe answer (a test has no tty): glyphs.
+        app.chrome.images = None;
+        let small = rail_layout(&app, 100, 1);
+        assert!(!small.big && small.width == 3);
+        assert!(small.slots.iter().all(|s| s.height == 1));
+        assert_eq!((small.slots[0].y, small.slots[1].y), (2, 4), "today's air");
     }
 }

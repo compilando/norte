@@ -10,6 +10,15 @@
 // does not go without a button: the renderer paints its LETTER, which is
 // what is already known about it.
 
+import diskMap from "../../../../norte-frontend/assets/panel-icons/disk-map.svg?raw";
+import log from "../../../../norte-frontend/assets/panel-icons/log.svg?raw";
+import metadata from "../../../../norte-frontend/assets/panel-icons/metadata.svg?raw";
+import places from "../../../../norte-frontend/assets/panel-icons/places.svg?raw";
+import processes from "../../../../norte-frontend/assets/panel-icons/processes.svg?raw";
+import timeline from "../../../../norte-frontend/assets/panel-icons/timeline.svg?raw";
+import tree from "../../../../norte-frontend/assets/panel-icons/tree.svg?raw";
+import viewer from "../../../../norte-frontend/assets/panel-icons/viewer.svg?raw";
+
 const SVG = "http://www.w3.org/2000/svg";
 
 /** An icon's pieces: `d` paths and `[cx, cy, r]` circles. */
@@ -18,30 +27,20 @@ interface Shape {
   circles?: [number, number, number][];
 }
 
+// The panels' icons are SHARED with the terminal, which rasterises the same
+// files (`norte_frontend::panelbar::icon_svg`): one drawing, two frontends.
+const PANEL_SVG: Record<string, string> = {
+  places,
+  tree,
+  viewer,
+  processes,
+  metadata,
+  log,
+  "disk-map": diskMap,
+  timeline,
+};
+
 const SHAPES: Record<string, Shape> = {
-  // Places: a star, what is marked as a favorite.
-  places: {
-    paths: ["M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"],
-  },
-  // Tree: a folder on top and two branches hanging from it.
-  tree: {
-    paths: ["M4 4h6v5H4z", "M14 11h6v4h-6z", "M14 17h6v4h-6z", "M7 9v10h7", "M7 13h7"],
-  },
-  // Viewer: an eye.
-  viewer: {
-    paths: ["M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"],
-    circles: [[12, 12, 3]],
-  },
-  // Processes: the pulse of something working.
-  processes: { paths: ["M3 12h4l2.5-6 5 12 2.5-6h4"] },
-  // Details: the "i" of information.
-  metadata: { paths: ["M12 11v6", "M12 7.5v.5"], circles: [[12, 12, 9]] },
-  // Log: lines of text piling up.
-  log: { paths: ["M5 6h14", "M5 10h14", "M5 14h10", "M5 18h7"] },
-  // Disk map: a cheese with a slice out.
-  "disk-map": { paths: ["M11 4a8 8 0 1 0 9 9h-9z", "M14 3.5a7 7 0 0 1 6.5 6.5H14z"] },
-  // Timeline: a clock.
-  timeline: { paths: ["M12 7v5l3.5 2"], circles: [[12, 12, 9]] },
   // The layout buttons (ADR 0133), with the `layout:` prefix so they do not
   // cross with a panel kind.
   // Split side by side: a frame with a vertical line.
@@ -113,8 +112,9 @@ const SHAPES: Record<string, Shape> = {
  * thing twice.
  */
 export function icon(doc: Document, kind: string): SVGSVGElement | null {
+  const shared = PANEL_SVG[kind];
   const shape = SHAPES[kind];
-  if (shape === undefined) {
+  if (shared === undefined && shape === undefined) {
     return null;
   }
   const svg = doc.createElementNS(SVG, "svg");
@@ -122,12 +122,16 @@ export function icon(doc: Document, kind: string): SVGSVGElement | null {
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("focusable", "false");
-  for (const d of shape.paths) {
+  const drawn = shared === undefined ? shape : shapeOf(shared);
+  if (drawn === undefined) {
+    return null;
+  }
+  for (const d of drawn.paths) {
     const p = doc.createElementNS(SVG, "path");
     p.setAttribute("d", d);
     svg.append(p);
   }
-  for (const [cx, cy, r] of shape.circles ?? []) {
+  for (const [cx, cy, r] of drawn.circles ?? []) {
     const c = doc.createElementNS(SVG, "circle");
     c.setAttribute("cx", String(cx));
     c.setAttribute("cy", String(cy));
@@ -135,6 +139,22 @@ export function icon(doc: Document, kind: string): SVGSVGElement | null {
     svg.append(c);
   }
   return svg;
+}
+
+/**
+ * The shapes of a shared icon file, read with two patterns and not a
+ * parser: the webview parses no markup (decision D11), and the files are
+ * ours — `path d` and `circle cx cy r`, nothing else. Their stroke
+ * attributes are for the terminal's rasteriser; here `.panelbar-icon`
+ * styles the strokes.
+ */
+function shapeOf(src: string): Shape {
+  const paths = Array.from(src.matchAll(/<path d="([^"]*)"/g), (m) => m[1] ?? "");
+  const circles = Array.from(
+    src.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)"/g),
+    (m): [number, number, number] => [Number(m[1]), Number(m[2]), Number(m[3])],
+  );
+  return { paths, circles };
 }
 
 /** A badge's figure: past a hundred, `99+`. */

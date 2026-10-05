@@ -456,6 +456,12 @@ pub async fn run(
                 .map_err(RunError::Terminal)?
                 .area
         };
+        // A resize redraws through ED 2, and kitty drops every placement
+        // with it: the column's icons must be placed again even where their
+        // cells did not move.
+        if painted_area != last_area {
+            crate::rail_icons::forget();
+        }
         last_area = painted_area;
         // T4 (phase 5 WOW): the pixels go AFTER the frame and outside
         // ratatui — an APC does not fit in a cell, and ratatui paints cells
@@ -574,6 +580,13 @@ pub async fn run(
                 (None, _) => crate::kitty_graphics::delete_placed(terminal.backend_mut()),
             }
         }
+        // The panel column's big icons (spec 2026-10-05), the same way and
+        // for the same reasons. Called on every terminal: with nothing to
+        // place and nothing placed it writes nothing.
+        crate::rail_icons::sync(
+            terminal.backend_mut(),
+            &ui::rail_icons_to_place(app, painted_area, crate::rail_icons::cell_px()),
+        );
         if app.quit {
             // The last snapshot, and waiting for it. The one-second tick
             // loses whatever happened within that second, and quitting is

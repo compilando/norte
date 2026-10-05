@@ -380,6 +380,7 @@ pub fn suspend_terminal(
     // it again on its own (the same mechanism that closes the viewer or
     // moves it to another file).
     crate::kitty_graphics::delete_placed(terminal.backend_mut());
+    crate::rail_icons::delete_all(terminal.backend_mut());
     disable_raw_mode()?;
     crossterm::execute!(
         terminal.backend_mut(),

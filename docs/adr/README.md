@@ -168,3 +168,5 @@ edits.
 | [0165](0165-a-local-copy-fills-its-staging-in-the-kernel.md) | A local copy fills its staging in the kernel | accepted |
 | [0166](0166-a-copy-keeps-several-files-in-flight.md) | A copy keeps several files in flight | accepted |
 | [0167](0167-compacting-the-journal-keeps-a-signed-base.md) | Compacting the journal keeps a signed base | accepted |
+| [0168](0168-the-terminal-panel-bar-is-a-column-by-default.md) | The terminal's panel bar is a column by default | accepted |
+| [0169](0169-the-terminal-panel-column-draws-pictures.md) | The terminal's panel column draws pictures | accepted |
