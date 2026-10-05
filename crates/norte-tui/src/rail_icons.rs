@@ -11,6 +11,9 @@
 pub enum RailBackend {
     /// Kitty's graphics protocol: the shared SVG rasterised, 2×2 cells.
     KittyGraphics,
+    /// DEC sixel (F2): the same raster, painted INTO the cells — ratatui
+    /// repainting a cell erases it, and there is nothing to delete.
+    Sixel,
     /// One cell per icon: Unicode, Nerd Font or the letter. Every terminal.
     #[default]
     Glyph,
@@ -18,13 +21,22 @@ pub enum RailBackend {
 
 /// The backend for this terminal: `[ui] images` first — `off` and `blocks`
 /// are "no pixels here", and `kitty` trusts the reader over the probe, as
-/// the viewer does — then the probe's answer.
+/// the viewer does — then the probe's answers, kitty before sixel. Sixel
+/// does not scale, so it needs the cell size in pixels (`cell_px`); a
+/// terminal that does not report it keeps the glyphs.
 #[must_use]
-pub fn choose(images: norte_config::Images, kitty: bool) -> RailBackend {
+pub fn choose(
+    images: norte_config::Images,
+    kitty: bool,
+    sixel: bool,
+    cell_px: (u16, u16),
+) -> RailBackend {
     use norte_config::Images;
+    let cells_known = cell_px.0 > 0 && cell_px.1 > 0;
     match images {
         Images::Kitty => RailBackend::KittyGraphics,
         Images::Auto if kitty => RailBackend::KittyGraphics,
+        Images::Auto if sixel && cells_known => RailBackend::Sixel,
         Images::Auto | Images::Off | Images::Blocks => RailBackend::Glyph,
     }
 }
@@ -33,7 +45,19 @@ pub fn choose(images: norte_config::Images, kitty: bool) -> RailBackend {
 /// startup probe needs nobody to remember to update it.
 #[must_use]
 pub fn backend(app: &crate::app::App) -> RailBackend {
-    choose(app.chrome.images(), crate::kitty_graphics::supported())
+    choose(
+        app.chrome.images(),
+        crate::kitty_graphics::supported(),
+        crate::kitty_graphics::sixel_supported(),
+        cell_px(),
+    )
+}
+
+/// A sixel slot's canvas: the 2×2 cells' pixels exactly — sixel paints
+/// pixel for pixel, with no scaling to fit.
+#[must_use]
+pub fn canvas_exact((cw, ch): (u16, u16)) -> (u32, u32) {
+    (2 * u32::from(cw), 2 * u32::from(ch))
 }
 
 /// The canvas, in pixels, for a 2×2-cell slot whose cells measure
@@ -66,14 +90,14 @@ pub fn cell_px() -> (u16, u16) {
     })
 }
 
-type Cache = std::collections::HashMap<(String, [u8; 3], (u32, u32)), std::sync::Arc<Vec<u8>>>;
+type Pixmap = resvg::tiny_skia::Pixmap;
+type Cache = std::collections::HashMap<(String, [u8; 3], (u32, u32)), std::sync::Arc<Pixmap>>;
 
-/// `kind`'s shared icon (`panelbar::icon_svg`) as a PNG stroked in `rgb`
-/// on a `canvas` (`canvas_for`), cached by the three: a frame asks for the
-/// same few every time. `None` for a kind without an SVG, or if rendering
-/// fails (logged; the slot stays blank for that frame).
-#[must_use]
-pub fn png(kind: &str, rgb: [u8; 3], canvas: (u32, u32)) -> Option<std::sync::Arc<Vec<u8>>> {
+/// `kind`'s shared icon (`panelbar::icon_svg`) stroked in `rgb` on a
+/// `canvas`, cached by the three: a frame asks for the same few every
+/// time. `None` for a kind without an SVG, or if rendering fails (logged;
+/// the slot stays blank for that frame).
+fn raster(kind: &str, rgb: [u8; 3], canvas: (u32, u32)) -> Option<std::sync::Arc<Pixmap>> {
     static CACHE: std::sync::OnceLock<std::sync::Mutex<Cache>> = std::sync::OnceLock::new();
     let svg = norte_frontend::panelbar::icon_svg(kind)?;
     let cache = CACHE.get_or_init(Default::default);
@@ -85,19 +109,49 @@ pub fn png(kind: &str, rgb: [u8; 3], canvas: (u32, u32)) -> Option<std::sync::Ar
     {
         return Some(hit.clone());
     }
-    let bytes = std::sync::Arc::new(rasterise(svg, rgb, canvas).or_else(|| {
+    let pixmap = std::sync::Arc::new(rasterise(svg, rgb, canvas).or_else(|| {
         tracing::debug!(kind, "could not rasterise the panel icon");
         None
     })?);
     cache
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(key, bytes.clone());
-    Some(bytes)
+        .insert(key, pixmap.clone());
+    Some(pixmap)
+}
+
+/// `kind`'s icon stroked in `rgb` on a `canvas`, as the PNG kitty takes.
+#[must_use]
+pub fn png(kind: &str, rgb: [u8; 3], canvas: (u32, u32)) -> Option<Vec<u8>> {
+    raster(kind, rgb, canvas)?.encode_png().ok()
+}
+
+/// What a slot sends: its escape, built before taking the placed lock.
+fn payload(id: u32, icon: &RailIcon) -> Option<String> {
+    let pix = raster(&icon.kind, icon.rgb, icon.canvas)?;
+    match icon.backend {
+        RailBackend::KittyGraphics => {
+            let png = pix.encode_png().ok()?;
+            Some(crate::kitty_graphics::escape_place(
+                id, &png, icon.rect, None,
+            ))
+        }
+        RailBackend::Sixel => {
+            let alpha: Vec<u8> = pix.pixels().iter().map(|p| p.alpha()).collect();
+            Some(crate::sixel::encode(
+                &alpha,
+                pix.width(),
+                pix.height(),
+                icon.rgb,
+                icon.bg,
+            ))
+        }
+        RailBackend::Glyph => None,
+    }
 }
 
 /// The icon as a square of side `min(w, h)` centred on a `w`×`h` canvas.
-fn rasterise(svg: &str, rgb: [u8; 3], (w, h): (u32, u32)) -> Option<Vec<u8>> {
+fn rasterise(svg: &str, rgb: [u8; 3], (w, h): (u32, u32)) -> Option<Pixmap> {
     use resvg::{tiny_skia, usvg};
     let [red, green, blue] = rgb;
     let src = svg.replace("currentColor", &format!("#{red:02x}{green:02x}{blue:02x}"));
@@ -111,7 +165,7 @@ fn rasterise(svg: &str, rgb: [u8; 3], (w, h): (u32, u32)) -> Option<Vec<u8>> {
     let transform = tiny_skia::Transform::from_scale(scale, scale)
         .post_translate((wf - side) / 2.0, (hf - side) / 2.0);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
-    pixmap.encode_png().ok()
+    Some(pixmap)
 }
 
 /// One icon to place: which, in what colour, over which 2×2 cells.
@@ -123,8 +177,14 @@ pub struct RailIcon {
     pub rgb: [u8; 3],
     /// The 2×2 cells `draw_rail` left blank for it.
     pub rect: ratatui::layout::Rect,
-    /// The raster's pixels, with the slot's proportions (`canvas_for`).
+    /// The raster's pixels: the slot's proportions for kitty
+    /// (`canvas_for`), its exact pixels for sixel (`canvas_exact`).
     pub canvas: (u32, u32),
+    /// What paints it.
+    pub backend: RailBackend,
+    /// The rail's background: sixel paints every pixel, the empty ones in
+    /// this colour.
+    pub bg: [u8; 3],
 }
 
 /// The first kitty image id of the column's range. The viewer's ids count
@@ -153,12 +213,18 @@ fn placed() -> std::sync::MutexGuard<'static, Vec<Option<RailIcon>>> {
 /// placed again, one no longer wanted is deleted, one unchanged is left
 /// alone — a still frame writes nothing. A failed write forgets that slot
 /// so the next frame retries it.
+///
+/// Only kitty images are deleted: a sixel image is cells, and whatever
+/// replaced it on screen (ratatui's repaint of the slot) already did.
 pub fn sync(out: &mut impl std::io::Write, want: &[RailIcon]) {
-    use crate::kitty_graphics::{escape_delete, escape_place};
-    // Rasterised BEFORE taking the lock: a panic inside resvg must not find
-    // the panic hook waiting on a lock its own thread holds
-    // (`delete_all`).
-    let pngs: Vec<_> = want.iter().map(|w| png(&w.kind, w.rgb, w.canvas)).collect();
+    use crate::kitty_graphics::escape_delete;
+    // Built BEFORE taking the lock: a panic inside resvg must not find the
+    // panic hook waiting on a lock its own thread holds (`delete_all`).
+    let payloads: Vec<_> = want
+        .iter()
+        .enumerate()
+        .map(|(i, w)| payload(id_for(i), w))
+        .collect();
     let mut placed = placed();
     let len = placed.len().max(want.len());
     placed.resize(len, None);
@@ -169,19 +235,22 @@ pub fn sync(out: &mut impl std::io::Write, want: &[RailIcon]) {
         }
         let id = id_for(i);
         let mut esc = String::new();
-        if slot.take().is_some() {
+        if slot
+            .take()
+            .is_some_and(|had| had.backend == RailBackend::KittyGraphics)
+        {
             esc.push_str(&escape_delete(id));
         }
-        let png = wants.zip(pngs.get(i).cloned().flatten());
-        let result = out.write_all(esc.as_bytes()).and_then(|()| match &png {
-            Some((w, bytes)) => {
+        let put = wants.zip(payloads.get(i).cloned().flatten());
+        let result = out.write_all(esc.as_bytes()).and_then(|()| match &put {
+            Some((w, escape)) => {
                 crossterm::queue!(out, crossterm::cursor::MoveTo(w.rect.x, w.rect.y))?;
-                out.write_all(escape_place(id, bytes, w.rect, None).as_bytes())
+                out.write_all(escape.as_bytes())
             }
             None => Ok(()),
         });
         match result {
-            Ok(()) => *slot = png.map(|(w, _)| w.clone()),
+            Ok(()) => *slot = put.map(|(w, _)| w.clone()),
             Err(e) => {
                 // An APC cut short swallows whatever is painted after it.
                 let _ = out.write_all(b"\x1b\\");
@@ -212,7 +281,13 @@ pub fn delete_all(out: &mut impl std::io::Write) {
         Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
         Err(std::sync::TryLockError::WouldBlock) => return,
     };
-    if placed.iter().all(Option::is_none) {
+    // Sixel images are cells, gone with the alternate screen; only kitty's
+    // outlive it.
+    let any_kitty = placed
+        .iter()
+        .flatten()
+        .any(|p| p.backend == RailBackend::KittyGraphics);
+    if !any_kitty {
         placed.clear();
         return;
     }
@@ -238,7 +313,77 @@ mod tests {
             rgb,
             rect: ratatui::layout::Rect::new(x, y, 2, 2),
             canvas: (64, 128),
+            backend: RailBackend::KittyGraphics,
+            bg: [0, 0, 0],
         }
+    }
+
+    fn sixel_icon(rgb: [u8; 3]) -> RailIcon {
+        RailIcon {
+            canvas: canvas_exact((9, 19)),
+            backend: RailBackend::Sixel,
+            ..icon("places", rgb, 1, 2)
+        }
+    }
+
+    #[test]
+    fn choose_prefers_kitty_and_needs_cells_for_sixel() {
+        let px = (9, 19);
+        assert_eq!(
+            choose(Images::Auto, true, true, px),
+            RailBackend::KittyGraphics
+        );
+        assert_eq!(choose(Images::Auto, false, true, px), RailBackend::Sixel);
+        assert_eq!(
+            choose(Images::Auto, false, true, (0, 0)),
+            RailBackend::Glyph
+        );
+        assert_eq!(choose(Images::Off, false, true, px), RailBackend::Glyph);
+        assert_eq!(choose(Images::Blocks, false, true, px), RailBackend::Glyph);
+        assert_eq!(
+            choose(Images::Kitty, false, true, px),
+            RailBackend::KittyGraphics
+        );
+    }
+
+    /// Sixel does not stretch: the canvas is the slot's pixels, exactly.
+    #[test]
+    fn the_sixel_canvas_is_the_slot_exactly() {
+        assert_eq!(canvas_exact((9, 19)), (18, 38));
+    }
+
+    #[test]
+    fn sixel_sync_paints_a_dcs_and_never_an_apc() {
+        let _ = written(delete_all);
+        let out = written(|o| sync(o, &[sixel_icon([200, 0, 0])]));
+        assert!(out.contains("\x1bP0;1;q\"1;1;18;38"), "{out:?}");
+        assert!(!out.contains("\x1b_G"), "{out:?}");
+        // A recolour paints over: no delete, a new image.
+        let again = written(|o| sync(o, &[sixel_icon([0, 200, 0])]));
+        assert!(
+            again.contains("\x1bP") && !again.contains("\x1b_G"),
+            "{again:?}"
+        );
+    }
+
+    /// Ratatui's repaint of the cells under an overlay erased the pixels;
+    /// when the overlay goes, they must be painted again.
+    #[test]
+    fn sixel_hidden_then_shown_emits_again() {
+        let _ = written(delete_all);
+        let want = [sixel_icon([200, 0, 0])];
+        let _ = written(|o| sync(o, &want));
+        assert_eq!(written(|o| sync(o, &[])), "", "nothing to delete in sixel");
+        assert!(written(|o| sync(o, &want)).contains("\x1bP"));
+    }
+
+    /// Sixel pixels are cells: leaving the alternate screen takes them, and
+    /// a terminal that never spoke kitty gets no APC on the way out.
+    #[test]
+    fn delete_all_after_sixel_writes_nothing() {
+        let _ = written(delete_all);
+        let _ = written(|o| sync(o, &[sixel_icon([200, 0, 0])]));
+        assert_eq!(written(delete_all), "");
     }
 
     /// Kitty stretches a raster to the `c`×`r` cells it is given, and cells
@@ -366,14 +511,5 @@ mod tests {
         let c = pix.pixel(S / 2, S / 2).expect("inside");
         assert_eq!(c.alpha(), 0, "{c:?}");
         assert!(png("plugin:x:y", [0, 0, 0], (S, S)).is_none());
-    }
-
-    #[test]
-    fn choose_follows_the_probe_and_the_images_switch() {
-        assert_eq!(choose(Images::Auto, true), RailBackend::KittyGraphics);
-        assert_eq!(choose(Images::Kitty, false), RailBackend::KittyGraphics);
-        assert_eq!(choose(Images::Auto, false), RailBackend::Glyph);
-        assert_eq!(choose(Images::Off, true), RailBackend::Glyph);
-        assert_eq!(choose(Images::Blocks, true), RailBackend::Glyph);
     }
 }

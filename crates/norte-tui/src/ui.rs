@@ -693,7 +693,11 @@ pub fn rail_icons_to_place(
         }
         out
     });
-    let canvas = crate::rail_icons::canvas_for(cell_px);
+    let backend = crate::rail_icons::backend(app);
+    let canvas = match backend {
+        crate::rail_icons::RailBackend::Sixel => crate::rail_icons::canvas_exact(cell_px),
+        _ => crate::rail_icons::canvas_for(cell_px),
+    };
     rail.slots
         .into_iter()
         .zip(chrome::panel_buttons(app, area))
@@ -708,6 +712,8 @@ pub fn rail_icons_to_place(
                 rect: Rect::new(bar.x + 1, slot.y, 2, 2),
                 kind: b.kind,
                 canvas,
+                backend,
+                bg,
             })
         })
         .collect()
