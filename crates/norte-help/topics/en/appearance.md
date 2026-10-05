@@ -39,7 +39,7 @@ column), or `auto`, the default, which is a column in both.
 icon — ★ ⋔ ◉ ∿ ⓘ ≡ ◔ ◷ — with a bar on the one that has the keyboard and a
 count on the one with news; `panel_bar_style = "nerd"` uses Nerd Font glyphs
 and `"letters"` goes back to letters. On a terminal that paints images
-(kitty, Ghostty, WezTerm…) the column shows the window's own icons at
+(kitty, Ghostty, WezTerm, foot, xterm with sixel…) the column shows the window's own icons at
 double size; `images = "off"` keeps the small ones.
 
 In the window, `titlebar = "custom"` removes the desktop's title bar and the

@@ -40,7 +40,7 @@ o `auto`, el de serie, que es una columna en los dos.
 icono —★ ⋔ ◉ ∿ ⓘ ≡ ◔ ◷—, con una raya en el que tiene el teclado y una cifra
 en el que tiene novedades; `panel_bar_style = "nerd"` usa los de Nerd Fonts y
 `"letters"` vuelve a las letras. En un terminal que pinta imágenes (kitty,
-Ghostty, WezTerm…) la columna muestra los iconos de la ventana a doble
+Ghostty, WezTerm, foot, xterm con sixel…) la columna muestra los iconos de la ventana a doble
 tamaño; `images = "off"` deja los pequeños.
 
 En la ventana, `titlebar = "custom"` quita la barra de título del escritorio
