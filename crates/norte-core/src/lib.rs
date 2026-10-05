@@ -52,8 +52,8 @@ pub use engine::{
     UNDO_REPORTS_MAX,
 };
 pub use journal::{
-    Actor, ChainStatus, JOURNAL_FORMAT, Journal, JournalEntry, JournalFormat, NewEntry, Reversal,
-    SqliteJournal,
+    Actor, ChainStatus, CompactionBase, JOURNAL_FORMAT, Journal, JournalEntry, JournalFormat,
+    NewEntry, Reversal, SqliteJournal,
 };
 pub use norte_index::Index;
 /// Is this a valid plugin id? Re-exported from `norte-plugin-host` so a

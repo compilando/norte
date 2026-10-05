@@ -233,6 +233,12 @@ enum Cmd {
         #[command(subcommand)]
         cmd: AuditCmd,
     },
+    /// Journal maintenance (ADR 0167). Like `audit`, it needs the journal
+    /// free: the daemon stopped and no embedded frontend holding it
+    Journal {
+        #[command(subcommand)]
+        cmd: JournalCmd,
+    },
     /// Opens the TERMINAL frontend (`norte-tui`) in this directory (or the
     /// one passed). The arguments travel verbatim to the binary
     /// (`norte tui --help` explains them)
@@ -439,6 +445,23 @@ enum AuditCmd {
     /// writes the line to STDOUT — keep it OFF this machine too: the
     /// external copy is what makes a file truncation detectable
     Anchor,
+}
+
+/// Journal subcommands (ADR 0167).
+#[derive(Subcommand)]
+enum JournalCmd {
+    /// Drops the entries older than a date, keeping the chain verifiable
+    /// from a base signed with the anchor key. Those entries can no longer
+    /// be undone, and a binary older than this one reports the compacted
+    /// journal as broken
+    Compact {
+        /// Entries before this day (YYYY-MM-DD, 00:00 UTC) are dropped
+        #[arg(long)]
+        before: String,
+        /// Says what would be dropped, and drops nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// The audit export's format.
@@ -721,6 +744,12 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if let Cmd::Audit { cmd } = cli.cmd {
         return cmd::audit::audit_cmd(cmd).await;
     }
+    if let Cmd::Journal {
+        cmd: JournalCmd::Compact { before, dry_run },
+    } = cli.cmd
+    {
+        return cmd::audit::compact_cmd(&before, dry_run).await;
+    }
     // A frontend is a SEPARATE process (the TUI takes over the terminal;
     // the graphical one, when there is one, will open a window): this CLI
     // only locates it and hands it the process — no engine or daemon
@@ -958,6 +987,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Cmd::Plugin { cmd } => cmd::plugin::plugin_cmd(&backend, cmd, cli.socket).await,
         Cmd::Index { cmd } => cmd::index::index_cmd(&backend, cmd).await,
         Cmd::Audit { .. }
+        | Cmd::Journal { .. }
         | Cmd::Ai { .. }
         | Cmd::Doctor { .. }
         | Cmd::Paths { .. }

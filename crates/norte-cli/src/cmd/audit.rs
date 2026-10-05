@@ -93,6 +93,14 @@ pub(crate) async fn audit_cmd(cmd: AuditCmd) -> anyhow::Result<ExitCode> {
                 .await
                 .map_err(|_| anyhow::anyhow!("keyring task panicked"))?
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
+            // Nor over a base nothing signs (ADR 0167): the anchor would
+            // vouch for whatever that base hides.
+            if matches!(
+                verified_base(&journal, &anchors_path, &key).await?,
+                Some(None)
+            ) {
+                return Ok(ExitCode::FAILURE);
+            }
             // The lines go out over stdout ON PURPOSE: the EXTERNAL copy of
             // the anchors (remote log, another host) is what makes trimming
             // the local file detectable (ADR 0025).
@@ -134,6 +142,183 @@ pub(crate) async fn audit_cmd(cmd: AuditCmd) -> anyhow::Result<ExitCode> {
             .await
         }
     }
+}
+
+/// `norte journal compact --before <date>` (ADR 0167): certify, plan, sign
+/// the base, and only then drop the rows.
+pub(crate) async fn compact_cmd(before: &str, dry_run: bool) -> anyhow::Result<ExitCode> {
+    use norte_core::{Journal, audit};
+    let Some(before_ms) = parse_day_utc(before) else {
+        eprintln!(
+            "{}",
+            norte_i18n::ta("cli-journal-bad-date", &[("date", before)])
+        );
+        return Ok(ExitCode::FAILURE);
+    };
+    let dir = norte_core::connect::config_dir();
+    let journal_path = dir.join("journal.db");
+    if !tokio::fs::try_exists(&journal_path).await.unwrap_or(false) {
+        println!("{}", norte_i18n::t("cli-journal-none"));
+        return Ok(ExitCode::SUCCESS);
+    }
+    let journal = Journal::open(&journal_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context(norte_i18n::t("cli-audit-open-failed"))?;
+    // The whole verdict of `audit verify`, not just the keyless chain: a
+    // signature minted over a journal whose base nothing signs, or whose
+    // anchors accuse it, would launder a truncation or a rewrite into a
+    // compaction (ADR 0167). Anchors are required, not forgiven: below the
+    // base an anchor is never compared again, so a deleted or trimmed
+    // anchors file would turn a rewrite into a pass for good.
+    let anchors_path = dir.join("journal-anchors.jsonl");
+    let marker_anchors_path = dir.join("journal-marker-anchors.jsonl");
+    if audit_verify(&journal, &anchors_path, &marker_anchors_path, false).await?
+        != ExitCode::SUCCESS
+    {
+        eprintln!("{}", norte_i18n::t("cli-journal-not-clean"));
+        return Ok(ExitCode::FAILURE);
+    }
+    let Some(plan) = journal
+        .compaction_plan(before_ms)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    else {
+        println!(
+            "{}",
+            norte_i18n::ta("cli-journal-nothing", &[("date", before)])
+        );
+        return Ok(ExitCode::SUCCESS);
+    };
+    let seq = plan.through_seq.to_string();
+    // Every row about to go must be covered by an anchor checked against
+    // the real rows NOW: below the base it will never be checked again.
+    let covered = anchors_cover(&journal, &anchors_path).await?;
+    if covered.is_none_or(|c| c < plan.through_seq) {
+        eprintln!(
+            "{}",
+            norte_i18n::ta(
+                "cli-journal-uncovered",
+                &[
+                    ("seq", &seq),
+                    (
+                        "anchored",
+                        &covered.map_or_else(|| "-".into(), |c| c.to_string())
+                    ),
+                ],
+            )
+        );
+        return Ok(ExitCode::FAILURE);
+    }
+    if dry_run {
+        println!(
+            "{}",
+            norte_i18n::ta("cli-journal-would-drop", &[("seq", &seq)])
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+    let key = tokio::task::spawn_blocking(norte_core::connect::journal_anchor_key)
+        .await
+        .map_err(|_| anyhow::anyhow!("keyring task panicked"))?
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    // Signed BEFORE anything is deleted (ADR 0167): a crash in between
+    // leaves a signature nothing matches, never a base nothing signs.
+    let marker = journal
+        .marker_hash()
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let line = audit::compaction_line(&key, &plan, marker.as_ref());
+    append_line_0600(&dir.join("journal-compactions.jsonl"), &line).await?;
+    println!("{line}");
+    let dropped = journal
+        .compact(&plan)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    // The rows are gone whatever happens here: a failed VACUUM only means
+    // the file did not shrink yet.
+    if let Err(e) = journal.vacuum().await {
+        eprintln!(
+            "{}",
+            norte_i18n::ta("cli-journal-vacuum-failed", &[("error", &e.to_string())])
+        );
+    }
+    journal.close().await;
+    println!(
+        "{}",
+        norte_i18n::ta(
+            "cli-journal-compacted",
+            &[("count", &dropped.to_string()), ("seq", &seq)],
+        )
+    );
+    Ok(ExitCode::SUCCESS)
+}
+
+/// The journal's compaction base, checked against its signature (ADR
+/// 0167): `None` = never compacted, `Some(Some(base))` = signed,
+/// `Some(None)` = a base nothing signs (reported here).
+async fn verified_base(
+    journal: &norte_core::Journal,
+    anchors_path: &std::path::Path,
+    key: &[u8],
+) -> anyhow::Result<Option<Option<norte_core::CompactionBase>>> {
+    let Some(base) = journal.base().await.map_err(|e| anyhow::anyhow!("{e}"))? else {
+        return Ok(None);
+    };
+    let path = anchors_path.with_file_name("journal-compactions.jsonl");
+    let lines = match tokio::fs::read_to_string(&path).await {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).context("journal-compactions.jsonl"),
+    };
+    let seq = base.through_seq.to_string();
+    let marker = journal
+        .marker_hash()
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    if norte_core::audit::base_is_signed(key, &lines, &base, marker.as_ref()) {
+        println!("{}", norte_i18n::ta("cli-audit-base-ok", &[("seq", &seq)]));
+        Ok(Some(Some(base)))
+    } else {
+        println!(
+            "{}",
+            norte_i18n::ta("cli-audit-base-unsigned", &[("seq", &seq)])
+        );
+        Ok(Some(None))
+    }
+}
+
+/// Up to which `seq` the head anchors verify against the journal as it is
+/// now. Called only after `audit_verify` passed, so a base, if any, is
+/// signed.
+async fn anchors_cover(
+    journal: &norte_core::Journal,
+    anchors_path: &std::path::Path,
+) -> anyhow::Result<Option<i64>> {
+    let key = tokio::task::spawn_blocking(norte_core::connect::journal_anchor_key)
+        .await
+        .map_err(|_| anyhow::anyhow!("keyring task panicked"))?
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let lines = tokio::fs::read_to_string(anchors_path)
+        .await
+        .context("journal-anchors.jsonl")?;
+    let hash_by_seq: std::collections::HashMap<i64, [u8; 32]> = journal
+        .entries()
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .into_iter()
+        .filter_map(|e| e.entry_hash.try_into().ok().map(|h: [u8; 32]| (e.seq, h)))
+        .collect();
+    let base = journal.base().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+    let report =
+        norte_core::audit::verify_anchors_over_base(&key, &lines, &hash_by_seq, base.as_ref());
+    Ok(report.max_ok_seq)
+}
+
+/// `YYYY-MM-DD` as the millisecond of its 00:00 UTC.
+fn parse_day_utc(s: &str) -> Option<i64> {
+    let day: jiff::civil::Date = s.parse().ok()?;
+    let at = day.to_zoned(jiff::tz::TimeZone::UTC).ok()?;
+    Some(at.timestamp().as_millisecond())
 }
 
 /// Why the chain was NOT certified, in the voice that fits: a break is an
@@ -260,6 +445,11 @@ async fn audit_verify(
         .await
         .map_err(|_| anyhow::anyhow!("keyring task panicked"))?
         .map_err(|e| anyhow::anyhow!("{e}"))?;
+    // A compacted journal (ADR 0167) is only as good as its signed base: an
+    // unsigned one is exactly what a truncation would leave.
+    let base = verified_base(journal, anchors_path, &key).await?;
+    let base_ok = !matches!(base, Some(None));
+    let signed_base = base.flatten();
     let lines = match tokio::fs::read_to_string(&anchors_path).await {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -277,7 +467,7 @@ async fn audit_verify(
                 println!("{msg}");
                 // `--allow-no-anchors` forgives the ABSENCE of head anchors,
                 // not an uncertified chain nor an unanchored marker.
-                return Ok(if marker_ok {
+                return Ok(if marker_ok && base_ok {
                     exit_for(certified)
                 } else {
                     ExitCode::FAILURE
@@ -301,10 +491,19 @@ async fn audit_verify(
         .filter_map(|e| e.entry_hash.try_into().ok().map(|h: [u8; 32]| (e.seq, h)))
         .collect();
 
-    let report = audit::verify_anchors(&key, &lines, &hash_by_seq);
+    let report = audit::verify_anchors_over_base(&key, &lines, &hash_by_seq, signed_base.as_ref());
     report_anchors(&report, head_seq, certified);
+    if report.compacted > 0 {
+        println!(
+            "{}",
+            norte_i18n::ta(
+                "cli-audit-anchors-compacted",
+                &[("count", &report.compacted.to_string())],
+            )
+        );
+    }
     let marker_ok = verify_marker_anchors(journal, marker_anchors_path, &key).await?;
-    if !report.bad.is_empty() || !marker_ok {
+    if !report.bad.is_empty() || !marker_ok || !base_ok {
         return Ok(ExitCode::FAILURE);
     }
     if certified {

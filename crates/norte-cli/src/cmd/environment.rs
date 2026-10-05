@@ -297,17 +297,31 @@ pub(crate) async fn doctor_cmd(json: bool) -> anyhow::Result<ExitCode> {
 }
 
 /// Appends a line (+`\n`) to `path`, creating it `0600` if it does not
-/// exist.
+/// exist, and syncs it: a compaction's signature must be on disk before
+/// the rows it vouches for are deleted (ADR 0167).
 pub(crate) async fn append_line_0600(path: &std::path::Path, line: &str) -> anyhow::Result<()> {
     use tokio::io::AsyncWriteExt;
     let mut opts = tokio::fs::OpenOptions::new();
     opts.append(true).create(true);
     #[cfg(unix)]
     opts.mode(0o600);
-    let mut f = opts.open(path).await.context("journal-anchors.jsonl")?;
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let created = !tokio::fs::try_exists(path).await.unwrap_or(false);
+    let mut f = opts.open(path).await.context(name)?;
     f.write_all(line.as_bytes()).await?;
     f.write_all(b"\n").await?;
-    f.flush().await?;
+    f.sync_all().await?;
+    // A new file's NAME lives in its directory: without this, a power cut
+    // can lose the whole file while what it vouches for is durable.
+    #[cfg(unix)]
+    if created && let Some(parent) = path.parent() {
+        tokio::fs::File::open(parent).await?.sync_all().await?;
+    }
+    #[cfg(not(unix))]
+    let _ = created;
     Ok(())
 }
 

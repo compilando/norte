@@ -26,6 +26,7 @@ dist = true
 anyhow.workspace = true
 clap.workspace = true
 futures.workspace = true
+jiff.workspace = true
 norte-config = { workspace = true, features = ["logging"] }
 norte-connect.workspace = true
 norte-core.workspace = true
