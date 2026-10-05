@@ -38,7 +38,7 @@ impl client::Handler for TestClient {
 
     async fn check_server_key(
         &mut self,
-        _key: &russh::keys::ssh_key::PublicKey,
+        _key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         // Ephemeral test container: the host key changes on every start and
         // there is no TOFU here. Phase 6 will bring real verification
