@@ -302,17 +302,23 @@ fn no_icons_under_an_overlay() {
     let area = ratatui::layout::Rect::new(0, 0, 80, 40);
     let mut app = app_big_rail();
     assert!(
-        !ui::rail_icons_to_place(&app, area).is_empty(),
+        !ui::rail_icons_to_place(&app, area, CELL).is_empty(),
         "nothing over it"
     );
     app.menu = Some(norte_frontend::menu::MenuState::new());
-    assert!(ui::rail_icons_to_place(&app, area).is_empty(), "menu open");
+    assert!(
+        ui::rail_icons_to_place(&app, area, CELL).is_empty(),
+        "menu open"
+    );
     app.menu = None;
     app.help = Some(norte_tui::app::HelpView::new(
         norte_i18n::Lang::En,
         Vec::new(),
     ));
-    assert!(ui::rail_icons_to_place(&app, area).is_empty(), "help open");
+    assert!(
+        ui::rail_icons_to_place(&app, area, CELL).is_empty(),
+        "help open"
+    );
 }
 
 /// Each icon sits on the 2×2 cells `draw_rail` left blank — column 1, two
@@ -321,7 +327,7 @@ fn no_icons_under_an_overlay() {
 fn icons_sit_on_the_reserved_cells() {
     let area = ratatui::layout::Rect::new(0, 0, 80, 40);
     let app = app_big_rail();
-    let icons = ui::rail_icons_to_place(&app, area);
+    let icons = ui::rail_icons_to_place(&app, area, CELL);
     let mut terminal = Terminal::new(TestBackend::new(80, 40)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let buf = terminal.backend().buffer().clone();
@@ -338,9 +344,64 @@ fn icons_sit_on_the_reserved_cells() {
         "no svg, no pixels"
     );
     let places = icons.iter().find(|i| i.kind == "places").expect("places");
-    let log = icons.iter().find(|i| i.kind == "log").expect("log");
     assert_eq!(places.rgb, [0xcc, 0xcc, 0xcc], "open: Title");
-    assert_eq!(log.rgb, [0x9d, 0x9d, 0x9d], "closed: Muted");
+    assert_eq!(
+        places.canvas,
+        norte_tui::rail_icons::canvas_for(CELL),
+        "the slot's proportions"
+    );
+}
+
+/// 9×19 px cells, a common monospace size.
+const CELL: (u16, u16) = (9, 19);
+
+/// Which-key, the go-to pop-up or the splash hide the pixels (they sit
+/// above the text) but do not hide the column: its slots then show the
+/// one-cell glyph instead of a blank square.
+#[test]
+fn a_big_column_with_its_pixels_hidden_shows_glyphs() {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 40);
+    let mut app = app_big_rail();
+    app.which_key = Some(norte_frontend::whichkey::WhichKeyRows::default());
+    assert!(ui::rail_icons_to_place(&app, area, CELL).is_empty());
+    let mut terminal = Terminal::new(TestBackend::new(80, 40)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let buf = terminal.backend().buffer().clone();
+    let star = norte_frontend::panelbar::icon("places", norte_frontend::panelbar::IconSet::Unicode)
+        .expect("icon");
+    assert!(
+        (0..40).any(|y| buf[(1, y)].symbol() == star),
+        "the places glyph is painted in its slot"
+    );
+}
+
+/// On every preset a closed icon reads dimmer than an open one: its colour
+/// sits closer to the background. Most presets define no `muted`, and the
+/// glyph column's `dim` does not reach pixels — the colour has to.
+#[test]
+fn closed_icons_are_dimmer_than_open_ones_on_every_preset() {
+    let area = ratatui::layout::Rect::new(0, 0, 80, 40);
+    let dist = |a: [u8; 3], b: [u8; 3]| -> u32 {
+        a.iter().zip(b).map(|(x, y)| u32::from(x.abs_diff(y))).sum()
+    };
+    for name in norte_theme::preset_names() {
+        let mut app = app_big_rail();
+        let theme = Theme::preset(name).unwrap().unwrap();
+        let bg = theme
+            .style(norte_theme::Role::Background)
+            .bg
+            .map_or([0, 0, 0], |c| [c.r, c.g, c.b]);
+        app.theme = TuiTheme::new(theme, ColorDepth::Truecolor);
+        let icons = ui::rail_icons_to_place(&app, area, CELL);
+        let open = icons.iter().find(|i| i.kind == "places").expect("places");
+        let closed = icons.iter().find(|i| i.kind == "log").expect("log");
+        assert!(
+            dist(closed.rgb, bg) < dist(open.rgb, bg),
+            "{name}: closed {:?} vs open {:?} over {bg:?}",
+            closed.rgb,
+            open.rgb
+        );
+    }
 }
 
 /// `true` if ANY buffer cell has that foreground color.

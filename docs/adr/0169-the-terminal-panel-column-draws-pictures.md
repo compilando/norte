@@ -32,11 +32,23 @@ rows per button) or small, for painting, mouse, the body's offset and
 the pixels. It goes small when the buttons do not fit at two rows, never
 mid-frame on a failure — a failed icon leaves its slot blank.
 
+**The raster has the slot's proportions.** Kitty stretches an image to
+the `c`×`r` cells it is given, and cells are about 1:2: a square raster
+came out as a tall oval. The canvas is 2×2 cells in pixels
+(`TIOCGWINSZ`, 1:2 if the terminal does not say) with the icon square in
+its middle. A resize redraws with ED 2, which drops every placement, so
+the loop forgets what it placed and places it again.
+
+**Closed is halfway to the background.** The glyph column dims closed
+icons with `dim`, which pixels do not get, and most presets define no
+`muted`; the closed colour is blended 50% toward the background.
+
 **Hidden under anything painted over the body.** Kitty draws pixels above
 text. Icons are placed only when the column is visible
 (`panel_bar_visible`) and nothing is over the body
 (`something_above_the_viewer`), the spec's buffer check replaced by the
-answers that already decide painting and clicking.
+answers that already decide painting and clicking. While they are
+withheld the slot shows the one-cell glyph, not an empty square.
 
 **Their own ids, erased at the ADR 0118 sites.** A reserved range
 (`rail_icons::ID_BASE`, 64 ids) never meets the viewer's; exit, suspend

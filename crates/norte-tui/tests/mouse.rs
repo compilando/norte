@@ -643,13 +643,9 @@ fn every_bar_button_falls_into_its_place() {
     );
 }
 
-/// With `[ui] panel_bar_position = "left"` the bar is a three-cell-wide
-/// COLUMN on the left edge (spec 2026-09-21): one button per row, and the
-/// listing shifts up one row and moves over three columns.
-///
-/// Painted, clicked and layout come from the same geometry; if the mouse
-/// still thought the bar was a row, clicking row 1 would open places with
-/// the listing underneath.
+/// A big column (spec 2026-10-05) is four cells wide with two rows per
+/// button: both rows click, the air between two does not, and the body
+/// starts after it.
 #[test]
 fn a_big_rail_reserves_two_by_two_and_clicks_land_on_both_rows() {
     let mut app = app_painted(5);
@@ -720,6 +716,13 @@ fn a_big_rail_rules_both_rows_of_an_open_panel() {
     );
 }
 
+/// With `[ui] panel_bar_position = "left"` the bar is a three-cell-wide
+/// COLUMN on the left edge (spec 2026-09-21): one button per row, and the
+/// listing shifts up one row and moves over three columns.
+///
+/// Painted, clicked and layout come from the same geometry; if the mouse
+/// still thought the bar was a row, clicking row 1 would open places with
+/// the listing underneath.
 #[test]
 fn in_column_mode_each_button_is_a_row_on_the_left_edge() {
     let mut app = app_painted(5);

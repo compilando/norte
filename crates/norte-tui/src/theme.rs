@@ -66,6 +66,12 @@ impl TuiTheme {
         self.theme.style(role).fg.map(|c| [c.r, c.g, c.b])
     }
 
+    /// [`Self::role_rgb`] for the background.
+    #[must_use]
+    pub fn role_bg_rgb(&self, role: Role) -> Option<[u8; 3]> {
+        self.theme.style(role).bg.map(|c| [c.r, c.g, c.b])
+    }
+
     /// The ratatui style of a file ENTRY (colored by extension/kind,
     /// ADR 0020 D2).
     #[must_use]

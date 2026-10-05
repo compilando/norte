@@ -472,8 +472,8 @@ mod tests {
     }
 
     /// Every built-in panel that is a button has an icon in both sets, and
-    /// every icon measures ONE cell: the terminal's column is three, and a
-    /// two-wide one would push the badge out.
+    /// every icon measures ONE cell: the terminal's glyph column is three,
+    /// and a two-wide one would push the badge out.
     #[test]
     fn every_builtin_button_has_a_one_cell_icon() {
         use unicode_width::UnicodeWidthStr;

@@ -641,48 +641,73 @@ pub fn something_above_the_viewer(app: &App) -> bool {
         || app.modal.is_some()
 }
 
-/// The panel column's big icons to place this frame (spec 2026-10-05): one
-/// per slot `draw_rail` left blank, in the state's colour. Empty when the
-/// column is not big, or when anything is painted over the body — kitty's
-/// pixels sit above the text, so an icon left placed would cover a menu
-/// or a dialog.
+/// The big column's slots, if its pixels can be shown this frame: the
+/// column is visible and big, and nothing is painted over the body —
+/// kitty's pixels sit above the text, so an icon left placed would cover a
+/// menu or a dialog. ONE answer for the painter (`draw_rail` leaves the
+/// slots blank only then; otherwise it paints the glyph there) and for the
+/// pixels ([`rail_icons_to_place`]).
 ///
 /// The column's own visibility is `panel_bar_visible`, the answer that
 /// already decides whether it is painted and clickable; what that one does
 /// not count — which-key, the go-to pop-up, the splash — is in
 /// [`something_above_the_viewer`], which asks the same question for the
 /// viewer's pixels.
-#[must_use]
-pub fn rail_icons_to_place(app: &App, area: Rect) -> Vec<crate::rail_icons::RailIcon> {
-    use norte_frontend::panelbar::{PanelState, icon_svg};
-    let Some(bar) = geometry::panel_bar_visible(app, area) else {
-        return Vec::new();
-    };
+pub(crate) fn rail_pixels_shown(app: &App, area: Rect) -> Option<(Rect, geometry::RailLayout)> {
+    let bar = geometry::panel_bar_visible(app, area)?;
     if something_above_the_viewer(app) || !geometry::bar_in_column(app) {
-        return Vec::new();
+        return None;
     }
     let rail = geometry::rail_layout(app, bar.height, bar.y);
-    if !rail.big {
+    rail.big.then_some((bar, rail))
+}
+
+/// The panel column's big icons to place this frame (spec 2026-10-05): one
+/// per slot `draw_rail` left blank, in the state's colour, rasterised for
+/// cells of `cell_px` pixels (`(0, 0)` if the terminal does not say). Empty
+/// unless `rail_pixels_shown`.
+#[must_use]
+pub fn rail_icons_to_place(
+    app: &App,
+    area: Rect,
+    cell_px: (u16, u16),
+) -> Vec<crate::rail_icons::RailIcon> {
+    use norte_frontend::panelbar::{PanelState, icon_svg};
+    let Some((bar, rail)) = rail_pixels_shown(app, area) else {
         return Vec::new();
-    }
+    };
     let rgb = |role| {
         app.theme
             .role_rgb(role)
             .or_else(|| app.theme.role_rgb(Role::Regular))
     };
+    // Closed: halfway to the background. The glyph column dims closed
+    // icons with `dim`, which pixels do not get, and most presets define
+    // no `muted` — so without this, closed and open came out the same
+    // colour wherever `title` equals `regular`.
+    let bg = app.theme.role_bg_rgb(Role::Background).unwrap_or([0, 0, 0]);
+    let closed = rgb(Role::Muted).map(|c| {
+        let mut out = c;
+        for (o, b) in out.iter_mut().zip(bg) {
+            *o = u8::midpoint(*o, b);
+        }
+        out
+    });
+    let canvas = crate::rail_icons::canvas_for(cell_px);
     rail.slots
         .into_iter()
         .zip(chrome::panel_buttons(app, area))
         .filter(|(_, b)| icon_svg(&b.kind).is_some())
         .filter_map(|(slot, b)| {
-            let role = match b.state {
-                PanelState::Closed => Role::Muted,
-                PanelState::Open | PanelState::Focused => Role::Title,
+            let rgb = match b.state {
+                PanelState::Closed => closed?,
+                PanelState::Open | PanelState::Focused => rgb(Role::Title)?,
             };
             Some(crate::rail_icons::RailIcon {
-                rgb: rgb(role)?,
+                rgb,
                 rect: Rect::new(bar.x + 1, slot.y, 2, 2),
                 kind: b.kind,
+                canvas,
             })
         })
         .collect()

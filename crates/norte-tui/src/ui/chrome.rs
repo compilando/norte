@@ -774,6 +774,10 @@ fn draw_rail(frame: &mut Frame<'_>, app: &App, bar: Rect) {
         }
     };
     let rail = crate::ui::geometry::rail_layout(app, bar.height, bar.y);
+    // Blank cells only where pixels WILL land this frame; with which-key or
+    // another pop-up over the body they are withheld, and the slot shows
+    // the glyph instead of an empty square.
+    let pixels = crate::ui::rail_pixels_shown(app, frame.area()).is_some();
     for (slot, b) in rail.slots.into_iter().zip(buttons) {
         let y = slot.y;
         let off = closed_panel_style(app);
@@ -797,12 +801,15 @@ fn draw_rail(frame: &mut Frame<'_>, app: &App, bar: Rect) {
         if rail.big {
             // 2×2: the icon's cells stay blank — the run loop places the
             // pixels over them (`rail_icons`) — unless the kind has no SVG
-            // (a plugin's), which keeps its letter. The rule covers both
-            // rows; the badge goes on the lower one.
-            let top = if norte_frontend::panelbar::icon_svg(&b.kind).is_some() {
+            // (`terminal`), which keeps its letter, or the pixels are
+            // withheld this frame, which shows the glyph. The rule covers
+            // both rows; the badge goes on the lower one.
+            let top = if pixels && norte_frontend::panelbar::icon_svg(&b.kind).is_some() {
                 "  ".to_owned()
-            } else {
+            } else if pixels {
                 format!("{} ", b.letter)
+            } else {
+                format!("{glyph} ")
             };
             let lines = vec![
                 Line::from(vec![

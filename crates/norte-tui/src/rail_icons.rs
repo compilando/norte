@@ -36,23 +36,48 @@ pub fn backend(app: &crate::app::App) -> RailBackend {
     choose(app.chrome.images(), crate::kitty_graphics::supported())
 }
 
-/// The side, in pixels, an icon is rasterised at. Kitty scales the raster
-/// to the 2×2 cells it is given, so this is a quality knob, not a size:
-/// 64 px stays sharp on high-density cells and is ~1 KB of PNG.
-pub const RASTER_PX: u32 = 64;
-
-type Cache = std::collections::HashMap<(String, [u8; 3]), std::sync::Arc<Vec<u8>>>;
-
-/// `kind`'s shared icon (`panelbar::icon_svg`) as a PNG stroked in `rgb`,
-/// cached by both: a frame asks for the same few every time. `None` for a
-/// kind without an SVG, or if rendering fails (logged; the slot stays
-/// blank for that frame).
+/// The canvas, in pixels, for a 2×2-cell slot whose cells measure
+/// `cell_px` (`crossterm::terminal::window_size`; `(0, 0)` when the
+/// terminal does not say, taken as 1:2). Kitty STRETCHES a raster to the
+/// cells it is given, so the canvas must have the slot's proportions; it is
+/// scaled up until its short side is at least 64 px, so the strokes stay
+/// sharp on dense cells.
 #[must_use]
-pub fn png(kind: &str, rgb: [u8; 3]) -> Option<std::sync::Arc<Vec<u8>>> {
+pub fn canvas_for(cell_px: (u16, u16)) -> (u32, u32) {
+    let (cw, ch) = match cell_px {
+        (0, _) | (_, 0) => (10, 20),
+        (w, h) => (u32::from(w), u32::from(h)),
+    };
+    let (w, h) = (2 * cw, 2 * ch);
+    let k = 64_u32.div_ceil(w.min(h)).clamp(1, 8);
+    (w * k, h * k)
+}
+
+/// One cell's size in pixels, as the terminal reports it (`TIOCGWINSZ`);
+/// `(0, 0)` when it does not, which [`canvas_for`] takes as 1:2.
+#[must_use]
+pub fn cell_px() -> (u16, u16) {
+    crossterm::terminal::window_size().map_or((0, 0), |s| {
+        if s.columns == 0 || s.rows == 0 {
+            (0, 0)
+        } else {
+            (s.width / s.columns, s.height / s.rows)
+        }
+    })
+}
+
+type Cache = std::collections::HashMap<(String, [u8; 3], (u32, u32)), std::sync::Arc<Vec<u8>>>;
+
+/// `kind`'s shared icon (`panelbar::icon_svg`) as a PNG stroked in `rgb`
+/// on a `canvas` (`canvas_for`), cached by the three: a frame asks for the
+/// same few every time. `None` for a kind without an SVG, or if rendering
+/// fails (logged; the slot stays blank for that frame).
+#[must_use]
+pub fn png(kind: &str, rgb: [u8; 3], canvas: (u32, u32)) -> Option<std::sync::Arc<Vec<u8>>> {
     static CACHE: std::sync::OnceLock<std::sync::Mutex<Cache>> = std::sync::OnceLock::new();
     let svg = norte_frontend::panelbar::icon_svg(kind)?;
     let cache = CACHE.get_or_init(Default::default);
-    let key = (kind.to_owned(), rgb);
+    let key = (kind.to_owned(), rgb, canvas);
     if let Some(hit) = cache
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -60,7 +85,7 @@ pub fn png(kind: &str, rgb: [u8; 3]) -> Option<std::sync::Arc<Vec<u8>>> {
     {
         return Some(hit.clone());
     }
-    let bytes = std::sync::Arc::new(rasterise(svg, rgb).or_else(|| {
+    let bytes = std::sync::Arc::new(rasterise(svg, rgb, canvas).or_else(|| {
         tracing::debug!(kind, "could not rasterise the panel icon");
         None
     })?);
@@ -71,19 +96,21 @@ pub fn png(kind: &str, rgb: [u8; 3]) -> Option<std::sync::Arc<Vec<u8>>> {
     Some(bytes)
 }
 
-fn rasterise(svg: &str, [r, g, b]: [u8; 3]) -> Option<Vec<u8>> {
+/// The icon as a square of side `min(w, h)` centred on a `w`×`h` canvas.
+fn rasterise(svg: &str, rgb: [u8; 3], (w, h): (u32, u32)) -> Option<Vec<u8>> {
     use resvg::{tiny_skia, usvg};
-    let src = svg.replace("currentColor", &format!("#{r:02x}{g:02x}{b:02x}"));
+    let [red, green, blue] = rgb;
+    let src = svg.replace("currentColor", &format!("#{red:02x}{green:02x}{blue:02x}"));
     let tree = usvg::Tree::from_str(&src, &usvg::Options::default()).ok()?;
-    let mut pixmap = tiny_skia::Pixmap::new(RASTER_PX, RASTER_PX)?;
-    // `as f32` on 64 and 24 is exact.
+    let mut pixmap = tiny_skia::Pixmap::new(w, h)?;
+    // Canvas sides are at most a few hundred pixels: exact in `f32`.
     #[allow(clippy::cast_precision_loss)]
-    let scale = RASTER_PX as f32 / tree.size().width();
-    resvg::render(
-        &tree,
-        tiny_skia::Transform::from_scale(scale, scale),
-        &mut pixmap.as_mut(),
-    );
+    let (wf, hf) = (w as f32, h as f32);
+    let side = wf.min(hf);
+    let scale = side / tree.size().width();
+    let transform = tiny_skia::Transform::from_scale(scale, scale)
+        .post_translate((wf - side) / 2.0, (hf - side) / 2.0);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
     pixmap.encode_png().ok()
 }
 
@@ -96,6 +123,8 @@ pub struct RailIcon {
     pub rgb: [u8; 3],
     /// The 2×2 cells `draw_rail` left blank for it.
     pub rect: ratatui::layout::Rect,
+    /// The raster's pixels, with the slot's proportions (`canvas_for`).
+    pub canvas: (u32, u32),
 }
 
 /// The first kitty image id of the column's range. The viewer's ids count
@@ -126,6 +155,10 @@ fn placed() -> std::sync::MutexGuard<'static, Vec<Option<RailIcon>>> {
 /// so the next frame retries it.
 pub fn sync(out: &mut impl std::io::Write, want: &[RailIcon]) {
     use crate::kitty_graphics::{escape_delete, escape_place};
+    // Rasterised BEFORE taking the lock: a panic inside resvg must not find
+    // the panic hook waiting on a lock its own thread holds
+    // (`delete_all`).
+    let pngs: Vec<_> = want.iter().map(|w| png(&w.kind, w.rgb, w.canvas)).collect();
     let mut placed = placed();
     let len = placed.len().max(want.len());
     placed.resize(len, None);
@@ -139,7 +172,7 @@ pub fn sync(out: &mut impl std::io::Write, want: &[RailIcon]) {
         if slot.take().is_some() {
             esc.push_str(&escape_delete(id));
         }
-        let png = wants.and_then(|w| png(&w.kind, w.rgb).map(|p| (w, p)));
+        let png = wants.zip(pngs.get(i).cloned().flatten());
         let result = out.write_all(esc.as_bytes()).and_then(|()| match &png {
             Some((w, bytes)) => {
                 crossterm::queue!(out, crossterm::cursor::MoveTo(w.rect.x, w.rect.y))?;
@@ -160,10 +193,25 @@ pub fn sync(out: &mut impl std::io::Write, want: &[RailIcon]) {
     let _ = out.flush();
 }
 
+/// Forgets what is placed WITHOUT writing: the screen was cleared (a resize
+/// redraws with ED 2, and kitty drops every placement with it), so the next
+/// [`sync`] places everything again.
+pub fn forget() {
+    placed().clear();
+}
+
 /// Takes every column icon off the terminal and forgets them: the exit,
 /// suspend and panic paths, next to `kitty_graphics::delete_placed`.
+///
+/// `try_lock`: the panic hook runs on the panicking thread, which may be
+/// inside [`sync`] holding the lock. Then it writes nothing — leaving the
+/// alternate screen comes next and matters more than the icons.
 pub fn delete_all(out: &mut impl std::io::Write) {
-    let mut placed = placed();
+    let mut placed = match PLACED.try_lock() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return,
+    };
     if placed.iter().all(Option::is_none) {
         placed.clear();
         return;
@@ -189,7 +237,61 @@ mod tests {
             kind: kind.to_owned(),
             rgb,
             rect: ratatui::layout::Rect::new(x, y, 2, 2),
+            canvas: (64, 128),
         }
+    }
+
+    /// Kitty stretches a raster to the `c`×`r` cells it is given, and cells
+    /// are about twice as tall as wide: a square canvas came out as a tall
+    /// oval. The canvas has the slot's proportions and the icon sits square
+    /// in its middle.
+    #[test]
+    fn a_tall_slot_keeps_the_icon_square() {
+        let bytes = png("places", [0xff, 0, 0], (40, 80)).expect("svg");
+        let pix = resvg::tiny_skia::Pixmap::decode_png(&bytes).expect("png");
+        assert_eq!((pix.width(), pix.height()), (40, 80));
+        // The square is rows 20..60: nothing above or below it.
+        for y in (0..20).chain(60..80) {
+            for x in 0..40 {
+                assert_eq!(pix.pixel(x, y).expect("in").alpha(), 0, "({x},{y})");
+            }
+        }
+        // The star's top stroke, (12, 3.5) of 24, inside the square.
+        let p = pix.pixel(20, 20 + 40 * 35 / 240 + 1).expect("in");
+        assert!(p.red() > 200 && p.alpha() > 200, "{p:?}");
+    }
+
+    #[test]
+    fn the_canvas_follows_the_cell_and_stays_sharp() {
+        // 9×19 px cells: a 18×38 slot, scaled ×4 so the short side is ≥ 64.
+        assert_eq!(canvas_for((9, 19)), (72, 152));
+        // A terminal that reports no pixels: assume 1:2.
+        assert_eq!(canvas_for((0, 0)), (80, 160));
+        // Big cells need no scaling.
+        assert_eq!(canvas_for((40, 80)), (80, 160));
+    }
+
+    /// A resize clears the screen (ED 2) and kitty drops every placement
+    /// with it: what this module believes is placed is no longer true.
+    #[test]
+    fn forget_makes_the_next_sync_place_again() {
+        let _ = written(delete_all);
+        let want = [icon("places", [1, 2, 3], 1, 2)];
+        let _ = written(|o| sync(o, &want));
+        forget();
+        assert!(written(|o| sync(o, &want)).contains("a=T"));
+    }
+
+    /// The panic hook runs on the panicking thread, which may hold the lock
+    /// (a panic inside `sync`): it must return, writing nothing, instead of
+    /// deadlocking before the terminal leaves the alternate screen.
+    #[test]
+    fn delete_all_under_a_held_lock_returns() {
+        let _ = written(delete_all);
+        let _ = written(|o| sync(o, &[icon("places", [1, 2, 3], 1, 2)]));
+        let guard = PLACED.lock().expect("not poisoned");
+        assert_eq!(written(delete_all), "");
+        drop(guard);
     }
 
     /// Runs `f` against a fresh writer, after forgetting whatever an
@@ -253,18 +355,17 @@ mod tests {
 
     #[test]
     fn the_star_rasterises_in_the_requested_colour() {
-        let bytes = png("places", [0xff, 0x00, 0x00]).expect("places has an svg");
+        const S: u32 = 64;
+        let bytes = png("places", [0xff, 0x00, 0x00], (S, S)).expect("places has an svg");
         let pix = resvg::tiny_skia::Pixmap::decode_png(&bytes).expect("valid png");
-        assert_eq!((pix.width(), pix.height()), (RASTER_PX, RASTER_PX));
+        assert_eq!((pix.width(), pix.height()), (S, S));
         // ON the star's top stroke: (12, 3.5) of the 24 grid.
-        let p = pix
-            .pixel(RASTER_PX / 2, RASTER_PX * 35 / 240 + 1)
-            .expect("inside");
+        let p = pix.pixel(S / 2, S * 35 / 240 + 1).expect("inside");
         assert!(p.red() > 200 && p.green() < 40 && p.alpha() > 200, "{p:?}");
         // And the middle of the star is empty: strokes, not a fill.
-        let c = pix.pixel(RASTER_PX / 2, RASTER_PX / 2).expect("inside");
+        let c = pix.pixel(S / 2, S / 2).expect("inside");
         assert_eq!(c.alpha(), 0, "{c:?}");
-        assert!(png("plugin:x:y", [0, 0, 0]).is_none());
+        assert!(png("plugin:x:y", [0, 0, 0], (S, S)).is_none());
     }
 
     #[test]
