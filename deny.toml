@@ -35,6 +35,10 @@ exceptions = [
     # transitiva de reqsign (firma sigv4) vía const-random. Mismo criterio
     # que notify: CC0 acotado por-crate, jamás en el allow global.
     { name = "tiny-keccak", allow = ["CC0-1.0"] },
+    # ADR 0169 (big panel icons): `arrayref`, a macro crate under
+    # tiny-skia → resvg. BSD-2-Clause: permissive, no copyleft, compatible
+    # with the AGPL; scoped to this crate like the rest.
+    { name = "arrayref", allow = ["BSD-2-Clause"] },
     # Fase 3 del plan multi-frontend (spike de Tauri, ADR 0067). Las cuatro
     # entran SOLO por `norte-gui-tauri`, que no se publica (`publish = false`),
     # y son MPL-2.0: copyleft POR FICHERO, no viral sobre el binario que las
