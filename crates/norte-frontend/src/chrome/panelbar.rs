@@ -177,6 +177,36 @@ pub fn icon(kind: &str, set: IconSet) -> Option<&'static str> {
     })
 }
 
+/// The panel's icon as SVG source — the SAME file the window draws
+/// (`assets/panel-icons`), so a redrawn icon changes in both frontends.
+/// `None` for a kind without one (a plugin's).
+///
+/// ```
+/// use norte_frontend::panelbar::icon_svg;
+/// assert!(icon_svg("places").is_some_and(|s| s.contains("currentColor")));
+/// assert_eq!(icon_svg("plugin:x:y"), None);
+/// ```
+#[must_use]
+pub fn icon_svg(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "places" => include_str!("../../assets/panel-icons/places.svg"),
+        "tree" => include_str!("../../assets/panel-icons/tree.svg"),
+        "viewer" => include_str!("../../assets/panel-icons/viewer.svg"),
+        "processes" => include_str!("../../assets/panel-icons/processes.svg"),
+        "metadata" => include_str!("../../assets/panel-icons/metadata.svg"),
+        "log" => include_str!("../../assets/panel-icons/log.svg"),
+        "disk-map" => include_str!("../../assets/panel-icons/disk-map.svg"),
+        "timeline" => include_str!("../../assets/panel-icons/timeline.svg"),
+        _ => return None,
+    })
+}
+
+/// How many buttons the bar has: the registry's, whatever their state.
+#[must_use]
+pub fn button_count(reg: &KindRegistry) -> usize {
+    reg.decls().iter().filter(|d| es_button(d)).count()
+}
+
 /// A count for a button's badge: saturates instead of truncating, because
 /// a figure that wraps around would say "nothing" with a full log.
 ///
@@ -413,6 +443,32 @@ mod tests {
 
     fn registry() -> KindRegistry {
         KindRegistry::builtin()
+    }
+
+    /// Every built-in button has the shared SVG both frontends draw, and
+    /// it is colourable (`currentColor`) — the TUI swaps that for the
+    /// state's colour before rasterising.
+    #[test]
+    fn every_builtin_button_has_a_shared_svg() {
+        let reg = registry();
+        for b in buttons(&reg, PanelBarInput::default()) {
+            // `terminal` has no icon in either frontend: both paint its letter.
+            if icon(&b.kind, IconSet::Unicode).is_none() {
+                assert_eq!(icon_svg(&b.kind), None, "{}", b.kind);
+                continue;
+            }
+            let svg = icon_svg(&b.kind).unwrap_or_else(|| panic!("{} has no svg", b.kind));
+            assert!(
+                svg.starts_with("<svg") && svg.contains("currentColor"),
+                "{}",
+                b.kind
+            );
+        }
+        assert_eq!(icon_svg("plugin:x:y"), None);
+        assert_eq!(
+            button_count(&reg),
+            buttons(&reg, PanelBarInput::default()).len()
+        );
     }
 
     /// Every built-in panel that is a button has an icon in both sets, and
