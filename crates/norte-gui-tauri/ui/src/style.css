@@ -284,15 +284,22 @@ body {
   opacity: 0.8;
 }
 
-.panelbar[data-vertical="true"] .panelbar-button[data-state="open"] {
+.panelbar[data-vertical="true"] .panelbar-button[data-state="open"],
+.panelbar[data-vertical="true"] .panelbar-button[data-state="focused"] {
   color: var(--fg);
+  /* `--fg` pushed AWAY from mid-grey: white on a dark theme, black on a
+     light one, with no theme flag to ask. A webview without relative
+     colours keeps the line above. */
+  color: oklch(from var(--fg) calc(l + (l - 0.5) * 0.8) c h);
+}
+
+.panelbar[data-vertical="true"] .panelbar-button[data-state="open"] {
   opacity: 1;
   border-left-color: color-mix(in srgb, var(--fg) 40%, transparent);
 }
 
 .panelbar[data-vertical="true"] .panelbar-button[data-state="focused"] {
   background: color-mix(in srgb, var(--fg) 8%, transparent);
-  color: var(--fg);
   opacity: 1;
   border-left-color: var(--focus-border, var(--border-focus));
 }
