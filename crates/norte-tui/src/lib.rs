@@ -39,6 +39,7 @@ pub mod paste;
 pub mod preview;
 pub mod probes;
 pub mod processes;
+pub mod rail_icons;
 pub mod refresh;
 pub mod screens;
 pub mod session_push;

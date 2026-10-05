@@ -651,6 +651,76 @@ fn every_bar_button_falls_into_its_place() {
 /// still thought the bar was a row, clicking row 1 would open places with
 /// the listing underneath.
 #[test]
+fn a_big_rail_reserves_two_by_two_and_clicks_land_on_both_rows() {
+    let mut app = app_painted(5);
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Left);
+    app.chrome.images = Some(norte_config::Images::Kitty);
+    let lines = paint_at(&mut app, 80, 40);
+    // Characters 1..=4 of a painted line are columns 0..=3 (quotes first).
+    let cells = |f: usize| lines[f].chars().skip(1).take(4).collect::<String>();
+    // places: the first slot, rows 2 and 3 with air on top; closed, so no
+    // rule; the icon's 2×2 left blank for the pixels.
+    assert_eq!(cells(2), "    ", "{:?}", lines[2]);
+    assert_eq!(cells(3), "    ", "{:?}", lines[3]);
+    let press = |app: &mut norte_tui::app::App, row: u16| {
+        app.pending_panel_command = None;
+        let _ = mouse::handle(app, ev(DOWN, 1, row));
+        app.pending_panel_command.clone()
+    };
+    assert_eq!(press(&mut app, 2).as_deref(), Some("layout.places"));
+    assert_eq!(press(&mut app, 3).as_deref(), Some("layout.places"));
+    assert_eq!(press(&mut app, 4), None, "the air between two is no button");
+    // And the body starts after the four-cell column.
+    assert!(mouse::hit_test(&app, 3, FILA0 - 1).is_none());
+    assert!(mouse::hit_test(&app, 5, FILA0 - 1).is_some());
+}
+
+/// A button with no SVG to rasterise (`terminal`, or a plugin's once they
+/// get buttons) keeps its LETTER in a big column, never a blank square.
+#[test]
+fn a_kind_without_svg_paints_its_letter_when_big() {
+    let mut app = app_painted(5);
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Left);
+    app.chrome.images = Some(norte_config::Images::Kitty);
+    let lines = paint_at(&mut app, 80, 40);
+    // Column 1 below the menu row: the only thing painted there.
+    let letters: String = lines[1..]
+        .iter()
+        .map(|l| l.chars().nth(2).expect("column 1"))
+        .filter(|c| *c != ' ')
+        .collect();
+    let terminal = norte_frontend::panelbar::buttons(
+        &app.kinds,
+        norte_frontend::panelbar::PanelBarInput::default(),
+    )
+    .into_iter()
+    .find(|b| b.kind == "terminal")
+    .expect("terminal is a button");
+    assert_eq!(
+        letters,
+        terminal.letter.to_string(),
+        "only the terminal's letter"
+    );
+}
+
+#[test]
+fn a_big_rail_rules_both_rows_of_an_open_panel() {
+    let mut app = app_painted(5);
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Left);
+    app.chrome.images = Some(norte_config::Images::Kitty);
+    app.toggle_places();
+    let lines = paint_at(&mut app, 80, 40);
+    let rule = |f: usize| lines[f].chars().nth(1).expect("column 0");
+    assert_eq!(
+        (rule(2), rule(3)),
+        ('▎', '▎'),
+        "{:?} {:?}",
+        lines[2],
+        lines[3]
+    );
+}
+
+#[test]
 fn in_column_mode_each_button_is_a_row_on_the_left_edge() {
     let mut app = app_painted(5);
     app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Left);
