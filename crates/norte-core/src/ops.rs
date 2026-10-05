@@ -4494,13 +4494,15 @@ async fn walk_following(
 /// Relocates `path` (a descendant of `from`) under `to`, segment by segment.
 fn rebase(path: &VPath, from: &VPath, to: &VPath) -> Result<VPath, Error> {
     let prefix_len = from.segments().count();
-    let mut target = to.clone();
-    for seg in path.segments().skip(prefix_len) {
-        // Invariant: the segments come from an already validated VPath.
-        let seg = Segment::new(seg.to_vec()).map_err(|_| Error::Internal { panic: false })?;
-        target = target.join(seg);
-    }
-    Ok(target)
+    // Invariant: the segments come from an already validated VPath.
+    let rest = path
+        .segments()
+        .skip(prefix_len)
+        .map(|seg| Segment::new(seg.to_vec()).map_err(|_| Error::Internal { panic: false }))
+        .collect::<Result<Vec<_>, _>>()?;
+    // One clone of `to`, not one per segment (#408): per entry of a deep
+    // tree that was quadratic in its depth.
+    Ok(to.join_all(rest))
 }
 
 /// `true` if `child` is a PROPER descendant of `ancestor` (same scheme and

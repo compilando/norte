@@ -33,6 +33,11 @@ independently through `PROTOCOL_VERSION`.
   serializes a result once and the client decodes it once, straight
   into its type, instead of three times. Reconnecting asks for tasks and
   pending approvals in one round trip. The protocol does not change.
+- **Indexing a large tree no longer holds it all in memory** (#408): the
+  walk feeds the index as it goes, so an indexing that stops early (cancel,
+  the 5 million entry limit, an unreadable server) keeps what it had
+  already indexed instead of nothing. Copying deep trees also builds each
+  destination path once instead of once per level.
 - **Copying many small files is several times faster** (#394, ADR 0166):
   consecutive files of a folder are copied four at a time. Pausing,
   cancelling, undo and the progress bar behave as before.

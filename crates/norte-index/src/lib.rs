@@ -239,7 +239,7 @@ impl Index {
     /// sweeps that root's rows NOT seen in this build. Cancelable: if the
     /// token fires, both the rest of the entries and the SWEEP are skipped —
     /// the rows already inserted persist (a coherent superset, never a wrong
-    /// prune).
+    /// prune). A thin wrapper over [`Self::build_stream`].
     ///
     /// # Errors
     /// [`IndexError::Sqlite`].
@@ -249,6 +249,27 @@ impl Index {
         entries: impl IntoIterator<Item = IndexEntry>,
         cancel: &CancellationToken,
     ) -> Result<BuildReport, IndexError> {
+        self.build_stream(root, futures::stream::iter(entries), cancel)
+            .await
+    }
+
+    /// [`Self::build`] fed as the entries are found (#408): the walk need not
+    /// hold the whole tree in memory first.
+    ///
+    /// The sweep runs only if `entries` ENDED with `cancel` still untripped:
+    /// a producer that fails must trip it before it stops sending, or the
+    /// rows it never got to would be swept as gone.
+    ///
+    /// # Errors
+    /// [`IndexError::Sqlite`].
+    pub async fn build_stream(
+        &self,
+        root: &VPath,
+        entries: impl futures::Stream<Item = IndexEntry>,
+        cancel: &CancellationToken,
+    ) -> Result<BuildReport, IndexError> {
+        use futures::StreamExt as _;
+        let mut entries = std::pin::pin!(entries);
         let rid = root_id(root);
         let prev: i64 = sqlx::query_scalar(
             "SELECT COALESCE(MAX(last_seen_build), 0) FROM files WHERE root_id = ?",
@@ -263,7 +284,7 @@ impl Index {
         // cancelled.
         let mut tx = self.pool.begin().await?;
         let mut in_batch = 0u32;
-        for e in entries {
+        while let Some(e) = entries.next().await {
             if cancel.is_cancelled() {
                 cancelled = true;
                 break;
@@ -308,6 +329,8 @@ impl Index {
             }
         }
         tx.commit().await?;
+        // A stream that stopped because its producer failed: see the doc.
+        cancelled |= cancel.is_cancelled();
         let removed = if cancelled {
             0
         } else {
@@ -856,6 +879,38 @@ mod tests {
             got.iter().any(|n| n.as_slice() == hostile),
             "the non-UTF8 name comes back BYTE-EXACT from the authority"
         );
+    }
+
+    #[tokio::test]
+    async fn a_stream_whose_producer_failed_is_not_swept() {
+        use futures::StreamExt as _;
+        let idx = Index::open_memory().await.unwrap();
+        let root = root();
+        let tok = CancellationToken::new();
+        idx.build(
+            &root,
+            vec![entry(&root, b"a.txt"), entry(&root, b"b.txt")],
+            &tok,
+        )
+        .await
+        .unwrap();
+        // The producer sends `a`, fails, trips the token and closes: every
+        // item was consumed before the trip, and still b must survive.
+        let stop = CancellationToken::new();
+        let tripped = stop.clone();
+        let items = futures::stream::iter(vec![entry(&root, b"a.txt")]).chain(
+            futures::stream::once(async move {
+                tripped.cancel();
+            })
+            .filter_map(|()| async { None }),
+        );
+        let r = idx.build_stream(&root, items, &stop).await.unwrap();
+        assert_eq!(r.removed, 0, "b was never seen, not gone");
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM files")
+            .fetch_one(&idx.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
     }
 
     #[tokio::test]

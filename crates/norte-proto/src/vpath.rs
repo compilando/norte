@@ -434,6 +434,22 @@ impl VPath {
         child
     }
 
+    /// Appends every segment of `segments`, cloning `self` once — a loop of
+    /// [`Self::join`] clones the whole path per segment.
+    ///
+    /// ```
+    /// use norte_proto::{Segment, VPath};
+    /// let base = VPath::parse("file:///a").unwrap();
+    /// let segs = ["b", "c"].map(|s| Segment::new(s).unwrap());
+    /// assert_eq!(base.join_all(segs).to_wire(), "file:///a/b/c");
+    /// ```
+    #[must_use]
+    pub fn join_all(&self, segments: impl IntoIterator<Item = Segment>) -> Self {
+        let mut child = self.clone();
+        child.segments.extend(segments);
+        child
+    }
+
     /// The parent path; `None` at the root.
     #[must_use]
     pub fn parent(&self) -> Option<Self> {

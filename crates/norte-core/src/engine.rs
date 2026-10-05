@@ -3104,19 +3104,43 @@ impl Engine {
             actor,
             Box::new(move |ctx| {
                 Box::pin(async move {
-                    let entries =
-                        crate::index_build::walk_for_index(provider, root.clone(), &ctx).await?;
-                    let r = index
-                        .build(&root, entries, &ctx.cancel)
-                        .await
-                        .map_err(|e| {
-                            tracing::warn!(error = %e, "index.build failed");
-                            // SQLite's BUSY/LOCKED = transient → retryable
-                            // (rust review MAJOR).
-                            Error::Io {
-                                retryable: e.is_retryable(),
-                            }
-                        })?;
+                    // The walk feeds the build as it goes (#408). A walk
+                    // that fails trips `stop` BEFORE closing the channel,
+                    // so the build does not sweep the rows it never sent.
+                    let (tx, mut rx) = tokio::sync::mpsc::channel::<norte_index::IndexEntry>(1024);
+                    let stop = ctx.cancel.child_token();
+                    let walk = async {
+                        let r =
+                            crate::index_build::walk_for_index(provider, root.clone(), &ctx, &tx)
+                                .await;
+                        if r.is_err() {
+                            stop.cancel();
+                        }
+                        drop(tx);
+                        r
+                    };
+                    // `move`: the stream OWNS `rx`, so when the build stops
+                    // — failed included — the receiver is dropped and a
+                    // walk parked on a full channel gets its send error
+                    // instead of waiting forever.
+                    let entries = futures::stream::poll_fn(move |cx| rx.poll_recv(cx));
+                    let insert = async {
+                        let r = index.build_stream(&root, entries, &stop).await;
+                        if r.is_err() {
+                            stop.cancel();
+                        }
+                        r
+                    };
+                    let (walked, inserted) = tokio::join!(walk, insert);
+                    let r = inserted.map_err(|e| {
+                        tracing::warn!(error = %e, "index.build failed");
+                        // SQLite's BUSY/LOCKED = transient → retryable
+                        // (rust review MAJOR).
+                        Error::Io {
+                            retryable: e.is_retryable(),
+                        }
+                    })?;
+                    walked?;
                     *report_task.lock().expect("report lock is sound") = Some(r);
                     Ok(())
                 })
