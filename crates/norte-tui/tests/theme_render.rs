@@ -39,6 +39,7 @@ fn the_pane_bar_paints_names_with_the_underlined_letter_and_falls_back_to_letter
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
     let mut app = app_con_dir(ColorDepth::Truecolor);
     app.panel_bar = true;
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Top);
     app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Names);
 
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
@@ -227,6 +228,7 @@ fn a_closed_panel_is_not_painted_as_a_lit_block() {
             .expect("preset exists");
         app.theme = TuiTheme::new(theme, ColorDepth::Truecolor);
         app.panel_bar = true;
+        app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Top);
 
         let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
         terminal.draw(|f| ui::draw(f, &app)).expect("draw");
@@ -246,6 +248,37 @@ fn a_closed_panel_is_not_painted_as_a_lit_block() {
              standing out and what is open as normal text"
         );
     }
+}
+
+/// The default panel COLUMN tells open from closed without `bold` or `dim`,
+/// which many terminals ignore on a single glyph: an open panel carries a
+/// `▎` rule and a closed one paints in another colour. On vscode-dark
+/// `Title` and `Regular` are both `#cccccc`, so bold-vs-dim was all there
+/// was (2026-10-05).
+#[test]
+fn the_default_column_tells_an_open_panel_from_a_closed_one() {
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    let theme = Theme::preset("vscode-dark").unwrap().unwrap();
+    app.theme = TuiTheme::new(theme, ColorDepth::Truecolor);
+    app.panel_bar = true;
+    app.toggle_places();
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let buf = terminal.backend().buffer().clone();
+    let row_of = |icon: &str| {
+        (0..24)
+            .find(|y| buf[(1, *y)].symbol() == icon)
+            .unwrap_or_else(|| panic!("{icon} is not in the column"))
+    };
+    let (open, closed) = (row_of("★"), row_of("∿"));
+    assert_eq!(buf[(0, open)].symbol(), "▎", "the open panel has its rule");
+    assert_eq!(buf[(0, closed)].symbol(), " ", "a closed one has none");
+    assert_ne!(
+        buf[(1, open)].fg,
+        buf[(1, closed)].fg,
+        "open and closed icons paint in different colours"
+    );
 }
 
 /// `true` if ANY buffer cell has that foreground color.

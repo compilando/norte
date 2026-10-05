@@ -727,10 +727,7 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
             // The menu next to it never fell into this: it uses `Title` for
             // what is not open and `Selection` for what is, and never
             // another surface's role.
-            PanelState::Closed => app
-                .theme
-                .role(Role::Regular)
-                .add_modifier(ratatui::style::Modifier::DIM),
+            PanelState::Closed => closed_panel_style(app),
         };
         // The letter ALWAYS keeps its state's style, and the attention mark
         // is a separate span. Painting the whole button as a warning — as
@@ -773,8 +770,8 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
 /// between icons if it fits ([`rail_rows`]).
 ///
 /// - The panel with the KEYBOARD carries the `▎` rule in the focus color
-///   and a lit icon; an open one, the lit icon with no rule; a closed one,
-///   a dimmed icon. The same scale as the window.
+///   and a lit icon; an open one, the lit icon and a muted rule; a closed
+///   one, a dimmed icon. The same scale as the window.
 /// - The badge is the COUNT (tasks, warnings) in the warning color, and `+`
 ///   past nine: one cell does not allow for more.
 /// - The icon comes from `[ui] panel_bar_style`: Unicode with `names` or
@@ -794,11 +791,14 @@ fn draw_rail(frame: &mut Frame<'_>, app: &App, bar: Rect) {
     };
     let rows = rail_rows(buttons.len(), bar);
     for (y, b) in rows.into_iter().zip(buttons) {
-        let off = app.theme.role(Role::Regular).add_modifier(Modifier::DIM);
+        let off = closed_panel_style(app);
         let on = app.theme.role(Role::Title).add_modifier(Modifier::BOLD);
+        // Open carries a rule too, in the muted color: a bold glyph against
+        // a dimmed one is all `dim` and `bold` give, and several terminals
+        // honour neither on a single symbol.
         let (rule, icon_style) = match b.state {
             PanelState::Focused => (Span::styled("▎", app.theme.role(Role::BorderFocus)), on),
-            PanelState::Open => (Span::raw(" "), on),
+            PanelState::Open => (Span::styled("▎", off.remove_modifier(Modifier::DIM)), on),
             PanelState::Closed => (Span::raw(" "), off),
         };
         let glyph = set
@@ -822,6 +822,16 @@ fn draw_rail(frame: &mut Frame<'_>, app: &App, bar: Rect) {
             },
         );
     }
+}
+
+/// A closed panel's button: `Muted`, dimmed. `Muted` is a colour of its own
+/// because many terminals ignore `dim`; a theme without it falls back to
+/// `Regular`, never to the terminal's foreground.
+fn closed_panel_style(app: &App) -> ratatui::style::Style {
+    app.theme
+        .role(Role::Regular)
+        .patch(app.theme.role(Role::Muted))
+        .add_modifier(ratatui::style::Modifier::DIM)
 }
 
 /// Paints the menu bar and its dropdown.

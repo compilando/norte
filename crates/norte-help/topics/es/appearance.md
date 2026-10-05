@@ -35,7 +35,7 @@ una cifra sobre el que tiene novedades: cuántas tareas hay en marcha,
 cuántos avisos guarda el registro.
 
 `panel_bar_position` elige dónde va: `top` (una fila), `left` (una columna),
-o `auto`, que es arriba en el terminal y a la izquierda en la ventana.
+o `auto`, el de serie, que es una columna en los dos.
 `panel_bar = false` la quita. En la columna del terminal cada panel es un
 icono —★ ⋔ ◉ ∿ ⓘ ≡ ◔ ◷—, con una raya en el que tiene el teclado y una cifra
 en el que tiene novedades; `panel_bar_style = "nerd"` usa los de Nerd Fonts y

@@ -33,10 +33,14 @@ fn entries(dir: &VPath) -> Vec<Entry> {
 
 fn test_app() -> App {
     let dir = vp("file:///casa");
-    App::new(
+    let mut app = App::new(
         Pane::new(dir.clone(), entries(&dir)),
         Pane::new(dir.clone(), entries(&dir)),
-    )
+    );
+    // The row, not the default column: the sidebar's cells are counted
+    // from the frame's left edge.
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Top);
+    app
 }
 
 /// Opening the sidebar does not change how many LISTINGS there are, which

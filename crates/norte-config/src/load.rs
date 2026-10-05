@@ -1496,13 +1496,12 @@ impl Titlebar {
 
 /// `[ui] panel_bar_position`: where the panel bar sits.
 ///
-/// `Auto` is not a third place: it is "what this frontend does best", and
-/// the two answer differently on purpose. A terminal is short on width, so
-/// its bar is a row on top; the window is short on height, so its bar is an
-/// activity rail on the left, as in VS Code (spec 2026-09-21).
+/// `Auto` is not a third place: it is "what this frontend does best". Both
+/// answer a column on the left today (ADR 0168); the variant stays so a
+/// frontend can answer differently without a config change.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PanelBarPosition {
-    /// Top in the terminal, left in the window. Default.
+    /// Each frontend's own answer — left in both today. Default.
     #[default]
     Auto,
     /// A row under the menu bar.

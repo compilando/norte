@@ -354,10 +354,10 @@ pub(crate) fn body_area(app: &App, area: Rect) -> Rect {
 pub(crate) const RAIL_W: u16 = 3;
 
 /// Does the panel bar go in a COLUMN? `[ui] panel_bar_position`, with the
-/// terminal's answer for `auto`: on top, because width is short here.
+/// terminal's answer for `auto`: a column, as in the window (ADR 0168).
 #[must_use]
 pub(crate) fn bar_in_column(app: &App) -> bool {
-    app.panel_bar && app.chrome.panel_bar_position().vertical(false)
+    app.panel_bar && app.chrome.panel_bar_position().vertical(true)
 }
 
 /// How many top rows the panel bar eats: one in a row, none in a column.

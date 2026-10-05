@@ -2640,6 +2640,9 @@ fn long_names_read_whole() {
         })
         .collect();
     let mut app = App::new(Pane::new(dir.clone(), entries), Pane::new(dir, Vec::new()));
+    // The row: the column's three cells would ellipsize the name this
+    // test sizes the frame to fit.
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Top);
     app.dialog_hints = default_dialog_hints();
     app.columns = norte_frontend::columns::ColumnsSettings::resolve(&norte_config::ColumnsConfig {
         default_columns: Some(

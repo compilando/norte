@@ -24,8 +24,8 @@ const H: u16 = 12;
 
 /// First listing row of a pane in this layout.
 ///
-/// FOUR since there are two chrome rows pinned by default: row 0 the menu
-/// bar (`[ui] menu_bar`), 1 the panel bar (`[ui] panel_bar`, #324), 2 the top
+/// FOUR since there are two chrome rows: row 0 the menu bar (`[ui]
+/// menu_bar`), 1 the panel bar as a row (`app_painted` pins `top`), 2 the top
 /// border and 3 the column header.
 ///
 /// That changing this constant FIXES every test in this file is the proof
@@ -64,6 +64,8 @@ fn app_painted(n: usize) -> App {
         Pane::new(dir.clone(), entries(&dir, n)),
         Pane::new(dir.clone(), entries(&dir, n)),
     );
+    // The row, not the default column: the numbers below count rows.
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Top);
     let _ = paint(&mut app);
     app
 }
@@ -1427,6 +1429,7 @@ fn marking_under_a_filter_does_not_reach_what_the_filter_hides() {
         Pane::new(dir.clone(), entries),
         Pane::new(dir.clone(), Vec::new()),
     );
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Top);
     app.panes[0].quick_start(norte_tui::nav::Mode::Filter);
     for c in "si".chars() {
         app.panes[0].quick_char(c);

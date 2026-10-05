@@ -52,10 +52,14 @@ fn entries(dir: &VPath, n: usize) -> Vec<Entry> {
 /// An `App` with `n` entries in each pane.
 fn test_app_with(n: usize) -> App {
     let dir = vp("file:///casa");
-    App::new(
+    let mut app = App::new(
         Pane::new(dir.clone(), entries(&dir, n)),
         Pane::new(dir.clone(), entries(&dir, n)),
-    )
+    );
+    // The row, not the default column: these tests measure the panes'
+    // widths against the whole frame.
+    app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Top);
+    app
 }
 
 /// Presses the left button on a cell, through the same path as the run loop.

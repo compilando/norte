@@ -34,7 +34,7 @@ it is a column on the left edge, with one icon per panel and a count on the
 one with news: how many tasks are running, how many warnings the log holds.
 
 `panel_bar_position` chooses where it goes: `top` (a row), `left` (a
-column), or `auto`, which is top in the terminal and left in the window.
+column), or `auto`, the default, which is a column in both.
 `panel_bar = false` removes it. In the terminal's column every panel is an
 icon — ★ ⋔ ◉ ∿ ⓘ ≡ ◔ ◷ — with a bar on the one that has the keyboard and a
 count on the one with news; `panel_bar_style = "nerd"` uses Nerd Font glyphs
