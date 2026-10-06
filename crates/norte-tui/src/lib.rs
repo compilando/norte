@@ -45,6 +45,7 @@ pub mod screens;
 pub mod session_push;
 pub mod settings;
 pub mod shortcuts_editor;
+pub mod sixel;
 pub mod splash;
 /// The persistent subshell (#142, ADR 0084): a pty on unix, ConPTY with
 /// PowerShell on Windows (ADR 0161).

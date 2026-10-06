@@ -10,10 +10,11 @@ independently through `PROTOCOL_VERSION`.
 ### Added
 
 - **Big icons in the terminal's panel column** (ADR 0169). On a terminal
-  that speaks kitty's graphics protocol (kitty, Ghostty, WezTerm,
-  Konsole) the column draws the window's own icons at double size; tmux
-  and other terminals keep the one-cell icons. `[ui] images = "off"`
-  keeps them small anywhere.
+  that paints images — kitty's graphics protocol (kitty, Ghostty,
+  WezTerm, Konsole) or sixel (foot, xterm `-ti vt340`, mlterm) — the
+  column draws the window's own icons at double size; other terminals,
+  tmux and Windows keep the one-cell icons.
+  `[ui] images = "off"` keeps them small anywhere.
 - **`norte journal compact --before <date>`** (#396, ADR 0167) drops the
   journal entries older than a day, so the journal stops growing forever.
   The chain stays verifiable: `norte audit verify` checks it from a base

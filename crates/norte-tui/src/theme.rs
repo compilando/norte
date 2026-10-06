@@ -66,6 +66,18 @@ impl TuiTheme {
         self.theme.style(role).fg.map(|c| [c.r, c.g, c.b])
     }
 
+    /// A role's background as the terminal SHOWS it: degraded to this
+    /// depth, and an index taken as xterm's default palette. What sixel
+    /// paints the rail's empty pixels in, so they match the cells around.
+    #[must_use]
+    pub fn role_bg_shown(&self, role: Role) -> Option<[u8; 3]> {
+        Some(match self.color(self.theme.style(role).bg?) {
+            RColor::Rgb(r, g, b) => [r, g, b],
+            RColor::Indexed(i) => xterm_rgb(i),
+            _ => return None,
+        })
+    }
+
     /// [`Self::role_rgb`] for the background.
     #[must_use]
     pub fn role_bg_rgb(&self, role: Role) -> Option<[u8; 3]> {
@@ -101,6 +113,37 @@ impl TuiTheme {
             ResolvedColor::Rgb(r, g, b) => RColor::Rgb(r, g, b),
             ResolvedColor::Indexed(i) => RColor::Indexed(i),
         }
+    }
+}
+
+/// Colour `i` of xterm's default 256-colour palette.
+fn xterm_rgb(i: u8) -> [u8; 3] {
+    const BASE: [[u8; 3]; 16] = [
+        [0, 0, 0],
+        [205, 0, 0],
+        [0, 205, 0],
+        [205, 205, 0],
+        [0, 0, 238],
+        [205, 0, 205],
+        [0, 205, 205],
+        [229, 229, 229],
+        [127, 127, 127],
+        [255, 0, 0],
+        [0, 255, 0],
+        [255, 255, 0],
+        [92, 92, 255],
+        [255, 0, 255],
+        [0, 255, 255],
+        [255, 255, 255],
+    ];
+    const CUBE: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    match i {
+        0..=15 => BASE[usize::from(i)],
+        16..=231 => {
+            let n = usize::from(i - 16);
+            [CUBE[n / 36], CUBE[n / 6 % 6], CUBE[n % 6]]
+        }
+        _ => [8 + 10 * (i - 232); 3],
     }
 }
 
@@ -169,6 +212,26 @@ mod rgb_tests {
         assert_eq!(t.role_rgb(Role::Title), Some([0xcc, 0xcc, 0xcc]));
         assert_eq!(t.role_rgb(Role::Muted), Some([0x9d, 0x9d, 0x9d]));
         assert_eq!(t.role_rgb(Role::Background), None, "a bg-only role");
+    }
+
+    /// Sixel paints the rail's empty pixels in its background, and they
+    /// must match the cells around them — the colour the terminal SHOWS,
+    /// after degrading to its depth, not the theme's.
+    #[test]
+    fn role_bg_shown_is_the_colour_after_degrading() {
+        let theme = || Theme::preset("vscode-dark").unwrap().unwrap();
+        let truecolor = TuiTheme::new(theme(), ColorDepth::Truecolor);
+        assert_eq!(
+            truecolor.role_bg_shown(Role::Background),
+            Some([0x1f, 0x1f, 0x1f])
+        );
+        // #1f1f1f in 256 colours is the grey ramp's 234 (8 + 10·2 = 28).
+        let ansi256 = TuiTheme::new(theme(), ColorDepth::Ansi256);
+        let [r, g, b] = ansi256.role_bg_shown(Role::Background).expect("bg");
+        assert!(r == g && g == b && r.abs_diff(0x1f) <= 10, "{r}");
+        // In 16 colours it is ANSI black.
+        let ansi16 = TuiTheme::new(theme(), ColorDepth::Ansi16);
+        assert_eq!(ansi16.role_bg_shown(Role::Background), Some([0, 0, 0]));
     }
 }
 

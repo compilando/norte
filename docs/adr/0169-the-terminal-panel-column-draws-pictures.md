@@ -55,11 +55,25 @@ withheld the slot shows the one-cell glyph, not an empty square.
 and the panic hook delete the range, and write nothing on a terminal
 that never got one.
 
+**Sixel too (F2).** The probe's DA1 reply listing attribute `4` makes
+`RailBackend::Sixel`, when kitty graphics is absent and the terminal
+reports its cell size in pixels — sixel paints pixel for pixel, so the
+canvas is the slot exactly. Eight levels from the rail's background to
+the stroke colour need no quantizer. A sixel image is cells: there is
+nothing to delete and nothing to erase on exit, but ratatui does not
+rewrite cells it believes unchanged, so taking an icon down repaints its
+cells from the frame just drawn. The background is the colour as SHOWN
+at the terminal's depth (a 16-colour xterm shows `#1f1f1f` as black).
+Checked in xterm `-ti vt340` under Xvfb.
+
 ## Consequences
 
 - tmux without passthrough, and terminals without kitty graphics, keep
   the glyph column exactly as before.
 - One more dependency (`resvg`, default features off). It brings
   `arrayref` (BSD-2-Clause), allowed in `deny.toml` for that crate only.
-- Sixel (foot, xterm, Windows Terminal…) is phase F2 of the spec: one
-  more `RailBackend` arm.
+- Sixel terminals that report their cell pixels (foot, xterm
+  `-ti vt340`, mlterm; only xterm was seen) get the icons too. One that
+  does not keeps the glyphs — Windows Terminal among them, since
+  crossterm reports no pixel size on Windows; asking the terminal itself
+  (`CSI 16 t`) would bring it in. tmux is untested.

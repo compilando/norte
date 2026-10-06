@@ -685,7 +685,12 @@ pub fn rail_icons_to_place(
     // icons with `dim`, which pixels do not get, and most presets define
     // no `muted` — so without this, closed and open came out the same
     // colour wherever `title` equals `regular`.
-    let bg = app.theme.role_bg_rgb(Role::Background).unwrap_or([0, 0, 0]);
+    // As SHOWN: sixel paints the empty pixels in it, and a 16-colour
+    // terminal shows `#1f1f1f` as ANSI black.
+    let bg = app
+        .theme
+        .role_bg_shown(Role::Background)
+        .unwrap_or([0, 0, 0]);
     let closed = rgb(Role::Muted).map(|c| {
         let mut out = c;
         for (o, b) in out.iter_mut().zip(bg) {
@@ -693,7 +698,11 @@ pub fn rail_icons_to_place(
         }
         out
     });
-    let canvas = crate::rail_icons::canvas_for(cell_px);
+    let backend = crate::rail_icons::backend(app);
+    let canvas = match backend {
+        crate::rail_icons::RailBackend::Sixel => crate::rail_icons::canvas_exact(cell_px),
+        _ => crate::rail_icons::canvas_for(cell_px),
+    };
     rail.slots
         .into_iter()
         .zip(chrome::panel_buttons(app, area))
@@ -708,6 +717,8 @@ pub fn rail_icons_to_place(
                 rect: Rect::new(bar.x + 1, slot.y, 2, 2),
                 kind: b.kind,
                 canvas,
+                backend,
+                bg,
             })
         })
         .collect()

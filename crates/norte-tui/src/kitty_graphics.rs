@@ -75,7 +75,27 @@ fn is_our_ok(body: &str) -> bool {
 }
 
 /// What the terminal answered, asked ONCE.
-static SUPPORT: OnceLock<bool> = OnceLock::new();
+static SUPPORT: OnceLock<Answer> = OnceLock::new();
+
+/// The probe's two answers, from the same reply.
+#[derive(Debug, Clone, Copy, Default)]
+struct Answer {
+    /// Kitty's graphics protocol: our APC came back `OK`.
+    kitty: bool,
+    /// Sixel: the DA1 reply lists attribute `4`.
+    sixel: bool,
+}
+
+/// Does the DA1 reply (`ESC [ ? 62 ; 4 ; … c`) list attribute `4`, sixel?
+fn da1_says_sixel(bytes: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    text.split("\x1b[?").skip(1).any(|rest| {
+        rest.split_once('c')
+            .is_some_and(|(attrs, _)| attrs.split(';').any(|a| a == "4"))
+    })
+}
 
 /// Asks the terminal whether it can paint graphics, and caches the answer.
 ///
@@ -97,19 +117,28 @@ static SUPPORT: OnceLock<bool> = OnceLock::new();
 /// there would be nothing to wait for — the probe would always time out, and
 /// startup would pay that delay on every terminal without support.
 pub fn query_support() -> bool {
-    *SUPPORT.get_or_init(|| {
-        if !io::stdout().is_terminal() {
-            return false;
-        }
-        ask().unwrap_or(false)
-    })
+    SUPPORT
+        .get_or_init(|| {
+            if !io::stdout().is_terminal() {
+                return Answer::default();
+            }
+            ask().unwrap_or_default()
+        })
+        .kitty
 }
 
 /// [`query_support`]'s answer, without asking. If it was never asked,
 /// "no".
 #[must_use]
 pub fn supported() -> bool {
-    SUPPORT.get().copied().unwrap_or(false)
+    SUPPORT.get().is_some_and(|a| a.kitty)
+}
+
+/// Whether the same probe's DA1 reply listed sixel (attribute `4`). If it
+/// was never asked, "no".
+#[must_use]
+pub fn sixel_supported() -> bool {
+    SUPPORT.get().is_some_and(|a| a.sixel)
 }
 
 /// How many RAW bytes (before base64) each chunk of an APC carries.
@@ -439,7 +468,7 @@ pub fn delete_placed(out: &mut impl Write) {
 /// than [`DEADLINE`] (200 ms) AND that also take so long to answer that they
 /// manage to overlap with the event reader's startup — not observed in this
 /// task's local tests (tmux, kitty).
-fn ask() -> io::Result<bool> {
+fn ask() -> io::Result<Answer> {
     let mut tty = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -471,21 +500,38 @@ fn ask() -> io::Result<bool> {
     });
 
     let read = rx.recv_timeout(DEADLINE).unwrap_or_default();
-    let support = response_says_yes(&read);
+    let answer = Answer {
+        kitty: response_says_yes(&read),
+        sixel: da1_says_sixel(&read),
+    };
     // Without this, a "no" and a terminal that answered nothing at all are
     // indistinguishable from outside. This is step 6's evidence (the gate):
     // what each real terminal actually answered, not just the final yes/no.
     tracing::debug!(
         response = %String::from_utf8_lossy(&read).escape_debug(),
-        support,
-        "kitty graphics probe"
+        kitty = answer.kitty,
+        sixel = answer.sixel,
+        "graphics probe"
     );
-    Ok(support)
+    Ok(answer)
 }
 
 #[cfg(test)]
 mod tests {
     use super::response_says_yes;
+
+    /// The DA1 reply lists the terminal's features; `4` is sixel graphics
+    /// (spec 2026-10-05, F2). Compared field by field: `42` is not `4`.
+    #[test]
+    fn da1_attribute_4_is_sixel() {
+        use super::da1_says_sixel;
+        assert!(da1_says_sixel(b"\x1b[?62;4;22c"));
+        assert!(da1_says_sixel(b"\x1b_Gi=31;OK\x1b\\\x1b[?65;1;4c"));
+        assert!(!da1_says_sixel(b"\x1b[?62;22c"));
+        assert!(!da1_says_sixel(b"\x1b[?62;42c"), "42 is not 4");
+        assert!(!da1_says_sixel(b"\x1b[?4"), "unterminated");
+        assert!(!da1_says_sixel(b""));
+    }
 
     /// #406: an image covered by an overlay leaves the screen keeping its
     /// bytes (`d=i`), so uncovering it needs no retransmission; closing the
