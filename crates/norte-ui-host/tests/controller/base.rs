@@ -1630,6 +1630,31 @@ async fn the_window_starts_with_its_own_layout_and_not_the_terminals() {
     assert_eq!(listings, 2, "the window's, not the terminal's");
 }
 
+/// ADR 0170: which panels are open is SHARED. The terminal left the disk
+/// map open: the window, starting with its own layout, opens it in its own
+/// place — and what it writes back says the same.
+#[tokio::test]
+async fn the_window_opens_the_panels_the_terminal_left_open() {
+    let mut saved = session_saved(1, 7, 1, "mem:///casa");
+    let mut body: norte_frontend::session::SessionBody =
+        serde_json::from_value(saved.body.clone()).expect("body");
+    body.layouts.insert(
+        "default@window".to_owned(),
+        norte_frontend::layout::presets::tree("orthodox").expect("preset"),
+    );
+    body.open_panels
+        .insert("default".to_owned(), vec!["disk-map".to_owned()]);
+    saved.body = serde_json::to_value(&body).expect("json");
+    let backend = Arc::new(fake_with_session(saved, true));
+    let (_h, snap) = host_tree(Arc::clone(&backend)).await;
+    assert!(
+        snap.slots
+            .iter()
+            .any(|s| matches!(s, norte_ui_host::dto::SlotView::DiskMap(_))),
+        "the terminal's open map opens here"
+    );
+}
+
 /// The session's tick writes what changed and does NOT repeat the same
 /// thing.
 ///

@@ -58,6 +58,10 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **The terminal and the window share which panels are open** (ADR
+  0170). Open the disk map, the log or the tree in one and the other
+  opens it too the next time it starts, in its own place; each keeps its
+  own sizes and positions as before.
 - **The terminal's panel bar is a column on the left by default**, like
   the window's (ADR 0168). To keep the row on top, set
   `[ui] panel_bar_position = "top"`.

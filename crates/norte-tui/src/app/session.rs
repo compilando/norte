@@ -83,12 +83,20 @@ impl App {
                 self.layout.clone(),
             );
         }
+        // Which panels are open is SHARED with the window (ADR 0170), under
+        // the profile's key; the other profiles' come back as is.
+        let mut open_panels = self.session.other_open_panels.clone();
+        open_panels.insert(
+            self.session_key(),
+            norte_frontend::session::open_panels_of(&self.layout, &self.kinds),
+        );
         let mut body = SessionBody {
             active: self.session_key_active(),
             layouts,
             slots: self.session.orphans.clone(),
             palette_recent: self.palette_recent.clone(),
             popular: self.popular.entries().to_vec(),
+            open_panels,
         };
         for id in self.layout.slot_ids() {
             let Some(pane) = self.panes.browser(id) else {
@@ -171,6 +179,16 @@ impl App {
         if let Some(tree) = body.layouts.get(&key) {
             self.set_layout(tree.clone());
         }
+        // Which panels are open is the window's too (ADR 0170): this
+        // frontend's layout keeps its own places and sizes, and opens or
+        // closes to match.
+        self.apply_open_panels(body.open_panels.get(&key));
+        self.session.other_open_panels = body
+            .open_panels
+            .iter()
+            .filter(|(k, _)| **k != key)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         self.palette_recent.clone_from(&body.palette_recent);
         self.popular = norte_frontend::history::Popular::from_entries(body.popular.clone());
         // The OTHER profiles' data is kept whole to be written back: this

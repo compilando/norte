@@ -222,6 +222,57 @@ pub struct SessionBody {
         deserialize_with = "popular::deserialize"
     )]
     pub popular: Vec<crate::history::PopularEntry>,
+    /// The panels open, by PROFILE key (the shared one, never `@window`):
+    /// what the two frontends share of a screen whose layouts they keep
+    /// apart (ADR 0139, ADR 0170). Additive like [`Self::palette_recent`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub open_panels: BTreeMap<String, Vec<String>>,
+}
+
+/// The panels open in `tree`: the panel bar's kinds it places, in the
+/// registry's order — not the listings, nor a plugin's panel, nor a strip.
+#[must_use]
+pub fn open_panels_of(tree: &Node, reg: &crate::layout::KindRegistry) -> Vec<String> {
+    let placed: BTreeSet<String> = tree
+        .slot_ids()
+        .into_iter()
+        .filter_map(|id| tree.kind_of(id).map(|k| k.as_str().to_owned()))
+        .collect();
+    reg.decls()
+        .iter()
+        .filter(|d| crate::panelbar::es_button(d) && placed.contains(d.id.as_str()))
+        .map(|d| d.id.as_str().to_owned())
+        .collect()
+}
+
+/// What a frontend opens and closes to match the panels saved open.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct PanelSync {
+    /// Saved open, missing here.
+    pub open: Vec<String>,
+    /// Open here, not saved open.
+    pub close: Vec<String>,
+}
+
+/// From the panels `present` in this frontend's layout to the `saved` ones
+/// (ADR 0170). `None` — a session from before the field — changes nothing.
+#[must_use]
+pub fn panels_to_sync(saved: Option<&Vec<String>>, present: &[String]) -> PanelSync {
+    let Some(saved) = saved else {
+        return PanelSync::default();
+    };
+    PanelSync {
+        open: saved
+            .iter()
+            .filter(|k| !present.contains(k))
+            .cloned()
+            .collect(),
+        close: present
+            .iter()
+            .filter(|k| !saved.contains(k))
+            .cloned()
+            .collect(),
+    }
 }
 
 /// Populars are read ENTRY BY ENTRY.
@@ -515,6 +566,7 @@ impl SessionBody {
             .filter(|c| profile_of(c) == profile)
             .cloned()
             .collect();
+        self.open_panels.remove(profile);
         keys.iter().filter_map(|c| self.layouts.remove(c)).collect()
     }
 
@@ -879,6 +931,67 @@ mod tests {
 
     fn vp(s: &str) -> VPath {
         VPath::parse(s).expect("vpath")
+    }
+
+    /// A browser with `kinds` docked next to it, one slot each.
+    fn tree_with(kinds: &[&str]) -> Node {
+        use crate::layout::{Dir, Size};
+        let mut children = vec![Node::slot(SlotId(1), KindId::browser())];
+        for (i, k) in kinds.iter().enumerate() {
+            let id = u32::try_from(i).expect("few") + 10;
+            children.push(Node::slot(SlotId(id), KindId::new(*k)));
+        }
+        Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Weight(1); children.len()],
+            children,
+        }
+    }
+
+    /// What counts as an open panel: the panel bar's kinds placed in the
+    /// tree — not the listings, not a plugin's panel, not a strip.
+    #[test]
+    fn open_panels_are_the_bars_kinds_in_the_tree() {
+        let reg = crate::layout::KindRegistry::builtin();
+        let tree = tree_with(&["disk-map", "log", "tasks"]);
+        // In the REGISTRY's order, not the tree's: the same set reads the
+        // same from either frontend.
+        assert_eq!(open_panels_of(&tree, &reg), vec!["log", "disk-map"]);
+    }
+
+    /// The window opened the map and closed the tree: the terminal, on
+    /// start, opens one and closes the other. Nothing saved — a session
+    /// from before — touches nothing.
+    #[test]
+    fn panels_to_sync_opens_what_is_missing_and_closes_what_is_not() {
+        let saved = vec!["disk-map".to_owned(), "log".to_owned()];
+        let present = vec!["log".to_owned(), "tree".to_owned()];
+        let sync = panels_to_sync(Some(&saved), &present);
+        assert_eq!(sync.open, vec!["disk-map"]);
+        assert_eq!(sync.close, vec!["tree"]);
+        let none = panels_to_sync(None, &present);
+        assert!(none.open.is_empty() && none.close.is_empty());
+    }
+
+    /// The set travels by profile and goes with it when it is pruned.
+    #[test]
+    fn open_panels_round_trip_and_leave_with_their_profile() {
+        let mut body = SessionBody::default();
+        body.open_panels
+            .insert("default".to_owned(), vec!["log".to_owned()]);
+        let json = serde_json::to_value(&body).expect("ser");
+        let back: SessionBody = serde_json::from_value(json).expect("de");
+        assert_eq!(back.open_panels, body.open_panels);
+        let old: SessionBody = serde_json::from_value(serde_json::json!({})).expect("old");
+        assert!(
+            old.open_panels.is_empty(),
+            "a session from before reads it empty"
+        );
+        body.layouts.insert("p".to_owned(), tree_with(&[]));
+        body.open_panels
+            .insert("p".to_owned(), vec!["log".to_owned()]);
+        let _ = body.remove_profile("p");
+        assert!(!body.open_panels.contains_key("p"));
     }
 
     fn slot(path: &str) -> SlotState {
@@ -1316,6 +1429,7 @@ mod tests {
             slots: std::collections::BTreeMap::new(),
             palette_recent: Vec::new(),
             popular: Vec::new(),
+            open_panels: BTreeMap::new(),
         };
         let v = body.to_value();
         assert!(matches!(

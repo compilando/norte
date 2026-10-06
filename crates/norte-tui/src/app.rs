@@ -459,6 +459,9 @@ pub struct SessionUi {
     /// would erase from the document the place where the others had left
     /// their panels (ADR 0079, D5).
     other_layouts: std::collections::BTreeMap<String, norte_frontend::layout::Node>,
+    /// The other profiles' open panels (ADR 0170), written back as they
+    /// came for the same reason.
+    other_open_panels: std::collections::BTreeMap<String, Vec<String>>,
     /// When each slot was last touched (epoch ms), for the age-based sweep.
     /// Stored instead of stamped at capture time because capturing is not
     /// touching: two captures of the same screen back to back have to

@@ -170,3 +170,4 @@ edits.
 | [0167](0167-compacting-the-journal-keeps-a-signed-base.md) | Compacting the journal keeps a signed base | accepted |
 | [0168](0168-the-terminal-panel-bar-is-a-column-by-default.md) | The terminal's panel bar is a column by default | accepted |
 | [0169](0169-the-terminal-panel-column-draws-pictures.md) | The terminal's panel column draws pictures | accepted |
+| [0170](0170-the-open-panels-are-shared.md) | Which panels are open is shared between the frontends | accepted |
