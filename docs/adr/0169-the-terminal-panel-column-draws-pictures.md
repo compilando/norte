@@ -59,21 +59,28 @@ that never got one.
 `RailBackend::Sixel`, when kitty graphics is absent and the terminal
 reports its cell size in pixels — sixel paints pixel for pixel, so the
 canvas is the slot exactly. Eight levels from the rail's background to
-the stroke colour need no quantizer. A sixel image is cells: there is
-nothing to delete and nothing to erase on exit, but ratatui does not
-rewrite cells it believes unchanged, so taking an icon down repaints its
-cells from the frame just drawn. The background is the colour as SHOWN
-at the terminal's depth (a 16-colour xterm shows `#1f1f1f` as black).
-Checked in xterm `-ti vt340` under Xvfb.
+the stroke colour need no quantizer, and level 0 is not painted: the
+cell's own background shows through, whatever the terminal's palette
+makes of it. A sixel image is cells: there is nothing to delete and
+nothing to erase on exit, but ratatui does not rewrite cells it believes
+unchanged, so taking an icon down — or putting a new one in its cells —
+repaints them first from the frame just drawn. The column's last row
+stays free in sixel: an image ending on the screen's last row scrolls
+the screen. Checked in xterm `-ti vt340` under Xvfb, with a custom
+palette, and through tmux 3.7.
+
+**The cell size comes from the terminal** (`CSI 16 t`, in the same
+probe), with the window size divided by the grid as the fallback.
+
+**Kitty images are hidden, not deleted, under an overlay** (`d=i`) and
+re-placed (`a=p`) when it closes; the image id is the column slot's.
 
 ## Consequences
 
-- tmux without passthrough, and terminals without kitty graphics, keep
-  the glyph column exactly as before.
+- Terminals without kitty graphics or sixel keep the glyph column
+  exactly as before; so does tmux without sixel or passthrough.
 - One more dependency (`resvg`, default features off). It brings
   `arrayref` (BSD-2-Clause), allowed in `deny.toml` for that crate only.
-- Sixel terminals that report their cell pixels (foot, xterm
-  `-ti vt340`, mlterm; only xterm was seen) get the icons too. One that
-  does not keeps the glyphs — Windows Terminal among them, since
-  crossterm reports no pixel size on Windows; asking the terminal itself
-  (`CSI 16 t`) would bring it in. tmux is untested.
+- On Windows the probe does not run (it reads `/dev/tty`), so Windows
+  Terminal keeps the glyphs although it speaks sixel and answers
+  `CSI 16 t`; porting the probe to the Windows console is what is left.
