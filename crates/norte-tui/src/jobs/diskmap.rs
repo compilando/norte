@@ -144,6 +144,7 @@ pub fn harvest(
     }
     let complete = state == norte_proto::TaskState::Completed;
     map.land(report, complete);
+    app.disk_map_landed();
     if !complete {
         // What's there is a fragment correct to look at NOW, with its
         // notice up front. It isn't saved to the cache: `DiskMap::land`

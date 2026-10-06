@@ -56,6 +56,9 @@ pub struct DiskMap {
     chosen: Option<Segment>,
     /// What point the measurement is at.
     state: State,
+    /// The directory changed while it was being measured: what lands is
+    /// from before, and it is measured once more.
+    changed: bool,
 }
 
 impl DiskMap {
@@ -96,6 +99,19 @@ impl DiskMap {
         ))
     }
 
+    /// The measured directory changed while a measurement runs: it is left
+    /// to finish — restarting it on every change never let a `$HOME` end —
+    /// and measured once more when it lands ([`Self::take_changed`]).
+    pub fn changed_meanwhile(&mut self) {
+        self.changed = true;
+    }
+
+    /// Whether the directory changed during the measurement that just
+    /// landed, once: then it is measured again.
+    pub fn take_changed(&mut self) -> bool {
+        std::mem::take(&mut self.changed)
+    }
+
     /// A FINISHED map with nothing to draw: the directory is empty, or
     /// nothing in it takes space. Then it says so (`disk-map-empty`, each
     /// frontend in its own session's language) instead of an empty frame.
@@ -118,6 +134,7 @@ impl DiskMap {
         self.report = FsDirUsageReportResult::default();
         self.chosen = None;
         self.state = State::Idle;
+        self.changed = false;
     }
 
     /// Says that a measurement is running.
@@ -254,6 +271,22 @@ mod tests {
         // though it is now one position higher.
         m.land(report(&["b", "c"]), true);
         assert_eq!(m.chosen().map(|c| c.name.clone()), Some(seg("c")));
+    }
+
+    /// A change while measuring is remembered for when the report lands —
+    /// leaving the running measurement alone used to leave the map with
+    /// the numbers from before the change, for good. Aiming elsewhere
+    /// forgets it: that directory is measured anew anyway.
+    #[test]
+    fn a_change_while_measuring_is_kept_for_the_landing() {
+        let mut m = DiskMap::new();
+        assert!(!m.take_changed());
+        m.changed_meanwhile();
+        assert!(m.take_changed(), "remembered");
+        assert!(!m.take_changed(), "and taken once");
+        m.changed_meanwhile();
+        m.aim(VPath::parse("file:///otra").expect("wire"));
+        assert!(!m.take_changed(), "aiming elsewhere forgets it");
     }
 
     /// A finished map with nothing to draw SAYS so: an empty frame read as

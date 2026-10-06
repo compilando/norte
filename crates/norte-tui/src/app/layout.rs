@@ -723,17 +723,36 @@ impl App {
     /// watcher already said so for changes made elsewhere; norte's own,
     /// and a remote directory with no watcher, only came through here.
     pub fn listings_refreshed(&mut self, refreshed: [bool; 2]) {
-        // One still measuring is left alone, as in the window: restarting
-        // it on every task of a copy batch never let a `$HOME` finish.
-        let Some(measured) = self
-            .disk_map_slot()
-            .and_then(|s| self.panes.disk_map(s))
-            .filter(|m| m.task().is_none())
-            .and_then(|m| m.dir().cloned())
-        else {
+        let Some(slot) = self.disk_map_slot() else {
             return;
         };
-        if (0..2).any(|i| refreshed[i] && self.panes[i].dir() == &measured) {
+        let Some(measured) = self.panes.disk_map(slot).and_then(|m| m.dir().cloned()) else {
+            return;
+        };
+        if !(0..2).any(|i| refreshed[i] && self.panes[i].dir() == &measured) {
+            return;
+        }
+        let Some(map) = self.panes.disk_map_mut(slot) else {
+            return;
+        };
+        // One still measuring is left alone, as in the window — restarting
+        // it on every task of a copy batch never let a `$HOME` finish — and
+        // measured once more when it lands (`disk_map_landed`).
+        if map.task().is_some() {
+            map.changed_meanwhile();
+        } else {
+            self.disk_map_stale = true;
+        }
+    }
+
+    /// A measurement just landed: if the directory changed during it,
+    /// what landed is from before, and it is measured once more.
+    pub fn disk_map_landed(&mut self) {
+        if let Some(map) = self
+            .disk_map_slot()
+            .and_then(|s| self.panes.disk_map_mut(s))
+            && map.take_changed()
+        {
             self.disk_map_stale = true;
         }
     }

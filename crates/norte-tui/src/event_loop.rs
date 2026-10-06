@@ -786,15 +786,10 @@ pub async fn run(
                 // event QUEUED (capacity-1 channel) and fires once the
                 // overlay closes.
                 if let Some(which) = ev {
-                    // The disk map is a snapshot from a while ago, and this
-                    // says something changed — but does NOT say what, so the
-                    // only honest thing is to measure again. The flag is
-                    // switched on and `drain_pending` drains it with the
-                    // backend in hand; measuring here would leave the loop
-                    // waiting on a whole tree.
-                    if app.disk_map_slot().is_some() {
-                        app.disk_map_stale = true;
-                    }
+                    // The disk map learns of it through `after_panes_refresh`
+                    // below (`listings_refreshed`): only if the change is in
+                    // the directory it measured, and without restarting a
+                    // measurement that is running.
                     let refreshed = refresh_panes_where(
                         app,
                         backend,

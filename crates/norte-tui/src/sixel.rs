@@ -23,7 +23,10 @@ pub fn encode(alpha: &[u8], w: u32, h: u32, fg: [u8; 3], bg: [u8; 3]) -> String 
         (a * (LEVELS - 1) + 127) / 255
     };
     let mut out = format!("\x1bP9;1;q\"1;1;{w};{h}");
-    for l in 1..LEVELS {
+    // Register 0 is the background, DEFINED but never used in the data: a
+    // terminal that ignores `P2` fills empty pixels with register 0, which
+    // undefined is its own default (black) — a black box on a light theme.
+    for l in 0..LEVELS {
         let pct = |c: usize| {
             let (f, b) = (u16::from(fg[c]), u16::from(bg[c]));
             // Mix in 0..=255, then to the percent sixel colours speak.
@@ -149,7 +152,10 @@ mod tests {
         let s = encode(&[0; 4], 2, 2, [255, 0, 0], [0, 0, 0]);
         assert!(s.starts_with("\x1bP9;1;q\"1;1;2;2"), "{s:?}");
         assert!(s.contains("#7;2;100;0;0"), "{s:?}");
-        assert!(!s.contains("#0;"), "level 0 is transparent: {s:?}");
+        // Register 0 is DEFINED as the background — a terminal that ignores
+        // `P2` fills empty pixels with it — but never used in the data.
+        assert!(s.contains("#0;2;0;0;0"), "{s:?}");
+        assert_eq!(s.matches("#0").count(), 1, "level 0 is transparent: {s:?}");
         assert!(s.ends_with("\x1b\\"));
     }
 
@@ -201,6 +207,6 @@ mod tests {
         let s = encode(&[0, 255], 2, 1, [255, 255, 255], [0, 0, 0]);
         // Colour 7 sets x=1 only (`@` = top bit, `?` = no bit); x=0 has no
         // coverage and is set by nobody.
-        assert!(s.contains("#7?@$") && !s.contains("#0"), "{s:?}");
+        assert!(s.contains("#7?@$") && s.matches("#0").count() == 1, "{s:?}");
     }
 }

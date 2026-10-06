@@ -76,10 +76,13 @@ impl State {
 
     /// `dir` was read again: the maps that measured it forget they did, so
     /// the next `probe_maps` measures it anew. One still measuring keeps
-    /// going — its report is about to land.
+    /// going, and is measured once more when it lands (`land_map`): its
+    /// numbers are from before the change.
     pub(super) fn maps_measured_before(&mut self, dir: &VPath) {
         for state in self.maps.values_mut() {
-            if state.in_flight.is_none() && state.requested.as_ref() == Some(dir) {
+            if state.in_flight.as_ref().is_some_and(|(_, d)| d == dir) {
+                state.map.changed_meanwhile();
+            } else if state.in_flight.is_none() && state.requested.as_ref() == Some(dir) {
                 state.requested = None;
             }
         }
@@ -240,6 +243,11 @@ impl State {
         };
         let complete = task_state == norte_proto::TaskState::Completed;
         state.map.land(report, complete);
+        // The directory changed while this was measured: what landed is
+        // from before, and `probe_maps` measures it once more.
+        if state.map.take_changed() {
+            state.requested = None;
+        }
         let snap = self.snapshot();
         Some(self.over(UiUpdate::Snapshot(Box::new(snap))))
     }

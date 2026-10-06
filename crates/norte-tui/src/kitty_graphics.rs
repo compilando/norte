@@ -155,9 +155,10 @@ pub fn sixel_supported() -> bool {
     SUPPORT.get().is_some_and(|a| a.sixel)
 }
 
-/// One cell in pixels as the terminal itself said it (`CSI 16 t`, asked in
-/// the same probe), `(width, height)`. A cell does not change size with
-/// the window, so asking once holds.
+/// One cell in pixels as the terminal itself said it at startup
+/// (`CSI 16 t`, asked in the same probe), `(width, height)`. A font zoom
+/// changes it afterwards, so it is the FALLBACK for a terminal whose
+/// window size reports no pixels (`rail_icons::cell_px`).
 #[must_use]
 pub fn probed_cell_px() -> Option<(u16, u16)> {
     SUPPORT.get().and_then(|a| a.cell)
@@ -543,11 +544,8 @@ fn ask() -> io::Result<Answer> {
 mod tests {
     use super::response_says_yes;
 
-    /// The DA1 reply lists the terminal's features; `4` is sixel graphics
-    /// (spec 2026-10-05, F2). Compared field by field: `42` is not `4`.
     /// `CSI 16 t` answers `ESC [ 6 ; height ; width t`: the cell in pixels,
-    /// straight from the terminal — Windows Terminal says it, and crossterm
-    /// cannot ask Windows for it.
+    /// straight from the terminal, for one whose window size reports none.
     #[test]
     fn the_cell_size_reply_is_read() {
         use super::cell_reply;
@@ -573,6 +571,8 @@ mod tests {
         assert!(da1_says_sixel(b"\xff\x1b[?62;4c"));
     }
 
+    /// The DA1 reply lists the terminal's features; `4` is sixel graphics
+    /// (spec 2026-10-05, F2). Compared field by field: `42` is not `4`.
     #[test]
     fn da1_attribute_4_is_sixel() {
         use super::da1_says_sixel;

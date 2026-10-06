@@ -568,6 +568,18 @@ fn a_refresh_does_not_restart_a_running_measurement() {
     map.measuring(norte_proto::TaskId::new(7));
     app.listings_refreshed([true, false]);
     assert!(!app.disk_map_wants_measure(), "still measuring: left alone");
+    // But not forgotten: when that measurement lands, it measures again —
+    // its numbers are from before the change.
+    let map = app.panes.disk_map_mut(slot).expect("map");
+    map.land(
+        norte_proto::methods::FsDirUsageReportResult::default(),
+        true,
+    );
+    app.disk_map_landed();
+    assert!(
+        app.disk_map_wants_measure(),
+        "the change during it is measured"
+    );
 }
 
 /// `true` if ANY buffer cell has that foreground color.

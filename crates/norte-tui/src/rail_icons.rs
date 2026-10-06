@@ -79,22 +79,30 @@ pub fn canvas_for(cell_px: (u16, u16)) -> (u32, u32) {
     (w * k, h * k)
 }
 
-/// One cell's size in pixels, as the terminal reports it (`TIOCGWINSZ`);
-/// `(0, 0)` when it does not, which [`canvas_for`] takes as 1:2.
+/// One cell's size in pixels; `(0, 0)` when nobody says, which
+/// [`canvas_for`] takes as 1:2.
 #[must_use]
 pub fn cell_px() -> (u16, u16) {
-    // What the terminal said at startup (`CSI 16 t`) first: exact, and the
-    // only source on Windows, where crossterm cannot ask.
-    if let Some(px) = crate::kitty_graphics::probed_cell_px() {
-        return px;
-    }
-    crossterm::terminal::window_size().map_or((0, 0), |s| {
+    let live = crossterm::terminal::window_size().map_or((0, 0), |s| {
         if s.columns == 0 || s.rows == 0 {
             (0, 0)
         } else {
             (s.width / s.columns, s.height / s.rows)
         }
-    })
+    });
+    pick_cell(live, crate::kitty_graphics::probed_cell_px())
+}
+
+/// The window's live size (`TIOCGWINSZ`) first: it follows a font zoom,
+/// which changes the cell and would leave a sixel image overflowing its
+/// slot. What the terminal said at startup (`CSI 16 t`) only fills in for
+/// a terminal whose ioctl reports no pixels.
+fn pick_cell(live: (u16, u16), probed: Option<(u16, u16)>) -> (u16, u16) {
+    match (live, probed) {
+        ((w, h), _) if w > 0 && h > 0 => live,
+        (_, Some(px)) => px,
+        _ => (0, 0),
+    }
 }
 
 type Pixmap = resvg::tiny_skia::Pixmap;
@@ -664,6 +672,20 @@ mod tests {
         let strip = column_strip(&frame_of_x());
         assert_eq!(strip.area, ratatui::layout::Rect::new(0, 0, STRIP_W, 10));
         assert_eq!(strip[(1, 3)].symbol(), "x", "its cells, copied");
+    }
+
+    /// The window's live size wins — it follows a font zoom, which changes
+    /// the cell — and what the terminal said at startup only fills in when
+    /// the window reports no pixels.
+    #[test]
+    fn the_live_cell_size_wins_over_the_probed_one() {
+        assert_eq!(pick_cell((8, 16), Some((10, 20))), (8, 16), "zoomed out");
+        assert_eq!(
+            pick_cell((0, 0), Some((10, 20))),
+            (10, 20),
+            "no ioctl pixels"
+        );
+        assert_eq!(pick_cell((0, 0), None), (0, 0));
     }
 
     /// A raster that fails is remembered as failed: it was retried — and
