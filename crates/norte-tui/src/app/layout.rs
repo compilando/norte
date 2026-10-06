@@ -717,6 +717,58 @@ impl App {
             .is_some_and(|m| m.dir() != Some(dir))
     }
 
+    /// Opens and closes panels to match the ones saved open (ADR 0170),
+    /// each in this frontend's own place, and leaves the keyboard on the
+    /// listings. `None` — a session from before — changes nothing.
+    ///
+    /// Opening goes through each kind's own path, which docks it and seeds
+    /// its state as a key press would; closing removes the slot.
+    pub fn apply_open_panels(&mut self, saved: Option<&Vec<String>>) {
+        let elsewhere = self.panels_owned_elsewhere();
+        let present = norte_frontend::session::open_panels_of(&self.layout, &self.kinds, elsewhere);
+        let sync = norte_frontend::session::panels_to_sync(saved, &present, elsewhere);
+        if sync == norte_frontend::session::PanelSync::default() {
+            return;
+        }
+        // Closing by removing the slot, without each kind's own close: this
+        // runs while the session is applied, before the loop has started a
+        // shell or raised the log's level for a restored panel, so there is
+        // nothing of theirs to undo yet.
+        for kind in &sync.close {
+            if let Some(id) = self.slot_of_kind(kind)
+                && let Some(new_layout) = self.layout.close_slot(id)
+            {
+                self.layout = new_layout;
+                self.panes.refresh_visible(&self.layout);
+                self.prune_by_tree();
+            }
+        }
+        for kind in &sync.open {
+            match kind.as_str() {
+                "places" => self.toggle_places(),
+                "tree" => self.toggle_tree(),
+                "viewer" => self.toggle_preview(),
+                "processes" => self.open_processes(false),
+                "metadata" => self.toggle_metadata(),
+                "log" => self.toggle_log(),
+                "disk-map" => self.open_disk_map(),
+                "timeline" => self.open_timeline(),
+                "terminal" => self.toggle_terminal(),
+                _ => {}
+            }
+        }
+        self.key_owner = KeyOwner::Panes;
+        self.settle_key_owner();
+    }
+
+    /// The panel kinds the shared set leaves alone (ADR 0170): processes,
+    /// under `processes_panel = "auto"`.
+    pub(crate) fn panels_owned_elsewhere(&self) -> &'static [&'static str] {
+        norte_frontend::session::owned_elsewhere(
+            self.chrome.processes_panel() == norte_config::load::ProcessesPanel::Auto,
+        )
+    }
+
     /// The listings in `refreshed` were read again: if one of them is the
     /// directory the map measured, what the map shows is from before — a
     /// copy, a mkdir, a Ctrl+R — and it measures again. The external

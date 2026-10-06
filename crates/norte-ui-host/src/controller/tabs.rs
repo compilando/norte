@@ -409,9 +409,22 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(updated) = self.tree_opening(kind) else {
+            return (self.applied(), Vec::new());
+        };
+        let outgoing = self.apply_layout(updated, backend, mailbox);
+        self.after_opening(kind, backend, mailbox);
+        outgoing
+    }
+
+    /// The tree with a slot of `kind` docked in its place, or `None` if one
+    /// is already there. Pure: the toggle applies it with everything a
+    /// change of layout wakes, and the start (ADR 0170) before anything is
+    /// published.
+    pub(super) fn tree_opening(&mut self, kind: &str) -> Option<Node> {
         use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Size};
         if self.slot_of_kind(kind).is_some() {
-            return (self.applied(), Vec::new());
+            return None;
         }
         let id = SlotId(self.new_slot());
         let leaf = match kind {
@@ -447,10 +460,20 @@ impl State {
         };
         // Grouped (phase F): a panel that reaches an edge with another panel
         // joins it as a tab, like VS Code.
-        let updated = self
-            .tree
-            .dock_grouped(SlotId(self.focused()), edge, size, &leaf);
-        let outgoing = self.apply_layout(updated, backend, mailbox);
+        Some(
+            self.tree
+                .dock_grouped(SlotId(self.focused()), edge, size, &leaf),
+        )
+    }
+
+    /// What a panel opened by hand starts: the tree's anchoring, the log's
+    /// polling.
+    fn after_opening(
+        &mut self,
+        kind: &str,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) {
         if kind == "tree" {
             // ANCHORING happens only here: it is the only time where the tree
             // hangs from is chosen. While the listing navigates, the panel
@@ -480,6 +503,5 @@ impl State {
             self.probe_log(mailbox);
             self.request_log_remote(backend, mailbox);
         }
-        outgoing
     }
 }

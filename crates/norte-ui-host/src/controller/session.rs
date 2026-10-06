@@ -75,6 +75,29 @@ impl State {
             // later.
             self.set_tree(tree, None);
         }
+        // Which panels are open is the terminal's too (ADR 0170): this
+        // window keeps its own places and sizes, and opens or closes to
+        // match — on the tree, before anything is published, like the
+        // layout just above.
+        let elsewhere = self.panels_owned_elsewhere();
+        let present = norte_frontend::session::open_panels_of(&self.tree, &self.kinds, elsewhere);
+        let sync = norte_frontend::session::panels_to_sync(
+            body.open_panels.get(&self.session_key()),
+            &present,
+            elsewhere,
+        );
+        for kind in &sync.close {
+            if let Some(id) = self.slot_of_kind(kind)
+                && let Some(tree) = self.tree.close_slot(id)
+            {
+                self.set_tree(tree, None);
+            }
+        }
+        for kind in &sync.open {
+            if let Some(tree) = self.tree_opening(kind) {
+                self.set_tree(tree, None);
+            }
+        }
         self.apply_session(&body);
         self.palette_recent.clone_from(&body.palette_recent);
         self.popular = norte_frontend::history::Popular::from_entries(body.popular.clone());
@@ -83,6 +106,15 @@ impl State {
             self.session.touched.insert(*id, slot_state.touched_ms);
         }
         self.session.read = body;
+    }
+
+    /// The panel kinds the shared set leaves alone (ADR 0170): processes,
+    /// under `processes_panel = "auto"`.
+    fn panels_owned_elsewhere(&self) -> &'static [&'static str] {
+        norte_frontend::session::owned_elsewhere(
+            self.config.common.ui_chrome.processes_panel()
+                == norte_config::load::ProcessesPanel::Auto,
+        )
     }
 
     /// Under which `layouts` key this window's screen goes.
@@ -565,6 +597,15 @@ impl State {
         }
         body.palette_recent.clone_from(&self.palette_recent);
         body.popular = self.popular.entries().to_vec();
+        // Which panels are open, SHARED with the terminal (ADR 0170).
+        body.open_panels.insert(
+            self.session_key(),
+            norte_frontend::session::open_panels_of(
+                &self.tree,
+                &self.kinds,
+                self.panels_owned_elsewhere(),
+            ),
+        );
         for (id, slot) in &self.slots {
             body.slots.insert(
                 *id,

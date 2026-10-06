@@ -88,6 +88,35 @@ fn the_windows_layout_is_respected_and_the_handoff_delivers_it() {
     );
 }
 
+/// Which panels are open is SHARED with the window (ADR 0170): a session
+/// whose window left the disk map open and the tree closed opens one and
+/// closes the other here — each in this frontend's own place — and the
+/// keyboard stays on the listing.
+#[test]
+fn the_shared_open_panels_are_applied_on_start() {
+    use norte_frontend::layout::{Dir, Size};
+    let tree = Node::Split {
+        dir: Dir::Horizontal,
+        sizes: vec![Size::Weight(1), Size::Fixed(30)],
+        children: vec![
+            Node::slot(SlotId(1), KindId::browser()),
+            Node::slot(SlotId(2), KindId::new("tree")),
+        ],
+    };
+    let mut body = norte_frontend::session::SessionBody::default();
+    body.layouts.insert("default".to_owned(), tree);
+    body.open_panels
+        .insert("default".to_owned(), vec!["disk-map".to_owned()]);
+    let mut app = app_basica();
+    app.apply_session_value(norte_frontend::session::SCHEMA_VERSION, &body.to_value());
+    assert!(app.disk_map_slot().is_some(), "the window's map opens here");
+    assert!(app.tree_slot().is_none(), "the tree it closed closes here");
+    assert_eq!(app.key_owner(), norte_tui::app::KeyOwner::Panes);
+    // And what this frontend saves says the same.
+    let saved = app.session_body();
+    assert_eq!(saved.open_panels["default"], vec!["disk-map"]);
+}
+
 /// The STICKY profile arrives with the session and requests the switch.
 ///
 /// It cannot be applied earlier: it lives in the session, the daemon holds
