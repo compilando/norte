@@ -472,12 +472,28 @@ pub(crate) fn draw_disk_map(
         State::Measuring(_) => format!(" — {}", t("disk-map-measuring")),
         State::Failure(motivo) => format!(" — {motivo}"),
     };
+    // WHICH directory, as the window says it: a map of the other pane's
+    // directory, or of one being filled, looked the same as this one's.
+    let which = map
+        .dir_label()
+        .map(|(name, _)| format!(" · {name}"))
+        .unwrap_or_default();
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" {}{the_state} ", t("disk-map-title")))
+        .title(format!(" {}{which}{the_state} ", t("disk-map-title")))
         .title_style(app.theme.role(Role::Title))
         .border_style(app.theme.role(border));
     let inside = block.inner(area);
+    // A finished map with nothing to draw says so; an empty frame read as
+    // "still loading" or "broken".
+    if map.nothing_to_draw() {
+        let note = t("disk-map-empty");
+        let para = Paragraph::new(Line::styled(note, app.theme.role(Role::Muted)))
+            .wrap(ratatui::widgets::Wrap { trim: true })
+            .block(block);
+        frame.render_widget(para, area);
+        return;
+    }
     let marco =
         norte_frontend::treemap::squarify(&map.report().children, inside.width, inside.height);
     let lines = frame_lines(&marco, &app.theme);

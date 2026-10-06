@@ -2320,6 +2320,7 @@ processes-has-keyboard = este panel tiene el teclado · Esc lo devuelve
 log-title = Registro
 disk-map-title = Mapa de disco
 disk-map-measuring = midiendo
+disk-map-empty = Nada que dibujar: el directorio está vacío o lo que tiene no ocupa espacio.
 slot-retry = reintentar
 # Esperando un listado (#323). Tres piezas y no una frase: el renderer las
 # compone con la RUTA en su propio nodo, porque una ruta pegada dentro de la

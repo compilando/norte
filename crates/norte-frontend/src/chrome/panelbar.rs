@@ -202,6 +202,13 @@ pub fn icon_svg(kind: &str) -> Option<&'static str> {
 }
 
 /// How many buttons the bar has: the registry's, whatever their state.
+///
+/// ```
+/// use norte_frontend::layout::KindRegistry;
+/// use norte_frontend::panelbar::{PanelBarInput, button_count, buttons};
+/// let reg = KindRegistry::builtin();
+/// assert_eq!(button_count(&reg), buttons(&reg, PanelBarInput::default()).len());
+/// ```
 #[must_use]
 pub fn button_count(reg: &KindRegistry) -> usize {
     reg.decls().iter().filter(|d| es_button(d)).count()

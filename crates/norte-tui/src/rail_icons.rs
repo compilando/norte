@@ -79,26 +79,44 @@ pub fn canvas_for(cell_px: (u16, u16)) -> (u32, u32) {
     (w * k, h * k)
 }
 
-/// One cell's size in pixels, as the terminal reports it (`TIOCGWINSZ`);
-/// `(0, 0)` when it does not, which [`canvas_for`] takes as 1:2.
+/// One cell's size in pixels; `(0, 0)` when nobody says, which
+/// [`canvas_for`] takes as 1:2.
 #[must_use]
 pub fn cell_px() -> (u16, u16) {
-    crossterm::terminal::window_size().map_or((0, 0), |s| {
+    let live = crossterm::terminal::window_size().map_or((0, 0), |s| {
         if s.columns == 0 || s.rows == 0 {
             (0, 0)
         } else {
             (s.width / s.columns, s.height / s.rows)
         }
-    })
+    });
+    pick_cell(live, crate::kitty_graphics::probed_cell_px())
+}
+
+/// The window's live size (`TIOCGWINSZ`) first: it follows a font zoom,
+/// which changes the cell and would leave a sixel image overflowing its
+/// slot. What the terminal said at startup (`CSI 16 t`) only fills in for
+/// a terminal whose ioctl reports no pixels.
+fn pick_cell(live: (u16, u16), probed: Option<(u16, u16)>) -> (u16, u16) {
+    match (live, probed) {
+        ((w, h), _) if w > 0 && h > 0 => live,
+        (_, Some(px)) => px,
+        _ => (0, 0),
+    }
 }
 
 type Pixmap = resvg::tiny_skia::Pixmap;
-type Cache = std::collections::HashMap<(String, [u8; 3], (u32, u32)), std::sync::Arc<Pixmap>>;
+type Cache =
+    std::collections::HashMap<(String, [u8; 3], (u32, u32)), Option<std::sync::Arc<Pixmap>>>;
+
+/// How many rasterisations ran: a test seam for "a failure is not retried".
+#[cfg(test)]
+static RASTERISED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// `kind`'s shared icon (`panelbar::icon_svg`) stroked in `rgb` on a
-/// `canvas`, cached by the three: a frame asks for the same few every
-/// time. `None` for a kind without an SVG, or if rendering fails (logged;
-/// the slot stays blank for that frame).
+/// `canvas`, cached by the three — a failure too, logged once: a frame asks
+/// for the same few every time. `None` for a kind without an SVG, or if
+/// rendering fails (the slot stays blank).
 fn raster(kind: &str, rgb: [u8; 3], canvas: (u32, u32)) -> Option<std::sync::Arc<Pixmap>> {
     static CACHE: std::sync::OnceLock<std::sync::Mutex<Cache>> = std::sync::OnceLock::new();
     let svg = norte_frontend::panelbar::icon_svg(kind)?;
@@ -109,17 +127,19 @@ fn raster(kind: &str, rgb: [u8; 3], canvas: (u32, u32)) -> Option<std::sync::Arc
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get(&key)
     {
-        return Some(hit.clone());
+        return hit.clone();
     }
-    let pixmap = std::sync::Arc::new(rasterise(svg, rgb, canvas).or_else(|| {
-        tracing::debug!(kind, "could not rasterise the panel icon");
-        None
-    })?);
+    #[cfg(test)]
+    RASTERISED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let pixmap = rasterise(svg, rgb, canvas).map(std::sync::Arc::new);
+    if pixmap.is_none() {
+        tracing::debug!(kind, ?canvas, "could not rasterise the panel icon");
+    }
     cache
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(key, pixmap.clone());
-    Some(pixmap)
+    pixmap
 }
 
 /// `kind`'s icon stroked in `rgb` on a `canvas`, as the PNG kitty takes.
@@ -191,9 +211,32 @@ pub struct RailIcon {
     pub canvas: (u32, u32),
     /// What paints it.
     pub backend: RailBackend,
-    /// The rail's background: sixel paints every pixel, the empty ones in
-    /// this colour.
+    /// The rail's background, as shown: what sixel blends the antialiased
+    /// edge toward.
     pub bg: [u8; 3],
+    /// Which slot of the column it fills: its image id (`id_for`), so a
+    /// slot with no SVG ahead of it does not shift the others.
+    pub slot: usize,
+}
+
+impl RailIcon {
+    /// Whether `other` is the same IMAGE — only placed elsewhere, or not at
+    /// all: a hidden kitty image is then shown again without its bytes.
+    fn same_image(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.rgb == other.rgb
+            && self.canvas == other.canvas
+            && self.backend == other.backend
+            && self.bg == other.bg
+    }
+}
+
+/// A slot's image on the terminal: shown, or a kitty image hidden under an
+/// overlay with its bytes kept (`d=i`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Placed {
+    icon: RailIcon,
+    shown: bool,
 }
 
 /// The first kitty image id of the column's range. The viewer's ids count
@@ -210,101 +253,168 @@ pub fn id_for(i: usize) -> u32 {
 
 /// What is on the terminal right now, slot by slot. PROCESS state, like
 /// `kitty_graphics::PLACED`: the exit paths that erase have no `App`.
-static PLACED: std::sync::Mutex<Vec<Option<RailIcon>>> = std::sync::Mutex::new(Vec::new());
+static PLACED: std::sync::Mutex<Vec<Option<Placed>>> = std::sync::Mutex::new(Vec::new());
 
-fn placed() -> std::sync::MutexGuard<'static, Vec<Option<RailIcon>>> {
+fn placed() -> std::sync::MutexGuard<'static, Vec<Option<Placed>>> {
     PLACED
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Brings the terminal to `want`: a slot that changed is taken down and put
-/// up again, one no longer wanted is taken down, one unchanged is left
-/// alone — a still frame builds nothing and writes nothing. A failed write
-/// forgets the changed slots so the next frame retries them.
+/// Brings the terminal to `want` (one icon per column slot, by
+/// `RailIcon::slot`): unchanged slots are left alone — a still frame
+/// builds nothing and writes nothing.
 ///
-/// Taking down: a kitty image by escape; a sixel image — cells, with no
-/// escape to remove it — by repainting its cells from `frame`, the one
-/// just drawn, since ratatui does not rewrite cells it believes unchanged.
-/// ALL of it before anything is put up: an icon that moved one row shares
-/// a row with where it was, and a later repaint would erase half of it.
-/// The cursor is saved and restored around it all.
+/// - A kitty icon no longer wanted is HIDDEN with its bytes kept (`d=i`),
+///   and shown again by re-placing it (`a=p`) when the same image comes
+///   back: closing a menu does not re-send every PNG. A different image
+///   deletes the old one (`d=I`) and transmits.
+/// - A sixel image is cells, with no escape to remove it: its cells are
+///   repainted from `frame`, the one just drawn, since ratatui does not
+///   rewrite cells it believes unchanged — ALWAYS, even under a new image
+///   in the same cells, whose empty pixels are transparent.
+///
+/// Everything comes down before anything goes up: an icon that moved one
+/// row shares a row with where it was, and a later repaint would erase
+/// half of it. The cursor is saved and restored around it all. A failed
+/// write keeps what was believed on screen, so the exit can still erase it.
 pub fn sync<B>(out: &mut B, want: &[RailIcon], frame: Option<&ratatui::buffer::Buffer>)
 where
     B: ratatui::backend::Backend<Error = std::io::Error> + std::io::Write,
 {
-    // Which slots changed, under the lock and nothing else: building an
-    // image runs resvg, and a panic there must not find the panic hook
-    // waiting on a lock its own thread holds (`delete_all`).
+    use crate::kitty_graphics::{escape_delete, escape_hide, escape_reposition};
+    // Decided under the lock and nothing else: building an image runs
+    // resvg, and a panic there must not find the panic hook waiting on a
+    // lock its own thread holds (`delete_all`).
     let before = placed().clone();
-    let len = before.len().max(want.len());
-    let had = |i: usize| before.get(i).cloned().flatten();
-    let changed: Vec<usize> = (0..len)
-        .filter(|&i| had(i).as_ref() != want.get(i))
-        .collect();
-    if changed.is_empty() {
+    let len = want
+        .iter()
+        .map(|w| w.slot + 1)
+        .max()
+        .unwrap_or(0)
+        .max(before.len());
+    let mut wanted: Vec<Option<&RailIcon>> = vec![None; len];
+    for w in want {
+        wanted[w.slot] = Some(w);
+    }
+    let mut after = before.clone();
+    after.resize(len, None);
+    let (mut down, mut repaint, mut up) = (String::new(), Vec::new(), Vec::new());
+    for (i, w) in wanted.iter().enumerate() {
+        let had = before.get(i).cloned().flatten();
+        let id = id_for(i);
+        match (had, *w) {
+            (None, None) => {}
+            (Some(p), None) if !p.shown => {}
+            (Some(p), None) => {
+                if p.icon.backend == RailBackend::KittyGraphics {
+                    down.push_str(&escape_hide(id));
+                    after[i] = Some(Placed { shown: false, ..p });
+                } else {
+                    repaint.push(p.icon.rect);
+                    after[i] = None;
+                }
+            }
+            (Some(p), Some(w)) if p.shown && p.icon == *w => {}
+            (Some(p), Some(w))
+                if p.icon.backend == RailBackend::KittyGraphics && p.icon.same_image(w) =>
+            {
+                up.push((w, escape_reposition(id, w.rect, None)));
+                after[i] = Some(Placed {
+                    icon: w.clone(),
+                    shown: true,
+                });
+            }
+            (had, Some(w)) => {
+                if let Some(p) = had {
+                    if p.icon.backend == RailBackend::KittyGraphics {
+                        down.push_str(&escape_delete(id));
+                    } else if p.shown {
+                        repaint.push(p.icon.rect);
+                    }
+                }
+                after[i] = None;
+                // Marked for a payload, built below outside the lock.
+                up.push((w, String::new()));
+            }
+        }
+    }
+    if after == before && up.is_empty() {
         return;
     }
-    let puts: Vec<(usize, &RailIcon, String)> = changed
-        .iter()
-        .filter_map(|&i| {
-            let w = want.get(i)?;
-            Some((i, w, payload(id_for(i), w)?))
-        })
-        .collect();
-    let mut deletes = String::new();
-    let mut repaint = Vec::new();
-    for &i in &changed {
-        let Some(old) = had(i) else { continue };
-        if old.backend == RailBackend::KittyGraphics {
-            deletes.push_str(&crate::kitty_graphics::escape_delete(id_for(i)));
-            continue;
-        }
-        // A new sixel image over the same cells covers the old one whole.
-        let covered = puts
-            .iter()
-            .any(|(j, w, _)| *j == i && w.rect == old.rect && w.backend == RailBackend::Sixel);
-        if !covered {
-            repaint.push(old.rect);
+    for (w, escape) in &mut up {
+        if escape.is_empty() {
+            match payload(id_for(w.slot), w) {
+                Some(p) => {
+                    *escape = p;
+                    after[w.slot] = Some(Placed {
+                        icon: (*w).clone(),
+                        shown: true,
+                    });
+                }
+                None => after[w.slot] = None,
+            }
         }
     }
     let written = (|| -> std::io::Result<()> {
         out.write_all(b"\x1b7")?;
-        out.write_all(deletes.as_bytes())?;
+        out.write_all(down.as_bytes())?;
         if let Some(buf) = frame {
-            let cells: Vec<_> = repaint
-                .iter()
-                .flat_map(|r| r.positions())
-                .filter(|p| buf.area.contains(*p))
-                .map(|p| (p.x, p.y, &buf[p]))
-                .collect();
-            out.draw(cells.into_iter())?;
+            out.draw(repaint_cells(buf, &repaint).into_iter())?;
         }
-        for (_, w, escape) in &puts {
+        for (w, escape) in up.iter().filter(|(_, e)| !e.is_empty()) {
             crossterm::queue!(out, crossterm::cursor::MoveTo(w.rect.x, w.rect.y))?;
             out.write_all(escape.as_bytes())?;
         }
         out.write_all(b"\x1b8")?;
         std::io::Write::flush(out)
     })();
-    let mut placed = placed();
-    placed.resize(len, None);
-    for &i in &changed {
-        placed[i] = None;
-    }
     match written {
-        Ok(()) => {
-            for (i, w, _) in puts {
-                placed[i] = Some(w.clone());
-            }
-        }
+        Ok(()) => *placed() = after,
         Err(e) => {
             // An APC or DCS cut short swallows whatever is painted after it.
+            // What was there is kept: the exit can still erase it.
             let _ = out.write_all(b"\x1b\\");
             tracing::debug!(error = %e, "could not place the panel icons");
         }
     }
-    placed.truncate(want.len());
+}
+
+/// How wide a strip of the frame the loop keeps: the big column is four
+/// cells, and its icons sit in columns 1–2.
+pub const STRIP_W: u16 = 4;
+
+/// The column's strip of a drawn frame — all a repaint reads — instead of
+/// a copy of the whole screen on every frame.
+#[must_use]
+pub fn column_strip(frame: &ratatui::buffer::Buffer) -> ratatui::buffer::Buffer {
+    let area = ratatui::layout::Rect {
+        width: frame.area.width.min(STRIP_W),
+        ..frame.area
+    };
+    let mut strip = ratatui::buffer::Buffer::empty(area);
+    for p in area.positions() {
+        strip[p] = frame[p].clone();
+    }
+    strip
+}
+
+/// The cells of `rects` as `frame` has them, for a repaint — skipping the
+/// right half of a wide character and cells ratatui itself skips: writing
+/// one would cut the character in two.
+fn repaint_cells<'a>(
+    frame: &'a ratatui::buffer::Buffer,
+    rects: &[ratatui::layout::Rect],
+) -> Vec<(u16, u16, &'a ratatui::buffer::Cell)> {
+    use unicode_width::UnicodeWidthStr as _;
+    rects
+        .iter()
+        .flat_map(|r| r.positions())
+        .filter(|p| frame.area.contains(*p))
+        .filter(|p| frame[*p].diff_option != ratatui::buffer::CellDiffOption::Skip)
+        .filter(|p| p.x == frame.area.x || frame[(p.x - 1, p.y)].symbol().width() < 2)
+        .map(|p| (p.x, p.y, &frame[p]))
+        .collect()
 }
 
 /// Whether sixel images are up: the loop keeps the drawn frame while they
@@ -315,7 +425,7 @@ pub fn any_sixel_placed() -> bool {
     placed()
         .iter()
         .flatten()
-        .any(|p| p.backend == RailBackend::Sixel)
+        .any(|p| p.shown && p.icon.backend == RailBackend::Sixel)
 }
 
 /// Forgets what is placed WITHOUT writing: the screen was cleared (a resize
@@ -338,27 +448,30 @@ pub fn delete_all(out: &mut impl std::io::Write) {
         Err(std::sync::TryLockError::WouldBlock) => return,
     };
     // Sixel images are cells, gone with the alternate screen; only kitty's
-    // outlive it.
-    let any_kitty = placed
+    // outlive it — shown or hidden, their bytes are in the terminal. One
+    // delete per id: the range delete (`d=R`) is newer than some terminals.
+    let esc: String = placed
         .iter()
-        .flatten()
-        .any(|p| p.backend == RailBackend::KittyGraphics);
-    if !any_kitty {
-        placed.clear();
+        .enumerate()
+        .filter(|(_, p)| {
+            p.as_ref()
+                .is_some_and(|p| p.icon.backend == RailBackend::KittyGraphics)
+        })
+        .map(|(i, _)| crate::kitty_graphics::escape_delete(id_for(i)))
+        .collect();
+    placed.clear();
+    if esc.is_empty() {
         return;
     }
-    let esc = format!(
-        "\x1b_Ga=d,d=R,x={},y={},q=2\x1b\\",
-        ID_BASE,
-        ID_BASE + MAX_SLOTS - 1
-    );
     if let Err(e) = out.write_all(esc.as_bytes()).and_then(|()| out.flush()) {
         tracing::debug!(error = %e, "could not erase the panel icons");
     }
-    placed.clear();
 }
 
 #[cfg(test)]
+// These tests share `PLACED`, PROCESS state: safe under nextest, which runs
+// each test in its own process (`just t`); `cargo test` threads would race.
+// Each test starts with `delete_all` to begin from nothing.
 mod tests {
     use super::*;
     use norte_config::Images;
@@ -371,6 +484,7 @@ mod tests {
             canvas: (64, 128),
             backend: RailBackend::KittyGraphics,
             bg: [0, 0, 0],
+            slot: 0,
         }
     }
 
@@ -412,7 +526,7 @@ mod tests {
     fn sixel_sync_paints_a_dcs_and_never_an_apc() {
         let _ = written(delete_all);
         let out = written(|o| sync_v(o, &[sixel_icon([200, 0, 0])]));
-        assert!(out.contains("\x1bP0;1;q\"1;1;18;38"), "{out:?}");
+        assert!(out.contains("\x1bP9;1;q\"1;1;18;38"), "{out:?}");
         assert!(!out.contains("\x1b_G"), "{out:?}");
         // A recolour paints over: no delete, a new image.
         let again = written(|o| sync_v(o, &[sixel_icon([0, 200, 0])]));
@@ -473,13 +587,138 @@ mod tests {
         assert!(repaint < image, "{out:?}");
     }
 
-    /// Kitty images are deleted by escape: nothing is repainted.
+    /// A recolour in the same cells repaints them first: the new image's
+    /// empty pixels are transparent, and the old strokes would show
+    /// through.
+    #[test]
+    fn a_recoloured_sixel_clears_its_cells_first() {
+        let _ = written(delete_all);
+        let _ = written(|o| sync_v(o, &[sixel_icon([200, 0, 0])]));
+        let out = written(|o| sync_f(o, &[sixel_icon([0, 200, 0])], Some(&frame_of_x())));
+        let repaint = out.find('x').expect("cells repainted");
+        let image = out.find("\x1bP").expect("placed again");
+        assert!(repaint < image, "{out:?}");
+    }
+
+    /// Hidden under a menu, a kitty icon keeps its bytes in the terminal
+    /// (`d=i`); shown again, it is only re-placed (`a=p`) — closing a menu
+    /// used to re-send every PNG.
+    #[test]
+    fn a_hidden_kitty_icon_comes_back_without_its_bytes() {
+        let _ = written(delete_all);
+        let want = [icon("places", [1, 2, 3], 1, 2)];
+        let _ = written(|o| sync_v(o, &want));
+        let hide = written(|o| sync_v(o, &[]));
+        assert!(
+            hide.contains(&format!("a=d,d=i,i={}", id_for(0))),
+            "{hide:?}"
+        );
+        let show = written(|o| sync_v(o, &want));
+        assert!(show.contains("a=p") && !show.contains("a=T"), "{show:?}");
+    }
+
+    /// The image id is the column SLOT's, not the position among the icons
+    /// placed: a slot with no SVG ahead of others no longer shifts them.
+    #[test]
+    fn the_id_follows_the_slot() {
+        let _ = written(delete_all);
+        let mut at_three = icon("places", [1, 2, 3], 1, 2);
+        at_three.slot = 3;
+        let out = written(|o| sync_v(o, &[at_three]));
+        assert!(out.contains(&format!("i={}", id_for(3))), "{out:?}");
+    }
+
+    /// Erasing goes id by id — a range delete (`d=R`) is newer than some
+    /// terminals — and covers hidden images too.
+    #[test]
+    fn delete_all_names_each_kitty_image_hidden_or_not() {
+        let _ = written(delete_all);
+        let _ = written(|o| sync_v(o, &[icon("places", [1, 2, 3], 1, 2)]));
+        let _ = written(|o| sync_v(o, &[]));
+        let all = written(delete_all);
+        assert!(
+            all.contains(&format!("d=I,i={}", id_for(0))) && !all.contains("d=R"),
+            "{all:?}"
+        );
+    }
+
+    /// A write that fails keeps what was believed placed, so the exit can
+    /// still delete it — dropping it left an orphan image on screen.
+    #[test]
+    fn a_failed_write_keeps_what_is_on_screen() {
+        struct Broken;
+        impl std::io::Write for Broken {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("gone"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let _ = written(delete_all);
+        let _ = written(|o| sync_v(o, &[icon("places", [1, 2, 3], 1, 2)]));
+        sync(
+            &mut ratatui::backend::CrosstermBackend::new(Broken),
+            &[],
+            None,
+        );
+        assert!(written(delete_all).contains(&format!("d=I,i={}", id_for(0))));
+    }
+
+    /// What the loop keeps of a drawn frame for repaints: only the
+    /// column's strip, not the whole screen every frame.
+    #[test]
+    fn the_kept_frame_is_the_column_strip() {
+        let strip = column_strip(&frame_of_x());
+        assert_eq!(strip.area, ratatui::layout::Rect::new(0, 0, STRIP_W, 10));
+        assert_eq!(strip[(1, 3)].symbol(), "x", "its cells, copied");
+    }
+
+    /// The window's live size wins — it follows a font zoom, which changes
+    /// the cell — and what the terminal said at startup only fills in when
+    /// the window reports no pixels.
+    #[test]
+    fn the_live_cell_size_wins_over_the_probed_one() {
+        assert_eq!(pick_cell((8, 16), Some((10, 20))), (8, 16), "zoomed out");
+        assert_eq!(
+            pick_cell((0, 0), Some((10, 20))),
+            (10, 20),
+            "no ioctl pixels"
+        );
+        assert_eq!(pick_cell((0, 0), None), (0, 0));
+    }
+
+    /// A raster that fails is remembered as failed: it was retried — and
+    /// logged — on every frame.
+    #[test]
+    fn a_failed_raster_is_not_retried() {
+        let before = RASTERISED.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(png("places", [1, 2, 3], (0, 0)).is_none());
+        assert!(png("places", [1, 2, 3], (0, 0)).is_none());
+        let after = RASTERISED.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(after - before, 1, "one attempt");
+    }
+
+    /// The repaint does not write the right half of a wide character (an
+    /// overlay's CJK title over the column): that would cut it in two.
+    #[test]
+    fn the_repaint_does_not_split_a_wide_character() {
+        let area = ratatui::layout::Rect::new(0, 0, 4, 1);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        buf.set_string(0, 0, "界", ratatui::style::Style::default());
+        let cells = repaint_cells(&buf, &[ratatui::layout::Rect::new(0, 0, 3, 1)]);
+        let xs: Vec<u16> = cells.iter().map(|(x, _, _)| *x).collect();
+        assert_eq!(xs, vec![0, 2], "x=1 is the wide character's other half");
+    }
+
+    /// Kitty images come down by escape (hidden, `d=i`): nothing is
+    /// repainted.
     #[test]
     fn kitty_removal_repaints_nothing() {
         let _ = written(delete_all);
         let _ = written(|o| sync_v(o, &[icon("places", [1, 2, 3], 1, 2)]));
         let out = written(|o| sync_f(o, &[], Some(&frame_of_x())));
-        assert!(!out.contains('x') && out.contains("d=I"), "{out:?}");
+        assert!(!out.contains('x') && out.contains("d=i"), "{out:?}");
     }
 
     /// The loop keeps the frame while sixel pixels are UP, not only while
@@ -631,8 +870,8 @@ mod tests {
         let _ = written(delete_all);
         let _ = written(|o| sync_v(o, &[icon("places", [1, 2, 3], 1, 2)]));
         let gone = written(|o| sync_v(o, &[]));
-        assert!(gone.contains(&format!("d=I,i={}", id_for(0))), "{gone:?}");
-        assert_eq!(written(|o| sync_v(o, &[])), "");
+        assert!(gone.contains(&format!("d=i,i={}", id_for(0))), "{gone:?}");
+        assert_eq!(written(|o| sync_v(o, &[])), "", "hidden stays hidden");
     }
 
     /// The exit paths call it on EVERY terminal: one that never got an icon
@@ -644,14 +883,10 @@ mod tests {
     }
 
     #[test]
-    fn delete_all_clears_the_range_and_the_state() {
+    fn delete_all_clears_the_state() {
         let want = [icon("places", [1, 2, 3], 1, 2)];
         let _ = written(|o| sync_v(o, &want));
-        let all = written(delete_all);
-        assert!(
-            all.contains(&format!("d=R,x={},y={}", ID_BASE, ID_BASE + MAX_SLOTS - 1)),
-            "{all:?}"
-        );
+        let _ = written(delete_all);
         assert!(
             written(|o| sync_v(o, &want)).contains("a=T"),
             "placed again"

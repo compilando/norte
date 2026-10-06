@@ -2129,6 +2129,10 @@ pub struct DiskMapSlotView {
     /// Travels because a half-done map without saying so reads as a small
     /// directory, which is the wrong answer and a believable one at that.
     pub measuring: bool,
+    /// What a finished map with nothing to draw says, already translated;
+    /// empty otherwise. An empty frame read as "still loading" or "broken"
+    /// (bridge 98).
+    pub empty: String,
 }
 
 /// The journal timeline (#359, bridge 78).

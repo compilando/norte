@@ -34,9 +34,10 @@ use ratatui::layout::Rect;
 const PROBE_ID: &str = "i=31";
 
 /// The query: a 1x1 RGB image (`f=24`) transmitted inline (`t=d`), with
-/// action `a=q` — "query", never draws anything — and a DA1 RIGHT AFTER to
-/// have something to wait for on a terminal that does not answer the APC.
-const QUERY: &[u8] = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c";
+/// action `a=q` — "query", never draws anything — then the cell size in
+/// pixels (`CSI 16 t`, whose reply has no `c`), and a DA1 LAST to have
+/// something to wait for on a terminal that answers neither.
+const QUERY: &[u8] = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[16t\x1b[c";
 
 /// How long to wait for the response before calling it "no".
 const DEADLINE: Duration = Duration::from_millis(200);
@@ -84,16 +85,29 @@ struct Answer {
     kitty: bool,
     /// Sixel: the DA1 reply lists attribute `4`.
     sixel: bool,
+    /// One cell in pixels, if the terminal answered `CSI 16 t`.
+    cell: Option<(u16, u16)>,
 }
 
 /// Does the DA1 reply (`ESC [ ? 62 ; 4 ; … c`) list attribute `4`, sixel?
+/// Lossy: a stray byte typed during the probe must not hide it.
 fn da1_says_sixel(bytes: &[u8]) -> bool {
-    let Ok(text) = std::str::from_utf8(bytes) else {
-        return false;
-    };
+    let text = String::from_utf8_lossy(bytes);
     text.split("\x1b[?").skip(1).any(|rest| {
         rest.split_once('c')
             .is_some_and(|(attrs, _)| attrs.split(';').any(|a| a == "4"))
+    })
+}
+
+/// The `CSI 16 t` reply, `ESC [ 6 ; height ; width t`: one cell in pixels
+/// as `(width, height)`. `None` without it, or with a zero.
+fn cell_reply(bytes: &[u8]) -> Option<(u16, u16)> {
+    let text = String::from_utf8_lossy(bytes);
+    text.split("\x1b[6;").skip(1).find_map(|rest| {
+        let (body, _) = rest.split_once('t')?;
+        let (h, w) = body.split_once(';')?;
+        let (h, w) = (h.parse::<u16>().ok()?, w.parse::<u16>().ok()?);
+        (h > 0 && w > 0).then_some((w, h))
     })
 }
 
@@ -139,6 +153,15 @@ pub fn supported() -> bool {
 #[must_use]
 pub fn sixel_supported() -> bool {
     SUPPORT.get().is_some_and(|a| a.sixel)
+}
+
+/// One cell in pixels as the terminal itself said it at startup
+/// (`CSI 16 t`, asked in the same probe), `(width, height)`. A font zoom
+/// changes it afterwards, so it is the FALLBACK for a terminal whose
+/// window size reports no pixels (`rail_icons::cell_px`).
+#[must_use]
+pub fn probed_cell_px() -> Option<(u16, u16)> {
+    SUPPORT.get().and_then(|a| a.cell)
 }
 
 /// How many RAW bytes (before base64) each chunk of an APC carries.
@@ -503,6 +526,7 @@ fn ask() -> io::Result<Answer> {
     let answer = Answer {
         kitty: response_says_yes(&read),
         sixel: da1_says_sixel(&read),
+        cell: cell_reply(&read),
     };
     // Without this, a "no" and a terminal that answered nothing at all are
     // indistinguishable from outside. This is step 6's evidence (the gate):
@@ -519,6 +543,33 @@ fn ask() -> io::Result<Answer> {
 #[cfg(test)]
 mod tests {
     use super::response_says_yes;
+
+    /// `CSI 16 t` answers `ESC [ 6 ; height ; width t`: the cell in pixels,
+    /// straight from the terminal, for one whose window size reports none.
+    #[test]
+    fn the_cell_size_reply_is_read() {
+        use super::cell_reply;
+        assert_eq!(cell_reply(b"\x1b[6;19;9t"), Some((9, 19)));
+        assert_eq!(
+            cell_reply(b"\x1b_Gi=31;OK\x1b\\\x1b[6;20;10t\x1b[?62;4c"),
+            Some((10, 20))
+        );
+        assert_eq!(cell_reply(b"\x1b[6;0;0t"), None, "zero is no answer");
+        assert_eq!(
+            cell_reply(b"\x1b[4;600;800t"),
+            None,
+            "4 is the window, not the cell"
+        );
+        assert_eq!(cell_reply(b"\x1b[?62;4c"), None);
+    }
+
+    /// A stray non-UTF-8 byte typed during the probe does not turn sixel
+    /// off.
+    #[test]
+    fn a_stray_byte_does_not_hide_sixel() {
+        use super::da1_says_sixel;
+        assert!(da1_says_sixel(b"\xff\x1b[?62;4c"));
+    }
 
     /// The DA1 reply lists the terminal's features; `4` is sixel graphics
     /// (spec 2026-10-05, F2). Compared field by field: `42` is not `4`.

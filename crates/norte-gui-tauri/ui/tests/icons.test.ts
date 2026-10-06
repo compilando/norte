@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import { describe, expect, it } from "vitest";
 import { icon } from "../src/render/icons";
 
@@ -16,6 +17,32 @@ describe("panel icons", () => {
 
   it("keeps the circles of the shared files", () => {
     expect(icon(document, "metadata")?.querySelectorAll("circle").length).toBe(1);
+  });
+
+  // The files are read with two patterns, not a parser (D11): a shape
+  // written another way — attributes in another order, a `<rect>` — would
+  // be dropped without a word. Every shape in every file is drawn.
+  const files = import.meta.glob<string>(
+    "../../../norte-frontend/assets/panel-icons/*.svg",
+    {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    },
+  );
+
+  it("draws every shape of every shared file", () => {
+    const entries = Object.entries(files);
+    expect(entries.length).toBe(8);
+    for (const [path, src] of entries) {
+      const kind = path.replace(/^.*\//, "").replace(/\.svg$/, "");
+      const svg = icon(document, kind);
+      const inFile = (
+        src.match(/<(path|circle|rect|line|polyline|polygon|ellipse)\b/g) ?? []
+      ).length;
+      const drawn = svg?.querySelectorAll("path, circle").length ?? 0;
+      expect(drawn, kind).toBe(inFile);
+    }
   });
 
   it("still draws the window-only icons and the letter fallback", () => {

@@ -1054,6 +1054,7 @@ processes-has-keyboard = this panel has the keyboard · Esc returns it
 log-title = Log
 disk-map-title = Disk map
 disk-map-measuring = measuring
+disk-map-empty = Nothing to draw: the directory is empty, or nothing in it takes up space.
 slot-retry = retry
 # Waiting for a listing (#323). Three pieces and not one sentence: the renderer
 # composes them with the PATH in its own node, because a path glued inside the

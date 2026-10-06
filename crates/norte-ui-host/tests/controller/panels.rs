@@ -831,6 +831,11 @@ async fn the_map_measures_the_listings_directory_and_the_report_lands() {
         map.hits.is_empty(),
         "with no children there is nothing to click"
     );
+    // And it SAYS so: an empty frame read as "still loading" or "broken".
+    assert!(
+        !map.empty.is_empty(),
+        "the finished empty map explains itself"
+    );
 }
 
 /// It measures ONCE per directory: not once per actor message.
@@ -856,6 +861,30 @@ async fn the_map_does_not_measure_the_same_directory_twice() {
     }
     let requested = backend.maps_requests.lock().expect("mapas").len();
     assert_eq!(requested, 1, "five messages, one measurement: {requested}");
+}
+
+/// A listing refreshed over the measured directory — a copy, a mkdir,
+/// `pane.refresh` — measures it again: what the map showed is from before.
+/// Only a `cd` used to, so a directory filled after it was measured kept
+/// its empty map (2026-10-06).
+#[tokio::test]
+async fn a_refresh_of_the_measured_directory_measures_again() {
+    let backend = fake_tree();
+    let h = host_with_map(Arc::clone(&backend)).await;
+    settle().await;
+    let _ = backend
+        .until("the first measurement", |f| {
+            f.maps_requests.lock().expect("mapas").first().cloned()
+        })
+        .await;
+    let mut sub = h.subscribe();
+    run_by_palette(&h, &mut sub, "pane.refresh").await;
+    let again = backend
+        .until("a second measurement", |f| {
+            f.maps_requests.lock().expect("mapas").get(1).cloned()
+        })
+        .await;
+    assert_eq!(again, dir(), "the same directory, measured again");
 }
 
 // ---------------------------------------------------------------------------

@@ -11,9 +11,10 @@ independently through `PROTOCOL_VERSION`.
 
 - **Big icons in the terminal's panel column** (ADR 0169). On a terminal
   that paints images — kitty's graphics protocol (kitty, Ghostty,
-  WezTerm, Konsole) or sixel (foot, xterm `-ti vt340`, mlterm) — the
-  column draws the window's own icons at double size; other terminals,
-  tmux and Windows keep the one-cell icons.
+  WezTerm, Konsole) or sixel (foot, xterm `-ti vt340`, mlterm, tmux
+  3.4+ built with sixel) — the column draws the window's own icons at
+  double size; other terminals, and Windows for now, keep the one-cell
+  icons.
   `[ui] images = "off"` keeps them small anywhere.
 - **`norte journal compact --before <date>`** (#396, ADR 0167) drops the
   journal entries older than a day, so the journal stops growing forever.
@@ -63,6 +64,12 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The disk map no longer stays blank.** In the terminal, a map that
+  came back with the session, or with a profile, now measures. In both
+  frontends a directory changed after it was measured — by a copy, a new
+  folder, a refresh — is measured again, and a finished map with nothing
+  to draw says so instead of showing an empty frame. The terminal's
+  title now names the directory it measured, as the window's did.
 - **The panel bar shows which panels are open**, in the window and in
   the terminal. Closed icons are dimmer, open ones carry a side line (an
   underline in the window's row), and the one with the keyboard is marked
