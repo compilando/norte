@@ -230,9 +230,15 @@ pub struct SessionBody {
 }
 
 /// The panels open in `tree`: the panel bar's kinds it places, in the
-/// registry's order — not the listings, nor a plugin's panel, nor a strip.
+/// registry's order — not the listings, nor a plugin's panel, nor a strip,
+/// nor the kinds in `owned_elsewhere`, whose visibility another rule owns
+/// ([`owned_elsewhere`]).
 #[must_use]
-pub fn open_panels_of(tree: &Node, reg: &crate::layout::KindRegistry) -> Vec<String> {
+pub fn open_panels_of(
+    tree: &Node,
+    reg: &crate::layout::KindRegistry,
+    owned_elsewhere: &[&str],
+) -> Vec<String> {
     let placed: BTreeSet<String> = tree
         .slot_ids()
         .into_iter()
@@ -241,8 +247,18 @@ pub fn open_panels_of(tree: &Node, reg: &crate::layout::KindRegistry) -> Vec<Str
     reg.decls()
         .iter()
         .filter(|d| crate::panelbar::es_button(d) && placed.contains(d.id.as_str()))
+        .filter(|d| !owned_elsewhere.contains(&d.id.as_str()))
         .map(|d| d.id.as_str().to_owned())
         .collect()
+}
+
+/// The panel kinds whose visibility another rule owns, and the shared set
+/// leaves alone: the processes panel under `processes_panel = "auto"`
+/// (ADR 0115) opens and closes with the tasks, and only closes what IT
+/// opened — forced open at start, it stayed open for good.
+#[must_use]
+pub fn owned_elsewhere(processes_auto: bool) -> &'static [&'static str] {
+    if processes_auto { &["processes"] } else { &[] }
 }
 
 /// What a frontend opens and closes to match the panels saved open.
@@ -255,20 +271,28 @@ pub struct PanelSync {
 }
 
 /// From the panels `present` in this frontend's layout to the `saved` ones
-/// (ADR 0170). `None` — a session from before the field — changes nothing.
+/// (ADR 0170). `None` — a session from before the field — changes nothing;
+/// a kind in `owned_elsewhere` is neither opened nor closed.
 #[must_use]
-pub fn panels_to_sync(saved: Option<&Vec<String>>, present: &[String]) -> PanelSync {
+pub fn panels_to_sync(
+    saved: Option<&Vec<String>>,
+    present: &[String],
+    owned_elsewhere: &[&str],
+) -> PanelSync {
     let Some(saved) = saved else {
         return PanelSync::default();
     };
+    let ours = |k: &&String| !owned_elsewhere.contains(&k.as_str());
     PanelSync {
         open: saved
             .iter()
+            .filter(ours)
             .filter(|k| !present.contains(k))
             .cloned()
             .collect(),
         close: present
             .iter()
+            .filter(ours)
             .filter(|k| !saved.contains(k))
             .cloned()
             .collect(),
@@ -956,7 +980,7 @@ mod tests {
         let tree = tree_with(&["disk-map", "log", "tasks"]);
         // In the REGISTRY's order, not the tree's: the same set reads the
         // same from either frontend.
-        assert_eq!(open_panels_of(&tree, &reg), vec!["log", "disk-map"]);
+        assert_eq!(open_panels_of(&tree, &reg, &[]), vec!["log", "disk-map"]);
     }
 
     /// The window opened the map and closed the tree: the terminal, on
@@ -966,11 +990,29 @@ mod tests {
     fn panels_to_sync_opens_what_is_missing_and_closes_what_is_not() {
         let saved = vec!["disk-map".to_owned(), "log".to_owned()];
         let present = vec!["log".to_owned(), "tree".to_owned()];
-        let sync = panels_to_sync(Some(&saved), &present);
+        let sync = panels_to_sync(Some(&saved), &present, &[]);
         assert_eq!(sync.open, vec!["disk-map"]);
         assert_eq!(sync.close, vec!["tree"]);
-        let none = panels_to_sync(None, &present);
+        let none = panels_to_sync(None, &present, &[]);
         assert!(none.open.is_empty() && none.close.is_empty());
+    }
+
+    /// A kind another rule owns — the processes panel under
+    /// `processes_panel = "auto"`, which opens and closes with the tasks —
+    /// is neither saved nor forced: forcing it open at start left it open
+    /// for good, since auto only closes what auto opened.
+    #[test]
+    fn a_kind_owned_elsewhere_is_neither_saved_nor_forced() {
+        let reg = crate::layout::KindRegistry::builtin();
+        let tree = tree_with(&["processes", "log"]);
+        assert_eq!(open_panels_of(&tree, &reg, &["processes"]), vec!["log"]);
+        let saved = vec!["processes".to_owned(), "log".to_owned()];
+        let present = vec!["log".to_owned()];
+        let sync = panels_to_sync(Some(&saved), &present, &["processes"]);
+        assert!(sync.open.is_empty() && sync.close.is_empty(), "{sync:?}");
+        let present = vec!["log".to_owned(), "processes".to_owned()];
+        let sync = panels_to_sync(Some(&vec!["log".to_owned()]), &present, &["processes"]);
+        assert!(sync.close.is_empty(), "not closed either: {sync:?}");
     }
 
     /// The set travels by profile and goes with it when it is pruned.

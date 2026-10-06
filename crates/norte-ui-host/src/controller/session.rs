@@ -79,10 +79,12 @@ impl State {
         // window keeps its own places and sizes, and opens or closes to
         // match — on the tree, before anything is published, like the
         // layout just above.
-        let present = norte_frontend::session::open_panels_of(&self.tree, &self.kinds);
+        let elsewhere = self.panels_owned_elsewhere();
+        let present = norte_frontend::session::open_panels_of(&self.tree, &self.kinds, elsewhere);
         let sync = norte_frontend::session::panels_to_sync(
             body.open_panels.get(&self.session_key()),
             &present,
+            elsewhere,
         );
         for kind in &sync.close {
             if let Some(id) = self.slot_of_kind(kind)
@@ -104,6 +106,15 @@ impl State {
             self.session.touched.insert(*id, slot_state.touched_ms);
         }
         self.session.read = body;
+    }
+
+    /// The panel kinds the shared set leaves alone (ADR 0170): processes,
+    /// under `processes_panel = "auto"`.
+    fn panels_owned_elsewhere(&self) -> &'static [&'static str] {
+        norte_frontend::session::owned_elsewhere(
+            self.config.common.ui_chrome.processes_panel()
+                == norte_config::load::ProcessesPanel::Auto,
+        )
     }
 
     /// Under which `layouts` key this window's screen goes.
@@ -589,7 +600,11 @@ impl State {
         // Which panels are open, SHARED with the terminal (ADR 0170).
         body.open_panels.insert(
             self.session_key(),
-            norte_frontend::session::open_panels_of(&self.tree, &self.kinds),
+            norte_frontend::session::open_panels_of(
+                &self.tree,
+                &self.kinds,
+                self.panels_owned_elsewhere(),
+            ),
         );
         for (id, slot) in &self.slots {
             body.slots.insert(

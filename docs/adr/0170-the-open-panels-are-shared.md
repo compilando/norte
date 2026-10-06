@@ -26,6 +26,12 @@ and its tree lacks — in its own default place — and closes what its tree
 has and the set lacks (`session::panels_to_sync`). Sizes, positions and
 tabs stay each frontend's.
 
+**A panel another rule owns stays out.** Under `processes_panel = "auto"`
+(ADR 0115) the processes panel opens and closes with the tasks, and auto
+only closes what it opened: forced open at start by the set, it stayed
+open for good. Under `auto` that kind is neither saved nor forced
+(`session::owned_elsewhere`).
+
 **Not live.** Like the rest of the session, it is applied on start: with
 both open, the second is detached (ADR 0059) and does not write.
 

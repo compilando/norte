@@ -88,7 +88,11 @@ impl App {
         let mut open_panels = self.session.other_open_panels.clone();
         open_panels.insert(
             self.session_key(),
-            norte_frontend::session::open_panels_of(&self.layout, &self.kinds),
+            norte_frontend::session::open_panels_of(
+                &self.layout,
+                &self.kinds,
+                self.panels_owned_elsewhere(),
+            ),
         );
         let mut body = SessionBody {
             active: self.session_key_active(),
