@@ -706,8 +706,9 @@ pub fn rail_icons_to_place(
     rail.slots
         .into_iter()
         .zip(chrome::panel_buttons(app, area))
-        .filter(|(_, b)| icon_svg(&b.kind).is_some())
-        .filter_map(|(slot, b)| {
+        .enumerate()
+        .filter(|(_, (_, b))| icon_svg(&b.kind).is_some())
+        .filter_map(|(index, (slot, b))| {
             let rgb = match b.state {
                 PanelState::Closed => closed?,
                 PanelState::Open | PanelState::Focused => rgb(Role::Title)?,
@@ -719,6 +720,7 @@ pub fn rail_icons_to_place(
                 canvas,
                 backend,
                 bg,
+                slot: index,
             })
         })
         .collect()

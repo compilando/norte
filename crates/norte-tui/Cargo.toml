@@ -106,9 +106,10 @@ portable-pty = { version = "0.9.0", default-features = false }
 # channel—, it is just linked here too.
 base64.workspace = true
 # The panel column's big icons (spec 2026-10-05): the window's SVGs
-# rasterised to the PNG kitty takes. Pure Rust (linebender), stroke-only
-# features; the alternative was a hand-written stroker for eight icons
-# that would drift from the window's renderer.
+# rasterised for kitty and sixel. Pure Rust (linebender, actively
+# released, MIT OR Apache-2.0); default features off: 16 small crates, no
+# fonts or embedded rasters. The alternative was a hand-written stroker
+# for eight icons that would drift from the window's renderer.
 resvg.workspace = true
 
 # The console speaks UTF-8 for the run (ADR 0162): `SetConsoleOutputCP` is

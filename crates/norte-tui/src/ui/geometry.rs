@@ -376,12 +376,31 @@ pub(crate) struct RailLayout {
 /// VS Code — when it fits, packed when it does not.
 #[must_use]
 pub(crate) fn rail_layout(app: &App, height: u16, top: u16) -> RailLayout {
+    rail_layout_with(app, crate::rail_icons::backend(app), height, top)
+}
+
+/// [`rail_layout`] for a given backend.
+fn rail_layout_with(
+    app: &App,
+    backend: crate::rail_icons::RailBackend,
+    height: u16,
+    top: u16,
+) -> RailLayout {
+    use crate::rail_icons::RailBackend;
     let n = norte_frontend::panelbar::button_count(&app.kinds);
-    let h = usize::from(height);
-    let big = crate::rail_icons::backend(app) != crate::rail_icons::RailBackend::Glyph
+    // A sixel image whose bottom is the screen's last row leaves the cursor
+    // below it, and the terminal SCROLLS the whole screen; with the key bar
+    // off the column reaches that row. Its last row stays free.
+    let usable = if backend == RailBackend::Sixel {
+        height.saturating_sub(1)
+    } else {
+        height
+    };
+    let big = backend != RailBackend::Glyph
         && app.chrome.panel_bar_style() != norte_config::PanelBarStyle::Letters
         && n > 0
-        && 2 * n <= h;
+        && 2 * n <= usize::from(usable);
+    let h = usize::from(if big { usable } else { height });
     let (rows, width) = if big { (2, 4) } else { (1, 3) };
     let (from, step) = if n > 0 && (rows + 1) * n <= h {
         (1, rows + 1)
@@ -953,6 +972,18 @@ mod tests {
         app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Letters);
         assert!(!rail_layout(&app, 100, 1).big, "letters stay letters");
         app.chrome.panel_bar_style = None;
+
+        // Sixel leaves the column's last row free: an image ending on the
+        // screen's last row scrolls the screen.
+        let sixel = rail_layout_with(&app, RailBackend::Sixel, 2 * n, 1);
+        assert!(!sixel.big, "2n rows are not enough for sixel");
+        let sixel = rail_layout_with(&app, RailBackend::Sixel, 2 * n + 1, 1);
+        assert!(sixel.big);
+        let last = sixel.slots.last().expect("slots");
+        assert!(
+            last.y + last.height < 1 + 2 * n + 1,
+            "the last row stays free"
+        );
 
         // `auto` with no probe answer (a test has no tty): glyphs.
         app.chrome.images = None;

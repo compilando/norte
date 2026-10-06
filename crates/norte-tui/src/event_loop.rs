@@ -462,7 +462,7 @@ pub async fn run(
                 .draw(|f| ui::draw(f, app))
                 .map_err(RunError::Terminal)?;
             if keep_frame {
-                drawn = Some(frame.buffer.clone());
+                drawn = Some(crate::rail_icons::column_strip(frame.buffer));
             }
             frame.area
         };
