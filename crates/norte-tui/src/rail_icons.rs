@@ -83,6 +83,11 @@ pub fn canvas_for(cell_px: (u16, u16)) -> (u32, u32) {
 /// `(0, 0)` when it does not, which [`canvas_for`] takes as 1:2.
 #[must_use]
 pub fn cell_px() -> (u16, u16) {
+    // What the terminal said at startup (`CSI 16 t`) first: exact, and the
+    // only source on Windows, where crossterm cannot ask.
+    if let Some(px) = crate::kitty_graphics::probed_cell_px() {
+        return px;
+    }
     crossterm::terminal::window_size().map_or((0, 0), |s| {
         if s.columns == 0 || s.rows == 0 {
             (0, 0)
@@ -260,13 +265,9 @@ where
             deletes.push_str(&crate::kitty_graphics::escape_delete(id_for(i)));
             continue;
         }
-        // A new sixel image over the same cells covers the old one whole.
-        let covered = puts
-            .iter()
-            .any(|(j, w, _)| *j == i && w.rect == old.rect && w.backend == RailBackend::Sixel);
-        if !covered {
-            repaint.push(old.rect);
-        }
+        // Always, even under a new image in the same cells: its empty
+        // pixels are transparent, and the old strokes would show through.
+        repaint.push(old.rect);
     }
     let written = (|| -> std::io::Result<()> {
         out.write_all(b"\x1b7")?;
@@ -412,7 +413,7 @@ mod tests {
     fn sixel_sync_paints_a_dcs_and_never_an_apc() {
         let _ = written(delete_all);
         let out = written(|o| sync_v(o, &[sixel_icon([200, 0, 0])]));
-        assert!(out.contains("\x1bP0;1;q\"1;1;18;38"), "{out:?}");
+        assert!(out.contains("\x1bP9;1;q\"1;1;18;38"), "{out:?}");
         assert!(!out.contains("\x1b_G"), "{out:?}");
         // A recolour paints over: no delete, a new image.
         let again = written(|o| sync_v(o, &[sixel_icon([0, 200, 0])]));
@@ -469,6 +470,19 @@ mod tests {
         };
         let out = written(|o| sync_f(o, &[moved], Some(&frame_of_x())));
         let repaint = out.find('x').expect("old cells repainted");
+        let image = out.find("\x1bP").expect("placed again");
+        assert!(repaint < image, "{out:?}");
+    }
+
+    /// A recolour in the same cells repaints them first: the new image's
+    /// empty pixels are transparent, and the old strokes would show
+    /// through.
+    #[test]
+    fn a_recoloured_sixel_clears_its_cells_first() {
+        let _ = written(delete_all);
+        let _ = written(|o| sync_v(o, &[sixel_icon([200, 0, 0])]));
+        let out = written(|o| sync_f(o, &[sixel_icon([0, 200, 0])], Some(&frame_of_x())));
+        let repaint = out.find('x').expect("cells repainted");
         let image = out.find("\x1bP").expect("placed again");
         assert!(repaint < image, "{out:?}");
     }

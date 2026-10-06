@@ -10,10 +10,11 @@ use std::fmt::Write as _;
 const LEVELS: u16 = 8;
 
 /// `alpha` (one coverage byte per pixel, row-major, `w`×`h`) as a DCS
-/// sixel image: level 0 is `bg`, level 7 is `fg`, and EVERY pixel inside
-/// `w`×`h` is set in exactly one level — a recolour covers the old image
-/// whole — while `P2=1` leaves the rows past `h` in the last band
-/// untouched, so nothing spills into the cell below.
+/// sixel image: level 7 is `fg`, levels 1–6 the antialiased edge blended
+/// toward `bg`, and level 0 — no coverage — is NOT painted (`P2=1`): the
+/// cell's own background shows through, whatever the terminal's palette
+/// makes of it. The caller repaints the cells before a new image, so an old
+/// one never shows through either. `P1=9`: square pixels.
 #[must_use]
 pub fn encode(alpha: &[u8], w: u32, h: u32, fg: [u8; 3], bg: [u8; 3]) -> String {
     let level = |x: u32, y: u32| -> u16 {
@@ -21,8 +22,8 @@ pub fn encode(alpha: &[u8], w: u32, h: u32, fg: [u8; 3], bg: [u8; 3]) -> String 
         let a = u16::from(alpha.get(i).copied().unwrap_or(0));
         (a * (LEVELS - 1) + 127) / 255
     };
-    let mut out = format!("\x1bP0;1;q\"1;1;{w};{h}");
-    for l in 0..LEVELS {
+    let mut out = format!("\x1bP9;1;q\"1;1;{w};{h}");
+    for l in 1..LEVELS {
         let pct = |c: usize| {
             let (f, b) = (u16::from(fg[c]), u16::from(bg[c]));
             // Mix in 0..=255, then to the percent sixel colours speak.
@@ -35,7 +36,7 @@ pub fn encode(alpha: &[u8], w: u32, h: u32, fg: [u8; 3], bg: [u8; 3]) -> String 
         if band > 0 {
             out.push('-');
         }
-        for l in 0..LEVELS {
+        for l in 1..LEVELS {
             let column = |x: u32| -> u8 {
                 (0..6)
                     .filter(|b| {
@@ -146,25 +147,34 @@ mod tests {
     #[test]
     fn header_raster_and_palette() {
         let s = encode(&[0; 4], 2, 2, [255, 0, 0], [0, 0, 0]);
-        assert!(s.starts_with("\x1bP0;1;q\"1;1;2;2"), "{s:?}");
-        assert!(
-            s.contains("#0;2;0;0;0") && s.contains("#7;2;100;0;0"),
-            "{s:?}"
-        );
+        assert!(s.starts_with("\x1bP9;1;q\"1;1;2;2"), "{s:?}");
+        assert!(s.contains("#7;2;100;0;0"), "{s:?}");
+        assert!(!s.contains("#0;"), "level 0 is transparent: {s:?}");
         assert!(s.ends_with("\x1b\\"));
     }
 
-    /// A recolour must cover the old image completely: every pixel of the
-    /// canvas is set in exactly ONE colour, background included.
+    /// Empty pixels are LEFT ALONE (`P2=1`), so the cell's own background —
+    /// whatever the terminal's palette makes of it — shows through: a
+    /// painted background came out a different shade on a Solarized or
+    /// gruvbox palette. Every covered pixel is set in exactly one colour.
     #[test]
-    fn every_pixel_of_the_canvas_is_painted() {
+    fn empty_pixels_are_transparent_and_covered_ones_set_once() {
         let alpha: Vec<u8> = (0..21_u8).map(|i| i * 12).collect();
         let bits = decode_bits(&encode(&alpha, 3, 7, [9, 9, 9], [0, 0, 0]));
         for y in 0..7 {
             for x in 0..3 {
-                assert_eq!(bits.count(x, y), 1, "({x},{y})");
+                let a = alpha[usize::try_from(y * 3 + x).expect("small")];
+                let want = u32::from((u16::from(a) * 7 + 127) / 255 > 0);
+                assert_eq!(bits.count(x, y), want, "({x},{y}) alpha {a}");
             }
         }
+    }
+
+    /// `P1=9`: square pixels, for a terminal that ignores the raster
+    /// attributes and would stretch the default 2:1.
+    #[test]
+    fn pixels_are_declared_square() {
+        assert!(encode(&[0], 1, 1, [0; 3], [0; 3]).starts_with("\x1bP9;1;q"));
     }
 
     /// Height 7 is a band and one row: the rest of the second band stays
@@ -189,8 +199,8 @@ mod tests {
     #[test]
     fn coverage_picks_the_level() {
         let s = encode(&[0, 255], 2, 1, [255, 255, 255], [0, 0, 0]);
-        // Colour 0 sets x=0 only, colour 7 sets x=1 only (`@` = top bit,
-        // `?` = no bit).
-        assert!(s.contains("#0@?$") && s.contains("#7?@$"), "{s:?}");
+        // Colour 7 sets x=1 only (`@` = top bit, `?` = no bit); x=0 has no
+        // coverage and is set by nobody.
+        assert!(s.contains("#7?@$") && !s.contains("#0"), "{s:?}");
     }
 }
