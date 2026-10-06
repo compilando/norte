@@ -96,14 +96,14 @@ impl DiskMap {
         ))
     }
 
-    /// What a FINISHED map with nothing to draw says instead of an empty
-    /// frame, translated: the directory is empty, or nothing in it takes
-    /// space. `None` while there is something to draw or the measurement is
-    /// not done — then the title speaks.
+    /// A FINISHED map with nothing to draw: the directory is empty, or
+    /// nothing in it takes space. Then it says so (`disk-map-empty`, each
+    /// frontend in its own session's language) instead of an empty frame.
+    /// `false` while there is something to draw or the measurement is not
+    /// done — then the title speaks.
     #[must_use]
-    pub fn empty_note(&self) -> Option<String> {
-        let nothing = self.report.children.iter().all(|c| c.bytes == 0);
-        (self.state == State::Done && nothing).then(|| norte_i18n::t("disk-map-empty"))
+    pub fn nothing_to_draw(&self) -> bool {
+        self.state == State::Done && self.report.children.iter().all(|c| c.bytes == 0)
     }
 
     /// Points at another directory: forgets what was measured and the
@@ -256,26 +256,26 @@ mod tests {
         assert_eq!(m.chosen().map(|c| c.name.clone()), Some(seg("c")));
     }
 
-    /// If the chosen one disappears, it is dropped: showing something as
-    /// chosen when it is no longer there is promising a key that cannot
-    /// work.
     /// A finished map with nothing to draw SAYS so: an empty frame read as
     /// "still loading" or "broken" (2026-10-06). Only when finished — while
     /// measuring, or before, the title already speaks.
     #[test]
     fn a_finished_map_with_nothing_to_draw_says_so() {
         let mut m = DiskMap::new();
-        assert_eq!(m.empty_note(), None, "nothing asked yet");
+        assert!(!m.nothing_to_draw(), "nothing asked yet");
         m.land(report(&[]), true);
-        assert!(m.empty_note().is_some(), "empty directory");
+        assert!(m.nothing_to_draw(), "empty directory");
         let mut zero = report(&["a"]);
         zero.children[0].bytes = 0;
         m.land(zero, true);
-        assert!(m.empty_note().is_some(), "nothing takes space");
+        assert!(m.nothing_to_draw(), "nothing takes space");
         m.land(report(&["a"]), true);
-        assert_eq!(m.empty_note(), None, "something to draw");
+        assert!(!m.nothing_to_draw(), "something to draw");
     }
 
+    /// If the chosen one disappears, it is dropped: showing something as
+    /// chosen when it is no longer there is promising a key that cannot
+    /// work.
     #[test]
     fn if_the_chosen_one_disappears_it_is_dropped() {
         let mut m = DiskMap::new();

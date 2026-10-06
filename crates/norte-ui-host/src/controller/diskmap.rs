@@ -367,10 +367,12 @@ impl State {
             lines,
             hits,
             measuring: state.is_some_and(|e| e.in_flight.is_some()),
-            empty: state
-                .filter(|e| e.in_flight.is_none())
-                .and_then(|e| e.map.empty_note())
-                .unwrap_or_default(),
+            // In THIS session's language, like the rest of the window.
+            empty: if state.is_some_and(|e| e.in_flight.is_none() && e.map.nothing_to_draw()) {
+                norte_i18n::t_in(self.lang, "disk-map-empty")
+            } else {
+                String::new()
+            },
         }
     }
 }

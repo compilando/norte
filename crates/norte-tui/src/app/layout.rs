@@ -723,9 +723,12 @@ impl App {
     /// watcher already said so for changes made elsewhere; norte's own,
     /// and a remote directory with no watcher, only came through here.
     pub fn listings_refreshed(&mut self, refreshed: [bool; 2]) {
+        // One still measuring is left alone, as in the window: restarting
+        // it on every task of a copy batch never let a `$HOME` finish.
         let Some(measured) = self
             .disk_map_slot()
             .and_then(|s| self.panes.disk_map(s))
+            .filter(|m| m.task().is_none())
             .and_then(|m| m.dir().cloned())
         else {
             return;

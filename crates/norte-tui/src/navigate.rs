@@ -230,6 +230,9 @@ pub fn settle_cd(
     }
     if let Cd::Refreshed(refreshed) = &outcome {
         request_refreshed_decorations(app, backend, decorate_fetch, refreshed);
+        // Ctrl+R lands here and not in `after_panes_refresh`: the map
+        // learns of it all the same.
+        app.listings_refreshed(*refreshed);
     }
     if let Some(pane) = cd_landed_pane(&outcome) {
         app.apply_scheme_sort(pane);

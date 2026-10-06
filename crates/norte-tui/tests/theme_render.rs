@@ -479,7 +479,8 @@ fn an_empty_disk_map_says_so_and_names_its_directory() {
         },
         true,
     );
-    let note = map.empty_note().expect("empty and done");
+    assert!(map.nothing_to_draw(), "empty and done");
+    let note = norte_i18n::t("disk-map-empty");
     let mut terminal = Terminal::new(TestBackend::new(116, 37)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let screen: String = (0..37)
@@ -548,6 +549,25 @@ fn a_refresh_of_the_measured_directory_measures_again() {
     );
     app.listings_refreshed([true, false]);
     assert!(app.disk_map_wants_measure(), "ours changed: measure again");
+}
+
+/// A refresh while a measurement RUNS leaves it alone: restarting it on
+/// every task of a copy batch meant a `$HOME` measurement that never
+/// finished. The window does the same.
+#[test]
+fn a_refresh_does_not_restart_a_running_measurement() {
+    let mut app = App::new(
+        Pane::new(vp("file:///casa"), Vec::new()),
+        Pane::new(vp("file:///otro"), Vec::new()),
+    );
+    app.open_disk_map();
+    let slot = app.disk_map_slot().expect("open");
+    let dir = app.focused().dir().clone();
+    let map = app.panes.disk_map_mut(slot).expect("map");
+    map.aim(dir);
+    map.measuring(norte_proto::TaskId::new(7));
+    app.listings_refreshed([true, false]);
+    assert!(!app.disk_map_wants_measure(), "still measuring: left alone");
 }
 
 /// `true` if ANY buffer cell has that foreground color.

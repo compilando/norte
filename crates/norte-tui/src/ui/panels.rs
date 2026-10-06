@@ -486,7 +486,8 @@ pub(crate) fn draw_disk_map(
     let inside = block.inner(area);
     // A finished map with nothing to draw says so; an empty frame read as
     // "still loading" or "broken".
-    if let Some(note) = map.empty_note() {
+    if map.nothing_to_draw() {
+        let note = t("disk-map-empty");
         let para = Paragraph::new(Line::styled(note, app.theme.role(Role::Muted)))
             .wrap(ratatui::widgets::Wrap { trim: true })
             .block(block);

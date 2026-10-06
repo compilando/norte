@@ -28,19 +28,25 @@ use norte_frontend::busy::{Busy, BusyKind};
 /// someone else, and therefore its end is not announced with the generic
 /// `done`.
 ///
-/// Only checksums (#311), for two reasons that go together: they mutate
-/// nothing — so there are no panes to re-list — and their answer is the
-/// harvest's verdict, which a later `done` would cover up. A copy or a
-/// delete are the opposite on both counts.
+/// Checksums (#311) and the disk map's measurement, for two reasons that go
+/// together: they mutate nothing — so there are no panes to re-list — and
+/// their answer is the harvest's verdict, which a later `done` would cover
+/// up. A copy or a delete are the opposite on both counts.
 ///
 /// ```
 /// use norte_proto::TaskKind;
 /// assert!(norte_tui::refresh::speaks_through_its_report(TaskKind::Checksum));
+/// // The disk map's measurement: re-listing after it marked the map stale,
+/// // and the map measured again forever (review of 2026-10-06).
+/// assert!(norte_tui::refresh::speaks_through_its_report(TaskKind::DirUsage));
 /// assert!(!norte_tui::refresh::speaks_through_its_report(TaskKind::Copy));
 /// ```
 #[must_use]
 pub fn speaks_through_its_report(kind: norte_proto::TaskKind) -> bool {
-    matches!(kind, norte_proto::TaskKind::Checksum)
+    matches!(
+        kind,
+        norte_proto::TaskKind::Checksum | norte_proto::TaskKind::DirUsage
+    )
 }
 
 /// Tick: refreshes the panel's snapshots and reacts to tasks that JUST
