@@ -211,6 +211,13 @@ impl State {
             Err(Error::NotFound) => self.popular.remove(&dir),
             Err(_) => {}
         }
+        // The SAME directory read again — a copy, a mkdir, `pane.refresh`:
+        // a map that measured it shows the before, and measures again
+        // (`probe_maps`, after this message). A `cd` re-aims it already.
+        let refresh = self.slots.get(&slot).is_some_and(|h| h.pane.dir() == &dir);
+        if refresh && res.is_ok() {
+            self.maps_measured_before(&dir);
+        }
         self.lands_on(slot, dir, res);
         self.request_capabilities(slot, backend, mailbox);
         self.probe(slot, backend, mailbox);

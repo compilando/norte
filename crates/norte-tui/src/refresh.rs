@@ -539,6 +539,7 @@ pub fn after_panes_refresh(
     // A refresh is the moment free space may have changed with nobody
     // navigating: it is requested again along with it.
     app.volumes_stale = true;
+    app.listings_refreshed(refreshed);
     crate::navigate::request_refreshed_decorations(app, backend, decorate_fetch, &refreshed);
     release_refreshed_fill(&app.panes, &refreshed, fill, last_probed);
     reap_search_run(app, search_run);

@@ -404,6 +404,152 @@ fn closed_icons_are_dimmer_than_open_ones_on_every_preset() {
     }
 }
 
+/// The disk map with a landed report paints its children: the report of
+/// 2026-10-06 showed an empty frame with no status over a directory of one
+/// subdirectory and nine files (3 MiB).
+#[test]
+fn a_landed_disk_map_paints_its_children() {
+    use norte_proto::methods::{DirUsageChild, FsDirUsageReportResult};
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.theme = TuiTheme::new(
+        Theme::preset("vscode-dark").unwrap().unwrap(),
+        ColorDepth::Truecolor,
+    );
+    app.open_disk_map();
+    let slot = app.disk_map_slot().expect("open");
+    let dir = app.focused().dir().clone();
+    let child = |name: &str, kind, bytes| DirUsageChild {
+        name: Segment::new(name.as_bytes().to_vec()).unwrap(),
+        kind,
+        bytes,
+        entries: 1,
+        partial: false,
+    };
+    let mut children = vec![child("estacion", EntryKind::Dir, 4096)];
+    for (i, b) in [
+        30_000, 361_000, 11_000, 173, 89_000, 1_400_000, 1_100_000, 38_000, 26_000,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        children.push(child(&format!("f{i}.pdf"), EntryKind::File, b));
+    }
+    let map = app.panes.disk_map_mut(slot).expect("map");
+    map.aim(dir);
+    map.land(
+        FsDirUsageReportResult {
+            children,
+            listed: true,
+            ..FsDirUsageReportResult::default()
+        },
+        true,
+    );
+    let mut terminal = Terminal::new(TestBackend::new(116, 37)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let screen: Vec<String> = (0..37)
+        .map(|y| {
+            (0..116)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_owned())
+                .collect()
+        })
+        .collect();
+    assert!(
+        screen.iter().any(|l| l.contains("f5.pdf")),
+        "the biggest file is labelled:\n{}",
+        screen.join("\n")
+    );
+}
+
+/// An empty finished map says so, and the title names WHICH directory it
+/// measured: a blank frame with only "Disk map" could not tell an empty
+/// directory from the other pane's, from one still loading.
+#[test]
+fn an_empty_disk_map_says_so_and_names_its_directory() {
+    use norte_proto::methods::FsDirUsageReportResult;
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.open_disk_map();
+    let slot = app.disk_map_slot().expect("open");
+    let dir = app.focused().dir().clone();
+    let map = app.panes.disk_map_mut(slot).expect("map");
+    map.aim(dir);
+    map.land(
+        FsDirUsageReportResult {
+            listed: true,
+            ..FsDirUsageReportResult::default()
+        },
+        true,
+    );
+    let note = map.empty_note().expect("empty and done");
+    let mut terminal = Terminal::new(TestBackend::new(116, 37)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let screen: String = (0..37)
+        .map(|y| {
+            (0..116)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_owned())
+                .collect::<String>()
+                + "\n"
+        })
+        .collect();
+    let first_words: String = note
+        .split_whitespace()
+        .take(3)
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(screen.contains(&first_words), "the note:\n{screen}");
+    let title_row = screen
+        .lines()
+        .find(|l| l.contains(&norte_i18n::t("disk-map-title")))
+        .expect("the map's title");
+    assert!(
+        title_row.contains("casa"),
+        "names the directory: {title_row}"
+    );
+}
+
+/// A layout that brings the disk map — yesterday's session, a profile —
+/// does not go through the toggle that creates its state: the slot stayed
+/// blank and never measured (2026-10-06). Like the tree and the timeline,
+/// it is seeded, and it asks to be measured.
+#[test]
+fn a_restored_disk_map_is_seeded_and_measures() {
+    use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.set_layout(Node::Split {
+        dir: Dir::Vertical,
+        sizes: vec![Size::Weight(1), Size::Fixed(12)],
+        children: vec![
+            Node::slot(SlotId(70), KindId::browser()),
+            Node::slot(SlotId(71), KindId::new("disk-map")),
+        ],
+    });
+    assert!(app.panes.disk_map(SlotId(71)).is_some(), "state seeded");
+    assert!(app.disk_map_wants_measure(), "and it asks to be measured");
+}
+
+/// A listing refreshed over the directory the map measured — a copy, a
+/// mkdir, Ctrl+R — leaves the map stale: it measures again. Before, only
+/// the external watcher said so, and norte's own changes (or a remote
+/// directory, which has no watcher) left the old map up.
+#[test]
+fn a_refresh_of_the_measured_directory_measures_again() {
+    let mut app = App::new(
+        Pane::new(vp("file:///casa"), Vec::new()),
+        Pane::new(vp("file:///otro"), Vec::new()),
+    );
+    app.open_disk_map();
+    let slot = app.disk_map_slot().expect("open");
+    let dir = app.focused().dir().clone();
+    app.panes.disk_map_mut(slot).expect("map").aim(dir);
+    assert!(!app.disk_map_wants_measure(), "aimed: nothing to do");
+    app.listings_refreshed([false, true]);
+    assert!(
+        !app.disk_map_wants_measure(),
+        "the other pane's dir: not ours"
+    );
+    app.listings_refreshed([true, false]);
+    assert!(app.disk_map_wants_measure(), "ours changed: measure again");
+}
+
 /// `true` if ANY buffer cell has that foreground color.
 fn hay_fg(app: &App, want: Color) -> bool {
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");

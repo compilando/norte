@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 97;
+export const BRIDGE_VERSION = 98;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -386,6 +386,9 @@ export interface DiskMapSlotView {
   hits: HitView[];
   /** The measurement is still running; a half-finished map has to say so. */
   measuring: boolean;
+  /** What a finished map with nothing to draw says, translated; "" otherwise
+   *  (bridge 98). */
+  empty: string;
 }
 
 /** A timeline row (bridge 78), already paintable. */

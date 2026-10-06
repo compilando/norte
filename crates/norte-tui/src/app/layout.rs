@@ -68,6 +68,12 @@ impl App {
                         .insert_timeline(id, norte_frontend::timeline::Timeline::default());
                     self.timeline_stale = true;
                 }
+                // Same again for the disk map: born aimed at nothing, so
+                // `disk_map_wants_measure` asks for the listing's directory.
+                Some(crate::diskmap::KIND) if self.panes.disk_map(id).is_none() => {
+                    self.panes
+                        .insert_disk_map(id, norte_frontend::diskmap::DiskMap::new());
+                }
                 _ => {}
             }
             // The layout's ids can't collide with the ones minted later.
@@ -709,6 +715,24 @@ impl App {
         self.disk_map_slot()
             .and_then(|s| self.panes.disk_map(s))
             .is_some_and(|m| m.dir() != Some(dir))
+    }
+
+    /// The listings in `refreshed` were read again: if one of them is the
+    /// directory the map measured, what the map shows is from before — a
+    /// copy, a mkdir, a Ctrl+R — and it measures again. The external
+    /// watcher already said so for changes made elsewhere; norte's own,
+    /// and a remote directory with no watcher, only came through here.
+    pub fn listings_refreshed(&mut self, refreshed: [bool; 2]) {
+        let Some(measured) = self
+            .disk_map_slot()
+            .and_then(|s| self.panes.disk_map(s))
+            .and_then(|m| m.dir().cloned())
+        else {
+            return;
+        };
+        if (0..2).any(|i| refreshed[i] && self.panes[i].dir() == &measured) {
+            self.disk_map_stale = true;
+        }
     }
 
     /// The timeline's slot, if it's open (phase 7).

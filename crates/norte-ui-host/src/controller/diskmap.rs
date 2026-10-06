@@ -74,6 +74,17 @@ impl State {
         Some((id, slot_state.pane.dir().clone()))
     }
 
+    /// `dir` was read again: the maps that measured it forget they did, so
+    /// the next `probe_maps` measures it anew. One still measuring keeps
+    /// going — its report is about to land.
+    pub(super) fn maps_measured_before(&mut self, dir: &VPath) {
+        for state in self.maps.values_mut() {
+            if state.in_flight.is_none() && state.requested.as_ref() == Some(dir) {
+                state.requested = None;
+            }
+        }
+    }
+
     /// Requests the measurement for placed maps whose directory changed.
     ///
     /// It is called after EVERY actor message, like its neighbours, so the
@@ -318,20 +329,7 @@ impl State {
     /// not arrived yet.
     pub(super) fn map_view(&self, id: u32) -> crate::dto::DiskMapSlotView {
         let state = self.maps.get(&id);
-        // The title is the NAME of the directory being described, not its
-        // path: the slot is narrow and the whole path does not fit. It comes
-        // from a file name, so it is masked like any other.
-        let (title, title_hostile) = state.and_then(|e| e.map.dir()).map_or_else(
-            || (String::new(), false),
-            |d| {
-                d.file_name().map_or_else(
-                    // A provider's root has no base name: it is said with its
-                    // scheme instead of leaving the title blank.
-                    || (d.scheme().to_owned(), false),
-                    |n| norte_frontend::display_name(n.as_bytes()),
-                )
-            },
-        );
+        let (title, title_hostile) = state.and_then(|e| e.map.dir_label()).unwrap_or_default();
 
         let cells = self
             .split
@@ -369,6 +367,10 @@ impl State {
             lines,
             hits,
             measuring: state.is_some_and(|e| e.in_flight.is_some()),
+            empty: state
+                .filter(|e| e.in_flight.is_none())
+                .and_then(|e| e.map.empty_note())
+                .unwrap_or_default(),
         }
     }
 }

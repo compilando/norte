@@ -36,6 +36,16 @@ export function paintDiskMap(this: Screen, dom: SlotDom, slot: DiskMapSlotView):
   dom.scroller.onwheel = null;
   dom.title.replaceChildren(document.createTextNode(title));
 
+  // A finished map with nothing to draw says so, as the timeline does: an
+  // empty frame read as "still loading" or "broken".
+  if (slot.empty !== "") {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = slot.empty;
+    dom.scroller.replaceChildren(empty);
+    return;
+  }
+
   // The zones, grouped by row in ONE pass: a map can carry 256 lines and 128
   // zones, and filtering the whole list for every line would mean walking it
   // 256 times to paint the same thing.
