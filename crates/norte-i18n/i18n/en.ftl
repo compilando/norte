@@ -999,6 +999,11 @@ picker-popular-title = Popular directories
 picker-popular-empty = no popular directories yet
 picker-hotlist-title = Favorites
 picker-hotlist-empty = no favorites configured
+places-favorites-empty = No favorites yet · { $chord } opens Favorites, where you can add one
+# The layout picker's legend, for kinds that are not panels.
+layout-legend-browser = File list
+layout-legend-status = Status bar
+layout-legend-tasks = Tasks
 picker-volume-space = {$free} free of {$total}
 # How much is left is known, but not of how much. It happens — a mount that
 # half answers — and saying "unknown" there throws away the one number there

@@ -50,6 +50,16 @@ independently through `PROTOCOL_VERSION`.
   folder you are in.
 - "1 files" in the pane footer; key bar cells running together at 80
   columns; drive names cut to fragments in Places.
+- **Window:** `Alt+O` and the panel keys leave the terminal panel instead
+  of reaching the shell, and Esc in any side panel returns to the
+  listing; the layout buttons split the listing, never a focused dock,
+  and have readable tooltips; the border above a bottom panel drags; the
+  disk map moved to another dock is no longer blank; paths are cut from
+  the left; tabs have a ×, close on middle click and get their own menu
+  (close, move left/right); empty Favorites and the layout picker
+  explain themselves; a panel behind a tab stays lit in the bar.
+- **Window:** a socket path too long for the system is named as the
+  problem, with its length and the limit, instead of a bare OS error.
 
 ### Performance
 

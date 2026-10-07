@@ -1008,6 +1008,11 @@ picker-popular-title = Directorios populares
 picker-popular-empty = todavía no hay directorios populares
 picker-hotlist-title = Favoritos
 picker-hotlist-empty = no hay favoritos configurados
+places-favorites-empty = Aún no hay favoritos · { $chord } abre Favoritos, donde puedes añadir uno
+# La leyenda del selector de disposición, para lo que no es un panel.
+layout-legend-browser = Listado
+layout-legend-status = Barra de estado
+layout-legend-tasks = Tareas
 picker-volume-space = {$free} libres de {$total}
 # Se sabe cuánto queda pero no de cuánto. Pasa —un montaje que contesta a
 # medias— y decir «desconocido» ahí tira el único número que hay: cuánto
