@@ -4,7 +4,7 @@ expression: "lines.join(\"\\n\")"
 ---
  Archivo Operar Marcar Ir Paneles       
  S  V  P  D  Á  R  M  H  T              
-┌ Sitios ──────┐┌/casa─────┐┌ Vista ───┐
+┌ Sitios ──────┐┌/casa─────┐┌ Visor ───┐
 │▾ Unidades    ││Nombre▲   ││          │
 │▾ Favoritos   ││   f00    ││          │
 │              ││   f01    ││          │

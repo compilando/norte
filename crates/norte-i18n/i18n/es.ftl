@@ -1045,7 +1045,7 @@ places-empty = todavía nada
 # L3: lo que el visor acoplado dice EN VEZ de un fichero. Un directorio no
 # se lee nunca: el preview sigue al cursor, y leer lo que sea es como uno
 # se convierte en abrir un dispositivo de bloque sin querer.
-preview-title = Vista
+preview-title = Visor
 preview-directory = directorio
 preview-empty = nada seleccionado
 preview-not-a-file = no es un fichero normal
@@ -1129,7 +1129,7 @@ panelbar-viewer = Visor
 panelbar-processes = Procesos
 panelbar-metadata = Detalles
 panelbar-log = Registro
-panelbar-disk-map = Mapa
+panelbar-disk-map = Mapa de disco
 panelbar-timeline = Historial
 panelbar-terminal = Terminal
 # El pie del panel de terminal: la ÚNICA tecla que el panel no le pasa al
@@ -1137,7 +1137,7 @@ panelbar-terminal = Terminal
 terminal-leave = salir
 terminal-none = No hay ningún shell en este panel.
 # La línea de tiempo del journal (fase 7).
-timeline-title = Línea de tiempo
+timeline-title = Historial
 timeline-empty = todavía no se ha hecho nada
 timeline-loading = leyendo el historial…
 timeline-batch = { $n } de golpe
@@ -1174,14 +1174,14 @@ wizard-preset-far = las teclas de FAR Manager, transcritas.
 wizard-preset-norton = las teclas de Norton Commander.
 wizard-preset-total-commander = las teclas de Total Commander, transcritas.
 wizard-done = Guardado. Cámbialo cuando quieras desde la pantalla de ajustes.
-menu-item-layout-places = Panel de sitios
-menu-item-layout-preview = Visor acoplado
-menu-item-layout-processes = Panel de procesos
+menu-item-layout-places = Sitios
+menu-item-layout-preview = Visor
+menu-item-layout-processes = Procesos
 menu-item-layout-log = Registro
 menu-item-layout-disk-map = Mapa de disco
-menu-item-layout-timeline = Línea de tiempo
-menu-item-layout-terminal = Panel de terminal
-menu-item-layout-metadata = Panel de detalles
+menu-item-layout-timeline = Historial
+menu-item-layout-terminal = Terminal
+menu-item-layout-metadata = Detalles
 menu-item-layout-pick = Disposición...
 menu-item-profile-pick = Perfil...
 menu-item-pane-tab-new = Abrir pestaña
