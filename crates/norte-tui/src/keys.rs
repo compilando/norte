@@ -217,6 +217,47 @@ pub async fn on_key(
             key.code,
         )
         .await;
+    } else if !modal_wins(app)
+        // Typing the log's filter is a text field: its keys are its own.
+        && app.log_filter_input.is_none()
+        && matches!(
+            app.key_owner(),
+            crate::app::KeyOwner::Tree
+                | crate::app::KeyOwner::Places
+                | crate::app::KeyOwner::Processes
+                | crate::app::KeyOwner::Log
+                | crate::app::KeyOwner::DiskMap
+                | crate::app::KeyOwner::Timeline
+                | crate::app::KeyOwner::Panel
+        )
+        && let Some(cmd) = crate::keymap::chord_from_crossterm(key.modifiers, key.code)
+            .and_then(|c| crate::keymap::shared_panel_command(resolver.effective(), c))
+    {
+        // Opening, closing and cycling panels work from INSIDE any side
+        // panel, through the same dispatch as from a listing: each panel's
+        // own allowlist used to decide, and they disagreed.
+        dialog_resolver.reset();
+        let outcome = dispatch(
+            app,
+            backend,
+            events,
+            help_lines,
+            lang,
+            quick_mode,
+            confirm_quit,
+            cfg,
+            cmd,
+        )
+        .await;
+        settle_cd(
+            app,
+            backend,
+            &mut work.fill,
+            &mut work.decorate,
+            &mut work.probed,
+            &mut work.search,
+            outcome,
+        );
     } else if app.key_owner() == crate::app::KeyOwner::Tree && !modal_wins(app) {
         // #136: the tree sends the listing to the branch
         // chosen through the usual cd flow.

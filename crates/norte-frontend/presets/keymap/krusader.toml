@@ -156,6 +156,10 @@ keymap = [
     # panel like this—, so nothing is transcribed: `alt+z` is bound, the one
     # letter free across all seven presets. See orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
+    # Details and Timeline: Krusader has no such panels; norte's common
+    # chords (see orthodox.toml).
+    { on = ["alt+I"], run = "layout.metadata" },
+    { on = ["alt+T"], run = "layout.timeline" },
     # The terminal panel (#362). **Krusader DOES have this panel** —it is
     # the docked terminal emulator, and a good part of why norte adds it—,
     # so here its chord should be transcribed rather than invented.

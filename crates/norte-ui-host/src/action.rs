@@ -29,6 +29,28 @@ pub enum TabVerb {
     New,
     /// Close the tab (`pane.tab-close`).
     Close,
+    /// Move the tab one place left in its group (`pane.tab-move-left`,
+    /// bridge 99: the tab's own context menu).
+    MoveLeft,
+    /// Move the tab one place right (`pane.tab-move-right`, bridge 99).
+    MoveRight,
+}
+
+/// Which border of a slot a resize grip sits on (bridge 99).
+///
+/// ```
+/// use norte_ui_host::BorderAxis;
+///
+/// let json = serde_json::to_string(&BorderAxis::Row).expect("serializes");
+/// assert_eq!(json, "\"row\"");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BorderAxis {
+    /// A vertical border: the neighbor is to the RIGHT.
+    Col,
+    /// A horizontal border: the neighbor is BELOW.
+    Row,
 }
 
 /// A request from the renderer.
@@ -837,6 +859,12 @@ pub enum UiAction {
         slot_id: u32,
         /// The pointer's position on the split's axis, in cells.
         cells: u16,
+        /// Which of the slot's borders was grabbed (bridge 99). A slot with
+        /// a neighbor to its right AND one below has two, and without this
+        /// the host always took the right one: the border above a bottom
+        /// dock never moved. Absent = the host guesses, right first.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        axis: Option<BorderAxis>,
     },
     /// Drops slot `slot_id`, dragged by its title, onto `target` (bridge 90,
     /// ADR 0138): onto one of its sides, or in the center to join it as a

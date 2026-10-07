@@ -711,7 +711,7 @@ pub fn rail_icons_to_place(
         .filter_map(|(index, (slot, b))| {
             let rgb = match b.state {
                 PanelState::Closed => closed?,
-                PanelState::Open | PanelState::Focused => rgb(Role::Title)?,
+                PanelState::Open | PanelState::Focused | PanelState::Behind => rgb(Role::Title)?,
             };
             Some(crate::rail_icons::RailIcon {
                 rgb,

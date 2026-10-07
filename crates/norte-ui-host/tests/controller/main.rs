@@ -46,6 +46,7 @@ mod splash;
 mod sync;
 mod timeline;
 mod transfers;
+mod usability;
 mod viewer;
 
 use attributes_processes::*;

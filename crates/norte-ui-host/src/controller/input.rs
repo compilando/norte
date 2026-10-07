@@ -420,6 +420,9 @@ impl State {
         if let Some(outcome) = self.key_in_terminal(k, backend, mailbox) {
             return outcome;
         }
+        if let Some(outcome) = self.escape_from_side_panel(k) {
+            return outcome;
+        }
         let Ok(chord) = k.to_chord() else {
             // A key the adapter does not understand is not guessed at.
             return (
@@ -509,6 +512,34 @@ impl State {
             }
             Resolution::Reset => self.key_missed(idle, chord),
         }
+    }
+
+    /// `Escape` with a side panel focused gives the keys back to the listing.
+    ///
+    /// No preset binds it in browse, so it used to be swallowed and the
+    /// universal "get me out" left the reader inside the places bar. Only
+    /// when nothing is half-typed: then `Escape` belongs to the resolver,
+    /// which drops the sequence. The terminal and the docked viewer never get
+    /// here — their own arms above keep their keys.
+    fn escape_from_side_panel(
+        &mut self,
+        k: &crate::keys::KeyInput,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        if !matches!(k.key.as_str(), "Escape" | "esc") || k.ctrl || k.alt || k.meta || k.shift {
+            return None;
+        }
+        if !self.resolver.pending().is_empty() || self.resolver.count().is_some() {
+            return None;
+        }
+        let SlotId(focus) = self.roles.get(RoleId::Active)?;
+        if self.slots.contains_key(&focus) {
+            return None;
+        }
+        let listing = self.active();
+        self.roles.set(RoleId::Active, SlotId(listing));
+        self.reconciles_roles();
+        let change = ViewChange::Layout(self.layout());
+        Some((self.applied(), vec![self.parche(vec![change])]))
     }
 
     /// A key no binding took. `idle` = nothing was half-typed before it.

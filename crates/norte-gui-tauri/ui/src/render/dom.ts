@@ -25,6 +25,23 @@ export function revealInView(el: Element | undefined): void {
   }
 }
 
+/**
+ * Makes `box` give up its START when it does not fit, and answers the node
+ * its content goes in.
+ *
+ * A path cut at the end hides the one segment that says where you are — the
+ * folder, the file. `box` lays out right to left so it overflows on the
+ * left, and the inner node turns the text back to left to right, isolated,
+ * so the path still reads in order (CSS `.cut-start`).
+ */
+export function cutStart(box: HTMLElement): HTMLElement {
+  box.classList.add("cut-start");
+  const inner = document.createElement("span");
+  inner.className = "cut-start-text";
+  box.replaceChildren(inner);
+  return inner;
+}
+
 /** A paragraph with a sentence the host already wrote. */
 export function note(text: string): HTMLElement {
   const p = document.createElement("p");

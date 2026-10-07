@@ -416,9 +416,89 @@ pub fn pending_display(resolver: &Resolver) -> String {
     norte_frontend::whichkey::pending_title(resolver.pending(), resolver.count())
 }
 
+/// What every side panel lets through, whatever its own keys: opening,
+/// closing and cycling panels. Each panel kept its own allowlist and they
+/// disagreed — from the log the others opened, from places they did not —
+/// and a key that works or not depending on which panel has the keyboard
+/// is not learned (review of 2026-10-07).
+const PANEL_SHARED: &[&str] = &[
+    "layout.places",
+    "layout.preview",
+    "layout.processes",
+    "layout.metadata",
+    "layout.log",
+    "layout.disk-map",
+    "layout.timeline",
+    "layout.terminal",
+    "pane.tree",
+    "layout.close-slot",
+    "layout.focus-next",
+    "layout.focus-prev",
+];
+
+/// The shared panel command `chord` runs in the LISTING's keymap, if any:
+/// asked of the browse map because `pane.tree` lives in `[pane]`, which a
+/// side panel's dialog context never resolves.
+#[must_use]
+pub fn shared_panel_command(
+    browse: &norte_frontend::keymap::Effective,
+    chord: norte_frontend::keymap::Chord,
+) -> Option<Command> {
+    PANEL_SHARED
+        .iter()
+        .find(|cmd| browse.single_chord_runs(chord, cmd))
+        .and_then(|cmd| Command::parse(cmd))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn orthodox_browse() -> norte_frontend::keymap::Effective {
+        let (_, preset) = presets()
+            .into_iter()
+            .find(|(n, _)| *n == "orthodox")
+            .expect("orthodox");
+        norte_frontend::keymap::Effective::build_for(
+            &preset,
+            &[],
+            COMMANDS,
+            norte_frontend::keymap::Screen::Browse,
+        )
+        .expect("builds")
+    }
+
+    /// Inside ANY side panel, the keys that open, close or cycle panels
+    /// work: from Places `alt+l` opened nothing, from Processes `alt+t`
+    /// opened nothing, and `alt+x` closed nothing (review of 2026-10-07).
+    /// What the panel uses for itself (an arrow, a letter) is not taken.
+    #[test]
+    fn panel_keys_pass_through_any_side_panel() {
+        let eff = orthodox_browse();
+        let chord = |s| norte_frontend::keymap::parse_chord(s).expect("chord");
+        assert_eq!(
+            shared_panel_command(&eff, chord("alt+l")),
+            Some(Command::LayoutLog)
+        );
+        assert_eq!(
+            shared_panel_command(&eff, chord("alt+t")),
+            Some(Command::PaneTree)
+        );
+        assert_eq!(
+            shared_panel_command(&eff, chord("alt+x")),
+            Some(Command::LayoutCloseSlot)
+        );
+        assert_eq!(
+            shared_panel_command(&eff, chord("alt+o")),
+            Some(Command::LayoutFocusNext)
+        );
+        assert_eq!(shared_panel_command(&eff, chord("down")), None);
+        assert_eq!(
+            shared_panel_command(&eff, chord("f5")),
+            None,
+            "a listing verb stays out"
+        );
+    }
 
     /// K2a: the bar paints the count WHILE it is typed, and keeps painting it
     /// with a half-done sequence on top (`12` + `g`). With no live count the

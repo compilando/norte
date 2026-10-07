@@ -3791,6 +3791,7 @@ async fn dragging_the_edge_splits_the_two_slots() {
     h.dispatch(UiAction::ResizeSlot {
         slot_id: left,
         cells: 40,
+        axis: None,
     })
     .await
     .expect("host alive");
@@ -4225,6 +4226,7 @@ async fn the_details_edge_is_dragged_from_the_second_listing() {
         .dispatch(UiAction::ResizeSlot {
             slot_id: listing,
             cells: meta.x + 10,
+            axis: None,
         })
         .await
         .expect("host alive");
@@ -4297,6 +4299,7 @@ async fn dragged_sizes_come_back_on_open() {
         .dispatch(UiAction::ResizeSlot {
             slot_id: left.slot_id,
             cells: (left.x + left.width * 2) / 3,
+            axis: None,
         })
         .await
         .expect("host alive");
@@ -4396,6 +4399,7 @@ async fn the_log_edge_is_dragged_from_the_details() {
         .dispatch(UiAction::ResizeSlot {
             slot_id: meta_id,
             cells: log.y - 5,
+            axis: None,
         })
         .await
         .expect("host alive");
@@ -4558,7 +4562,7 @@ async fn the_preview_slot_follows_the_cursor_and_shows_the_viewer() {
     // listing lands there is no cursor, and THAT note is a different one
     // ("nothing selected"): it waits for the directory's.
     let with_note = snapshot_until(&h, &mut sub, "the preview slot over a directory", |s| {
-        preview_de(s).filter(|p| p.viewer.is_none() && p.note == "directorio")
+        preview_de(s).filter(|p| p.viewer.is_none() && p.note.starts_with("Una carpeta"))
     })
     .await;
     assert!(with_note.viewer.is_none(), "{with_note:?}");

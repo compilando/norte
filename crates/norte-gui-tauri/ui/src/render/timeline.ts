@@ -9,7 +9,7 @@
 import type { Screen } from "../render";
 import type { TimelineSlotView } from "../types";
 import type { SlotDom } from "./dom";
-import { badge, revealInView } from "./dom";
+import { badge, cutStart, revealInView } from "./dom";
 
 /**
  * Paints a slot's timeline: one row per mutation — or per batch — from
@@ -64,8 +64,8 @@ export function paintTimeline(this: Screen, dom: SlotDom, slot: TimelineSlotView
     verb.textContent = r.op;
     const path = document.createElement("span");
     path.className = "timeline-path";
-    path.textContent = r.path;
-    // The column truncates from the end: the whole path, on hover.
+    // Cut from the LEFT, so the file name shows: the whole path, on hover.
+    cutStart(path).textContent = r.path;
     row.title = `${r.op} ${r.path}`;
     row.append(verb, path);
     if (r.tail !== "") {

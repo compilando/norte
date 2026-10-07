@@ -294,9 +294,40 @@ impl State {
                 .map_or_else(Vec::new, |t| {
                     norte_frontend::layout_picker::preview(t, THUMBNAIL.0, THUMBNAIL.1, &self.kinds)
                 }),
+            legend: current
+                .and_then(|r| r.tree.as_ref())
+                .map_or_else(Vec::new, |t| self.preview_legend(t)),
             problem: clamp_display(diagnostic.0),
             problem_hostile: diagnostic.1,
         })
+    }
+
+    /// One entry per distinct letter of the preview: the letter is the
+    /// kind's initial (`layout_picker::preview`), so two kinds sharing it —
+    /// places, processes — share the entry, named together.
+    fn preview_legend(&self, tree: &Node) -> Vec<crate::dto::LegendEntryView> {
+        let mut out: Vec<(char, Vec<String>)> = Vec::new();
+        for id in tree.slot_ids() {
+            let Some(kind) = tree.kind_of(id) else {
+                continue;
+            };
+            let kind = kind.as_str();
+            let Some(letter) = kind.chars().next() else {
+                continue;
+            };
+            let label = clamp_display(kind_label(self.lang, kind));
+            match out.iter_mut().find(|(l, _)| *l == letter) {
+                Some((_, labels)) if !labels.contains(&label) => labels.push(label),
+                Some(_) => {}
+                None => out.push((letter, vec![label])),
+            }
+        }
+        out.into_iter()
+            .map(|(letter, labels)| crate::dto::LegendEntryView {
+                letter: letter.to_string(),
+                label: labels.join(" / "),
+            })
+            .collect()
     }
 
     /// The keys while the layout selector is open.
@@ -739,4 +770,16 @@ impl State {
             title_hostile: hostile,
         }
     }
+}
+
+/// A kind's name for the preview legend: `layout-legend-<kind>` if the
+/// catalogue has it (the listing, the status bar), else the panel bar's
+/// name, else the kind's id.
+fn kind_label(lang: norte_i18n::Lang, kind: &str) -> String {
+    let key = format!("layout-legend-{kind}");
+    let own = norte_i18n::t_in(lang, &key);
+    if own != key {
+        return own;
+    }
+    norte_frontend::panelbar::label_in(lang, kind, &format!("layout.{kind}"))
 }

@@ -11,6 +11,12 @@
 use super::*;
 
 impl State {
+    /// A bottom dock's opening size against the last viewport (ADR 0171).
+    fn bottom_dock(&self, rows: u16) -> norte_frontend::layout::Size {
+        let h = self.viewport.1;
+        norte_frontend::layout::dock_rows(rows, (h > 0).then_some(h))
+    }
+
     /// The three effects that touch the LAYOUT, together.
     ///
     /// Grouped here and not in `apply_effect` because that method is a
@@ -67,6 +73,13 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // A PANEL's tab closes that panel the way its toggle does (shell and
+        // log level released): `close_slot` routes it there.
+        if !self.slots.contains_key(&self.focused())
+            && self.tree.tabs_of(SlotId(self.focused())).is_some()
+        {
+            return self.close_slot(backend, mailbox);
+        }
         let Some(updated) = self.tree.close_tab(SlotId(self.focused())) else {
             return (
                 ActionAck::Unavailable {
@@ -213,7 +226,7 @@ impl State {
             .saturating_add(1)
     }
 
-    /// Splits the focused slot and puts another LISTING next to it.
+    /// Splits the active LISTING and puts another one next to it.
     ///
     /// The new one starts in the directory it was split from, which is the
     /// least surprising thing: asking for room to work is not going somewhere
@@ -236,11 +249,15 @@ impl State {
         // tabs — with the tree saving it just the same. The TUI refuses at
         // this same spot (ADR 0077: a decision duplicated between frontends
         // diverges silently).
+        // The LISTING is split, never a dock with the keys: a split adds a
+        // listing, and one born inside the dock sat under its tab strip with
+        // no path bar. `active()` is the focused slot when it is a listing.
+        let base = self.active();
         let room = self
             .split
             .placements
             .iter()
-            .find(|(s, _)| s.0 == self.focused())
+            .find(|(s, _)| s.0 == base)
             .is_none_or(|(_, re)| {
                 norte_frontend::layout::has_room_to_split(*re, dir, &KindId::browser(), &self.kinds)
             });
@@ -254,7 +271,7 @@ impl State {
         }
         let id = self.new_slot();
         let updated = self.tree.split_slot(
-            SlotId(self.focused()),
+            SlotId(base),
             dir,
             &Node::slot(SlotId(id), KindId::browser()),
         );
@@ -276,7 +293,18 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(updated) = self.tree.close_slot(SlotId(self.focused())) else {
+        // A SIDE panel closes the way its own toggle closes it: that path
+        // kills the terminal's shell and lowers the log's capture level,
+        // which a bare `close_slot` skipped. And it does not get the
+        // "splits again" hint, which is about a closed listing.
+        let focus = self.focused();
+        if !self.slots.contains_key(&focus)
+            && let Some(kind) = kind_de(&self.tree, SlotId(focus))
+            && self.slot_of_kind(kind.as_str()) == Some(SlotId(focus))
+        {
+            return self.close_slot_of_kind(kind.as_str(), backend, mailbox);
+        }
+        let Some(updated) = self.tree.close_slot(SlotId(focus)) else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-layout-last-panel".to_owned(),
@@ -443,11 +471,11 @@ impl State {
         };
         let (edge, size) = match kind {
             "places" => (Edge::Left, Size::Fixed(16)),
-            "processes" => (Edge::Bottom, Size::Fixed(8)),
+            "processes" => (Edge::Bottom, self.bottom_dock(8)),
             // The log at the bottom, and taller than the board: its lines are
             // long, and eight rows of which two are chrome do not leave room
             // to read a trace. It is the same spot the TUI gives it.
-            "log" => (Edge::Bottom, Size::Fixed(12)),
+            "log" => (Edge::Bottom, self.bottom_dock(12)),
             // The tree on the left and with the places bar's width: it is the
             // same gesture — a navigation column next to the listing — and
             // two different widths for the same thing stand out.

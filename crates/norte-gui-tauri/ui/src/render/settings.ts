@@ -831,7 +831,25 @@ export function paintLayouts(this: Screen, layouts: LayoutPickerView | null): vo
     preview.className = "layouts-preview";
     preview.setAttribute("aria-hidden", "true");
     preview.textContent = layouts.preview.join("\n");
-    body.append(preview);
+    // What each letter IS (bridge 99): the thumbnail alone was a grid of
+    // `b`, `p`, `v` nobody could read. Next to the drawing, in one box.
+    const side = document.createElement("div");
+    side.className = "layouts-side";
+    side.append(preview);
+    const legend = layouts.legend ?? [];
+    if (legend.length > 0) {
+      const dl = document.createElement("dl");
+      dl.className = "layouts-legend";
+      for (const e of legend) {
+        const dt = document.createElement("dt");
+        dt.textContent = e.letter;
+        const dd = document.createElement("dd");
+        dd.textContent = e.label;
+        dl.append(dt, dd);
+      }
+      side.append(dl);
+    }
+    body.append(side);
   } else {
     const broken = document.createElement("p");
     broken.className = "layouts-problem";

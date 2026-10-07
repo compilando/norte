@@ -42,6 +42,7 @@ fn the_pane_bar_paints_names_with_the_underlined_letter_and_falls_back_to_letter
     app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Top);
     app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Names);
 
+    // 80 columns, the common terminal: the names must fit there (ADR 0171).
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let row: String = (0..80)
@@ -115,7 +116,7 @@ fn the_pane_footer_counts_and_tells_the_free_space() {
     };
     let con = row_down(&app);
     assert!(
-        con.contains("1 dirs") && con.contains("0 ficheros"),
+        con.contains("1 dir ·") && con.contains("0 ficheros"),
         "{con:?}"
     );
     assert!(con.contains("120") && con.contains("libres"), "{con:?}");
@@ -159,11 +160,11 @@ fn the_key_bar_paints_what_is_bound_and_a_click_is_the_key() {
             .collect()
     };
     let ultima = row(&app, 15);
-    // With a space between the number and the label (spec 2026-09-15): in a
-    // cell with room for it, `2 Copiar` reads at a glance and `2Copiar`
-    // needs the eye to split it. The ZONES do not change — they come from
+    // At 80 columns a cell is 8: `Copiar` fills it, so the space after the
+    // number gives way to the blank that separates it from the next cell
+    // (review of 2026-10-07). The ZONES do not change — they come from
     // `keybar::layout`, which splits the row the same way.
-    assert!(ultima.contains("2 Copiar"), "the bound cell: {ultima:?}");
+    assert!(ultima.contains("2Copiar "), "the bound cell: {ultima:?}");
     assert!(
         ultima.starts_with('1'),
         "the empty one only carries the number: {ultima:?}"
@@ -505,6 +506,38 @@ fn an_empty_disk_map_says_so_and_names_its_directory() {
         title_row.contains("casa"),
         "names the directory: {title_row}"
     );
+}
+
+/// The View menu marks the panels that are open: it listed them with
+/// their keys and said nothing of which were open (review of 2026-10-07).
+#[test]
+fn the_view_menu_marks_open_panels() {
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.toggle_log();
+    let view = norte_frontend::menu::MENUS
+        .iter()
+        .position(|m| m.title == "menu-view")
+        .expect("a View menu");
+    let mut menu = norte_frontend::menu::MenuState::new();
+    menu.open(view);
+    app.menu = Some(menu);
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let screen: String = (0..40)
+        .map(|y| {
+            (0..120)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_owned())
+                .collect::<String>()
+                + "\n"
+        })
+        .collect();
+    let log = norte_i18n::t("menu-item-layout-log");
+    let tree = norte_i18n::t("menu-item-pane-tree");
+    assert!(
+        screen.contains(&format!("✓ {log}")),
+        "open, marked:\n{screen}"
+    );
+    assert!(!screen.contains(&format!("✓ {tree}")), "closed, not marked");
 }
 
 /// A layout that brings the disk map — yesterday's session, a profile —

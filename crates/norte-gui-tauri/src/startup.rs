@@ -206,6 +206,23 @@ pub enum StartupError {
         #[source]
         source: norte_proto::Error,
     },
+    /// The socket's path does not fit in a Unix socket address.
+    ///
+    /// Said BEFORE trying: the kernel's answer surfaces as a bare "could
+    /// not connect", the reader goes looking for a daemon that is not the
+    /// problem, and the path that is — a long `XDG_RUNTIME_DIR` — is the one
+    /// thing that message cut off.
+    #[error(
+        "the daemon's socket path is too long ({len} bytes; a Unix socket allows at most {max}): {socket}"
+    )]
+    SocketPathTooLong {
+        /// The path.
+        socket: String,
+        /// Its length, in bytes.
+        len: usize,
+        /// The most a socket address holds on this system.
+        max: usize,
+    },
     /// The daemon started and DIED, with whatever it said.
     ///
     /// Separate from [`StartupError::Connect`] because the advice is the
@@ -766,6 +783,13 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         .clone()
         .or_else(|| cfg.common.daemon.socket.clone())
         .unwrap_or_else(|| norte_client::default_socket_path(None));
+    if let Some((len, max)) = socket_path_too_long(&socket) {
+        return Err(StartupError::SocketPathTooLong {
+            socket: socket.display().to_string(),
+            len,
+            max,
+        });
+    }
 
     // Daemon and ONLY daemon: the reference GUI does not build an `Engine` in
     // its own process (decision D10). What it does do is START ONE if there
@@ -1133,9 +1157,51 @@ fn logging(cfg: &norte_frontend::config::FrontendConfig) -> Option<norte_config:
     )
 }
 
+/// The most bytes a Unix socket path can have here: `sun_path` minus its
+/// terminating NUL (108 on Linux, 104 on the BSDs and macOS).
+#[cfg(unix)]
+const SOCKET_PATH_MAX: usize = if cfg!(target_os = "linux") { 107 } else { 103 };
+
+/// `(len, max)` when `socket` does not fit in a socket address; `None` when it
+/// does, or on a platform whose daemon is not a Unix socket.
+fn socket_path_too_long(socket: &std::path::Path) -> Option<(usize, usize)> {
+    #[cfg(unix)]
+    {
+        let len = socket.as_os_str().len();
+        (len > SOCKET_PATH_MAX).then_some((len, SOCKET_PATH_MAX))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = socket;
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W10 (2026-10-07): a socket path past the Unix limit is NAMED as the
+    /// problem. It used to surface as "could not connect to the daemon at
+    /// …", cut off before the path that was the actual cause.
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_path_past_the_limit_is_said_to_be_too_long() {
+        let fits = PathBuf::from(format!("/run/user/1000/{}", "a".repeat(40)));
+        assert_eq!(socket_path_too_long(&fits), None);
+        let long = PathBuf::from(format!("/tmp/{}/norte.sock", "x".repeat(120)));
+        let (len, max) = socket_path_too_long(&long).expect("too long");
+        assert_eq!(len, long.as_os_str().len());
+        assert_eq!(max, SOCKET_PATH_MAX);
+        let msg = StartupError::SocketPathTooLong {
+            socket: long.display().to_string(),
+            len,
+            max,
+        }
+        .to_string();
+        assert!(msg.contains("too long"), "{msg}");
+        assert!(msg.contains(&max.to_string()), "{msg}");
+    }
 
     /// `--lang` reaches the window's startup, and a language norte does not
     /// have is an error that names the flag — not a quiet English. The

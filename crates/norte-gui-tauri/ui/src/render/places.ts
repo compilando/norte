@@ -3,7 +3,7 @@
 
 import type { Screen } from "../render";
 import type { PlacesSlotView, TreeSlotView } from "../types";
-import { revealInView, badge, unchanged } from "./dom";
+import { revealInView, badge, note, unchanged } from "./dom";
 import { icon } from "./icons";
 import type { SlotDom } from "./dom";
 
@@ -246,6 +246,16 @@ export function paintPlaces(this: Screen, dom: SlotDom, slot: PlacesSlotView): v
     list.append(row);
   }
   list.setAttribute("aria-activedescendant", `place-row-${String(slot.cursor)}`);
-  dom.scroller.replaceChildren(list);
+  // The empty Favorites section says how to get one (bridge 99). Under the
+  // list, not as a row: rows are clicked by index, and Favorites is the
+  // last section, so this sits right under its header.
+  const hint = slot.favorites_hint ?? "";
+  if (hint !== "") {
+    const p = note(hint);
+    p.classList.add("places-hint");
+    dom.scroller.replaceChildren(list, p);
+  } else {
+    dom.scroller.replaceChildren(list);
+  }
   revealInView(list.querySelector(`#place-row-${String(slot.cursor)}`) ?? undefined);
 }

@@ -117,6 +117,25 @@ pub enum LayoutDiagnostic {
     },
 }
 
+/// The size a bottom dock OPENS with: `wanted` rows, but at most a third of
+/// a `column` of 12 rows or more, so the listing keeps its rows on a short
+/// terminal (ADR 0171). Below 12 rows the collapse decides; with no size
+/// known yet, `wanted`. Applied when opening, never when resolving: a size
+/// the reader drags afterwards is theirs.
+///
+/// ```
+/// use norte_frontend::layout::{Size, dock_rows};
+/// assert_eq!(dock_rows(12, Some(24)), Size::Fixed(8));
+/// assert_eq!(dock_rows(12, Some(48)), Size::Fixed(12));
+/// ```
+#[must_use]
+pub fn dock_rows(wanted: u16, column: Option<u16>) -> Size {
+    Size::Fixed(match column {
+        Some(rows) if rows >= 12 => wanted.min(rows / 3),
+        _ => wanted,
+    })
+}
+
 /// Validates a tree before using it.
 ///
 /// Only what is INCONSISTENT: what is clampable (an active tab out of

@@ -418,7 +418,7 @@ impl State {
                             tail.push(norte_i18n::t_in(self.lang, "timeline-irreversible"));
                         }
                         crate::dto::TimelineRowView {
-                            time: norte_frontend::format::time_utc(f.ts_ms),
+                            time: norte_frontend::format::time_local(f.ts_ms),
                             actor: clamp_display(f.actor_kind.clone()),
                             op: clamp_display(f.op.clone()),
                             path: clamp_display(norte_frontend::timeline::path_label(&f.path)),

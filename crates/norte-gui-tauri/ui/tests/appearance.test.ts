@@ -74,6 +74,16 @@ describe("bundled typography and configuration", () => {
     expect(fatal.textContent).toBe("again");
   });
 
+  // W10 (2026-10-07): the sentence ends in a long path, and an unbreakable
+  // one ran off the window, cutting off the part that explained it.
+  it("the fatal sentence sits in a block that wraps anywhere", () => {
+    const fatal = document.createElement("div");
+    showFatal(fatal, `socket path too long: /tmp/${"x".repeat(200)}`);
+    expect(fatal.querySelector(".fatal-text")?.textContent).toContain("too long");
+    const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+    expect(css).toMatch(/\.fatal-text\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  });
+
   it("a null field doesn't touch what was already there", () => {
     const root = document.documentElement;
     root.style.setProperty("--mono", "Fira Code");

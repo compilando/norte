@@ -80,26 +80,35 @@ pub fn human_bytes_short(n: u64) -> String {
     format!("{value}{}", UNITS[unit])
 }
 
-/// The `HH:MM:SS` time of a millisecond timestamp, in UTC.
-///
-/// UTC and not local, same as the date column in ISO format: this tree
-/// carries no timezone database, and a local time invented from a fixed
-/// offset would lie twice a year. What gets compared here is lines against
-/// each other, and for that the timezone does not matter as long as it is the
-/// same one.
+/// The `HH:MM:SS` time of a millisecond timestamp, in the system's zone —
+/// the same clock as the listing's date column, which the log and the
+/// timeline sit next to.
 ///
 /// Lives here since #326, when the window needed the same thing: two ideas of
 /// what time it is in each frontend's log panel is the kind of difference
 /// nobody notices until they compare two screenshots.
+#[must_use]
+pub fn time_local(epoch_ms: i64) -> String {
+    time_in(epoch_ms, &jiff::tz::TimeZone::system())
+}
+
+/// [`time_local`] in a GIVEN zone, for tests that must not depend on the
+/// machine's.
 ///
 /// ```
-/// use norte_frontend::format::time_utc;
-/// assert_eq!(time_utc(0), "00:00:00");
+/// use norte_frontend::format::time_in;
+/// assert_eq!(time_in(0, &jiff::tz::TimeZone::UTC), "00:00:00");
 /// // And a timestamp BEFORE the epoch does not give a negative time.
-/// assert_eq!(time_utc(-1), "23:59:59");
+/// assert_eq!(time_in(-1, &jiff::tz::TimeZone::UTC), "23:59:59");
 /// ```
 #[must_use]
-pub fn time_utc(epoch_ms: i64) -> String {
+pub fn time_in(epoch_ms: i64, tz: &jiff::tz::TimeZone) -> String {
+    if let Ok(ts) = jiff::Timestamp::from_millisecond(epoch_ms) {
+        let z = ts.to_zoned(tz.clone());
+        return format!("{:02}:{:02}:{:02}", z.hour(), z.minute(), z.second());
+    }
+    // Out of jiff's range (a hostile timestamp): UTC arithmetic, which
+    // knows how to paint any `i64`.
     let sod = epoch_ms.div_euclid(1000).rem_euclid(86_400);
     format!("{:02}:{:02}:{:02}", sod / 3600, (sod % 3600) / 60, sod % 60)
 }
@@ -107,6 +116,17 @@ pub fn time_utc(epoch_ms: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Log and timeline speak the listing's time, not UTC: two clocks on
+    /// one screen, one of them unmarked (review of 2026-10-07).
+    #[test]
+    fn a_clock_time_is_in_the_given_zone() {
+        let madrid = jiff::tz::TimeZone::fixed(jiff::tz::offset(2));
+        assert_eq!(time_in(0, &madrid), "02:00:00");
+        assert_eq!(time_in(0, &jiff::tz::TimeZone::UTC), "00:00:00");
+        // Out of jiff's range: the plain arithmetic, never a panic.
+        assert_eq!(time_in(i64::MAX, &madrid).len(), 8);
+    }
 
     /// The short form rounds DOWN: announcing more free space than there is
     /// is the lie that matters here.

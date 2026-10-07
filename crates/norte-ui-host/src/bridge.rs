@@ -575,7 +575,14 @@ use serde::{Deserialize, Serialize};
 ///   name rows among ALL visible branches.
 /// - **98**: `DiskMapSlotView.empty`: what a finished map with nothing to
 ///   draw says, translated; empty otherwise.
-pub const BRIDGE_VERSION: u32 = 98;
+/// - **99**: `resize_slot { axis }`: which border of the slot was grabbed
+///   (`col` or `row`). Absent = the old guess, right neighbor first. And
+///   `tab_action`'s `verb` gains `move_left` / `move_right` (a tab's own
+///   context menu). And `LayoutPickerView.legend`: what each letter of
+///   the preview is; and `PlacesSlotView.favorites_hint`, what an empty
+///   Favorites section says. And `PanelButtonState::Behind`: a panel in
+///   the layout but not in view (behind a tab, or dropped for room).
+pub const BRIDGE_VERSION: u32 = 99;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

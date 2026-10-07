@@ -467,6 +467,44 @@ pub fn middle_ellipsis(s: &str, max: usize) -> String {
     out
 }
 
+/// `s` in at most `max` cells, cut from the LEFT with a `…`: for a path
+/// whose tail — the folder you are in — matters more than its root.
+///
+/// ```
+/// use norte_frontend::display::head_ellipsis;
+/// assert_eq!(head_ellipsis("/a/b", 10), "/a/b");
+/// assert_eq!(head_ellipsis("/uno/dos/tres", 8), "…os/tres");
+/// assert_eq!(head_ellipsis("/uno", 0), "");
+/// ```
+#[must_use]
+pub fn head_ellipsis(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    let cell = |c: char| UnicodeWidthChar::width(c).unwrap_or(0);
+    // Bounded by chars first, like `middle_ellipsis`: a flood of zero-width
+    // marks weighs nothing and would otherwise be walked whole.
+    let chars: Vec<char> = s.chars().collect();
+    let cap = max.saturating_mul(4);
+    let cut_by_chars = chars.len() > cap;
+    let chars = &chars[chars.len().saturating_sub(cap)..];
+    if !cut_by_chars && chars.iter().copied().map(cell).sum::<usize>() <= max {
+        return chars.iter().collect();
+    }
+    let budget = max - 1;
+    let mut used = 0usize;
+    let mut tail: Vec<char> = Vec::new();
+    for &c in chars.iter().rev() {
+        let w = cell(c);
+        if used + w > budget {
+            break;
+        }
+        used += w;
+        tail.push(c);
+    }
+    std::iter::once('…').chain(tail.into_iter().rev()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

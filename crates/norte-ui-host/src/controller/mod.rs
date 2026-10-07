@@ -4005,9 +4005,11 @@ impl State {
                 target,
                 zone,
             } => self.mover_slot(*slot_id, *target, *zone, backend, mailbox),
-            UiAction::ResizeSlot { slot_id, cells } => {
-                self.drag_edge(*slot_id, *cells, backend, mailbox)
-            }
+            UiAction::ResizeSlot {
+                slot_id,
+                cells,
+                axis,
+            } => self.drag_edge(*slot_id, *cells, *axis, backend, mailbox),
             UiAction::ProfileActivateRow { row, generation } => {
                 self.activate_profile_from_row(*row, *generation, backend, mailbox)
             }

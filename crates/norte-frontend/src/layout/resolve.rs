@@ -1145,6 +1145,35 @@ mod tests {
         );
     }
 
+    /// A bottom dock OPENS at most a third of a short column: 12 rows of
+    /// log in a 24-row terminal left the listing half the screen (review of
+    /// 2026-10-07). On a tall one, or with no size known, its own size.
+    #[test]
+    fn a_bottom_dock_opens_at_most_a_third_of_a_short_column() {
+        assert_eq!(crate::layout::dock_rows(12, Some(24)), Size::Fixed(8));
+        assert_eq!(crate::layout::dock_rows(12, Some(60)), Size::Fixed(12));
+        assert_eq!(crate::layout::dock_rows(12, Some(10)), Size::Fixed(12));
+        assert_eq!(crate::layout::dock_rows(12, None), Size::Fixed(12));
+    }
+
+    /// And a size the reader CHOSE is painted as chosen: capping it at
+    /// resolve time snapped every drag back and made `grow` look broken.
+    #[test]
+    fn a_dragged_dock_keeps_its_size() {
+        let tree = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(17)],
+            children: vec![browser(1), Node::slot(SlotId(4), KindId::new("viewer"))],
+        };
+        let out = resolve(r(0, 0, 80, 24), &tree, &reg());
+        let h = out
+            .placements
+            .iter()
+            .find(|(id, _)| *id == SlotId(4))
+            .map(|(_, re)| re.height);
+        assert_eq!(h, Some(17));
+    }
+
     /// Setting aside a tab BEFORE another does not change which one is
     /// being looked at.
     ///

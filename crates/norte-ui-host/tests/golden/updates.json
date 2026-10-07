@@ -724,6 +724,12 @@
     ],
     "layouts": {
       "cursor": 0,
+      "legend": [
+        {
+          "label": "Listado",
+          "letter": "b"
+        }
+      ],
       "preview": [
         "··········",
         "·bbbbbbbb·"
@@ -854,6 +860,15 @@
           "label": "Registro",
           "letter": "R",
           "state": "closed"
+        },
+        {
+          "attention": false,
+          "chord": "—",
+          "count": 0,
+          "kind": "timeline",
+          "label": "Historial",
+          "letter": "H",
+          "state": "behind"
         }
       ],
       "names": true,
@@ -1202,6 +1217,7 @@
       },
       {
         "cursor": 1,
+        "favorites_hint": "",
         "generation": 5,
         "kind": "places",
         "rows": [

@@ -404,6 +404,11 @@ impl State {
                             norte_frontend::panelbar::PanelState::Open => {
                                 crate::dto::PanelButtonState::Open
                             }
+                            // Behind another tab or dropped for room: its own
+                            // state, painted lit but not "in view" (bridge 99).
+                            norte_frontend::panelbar::PanelState::Behind => {
+                                crate::dto::PanelButtonState::Behind
+                            }
                             norte_frontend::panelbar::PanelState::Focused => {
                                 crate::dto::PanelButtonState::Focused
                             }
@@ -529,12 +534,20 @@ impl State {
                 ),
             ));
         }
+        let present: Vec<String> = self
+            .tree
+            .slot_ids()
+            .into_iter()
+            .filter_map(|s| self.tree.kind_of(s).map(|k| k.as_str().to_owned()))
+            .collect();
+        let present: Vec<&str> = present.iter().map(String::as_str).collect();
         norte_frontend::panelbar::buttons_in(
             &self.kinds,
             norte_frontend::panelbar::PanelBarInput {
                 open: &open_kinds,
                 focused,
                 attention: &attention_list,
+                present: &present,
             },
             self.lang,
         )

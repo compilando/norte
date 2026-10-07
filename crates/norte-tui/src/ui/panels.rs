@@ -1120,7 +1120,7 @@ pub(crate) fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
 /// It used to live here until the window needed the same one (#326): two
 /// ideas of what time it is in each frontend's log panel is the kind of
 /// difference nobody notices until they compare two screenshots.
-use norte_frontend::format::time_utc;
+use norte_frontend::format::time_local;
 
 /// The log panel (#323): what is happening, without leaving the TUI.
 /// The terminal panel (#362): the shell's grid inside its frame.
@@ -1322,7 +1322,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
             };
             Line::from(vec![
                 Span::styled(margin, theme.role(Role::BorderUnfocused)),
-                Span::raw(format!("{} ", time_utc(l.epoch_ms))),
+                Span::raw(format!("{} ", time_local(l.epoch_ms))),
                 Span::styled(format!("{} ", l.level.label()), theme.role(rol)),
                 Span::raw(body),
             ])
@@ -1363,7 +1363,7 @@ fn timeline_line<'a>(
 
     let mut spans = vec![
         Span::styled(
-            format!("{} ", norte_frontend::format::time_utc(the_row.ts_ms)),
+            format!("{} ", norte_frontend::format::time_local(the_row.ts_ms)),
             theme.role(Role::BorderUnfocused),
         ),
         Span::styled("● ", theme.role(rol_de_actor(&the_row.actor_kind))),

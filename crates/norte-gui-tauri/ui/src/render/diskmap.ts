@@ -9,6 +9,7 @@
 import type { Screen } from "../render";
 import type { DiskMapSlotView } from "../types";
 import type { SlotDom } from "./dom";
+import { note } from "./dom";
 // The SAME span that paints a plugin panel, not a copy: it is the conversion
 // of a styled span to DOM, and two copies drift apart as soon as one learns
 // something the other does not — a new role, another one masked.
@@ -43,6 +44,16 @@ export function paintDiskMap(this: Screen, dom: SlotDom, slot: DiskMapSlotView):
     empty.className = "empty";
     empty.textContent = slot.empty;
     dom.scroller.replaceChildren(empty);
+    return;
+  }
+  // Nothing drawn: the TITLE goes in the body too — the directory and
+  // "measuring", or a failure's reason. In a dock's tab group the strip
+  // hides the title, and measuring a big tree left a blank panel.
+  if (slot.lines.length === 0) {
+    // No title and not measuring: nothing to claim, so nothing is said.
+    const text =
+      title !== "" ? title : slot.measuring ? this.t("disk-map-measuring") : "";
+    dom.scroller.replaceChildren(...(text === "" ? [] : [note(text)]));
     return;
   }
 

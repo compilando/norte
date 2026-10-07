@@ -4,7 +4,7 @@ expression: "lines.join(\"\\n\")"
 ---
  Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        
  Sitios  Visor  Procesos  Detalles  Árbol  Registro  Mapa  Historial  Terminal  
-┌ Sitios ──────┐┌/casa──────────┐┌/casa──────────┐┌ Vista ─────────────────────┐
+┌ Sitios ──────┐┌/casa──────────┐┌/casa──────────┐┌ Visor ─────────────────────┐
 │▾ Unidades    ││Nombre▲        ││Nombre▲        ││                            │
 │▾ Favoritos   ││   f00         ││   f00         ││                            │
 │              ││   f01         ││   f01         ││                            │

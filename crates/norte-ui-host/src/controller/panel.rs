@@ -169,9 +169,11 @@ impl State {
         &mut self,
         slot: u32,
         cells: u16,
+        axis: Option<crate::action::BorderAxis>,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        use crate::action::BorderAxis;
         let Some((_, ra)) = self
             .split
             .placements
@@ -189,6 +191,13 @@ impl State {
         let below = self.split.placements.iter().find(|(_, r)| {
             r.y == ra.y + ra.height && r.x < ra.x + ra.width && ra.x < r.x + r.width
         });
+        // The grabbed border, when the renderer says which: a slot with a
+        // neighbor on both sides used to always resolve to the right one.
+        let (right, below) = match axis {
+            Some(BorderAxis::Col) => (right, None),
+            Some(BorderAxis::Row) => (None, below),
+            None => (right, below),
+        };
         let (neighbor, axis) = match (right, below) {
             (Some((b, _)), _) => (*b, norte_frontend::layout::Dir::Horizontal),
             (None, Some((b, _))) => (*b, norte_frontend::layout::Dir::Vertical),
