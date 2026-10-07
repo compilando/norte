@@ -1583,6 +1583,16 @@ fn reference_pane_bar() -> norte_ui_host::dto::PanelBarView {
                 attention: true,
                 count: 3,
             },
+            // Bridge 99: in the layout but behind a tab.
+            PanelButtonView {
+                kind: "timeline".to_owned(),
+                label: "Historial".to_owned(),
+                letter: "H".to_owned(),
+                chord: "—".to_owned(),
+                state: PanelButtonState::Behind,
+                attention: false,
+                count: 0,
+            },
         ],
     }
 }

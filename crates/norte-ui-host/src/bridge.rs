@@ -580,7 +580,8 @@ use serde::{Deserialize, Serialize};
 ///   `tab_action`'s `verb` gains `move_left` / `move_right` (a tab's own
 ///   context menu). And `LayoutPickerView.legend`: what each letter of
 ///   the preview is; and `PlacesSlotView.favorites_hint`, what an empty
-///   Favorites section says.
+///   Favorites section says. And `PanelButtonState::Behind`: a panel in
+///   the layout but not in view (behind a tab, or dropped for room).
 pub const BRIDGE_VERSION: u32 = 99;
 
 /// Cap on a string that crosses to the renderer, in bytes.

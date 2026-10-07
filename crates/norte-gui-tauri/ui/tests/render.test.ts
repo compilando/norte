@@ -2816,6 +2816,24 @@ describe("the menu bar", () => {
     expect(sent).toEqual([{ action: "panel_bar_activate", button: 1 }]);
   });
 
+  // W8 (2026-10-07): a panel behind a tab looked closed.
+  it("a panel behind a tab is lit but has no 'in view' mark", () => {
+    const { screen } = mount();
+    const v = view({});
+    const first = v.panel_bar.buttons[0];
+    if (first !== undefined) {
+      first.state = "behind";
+    }
+    screen.paint(v);
+    const b = document.querySelector(".panelbar-button") as HTMLElement;
+    expect(b.dataset["state"]).toBe("behind");
+    expect(b.getAttribute("aria-pressed")).toBe("true");
+    const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+    const rule = /\.panelbar-button\[data-state="behind"\]\s*\{([^}]*)\}/.exec(css);
+    expect(rule?.[1]).toMatch(/opacity:\s*1/);
+    expect(rule?.[1]).not.toMatch(/box-shadow/);
+  });
+
   it("layout buttons go to the right of the menu and come back by id", () => {
     const { screen, sent } = mount();
     const v = view({});

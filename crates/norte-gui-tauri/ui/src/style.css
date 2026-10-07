@@ -243,6 +243,14 @@ body {
   opacity: 1;
 }
 
+/* Open but NOT in view — behind a tab, or dropped for room (bridge 99):
+   lit like open, without the underline that says "you are looking at it".
+   Dimmed, it read as closed, and pressing it would bring it forward. */
+.panelbar-button[data-state="behind"] {
+  color: var(--title-fg, inherit);
+  opacity: 1;
+}
+
 .panelbar-attention {
   color: var(--warning-fg, var(--error-fg));
   font-weight: bold;
@@ -285,6 +293,7 @@ body {
 }
 
 .panelbar[data-vertical="true"] .panelbar-button[data-state="open"],
+.panelbar[data-vertical="true"] .panelbar-button[data-state="behind"],
 .panelbar[data-vertical="true"] .panelbar-button[data-state="focused"] {
   color: var(--fg);
   /* `--fg` pushed AWAY from mid-grey: white on a dark theme, black on a
@@ -296,6 +305,11 @@ body {
 .panelbar[data-vertical="true"] .panelbar-button[data-state="open"] {
   opacity: 1;
   border-left-color: color-mix(in srgb, var(--fg) 40%, transparent);
+}
+
+/* Behind: lit, no side line — the line says "in view". */
+.panelbar[data-vertical="true"] .panelbar-button[data-state="behind"] {
+  opacity: 1;
 }
 
 .panelbar[data-vertical="true"] .panelbar-button[data-state="focused"] {

@@ -989,7 +989,7 @@ export interface MenuView {
 }
 
 /** How a panel bar button's panel stands (bridge 51). */
-export type PanelButtonState = "closed" | "open" | "focused";
+export type PanelButtonState = "closed" | "open" | "behind" | "focused";
 
 /** A panel bar button. */
 export interface PanelButtonView {

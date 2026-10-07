@@ -408,6 +408,26 @@ fn tab_order(snap: &norte_ui_host::ViewSnapshot) -> Vec<u32> {
         .collect()
 }
 
+/// W8: a panel behind another tab is `behind` in the panel bar — lit, but
+/// not claimed to be in view.
+#[tokio::test]
+async fn a_panel_behind_a_tab_is_behind_in_the_bar() {
+    let (h, _snap) = host_panel_tabs().await;
+    let mut sub = h.subscribe();
+    let (_, snap) = after(&h, &mut sub, UiAction::Resync).await;
+    let state = |kind: &str| {
+        snap.panel_bar
+            .buttons
+            .iter()
+            .find(|b| b.kind == kind)
+            .map(|b| b.state)
+            .unwrap_or_else(|| panic!("{kind} has a button"))
+    };
+    use norte_ui_host::dto::PanelButtonState;
+    assert_eq!(state("processes"), PanelButtonState::Open);
+    assert_eq!(state("log"), PanelButtonState::Behind);
+}
+
 /// W7: a panel tab's close button closes THAT panel, and only it.
 #[tokio::test]
 async fn closing_a_panel_tab_closes_that_panel() {

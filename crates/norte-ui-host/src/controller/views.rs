@@ -401,12 +401,13 @@ impl State {
                             norte_frontend::panelbar::PanelState::Closed => {
                                 crate::dto::PanelButtonState::Closed
                             }
-                            // Behind another tab or dropped for room: lit, as
-                            // open — dimmed, it looked closed (review of
-                            // 2026-10-07).
-                            norte_frontend::panelbar::PanelState::Open
-                            | norte_frontend::panelbar::PanelState::Behind => {
+                            norte_frontend::panelbar::PanelState::Open => {
                                 crate::dto::PanelButtonState::Open
+                            }
+                            // Behind another tab or dropped for room: its own
+                            // state, painted lit but not "in view" (bridge 99).
+                            norte_frontend::panelbar::PanelState::Behind => {
+                                crate::dto::PanelButtonState::Behind
                             }
                             norte_frontend::panelbar::PanelState::Focused => {
                                 crate::dto::PanelButtonState::Focused

@@ -361,6 +361,10 @@ pub enum PanelButtonState {
     Closed,
     /// Placed and visible, but the keyboard goes elsewhere.
     Open,
+    /// In the layout but NOT in view: behind another tab, or dropped for
+    /// room (bridge 99). Lit — dimmed it looked closed — but without the
+    /// "in view" mark.
+    Behind,
     /// Placed, visible, and with the keyboard.
     Focused,
 }
