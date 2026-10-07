@@ -401,7 +401,11 @@ impl State {
                             norte_frontend::panelbar::PanelState::Closed => {
                                 crate::dto::PanelButtonState::Closed
                             }
-                            norte_frontend::panelbar::PanelState::Open => {
+                            // Behind another tab or dropped for room: lit, as
+                            // open — dimmed, it looked closed (review of
+                            // 2026-10-07).
+                            norte_frontend::panelbar::PanelState::Open
+                            | norte_frontend::panelbar::PanelState::Behind => {
                                 crate::dto::PanelButtonState::Open
                             }
                             norte_frontend::panelbar::PanelState::Focused => {
@@ -529,12 +533,20 @@ impl State {
                 ),
             ));
         }
+        let present: Vec<String> = self
+            .tree
+            .slot_ids()
+            .into_iter()
+            .filter_map(|s| self.tree.kind_of(s).map(|k| k.as_str().to_owned()))
+            .collect();
+        let present: Vec<&str> = present.iter().map(String::as_str).collect();
         norte_frontend::panelbar::buttons_in(
             &self.kinds,
             norte_frontend::panelbar::PanelBarInput {
                 open: &open_kinds,
                 focused,
                 attention: &attention_list,
+                present: &present,
             },
             self.lang,
         )

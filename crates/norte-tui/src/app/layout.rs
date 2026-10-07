@@ -1950,13 +1950,12 @@ mod tests {
         app
     }
 
-    /// A panel hidden in a tab's button says CLOSED (#329).
-    ///
-    /// It used to say open, because the status bar asked if the slot
-    /// EXISTS. To the reader it doesn't exist: they don't see it, and what
-    /// the button promises is showing it to them.
+    /// A panel hidden in a tab's button says BEHIND: not open (#329 — the
+    /// reader does not see it, and the button promises showing it), and
+    /// not closed either — painted closed, an open panel looked gone
+    /// (review of 2026-10-07).
     #[test]
-    fn a_panel_hidden_in_a_tab_paints_closed() {
+    fn a_panel_hidden_in_a_tab_paints_behind() {
         use norte_frontend::panelbar::PanelState;
 
         let app = app_with_hidden_log();
@@ -1964,17 +1963,19 @@ mod tests {
             .into_iter()
             .find(|b| b.kind == crate::logview::KIND)
             .expect("the log has a button");
-        assert_eq!(button.state, PanelState::Closed);
+        assert_eq!(button.state, PanelState::Behind);
     }
 
-    /// A panel the layout drops for lack of room isn't open either (#331).
+    /// A panel the layout drops for lack of room isn't OPEN (#331) — nor
+    /// closed: it is BEHIND, there but not in view. Painted closed, it
+    /// vanished without a sign (review of 2026-10-07).
     ///
     /// `visible_slot_ids` answers which tab is active, not what FITS. The
     /// SAME tree, with the panel on the active tab, reads differently on
     /// two screens — and that's exactly what has to be seen, because it
     /// proves the button looks at the layout and not at the tree.
     #[test]
-    fn a_panel_that_doesnt_fit_paints_closed() {
+    fn a_panel_that_doesnt_fit_paints_behind() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
         use norte_frontend::panelbar::PanelState;
 
@@ -2011,8 +2012,8 @@ mod tests {
         assert_eq!(state(&app, 110), PanelState::Open, "with room, open");
         assert_eq!(
             state(&app, 24),
-            PanelState::Closed,
-            "the layout dropped it, so the button can't say yes"
+            PanelState::Behind,
+            "the layout dropped it: not open, and not closed either"
         );
     }
 

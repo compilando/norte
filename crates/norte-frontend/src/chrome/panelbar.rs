@@ -46,6 +46,9 @@ const TOGGLES: &[(&str, &str)] = &[
 pub enum PanelState {
     /// Not even in the layout.
     Closed,
+    /// In the layout but not in view: behind another tab, or dropped for
+    /// lack of room. Its button brings it forward.
+    Behind,
     /// Open, but the keyboard belongs to the listings or another panel.
     Open,
     /// Open AND holding the keyboard.
@@ -201,6 +204,23 @@ pub fn icon_svg(kind: &str) -> Option<&'static str> {
     })
 }
 
+/// The panel kind `command` opens and closes — the inverse of each
+/// button's command — or `None` for a command that toggles no panel. What
+/// a menu needs to mark the open panels with the same rule as the bar.
+#[must_use]
+pub fn toggled_kind<'r>(reg: &'r KindRegistry, command: &str) -> Option<&'r str> {
+    reg.decls()
+        .iter()
+        .filter(|d| es_button(d))
+        .map(|d| d.id.as_str())
+        .find(|id| {
+            TOGGLES.iter().find(|(k, _)| k == id).map_or_else(
+                || command.strip_prefix("layout.") == Some(*id),
+                |(_, c)| *c == command,
+            )
+        })
+}
+
 /// How many buttons the bar has: the registry's, whatever their state.
 ///
 /// ```
@@ -242,6 +262,10 @@ pub struct PanelBarInput<'a> {
     /// Kinds with novelty, with how many. A `0` figure is the same as not
     /// being there.
     pub attention: &'a [(&'a str, u32)],
+    /// Kinds IN the layout's tree, placed or not: one here and not in
+    /// [`Self::open`] is behind another tab, or dropped for lack of room
+    /// ([`PanelState::Behind`]). Empty = nobody says, and nothing is behind.
+    pub present: &'a [&'a str],
 }
 
 /// The bar's buttons: the OPEN ones in the order they are on screen, and
@@ -298,7 +322,9 @@ fn buttons_with(
         let name = name_with(id, &command, &t);
         let letter = letter_of(&name, id, &out);
         let open = input.open.contains(&id);
-        let state = if !open {
+        let state = if !open && input.present.contains(&id) {
+            PanelState::Behind
+        } else if !open {
             PanelState::Closed
         } else if input.focused == Some(id) {
             PanelState::Focused
@@ -745,6 +771,40 @@ mod tests {
         }
     }
 
+    /// The command a menu item runs says which panel it opens, so the menu
+    /// can mark the open ones — the View menu said nothing of what was
+    /// open (review of 2026-10-07).
+    #[test]
+    fn a_toggle_command_names_its_panel() {
+        let reg = registry();
+        assert_eq!(toggled_kind(&reg, "layout.places"), Some("places"));
+        assert_eq!(toggled_kind(&reg, "pane.tree"), Some("tree"));
+        assert_eq!(toggled_kind(&reg, "layout.preview"), Some("viewer"));
+        assert_eq!(toggled_kind(&reg, "layout.timeline"), Some("timeline"));
+        assert_eq!(toggled_kind(&reg, "layout.split-h"), None);
+        assert_eq!(toggled_kind(&reg, "pane.copy"), None);
+    }
+
+    /// A panel in the layout but not in view — behind another tab, or
+    /// dropped for lack of room — is neither closed nor open: it looked
+    /// closed, and pressing it to "open" it brought it forward instead
+    /// (review of 2026-10-07).
+    #[test]
+    fn a_panel_present_but_not_in_view_is_behind() {
+        let b = buttons(
+            &registry(),
+            PanelBarInput {
+                open: &["log"],
+                present: &["log", "disk-map"],
+                ..PanelBarInput::default()
+            },
+        );
+        let of = |k: &str| b.iter().find(|x| x.kind == k).expect("is there").state;
+        assert_eq!(of("disk-map"), PanelState::Behind);
+        assert_eq!(of("log"), PanelState::Open);
+        assert_eq!(of("tree"), PanelState::Closed);
+    }
+
     /// Three distinct states, and focus beats being open: a button that
     /// only said "open" would not say where the keyboard is, which is
     /// half of what is asked when looking at the bar.
@@ -757,6 +817,7 @@ mod tests {
                 open: &open,
                 focused: Some("log"),
                 attention: &[("processes", 3), ("tree", 0)],
+                ..PanelBarInput::default()
             },
         );
         let of = |k: &str| b.iter().find(|x| x.kind == k).expect("is there").clone();

@@ -509,6 +509,38 @@ fn an_empty_disk_map_says_so_and_names_its_directory() {
     );
 }
 
+/// The View menu marks the panels that are open: it listed them with
+/// their keys and said nothing of which were open (review of 2026-10-07).
+#[test]
+fn the_view_menu_marks_open_panels() {
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.toggle_log();
+    let view = norte_frontend::menu::MENUS
+        .iter()
+        .position(|m| m.title == "menu-view")
+        .expect("a View menu");
+    let mut menu = norte_frontend::menu::MenuState::new();
+    menu.open(view);
+    app.menu = Some(menu);
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let screen: String = (0..40)
+        .map(|y| {
+            (0..120)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_owned())
+                .collect::<String>()
+                + "\n"
+        })
+        .collect();
+    let log = norte_i18n::t("menu-item-layout-log");
+    let tree = norte_i18n::t("menu-item-pane-tree");
+    assert!(
+        screen.contains(&format!("✓ {log}")),
+        "open, marked:\n{screen}"
+    );
+    assert!(!screen.contains(&format!("✓ {tree}")), "closed, not marked");
+}
+
 /// A layout that brings the disk map — yesterday's session, a profile —
 /// does not go through the toggle that creates its state: the slot stayed
 /// blank and never measured (2026-10-06). Like the tree and the timeline,
