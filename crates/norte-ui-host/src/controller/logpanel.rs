@@ -409,7 +409,7 @@ impl State {
         let (target, t_hostile) = norte_frontend::display_name(l.target.as_bytes());
         let (message, m_hostile) = norte_frontend::display_name(l.message.as_bytes());
         crate::dto::LogLineView {
-            time: norte_frontend::format::time_utc(l.epoch_ms),
+            time: norte_frontend::format::time_local(l.epoch_ms),
             level: l.level.wire().to_owned(),
             // What is PAINTED, which is not the wire id. The renderer used
             // to paint `trace` while the terminal paints `TRACE` and its own
