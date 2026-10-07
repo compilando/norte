@@ -4613,6 +4613,15 @@ button.status-item:hover {
   color: var(--selection-fg);
 }
 
+/* The places bar's and the tree's cursor, when the keys are ELSEWHERE:
+   dimmed, like a listing's (W1, 2026-10-07). It looked the same focused or
+   not, so nothing said whether the arrows would move it. */
+[aria-current="false"] .places-row[aria-selected="true"],
+[aria-current="false"] .tree-row[aria-selected="true"] {
+  background: var(--selection-unfocused-bg);
+  color: var(--selection-unfocused-fg);
+}
+
 .places-name,
 .places-detail,
 .places-broken,

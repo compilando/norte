@@ -5255,6 +5255,20 @@ describe("the places sidebar", () => {
     return v;
   }
 
+  // W1 (2026-10-07): the bar's cursor looked the same with the keys
+  // elsewhere. The slot says whether it has them (`aria-current`), and the
+  // sheet dims the cursor of a bar or tree that does not.
+  it("the bar's cursor dims when the keys are elsewhere", () => {
+    const { screen } = mount();
+    screen.paint(withPlaces(1));
+    const slot = document.querySelector('[data-slot-id="7"]') as HTMLElement;
+    expect(slot.getAttribute("aria-current")).toBe("false");
+    const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+    expect(css).toMatch(
+      /\[aria-current="false"\] \.places-row\[aria-selected="true"\],\s*\[aria-current="false"\] \.tree-row\[aria-selected="true"\]\s*\{[^}]*selection-unfocused-bg/,
+    );
+  });
+
   // W9 (2026-10-07): an empty Favorites header said nothing about how to
   // fill it.
   it("the empty Favorites section carries the host's hint, and only then", () => {
