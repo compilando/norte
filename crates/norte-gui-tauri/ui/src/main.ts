@@ -678,7 +678,13 @@ export function showFatal(
     mountTitleBar(bar, window_.t, window_.request, false);
     el.append(bar);
   }
-  el.append(text);
+  // In its own block that WRAPS, anywhere: the sentence usually ends in a
+  // path, and an unbreakable path ran off the window — the part that said
+  // what was wrong was the part cut off (W10, 2026-10-07).
+  const p = doc.createElement("p");
+  p.className = "fatal-text";
+  p.textContent = text;
+  el.append(p);
   el.dataset["shown"] = "true";
 }
 
