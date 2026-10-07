@@ -1523,6 +1523,11 @@ pub struct PlacesSlotView {
     /// painted with, and one that does not match is rejected instead of
     /// navigating somewhere else (ADR 0068).
     pub generation: u64,
+    /// What the empty Favorites section says under its header, translated
+    /// (bridge 99); empty when there are favorites. Not a ROW: rows are
+    /// clicked by index, and a hint is not a place.
+    #[serde(default)]
+    pub favorites_hint: String,
 }
 
 /// A row of the sidebar.
@@ -1592,6 +1597,11 @@ pub struct LayoutPickerView {
     /// Painted by the host with the same engine that lays out the real
     /// screen, so the preview cannot lie about what will come out.
     pub preview: Vec<String>,
+    /// What each LETTER of the preview is (bridge 99), in the order the
+    /// panels appear in the layout. Without it the thumbnail was a grid of
+    /// `b`, `p`, `v`, `m` nobody could read.
+    #[serde(default)]
+    pub legend: Vec<LegendEntryView>,
     /// Why the chosen one has no preview, already translated. Empty when it
     /// has one.
     ///
@@ -1600,6 +1610,15 @@ pub struct LayoutPickerView {
     pub problem: String,
     /// The painted diagnostic differs from what the file contains.
     pub problem_hostile: bool,
+}
+
+/// One letter of a layout preview and the panel it stands for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LegendEntryView {
+    /// The letter, as the preview draws it.
+    pub letter: String,
+    /// The panel's name, translated; the kind's id when it has none.
+    pub label: String,
 }
 
 /// An offered layout.

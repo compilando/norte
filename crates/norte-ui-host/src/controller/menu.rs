@@ -215,6 +215,8 @@ impl State {
         let command = match verb {
             crate::action::TabVerb::New => "pane.tab-new",
             crate::action::TabVerb::Close => "pane.tab-close",
+            crate::action::TabVerb::MoveLeft => "pane.tab-move-left",
+            crate::action::TabVerb::MoveRight => "pane.tab-move-right",
         };
         let (ack, more) = match crate::commands::effect_of(command, 1) {
             Some(effect) => self.apply_effect(effect, backend, mailbox),

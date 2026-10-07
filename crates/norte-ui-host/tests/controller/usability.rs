@@ -257,12 +257,11 @@ async fn the_border_above_a_bottom_dock_drags() {
     .await;
     let mut sub = h.subscribe();
     let place = |s: &norte_ui_host::ViewSnapshot, id: u32| {
-        s.layout
+        *s.layout
             .placements
             .iter()
             .find(|p| p.slot_id == id)
             .expect("placed")
-            .clone()
     };
     let dock = place(&snap, 9);
     let left = place(&snap, 1);
@@ -375,6 +374,138 @@ async fn the_disk_map_moved_into_a_dock_still_says_something() {
     assert!(
         map.measuring || !map.lines.is_empty() || !map.empty.is_empty(),
         "a map in the dock says something: {map:?}"
+    );
+}
+
+/// A listing on top, and a dock below with two PANEL tabs: processes(9),
+/// log(8).
+async fn host_panel_tabs() -> (UiHost, norte_ui_host::ViewSnapshot) {
+    host_over(Node::Split {
+        dir: Dir::Vertical,
+        children: vec![
+            Node::slot(SlotId(1), KindId::browser()),
+            Node::Tabs {
+                children: vec![
+                    Node::slot(SlotId(9), KindId::new("processes")),
+                    Node::slot(SlotId(8), KindId::new("log")),
+                ],
+                active: 0,
+            },
+        ],
+        sizes: vec![
+            norte_frontend::layout::Size::Weight(1),
+            norte_frontend::layout::Size::Fixed(12),
+        ],
+    })
+    .await
+}
+
+fn tab_order(snap: &norte_ui_host::ViewSnapshot) -> Vec<u32> {
+    snap.layout
+        .tabs
+        .iter()
+        .flat_map(|g| g.tabs.iter().map(|t| t.slot_id))
+        .collect()
+}
+
+/// W7: a panel tab's close button closes THAT panel, and only it.
+#[tokio::test]
+async fn closing_a_panel_tab_closes_that_panel() {
+    let (h, snap) = host_panel_tabs().await;
+    assert_eq!(tab_order(&snap), vec![9, 8]);
+    let mut sub = h.subscribe();
+    let (ack, snap) = after(
+        &h,
+        &mut sub,
+        UiAction::TabAction {
+            slot_id: 8,
+            verb: norte_ui_host::TabVerb::Close,
+        },
+    )
+    .await;
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    assert!(
+        !kinds(&snap).iter().any(|(id, _)| *id == 8),
+        "the log closed: {:?}",
+        kinds(&snap)
+    );
+    assert!(
+        snap.layout.placements.iter().any(|p| p.slot_id == 9),
+        "the processes panel stays"
+    );
+}
+
+/// W7: the tab menu's "move right" reorders the group.
+#[tokio::test]
+async fn a_tab_moves_right_in_its_group() {
+    let (h, _snap) = host_panel_tabs().await;
+    let mut sub = h.subscribe();
+    let (_, snap) = after(
+        &h,
+        &mut sub,
+        UiAction::TabAction {
+            slot_id: 9,
+            verb: norte_ui_host::TabVerb::MoveRight,
+        },
+    )
+    .await;
+    assert_eq!(tab_order(&snap), vec![8, 9]);
+}
+
+/// W9: every letter the layout preview draws has a legend entry.
+#[tokio::test]
+async fn the_layout_preview_explains_its_letters() {
+    let (h, _snap) = host_beside("places").await;
+    let mut sub = h.subscribe();
+    let (_, snap) = after(
+        &h,
+        &mut sub,
+        UiAction::LayoutButtonActivate {
+            id: "pick".to_owned(),
+        },
+    )
+    .await;
+    let picker = snap.layouts.expect("the picker is open");
+    let drawn: std::collections::BTreeSet<char> = picker
+        .preview
+        .iter()
+        .flat_map(|l| l.chars())
+        .filter(char::is_ascii_alphabetic)
+        .collect();
+    assert!(!drawn.is_empty(), "the preview draws panels");
+    for c in drawn {
+        let entry = picker
+            .legend
+            .iter()
+            .find(|e| e.letter == c.to_string())
+            .unwrap_or_else(|| panic!("no legend for {c:?}: {:?}", picker.legend));
+        assert!(!entry.label.is_empty());
+    }
+}
+
+/// W9: an empty Favorites section says how to get one; with a favorite it
+/// says nothing.
+#[tokio::test]
+async fn the_empty_favorites_section_has_a_hint() {
+    let (h, _snap) = host_beside("places").await;
+    let mut sub = h.subscribe();
+    let (_, snap) = after(&h, &mut sub, UiAction::Resync).await;
+    let places = snap
+        .slots
+        .iter()
+        .find_map(|s| match s {
+            SlotView::Places(p) => Some(p.clone()),
+            _ => None,
+        })
+        .expect("the places bar");
+    let has_favorites = places
+        .rows
+        .iter()
+        .any(|r| matches!(r, norte_ui_host::dto::PlaceRowView::Favorite { .. }));
+    assert!(!has_favorites, "the test settings carry no favorites");
+    assert!(
+        !places.favorites_hint.is_empty(),
+        "the empty section explains itself"
     );
 }
 

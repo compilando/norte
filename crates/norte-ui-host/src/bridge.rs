@@ -576,7 +576,11 @@ use serde::{Deserialize, Serialize};
 /// - **98**: `DiskMapSlotView.empty`: what a finished map with nothing to
 ///   draw says, translated; empty otherwise.
 /// - **99**: `resize_slot { axis }`: which border of the slot was grabbed
-///   (`col` or `row`). Absent = the old guess, right neighbor first.
+///   (`col` or `row`). Absent = the old guess, right neighbor first. And
+///   `tab_action`'s `verb` gains `move_left` / `move_right` (a tab's own
+///   context menu). And `LayoutPickerView.legend`: what each letter of
+///   the preview is; and `PlacesSlotView.favorites_hint`, what an empty
+///   Favorites section says.
 pub const BRIDGE_VERSION: u32 = 99;
 
 /// Cap on a string that crosses to the renderer, in bytes.

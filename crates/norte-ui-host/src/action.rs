@@ -29,6 +29,11 @@ pub enum TabVerb {
     New,
     /// Close the tab (`pane.tab-close`).
     Close,
+    /// Move the tab one place left in its group (`pane.tab-move-left`,
+    /// bridge 99: the tab's own context menu).
+    MoveLeft,
+    /// Move the tab one place right (`pane.tab-move-right`, bridge 99).
+    MoveRight,
 }
 
 /// Which border of a slot a resize grip sits on (bridge 99).

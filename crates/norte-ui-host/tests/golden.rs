@@ -1276,6 +1276,7 @@ fn reference_slots() -> Vec<SlotView> {
             ],
             cursor: 1,
             generation: 5,
+            favorites_hint: String::new(),
         })),
         // The tree: its three `children` states are three different things
         // to the reader — an open branch, a leaf, and not looked at yet — so
@@ -1921,6 +1922,10 @@ fn reference_layouts() -> norte_ui_host::dto::LayoutPickerView {
         ],
         cursor: 0,
         preview: vec!["··········".to_owned(), "·bbbbbbbb·".to_owned()],
+        legend: vec![norte_ui_host::dto::LegendEntryView {
+            letter: "b".to_owned(),
+            label: "Listado".to_owned(),
+        }],
         problem_hostile: false,
         problem: String::new(),
     }
@@ -2984,7 +2989,9 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // 96 (#401): the `terminal` change, the panel alone; and the `slot`
     // change, any non-listing slot alone.
     // 97 (#403): the tree's window, `first`/`total` and its range action.
-    const SHAPE: u64 = 7_568_239_604_462_371_663;
+    // 99: `LayoutPickerView.legend`, what each preview letter is, and
+    // `PlacesSlotView.favorites_hint`.
+    const SHAPE: u64 = 17_974_543_604_403_547_132;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

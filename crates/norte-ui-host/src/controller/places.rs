@@ -289,11 +289,44 @@ impl State {
                 }
             })
             .collect();
+        let no_favorites = !state
+            .rows()
+            .iter()
+            .any(|r| matches!(r, PlaceRow::Favorite { .. }));
+        let folded = state.rows().iter().any(|r| {
+            matches!(
+                r,
+                PlaceRow::Header {
+                    section: norte_frontend::places::Section::Favorites,
+                    folded: true
+                }
+            )
+        });
         crate::dto::PlacesSlotView {
             slot_id: id,
             rows,
             cursor: state.cursor() as u64,
             generation,
+            favorites_hint: if no_favorites && !folded {
+                clamp_display(self.favorites_hint())
+            } else {
+                String::new()
+            },
+        }
+    }
+
+    /// The empty Favorites section's hint: how to add one, with the live
+    /// shortcut of the favorites picker. `places-favorites-empty` is new;
+    /// until the catalogue has it, the picker's own "no favorites" line.
+    fn favorites_hint(&self) -> String {
+        let key = "places-favorites-empty";
+        let chord = norte_frontend::palette::first_chord("pane.hotlist", &self.effective)
+            .unwrap_or_else(|| "—".to_owned());
+        let own = norte_i18n::ta_in(self.lang, key, &[("chord", &chord)]);
+        if own == key {
+            norte_i18n::t_in(self.lang, "picker-hotlist-empty")
+        } else {
+            own
         }
     }
 

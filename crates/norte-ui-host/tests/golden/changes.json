@@ -636,6 +636,12 @@
     "change": "layouts",
     "layouts": {
       "cursor": 0,
+      "legend": [
+        {
+          "label": "Listado",
+          "letter": "b"
+        }
+      ],
       "preview": [
         "··········",
         "·bbbbbbbb·"

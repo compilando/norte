@@ -67,6 +67,13 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // A PANEL's tab closes that panel the way its toggle does (shell and
+        // log level released): `close_slot` routes it there.
+        if !self.slots.contains_key(&self.focused())
+            && self.tree.tabs_of(SlotId(self.focused())).is_some()
+        {
+            return self.close_slot(backend, mailbox);
+        }
         let Some(updated) = self.tree.close_tab(SlotId(self.focused())) else {
             return (
                 ActionAck::Unavailable {

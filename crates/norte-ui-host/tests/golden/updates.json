@@ -724,6 +724,12 @@
     ],
     "layouts": {
       "cursor": 0,
+      "legend": [
+        {
+          "label": "Listado",
+          "letter": "b"
+        }
+      ],
       "preview": [
         "··········",
         "·bbbbbbbb·"
@@ -1202,6 +1208,7 @@
       },
       {
         "cursor": 1,
+        "favorites_hint": "",
         "generation": 5,
         "kind": "places",
         "rows": [
