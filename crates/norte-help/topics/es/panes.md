@@ -309,7 +309,7 @@ rejilla por dentro. Sobre un panel remoto se niega a abrirse y lo dice: un shell
 se sienta en un directorio del sistema de ficheros, y en un `sftp://` no hay
 dónde sentarlo.
 
-{{cmd:layout.timeline}} abre la línea de tiempo: qué se ha hecho en esta
+{{cmd:layout.timeline}} abre el historial: qué se ha hecho en esta
 máquina, de lo más reciente hacia atrás, con la hora, quién lo hizo —tú, un
 agente o una extensión, y lo dice el color del punto—, el verbo y sobre qué. Un
 lote sale como **una** fila y dice cuántas entradas trae, porque se deshace

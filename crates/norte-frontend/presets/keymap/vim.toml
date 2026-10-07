@@ -45,6 +45,9 @@ keymap = [
     # The disk map (phase 4), `alt+z`: the one letter free in all seven.
     # See the note in orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
+    # Details and Timeline, norte's common chords (see orthodox.toml).
+    { on = ["alt+I"], run = "layout.metadata" },
+    { on = ["alt+T"], run = "layout.timeline" },
     # The terminal panel (#362), with norte's common chord. See
     # orthodox.toml for why `ctrl+alt+s` and not `ctrl+alt+t`.
     #

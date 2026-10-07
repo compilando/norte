@@ -48,6 +48,10 @@ keymap = [
     # learned, one that does two different things depending on the preset is
     # not.
     { on = ["alt+z"], run = "layout.disk-map" },
+    # Details (Info) and Timeline: shifted, every lowercase alt+letter was
+    # taken in some preset. One pair for all seven.
+    { on = ["alt+I"], run = "layout.metadata" },
+    { on = ["alt+T"], run = "layout.timeline" },
     # The terminal panel (#362). `ctrl+alt+s`, for "shell", and NOT
     # `ctrl+alt+t`, which is the obvious letter and is free in all seven: the
     # desktop hijacks it —GNOME and KDE bind it out of the box to "open a

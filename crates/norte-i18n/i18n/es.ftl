@@ -1302,7 +1302,7 @@ help-cmd-layout-preview = enseñar u ocultar el visor acoplado
 help-cmd-layout-processes = muestra u oculta el panel de procesos
 help-cmd-layout-log = muestra u oculta el registro de esta sesión
 help-cmd-layout-disk-map = muestra u oculta el mapa de disco
-help-cmd-layout-timeline = muestra u oculta la línea de tiempo
+help-cmd-layout-timeline = muestra u oculta el historial
 # No dice «muestra u oculta» como sus vecinos, y es a propósito: el segundo
 # toque devuelve el foco y deja el shell vivo, no lo cierra.
 help-cmd-layout-terminal = abre un terminal en un panel, o le devuelve el foco

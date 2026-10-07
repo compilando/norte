@@ -159,6 +159,10 @@ keymap = [
     # chord, so this is not a transcription: `alt+z` is the one letter free
     # across all seven presets. See orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
+    # Details and Timeline: FAR has no such panels; norte's common chords
+    # (see orthodox.toml).
+    { on = ["alt+I"], run = "layout.metadata" },
+    { on = ["alt+T"], run = "layout.timeline" },
     # The terminal panel (#362). FAR has no panel like this —its console is
     # the one below the panels, shown with `ctrl+o` and taking up the whole
     # screen, which in norte is what `app.toggle-panels` does—, so this is
