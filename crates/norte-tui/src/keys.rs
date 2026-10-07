@@ -218,6 +218,8 @@ pub async fn on_key(
         )
         .await;
     } else if !modal_wins(app)
+        // Typing the log's filter is a text field: its keys are its own.
+        && app.log_filter_input.is_none()
         && matches!(
             app.key_owner(),
             crate::app::KeyOwner::Tree

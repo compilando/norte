@@ -11,6 +11,12 @@
 use super::*;
 
 impl State {
+    /// A bottom dock's opening size against the last viewport (ADR 0171).
+    fn bottom_dock(&self, rows: u16) -> norte_frontend::layout::Size {
+        let h = self.viewport.1;
+        norte_frontend::layout::dock_rows(rows, (h > 0).then_some(h))
+    }
+
     /// The three effects that touch the LAYOUT, together.
     ///
     /// Grouped here and not in `apply_effect` because that method is a
@@ -443,11 +449,11 @@ impl State {
         };
         let (edge, size) = match kind {
             "places" => (Edge::Left, Size::Fixed(16)),
-            "processes" => (Edge::Bottom, Size::Fixed(8)),
+            "processes" => (Edge::Bottom, self.bottom_dock(8)),
             // The log at the bottom, and taller than the board: its lines are
             // long, and eight rows of which two are chrome do not leave room
             // to read a trace. It is the same spot the TUI gives it.
-            "log" => (Edge::Bottom, Size::Fixed(12)),
+            "log" => (Edge::Bottom, self.bottom_dock(12)),
             // The tree on the left and with the places bar's width: it is the
             // same gesture — a navigation column next to the listing — and
             // two different widths for the same thing stand out.

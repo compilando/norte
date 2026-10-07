@@ -26,6 +26,30 @@ independently through `PROTOCOL_VERSION`.
   cut, it can no longer catch anything. Compacted entries can no longer be
   undone, and **a norte older than this one reports a compacted journal
   as broken** — do not go back to one after compacting.
+- **Keys for Details and Timeline** in every preset: `Alt+I` and
+  `Alt+T` (ADR 0171).
+- **The View menu marks the open panels** with `✓`.
+
+### Changed
+
+- **Panel keys work from inside any side panel** (ADR 0171): from
+  places, processes, the log or the disk map you can open, close and
+  cycle the other panels, and `Alt+X` closes the panel you are in.
+- **A panel behind a tab no longer looks closed**: its button stays
+  lit, without the "open" rule.
+- **Bottom panels open at most a third** of a short terminal or window,
+  so the listing keeps its rows. You can still drag them taller.
+- **One name per panel** everywhere: Places, Tree, Viewer, Processes,
+  Details, Log, Disk map (Map in the bar), Timeline, Terminal.
+- **Log and timeline show local time**, like the listing (they showed
+  UTC, unmarked).
+
+### Fixed
+
+- A long path in a listing's title is cut from the left, keeping the
+  folder you are in.
+- "1 files" in the pane footer; key bar cells running together at 80
+  columns; drive names cut to fragments in Places.
 
 ### Performance
 

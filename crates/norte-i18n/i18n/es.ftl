@@ -1133,7 +1133,7 @@ panelbar-viewer = Visor
 panelbar-processes = Procesos
 panelbar-metadata = Detalles
 panelbar-log = Registro
-panelbar-disk-map = Mapa de disco
+panelbar-disk-map = Mapa
 panelbar-timeline = Historial
 panelbar-terminal = Terminal
 # El pie del panel de terminal: la ÚNICA tecla que el panel no le pasa al

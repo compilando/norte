@@ -392,7 +392,9 @@ fn pane_title(
     }
     let room = usize::from(width)
         .saturating_sub(norte_frontend::display::cells(&lead))
-        .saturating_sub(norte_frontend::display::cells(&marks));
+        .saturating_sub(norte_frontend::display::cells(&marks))
+        // The spinner and its space, when waiting goes in front.
+        .saturating_sub(if busy.is_some() { 2 } else { 0 });
     let mut title = format!(
         "{lead}{}{marks}",
         norte_frontend::display::head_ellipsis(&path, room)

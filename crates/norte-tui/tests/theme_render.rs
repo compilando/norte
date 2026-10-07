@@ -42,11 +42,10 @@ fn the_pane_bar_paints_names_with_the_underlined_letter_and_falls_back_to_letter
     app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Top);
     app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Names);
 
-    // 110 columns: the full names (one per panel since 2026-10-07, "Mapa de
-    // disco" among them) no longer fit in 80, which falls back to letters.
-    let mut terminal = Terminal::new(TestBackend::new(110, 16)).expect("terminal");
+    // 80 columns, the common terminal: the names must fit there (ADR 0171).
+    let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let row: String = (0..110)
+    let row: String = (0..80)
         .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
         .collect();
     assert!(
@@ -61,7 +60,7 @@ fn the_pane_bar_paints_names_with_the_underlined_letter_and_falls_back_to_letter
             .contains(ratatui::style::Modifier::UNDERLINED),
         "the access letter is underlined"
     );
-    let zones = ui::panel_zones(&app, ratatui::layout::Rect::new(0, 0, 110, 16));
+    let zones = ui::panel_zones(&app, ratatui::layout::Rect::new(0, 0, 80, 16));
     let width_zone = zones[0].x1 - zones[0].x0 + 1;
     assert_eq!(
         usize::from(width_zone),

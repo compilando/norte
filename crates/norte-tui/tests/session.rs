@@ -130,6 +130,20 @@ fn close_slot_closes_the_side_panel_that_has_the_keyboard() {
     assert_eq!(app.key_owner(), norte_tui::app::KeyOwner::Panes);
 }
 
+/// Closing the log with `close-slot` cleans up like its own toggle: a
+/// filter left half-typed came back on the next opening (review of
+/// 2026-10-07).
+#[test]
+fn close_slot_on_the_log_forgets_its_filter() {
+    let mut app = app_basica();
+    app.toggle_log();
+    assert_eq!(app.key_owner(), norte_tui::app::KeyOwner::Log);
+    app.log_filter_input = Some("err".to_owned());
+    assert_eq!(app.layout_close_slot(), norte_tui::app::Closed::SidePanel);
+    assert!(app.log_slot().is_none());
+    assert!(app.log_filter_input.is_none());
+}
+
 /// The STICKY profile arrives with the session and requests the switch.
 ///
 /// It cannot be applied earlier: it lives in the session, the daemon holds
