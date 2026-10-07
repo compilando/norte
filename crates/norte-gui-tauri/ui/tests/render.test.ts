@@ -1386,6 +1386,37 @@ describe("breadcrumbs, the space indicator and the toast", () => {
     );
   });
 
+  it("the path gives up its START, so the current folder stays in view", () => {
+    // jsdom does not lay out: what is pinned is the structure the CSS needs
+    // — a right-to-left box (`.cut-start`) holding the path turned back to
+    // left to right, isolated (`.cut-start-text`), crumbs in reading order.
+    const { screen, root } = mount();
+    screen.paint(
+      view({
+        path_segments: ["⟨file⟩", "home", "oscar"],
+        path_display: "⟨file⟩/home/oscar",
+        path_hostile: true,
+      }),
+    );
+    const box = root.querySelector(".title-path") as HTMLElement;
+    expect(box.classList.contains("cut-start")).toBe(true);
+    const inner = box.querySelector(":scope > .cut-start-text") as HTMLElement;
+    expect([...inner.querySelectorAll(".crumb")].map((m) => m.textContent)).toEqual([
+      "⟨file⟩",
+      "home",
+      "oscar",
+    ]);
+    // The hostile badge sits in FRONT of the path, not inside the part the
+    // cut hides.
+    expect(box.querySelector(".hostile-badge")).toBeNull();
+    expect(box.previousElementSibling?.classList.contains("hostile-badge")).toBe(true);
+    const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+    expect(css).toMatch(/\.cut-start\s*\{[^}]*direction:\s*rtl/);
+    expect(css).toMatch(
+      /\.cut-start-text\s*\{[^}]*direction:\s*ltr[^}]*unicode-bidi:\s*isolate/,
+    );
+  });
+
   it("with no crumbs, the path goes as text, same as before", () => {
     const { screen, root } = mount();
     screen.paint(view({}));
@@ -2525,10 +2556,32 @@ describe("moving a panel by dragging it (ADR 0138)", () => {
     window.dispatchEvent(pointer("pointermove", 200, 100));
     const steps = sent.filter((a) => a.action === "resize_slot");
     expect(steps).toEqual([
-      { action: "resize_slot", slot_id: 1, cells: 50 },
-      { action: "resize_slot", slot_id: 1, cells: 40 },
+      { action: "resize_slot", slot_id: 1, cells: 50, axis: "col" },
+      { action: "resize_slot", slot_id: 1, cells: 40, axis: "col" },
     ]);
     expect(document.documentElement.dataset["dragging"]).toBeUndefined();
+  });
+
+  // A slot with a neighbor to its right AND a dock below has two borders;
+  // the host used to resolve every drag to the right one, so the border
+  // above the bottom dock never moved. The grip says which it is.
+  it("the border above a bottom dock says it is a ROW border", () => {
+    const { screen, sent } = mount();
+    const v = twoListings();
+    v.layout.placements = [
+      { slot_id: 1, x: 0, y: 0, width: 60, height: 30, role: "active", focus_index: 0 },
+      { slot_id: 2, x: 60, y: 0, width: 60, height: 30, role: null, focus_index: 1 },
+      { slot_id: 4, x: 0, y: 30, width: 120, height: 10, role: null, focus_index: 2 },
+    ];
+    screen.paint(v);
+    const rows = document.querySelectorAll(".resize-handle.row");
+    expect(rows.length).toBeGreaterThan(0);
+    (rows[0] as HTMLElement).dispatchEvent(pointer("pointerdown", 100, 600));
+    window.dispatchEvent(pointer("pointermove", 100, 500));
+    window.dispatchEvent(pointer("pointerup", 100, 500));
+    const steps = sent.filter((a) => a.action === "resize_slot");
+    expect(steps.length).toBe(1);
+    expect(steps[0]).toMatchObject({ action: "resize_slot", axis: "row" });
   });
 
   it("zoneOf: the nearest side under a quarter away, else the center", () => {
@@ -2776,15 +2829,21 @@ describe("the menu bar", () => {
     ] as HTMLButtonElement[];
     expect(buttons.map((b) => b.dataset["id"])).toEqual(["split-h", "pick"]);
     expect(buttons[0]?.querySelector("svg.panelbar-icon")).not.toBeNull();
-    expect(buttons[0]?.title).toBe("Partir lado a lado (ctrl+\\)");
-    expect(buttons[1]?.title).toBe("Disposición...");
+    // OUR tooltip on every button (W2, 2026-10-07): the native `title` only
+    // showed for some of them under WebKitGTK.
+    expect(buttons[0]?.dataset["tip"]).toBe("Partir lado a lado (ctrl+\\)");
+    expect(buttons[1]?.dataset["tip"]).toBe("Disposición...");
+    expect(buttons.every((b) => b.title === "")).toBe(true);
+    const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+    expect(css).toMatch(
+      /\.menubar-action\[data-tip\]::after\s*\{[^}]*content:\s*attr\(data-tip\)/,
+    );
     expect(buttons[1]?.getAttribute("aria-label")).toBe("Disposición...");
     buttons[1]?.click();
     expect(sent).toEqual([{ action: "layout_button_activate", id: "pick" }]);
   });
 
-  it("a PANEL group carries neither + nor x and gets marked for its style", () => {
-    const { screen, sent } = mount();
+  function panelGroup(): ViewSnapshot {
     const v = view({});
     v.layout.tabs = [
       {
@@ -2797,13 +2856,59 @@ describe("the menu bar", () => {
         ],
       },
     ];
-    screen.paint(v);
+    return v;
+  }
+
+  // W7 (2026-10-07): a panel tab used to carry no x — the activity bar was
+  // the only way to close it — and still carries no +.
+  it("a PANEL group carries its x but no +, and gets marked for its style", () => {
+    const { screen, sent } = mount();
+    screen.paint(panelGroup());
     expect(document.querySelector(".tab-new")).toBeNull();
-    expect(document.querySelector(".tab-close")).toBeNull();
+    expect(document.querySelectorAll(".tab .tab-close")).toHaveLength(2);
     const strip = document.querySelector(".slot-tabs") as HTMLElement;
     expect(strip.dataset["panels"]).toBe("true");
     (document.querySelectorAll(".tab")[0] as HTMLElement).click();
     expect(sent).toEqual([{ action: "select_tab", slot_id: 7 }]);
+  });
+
+  it("a middle click closes the tab", () => {
+    const { screen, sent } = mount();
+    screen.paint(panelGroup());
+    const tab = document.querySelectorAll(".tab")[0] as HTMLElement;
+    tab.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+    expect(sent).toEqual([{ action: "tab_action", slot_id: 7, verb: "close" }]);
+  });
+
+  it("a right click opens OUR menu: close, move left, move right", () => {
+    const { screen, sent } = mount();
+    screen.paint(panelGroup());
+    const tab = document.querySelectorAll(".tab")[1] as HTMLElement;
+    const ev = new MouseEvent("contextmenu", {
+      button: 2,
+      bubbles: true,
+      cancelable: true,
+      clientX: 40,
+      clientY: 30,
+    });
+    tab.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    const items = [
+      ...document.querySelectorAll(".tab-menu .tab-menu-item"),
+    ] as HTMLElement[];
+    const cat = realCatalog();
+    expect(items.map((i) => i.textContent)).toEqual([
+      cat["menu-item-pane-tab-close"],
+      cat["menu-item-pane-tab-move-left"],
+      cat["menu-item-pane-tab-move-right"],
+    ]);
+    items[2]?.click();
+    expect(sent).toEqual([{ action: "tab_action", slot_id: 1, verb: "move_right" }]);
+    expect(document.querySelector(".tab-menu")).toBeNull();
+    // Escape dismisses it without reaching the host.
+    tab.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(document.querySelector(".tab-menu")).toBeNull();
   });
 
   it("a group's tabs carry their x and the group its +, and the x doesn't select", () => {
@@ -4862,6 +4967,48 @@ describe("a plugin's panel", () => {
   });
 });
 
+describe("the disk map", () => {
+  function withMap(measuring: boolean, empty: string): ViewSnapshot {
+    const v = view({});
+    v.slots = [
+      ...v.slots,
+      {
+        kind: "disk_map",
+        slot_id: 7,
+        title: "⟨file⟩/casa",
+        title_hostile: false,
+        lines: [],
+        hits: [],
+        measuring,
+        empty,
+      },
+    ];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 0, y: 30, width: 120, height: 8, role: null, focus_index: 2 },
+    ];
+    return v;
+  }
+
+  // W3 (2026-10-07): moved into the bottom dock's tab group the map went
+  // blank. The tab strip hides the slot's title, and "measuring" lived only
+  // there — the body said nothing while a big directory was measured.
+  it("a map with nothing to draw YET says it is measuring, in its body", () => {
+    const { screen, root } = mount();
+    screen.paint(withMap(true, ""));
+    const body = root.querySelector('[data-slot-id="7"] .disk-map') as HTMLElement;
+    expect(body.textContent).toContain(realCatalog()["disk-map-measuring"]);
+    expect(body.textContent).toContain("⟨file⟩/casa");
+  });
+
+  it("a finished empty map says so, not 'measuring'", () => {
+    const { screen, root } = mount();
+    screen.paint(withMap(false, "nada que dibujar"));
+    const body = root.querySelector('[data-slot-id="7"] .disk-map') as HTMLElement;
+    expect(body.textContent).toBe("nada que dibujar");
+  });
+});
+
 describe("the log panel", () => {
   function withLog(extra: Partial<LogSlotView> = {}): ViewSnapshot {
     const v = view({});
@@ -5108,6 +5255,24 @@ describe("the places sidebar", () => {
     return v;
   }
 
+  // W9 (2026-10-07): an empty Favorites header said nothing about how to
+  // fill it.
+  it("the empty Favorites section carries the host's hint, and only then", () => {
+    const { screen } = mount();
+    const v = withPlaces(0);
+    const places = v.slots.find((s) => s.kind === "places");
+    if (places?.kind === "places") {
+      places.rows = places.rows.filter((r) => r.row !== "favorite");
+      places.favorites_hint = "Ningún favorito aún";
+    }
+    screen.paint(v);
+    expect(document.querySelector(".places .places-hint")?.textContent).toBe(
+      "Ningún favorito aún",
+    );
+    screen.paint(withPlaces(0));
+    expect(document.querySelector(".places-hint")).toBeNull();
+  });
+
   it("a header says whether it's folded, and a broken favorite says why", () => {
     const { screen } = mount();
     screen.paint(withPlaces(1));
@@ -5203,6 +5368,26 @@ describe("the layouts selector", () => {
     expect(preview?.textContent).toBe("··········\n·bbbbbbbb·");
     // It's decorative: what it says is already in the row's name.
     expect(preview?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  // W9 (2026-10-07): the letters had no legend.
+  it("under the thumbnail, what each letter is", () => {
+    const { screen } = mount();
+    const v = withLayouts(0);
+    if (v.layouts) {
+      v.layouts.legend = [
+        { letter: "b", label: "Listado" },
+        { letter: "p", label: "Sitios / Procesos" },
+      ];
+    }
+    screen.paint(v);
+    const legend = document.querySelector(".layouts-side .layouts-legend");
+    expect([...(legend?.querySelectorAll("dt") ?? [])].map((d) => d.textContent)).toEqual(
+      ["b", "p"],
+    );
+    expect([...(legend?.querySelectorAll("dd") ?? [])].map((d) => d.textContent)).toEqual(
+      ["Listado", "Sitios / Procesos"],
+    );
   });
 
   it("one that fails to parse shows its reason instead of a thumbnail", () => {

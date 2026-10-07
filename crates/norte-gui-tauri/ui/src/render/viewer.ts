@@ -3,7 +3,7 @@
 
 import type { Screen } from "../render";
 import type { MetadataSlotView, PreviewSlotView, ViewerView } from "../types";
-import { note, viewerBar, viewerBody, badge } from "./dom";
+import { note, viewerBar, viewerBody, badge, cutStart } from "./dom";
 import type { SlotDom } from "./dom";
 
 /** The viewer covers the screen while it is open. */
@@ -66,11 +66,12 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
   // lossy-decoding notice — and they came out cut off.
   const path = document.createElement("span");
   path.className = "viewer-path";
-  path.textContent = viewer.path_display;
-  head.append(path);
+  // Cut from the LEFT: the file name is what must show.
+  cutStart(path).textContent = viewer.path_display;
   if (viewer.path_hostile) {
-    path.append(badge(this.t("hostile-name")));
+    head.append(badge(this.t("hostile-name")));
   }
+  head.append(path);
   const meta = document.createElement("span");
   meta.className = "viewer-meta";
   meta.textContent = viewerMarks(this, viewer);
@@ -308,9 +309,12 @@ export function paintPreview(this: Screen, dom: SlotDom, slot: PreviewSlotView):
   const title =
     slot.viewer === null ? this.t("panelbar-viewer") : slot.viewer.path_display;
   dom.root.setAttribute("aria-label", title);
-  dom.title.textContent = title;
+  const path = document.createElement("span");
+  path.className = "title-path";
+  cutStart(path).textContent = title;
+  dom.title.replaceChildren(path);
   if (slot.viewer?.path_hostile === true) {
-    dom.title.append(badge(this.t("hostile-name")));
+    dom.title.prepend(badge(this.t("hostile-name")));
   }
   dom.scroller.className = "preview";
   if (slot.viewer === null) {

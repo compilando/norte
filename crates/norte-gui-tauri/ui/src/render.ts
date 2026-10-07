@@ -30,6 +30,7 @@ import {
   newRow,
   updateRow,
   badge,
+  cutStart,
   unchanged,
   emptyNode,
   errorNode,
@@ -581,7 +582,9 @@ export class Screen {
         return;
       }
       last = cells;
-      this.send({ action: "resize_slot", slot_id: slot, cells });
+      // Which border: a slot with neighbors right AND below has two.
+      const axis = vertical ? "col" : "row";
+      this.send({ action: "resize_slot", slot_id: slot, cells, axis });
     };
     const release = (): void => {
       window.removeEventListener("pointermove", move);
@@ -1197,9 +1200,11 @@ export class Screen {
   paintBrowserTitle(dom: SlotDom, slot: BrowserSlotView): void {
     const path = document.createElement("span");
     path.className = "title-path";
+    // Cut from the LEFT: the current folder is the segment that must show.
+    const text = cutStart(path);
     const crumbs = slot.path_segments ?? [];
     if (crumbs.length === 0) {
-      path.textContent = slot.path_display;
+      text.textContent = slot.path_display;
     } else {
       // BREADCRUMBS (bridge 65): one button per segment, with a separator;
       // the last one is the current directory and does not navigate. The
@@ -1212,7 +1217,7 @@ export class Screen {
           sep.className = "crumb-sep";
           sep.setAttribute("aria-hidden", "true");
           sep.textContent = "›";
-          path.append(sep);
+          text.append(sep);
         }
         const crumb = document.createElement("button");
         crumb.type = "button";
@@ -1239,12 +1244,13 @@ export class Screen {
             });
           });
         }
-        path.append(crumb);
+        text.append(crumb);
       }
     }
     dom.title.replaceChildren(path);
     if (slot.path_hostile) {
-      path.append(badge(this.t("hostile-name")));
+      // In FRONT of the path, outside it: inside, the left cut would hide it.
+      dom.title.prepend(badge(this.t("hostile-name")));
     }
     // Everything that says the listing is NOT what it looks like, already
     // worded in Rust. Goes in the HEADER and not at the end of the list:

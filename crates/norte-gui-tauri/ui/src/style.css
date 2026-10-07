@@ -404,6 +404,38 @@ body {
   background: var(--hover, var(--panel-focus-bg));
 }
 
+/* Each button's name and shortcut, on hover. OUR tooltip and not `title`:
+   WebKitGTK showed the native one for some buttons and not others, so four
+   of the five icons went unexplained. Anchored to the right edge so the
+   last one does not run off the window. */
+.menubar-action {
+  position: relative;
+}
+
+.menubar-action[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  background: var(--panel-bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.1s;
+}
+
+.menubar-action[data-tip]:hover::after {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0.4s;
+}
+
 .menubar-action .panelbar-icon {
   width: 16px;
   height: 16px;
@@ -803,6 +835,21 @@ body {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: isolate;
+}
+
+/* A path that gives up its START (`cutStart` in render/dom.ts): the box runs
+   right to left so it overflows — and puts its ellipsis — on the left; the
+   text inside is turned back to left to right, isolated, so it reads in
+   order. `text-align: left` keeps a path that fits where it always was. */
+.cut-start {
+  direction: rtl;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.cut-start-text {
+  direction: ltr;
   unicode-bidi: isolate;
 }
 
@@ -2192,6 +2239,13 @@ button.status-item:hover {
   display: flex;
 }
 
+.fatal-text {
+  max-width: 100%;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* --- Help (F1) --------------------------------------------------------- */
 
 #help[data-open="true"] {
@@ -3538,6 +3592,38 @@ button.status-item:hover {
   opacity: 0.7;
 }
 
+/* A tab's own context menu (`openTabMenu`): the dropdown's look, at the
+   pointer. Last in `body` and `fixed`, so it paints over everything — no
+   `z-index` here, as everywhere else. */
+.tab-menu {
+  position: fixed;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  min-width: 20ch;
+  background: var(--widget-bg, var(--panel-bg));
+  color: var(--fg);
+  border: 1px solid var(--separator, var(--border));
+  border-radius: 6px;
+  box-shadow: 0 10px 28px var(--widget-shadow, rgb(0 0 0 / 45%));
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.tab-menu-item {
+  min-height: 24px;
+  line-height: 24px;
+  padding: 0 12px;
+  margin: 0 4px;
+  border-radius: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tab-menu-item:hover {
+  background: var(--hover, var(--panel-focus-bg));
+}
+
 .agents-note,
 .agents-empty {
   opacity: 0.8;
@@ -3828,6 +3914,32 @@ button.status-item:hover {
 :root[data-dragging="border-row"] * {
   cursor: row-resize !important;
   user-select: none;
+}
+
+/* The app's CHROME selects no text. A drag that started a hair off a grip
+   used to paint a selection across every panel. WebKitGTK still reads the
+   prefixed property, which is why both are written — here and in the drag
+   rules above. Fields stay editable: `user-select: none` on an ancestor can
+   lock an input in WebKit. */
+:root[data-dragging],
+:root[data-dragging] *,
+#menu,
+#panelbar,
+.statusbar,
+.slot-tabs,
+.slot-title,
+.slot-columns,
+.slot-footer,
+.slot[data-kind="browser"] .scroller,
+.resize-handle {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#screen input,
+#screen textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 #profiles[data-open="true"] {
@@ -4666,6 +4778,29 @@ button.status-item:hover {
 .layouts-problem {
   margin: 0;
   color: var(--error-fg);
+}
+
+/* The preview and, under it, what each letter is. */
+.layouts-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.layouts-legend {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  margin: 0;
+}
+
+.layouts-legend dt {
+  opacity: 0.8;
+}
+
+.layouts-legend dd {
+  margin: 0;
 }
 
 /* --- Subtree search --------------------------------------------------- */

@@ -326,7 +326,9 @@ export function paintMenu(
       button.type = "button";
       button.className = "menubar-action";
       button.dataset["id"] = b.id;
-      button.title = b.chord === "—" ? b.label : `${b.label} (${b.chord})`;
+      // Our own tooltip (`data-tip`, CSS): the native `title` showed for
+      // some buttons and not others under WebKitGTK.
+      button.dataset["tip"] = b.chord === "—" ? b.label : `${b.label} (${b.chord})`;
       button.setAttribute("aria-label", b.label);
       const icon = panelIcon(document, `layout:${b.id}`);
       if (icon !== null) {
@@ -677,14 +679,26 @@ export function paintTabs(
       e.stopPropagation();
       this.send({ action: "tab_action", slot_id: t.slot_id, verb: "close" });
     });
-    if (group.panels !== true) {
-      li.append(close);
-    }
+    // A PANEL tab gets its `×` too (usability review 2026-10-07): the
+    // activity bar was the only way to close one, and nothing said so. The
+    // host closes a panel tab the way its toggle does.
+    li.append(close);
+    // The middle button closes, as in every tabbed desktop program.
+    li.addEventListener("auxclick", (e) => {
+      if (e.button === 1) {
+        e.preventDefault();
+        this.send({ action: "tab_action", slot_id: t.slot_id, verb: "close" });
+      }
+    });
+    // The right button: OUR menu, not the browser's ("Reload", "Inspect").
+    li.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      openTabMenu.call(this, e.clientX, e.clientY, t.slot_id);
+    });
     list.append(li);
   }
-  // A group of PANELS (ADR 0134) carries no `+` nor `×`: they open and close
-  // as listings. Its panels open and close from the activity bar, like VS
-  // Code's panel views.
+  // A group of PANELS (ADR 0134) carries no `+`: its panels open from the
+  // activity bar, like VS Code's panel views.
   dom.tabs.dataset["panels"] = String(group.panels === true);
   if (group.panels === true) {
     dom.tabs.replaceChildren(list);
@@ -705,6 +719,60 @@ export function paintTabs(
     });
   }
   dom.tabs.replaceChildren(list, add);
+}
+
+/**
+ * A tab's context menu: close it, or move it one place in its group.
+ *
+ * Every entry is a command the host already has (`pane.tab-close`,
+ * `pane.tab-move-left/right`), sent for THAT tab by slot. It closes on a
+ * choice, on `Escape`, or on any press outside it; only one is ever open.
+ */
+export function openTabMenu(this: Screen, x: number, y: number, slotId: number): void {
+  document.querySelector(".tab-menu")?.remove();
+  const box = document.createElement("ul");
+  box.className = "tab-menu";
+  box.setAttribute("role", "menu");
+  box.style.left = `${String(x)}px`;
+  box.style.top = `${String(y)}px`;
+  const dismiss = (): void => {
+    box.remove();
+    window.removeEventListener("pointerdown", outside, true);
+    window.removeEventListener("keydown", escape, true);
+  };
+  const outside = (e: Event): void => {
+    if (!(e.target instanceof Node) || !box.contains(e.target)) {
+      dismiss();
+    }
+  };
+  const escape = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") {
+      // Ours: the host would read it as "leave the panel".
+      e.stopPropagation();
+      e.preventDefault();
+      dismiss();
+    }
+  };
+  const entries: [string, "close" | "move_left" | "move_right"][] = [
+    ["menu-item-pane-tab-close", "close"],
+    ["menu-item-pane-tab-move-left", "move_left"],
+    ["menu-item-pane-tab-move-right", "move_right"],
+  ];
+  for (const [key, verb] of entries) {
+    const item = document.createElement("li");
+    item.className = "tab-menu-item";
+    item.setAttribute("role", "menuitem");
+    item.dataset["verb"] = verb;
+    item.textContent = this.t(key);
+    item.addEventListener("click", () => {
+      dismiss();
+      this.send({ action: "tab_action", slot_id: slotId, verb });
+    });
+    box.append(item);
+  }
+  document.body.append(box);
+  window.addEventListener("pointerdown", outside, true);
+  window.addEventListener("keydown", escape, true);
 }
 
 /**

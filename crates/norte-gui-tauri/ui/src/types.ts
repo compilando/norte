@@ -502,6 +502,8 @@ export interface PlacesSlotView {
    * so an index with no generation could name the row next door.
    */
   generation: number;
+  /** What the empty Favorites section says (bridge 99); "" otherwise. */
+  favorites_hint?: string;
 }
 
 export interface TreeRowView {
@@ -1423,11 +1425,18 @@ export interface ColumnsPickerRowView {
   fixed: boolean;
 }
 
+export interface LegendEntryView {
+  letter: string;
+  label: string;
+}
+
 export interface LayoutPickerView {
   title: string;
   rows: LayoutRowView[];
   cursor: number;
   preview: string[];
+  /** What each preview letter is (bridge 99). Absent from an older host. */
+  legend?: LegendEntryView[];
   /** Why the chosen one has no preview. QUOTES the user's file. */
   problem: string;
   /** The painted diagnosis differs from what the file contains. */
@@ -1868,7 +1877,11 @@ export type UiAction =
   | { action: "panel_bar_activate"; button: number }
   | { action: "status_item_activate"; id: string }
   | { action: "layout_button_activate"; id: string }
-  | { action: "tab_action"; slot_id: number; verb: "new" | "close" }
+  | {
+      action: "tab_action";
+      slot_id: number;
+      verb: "new" | "close" | "move_left" | "move_right";
+    }
   | { action: "resize_slot"; slot_id: number; cells: number; axis?: "col" | "row" }
   | { action: "move_slot"; slot_id: number; target: number; zone: DropZone }
   | { action: "profile_activate_row"; row: number; generation: number }
