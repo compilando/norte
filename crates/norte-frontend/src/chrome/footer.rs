@@ -79,14 +79,26 @@ pub fn segments(
     free: Option<u64>,
     lang: Lang,
 ) -> Vec<(u8, String)> {
+    // Singular and plural are two ids: args travel as strings, so Fluent's
+    // plural selectors never match (see `modal-chmod-one` in the .ftl).
+    let piece = |n: usize, one: &str, many: &str| {
+        let n = n.to_string();
+        ta_in(lang, if n == "1" { one } else { many }, &[("n", &n)])
+    };
     let mut out = vec![(
         1,
         ta_in(
             lang,
             "pane-footer-counts",
             &[
-                ("dirs", &counts.dirs.to_string()),
-                ("files", &counts.files.to_string()),
+                (
+                    "dirs",
+                    &piece(counts.dirs, "pane-footer-dirs-one", "pane-footer-dirs"),
+                ),
+                (
+                    "files",
+                    &piece(counts.files, "pane-footer-files-one", "pane-footer-files"),
+                ),
                 ("size", &crate::human_bytes(counts.bytes)),
             ],
         ),
@@ -149,6 +161,28 @@ mod tests {
             size,
             mtime_ms: None,
         }
+    }
+
+    /// One of each reads singular: "1 files" was the footer of every
+    /// folder with a single file in it (review of 2026-10-07).
+    #[test]
+    fn one_file_and_one_dir_read_singular() {
+        let one = Counts {
+            dirs: 1,
+            files: 1,
+            bytes: 0,
+        };
+        let en = pane_footer(one, Marked::default(), None, Lang::En);
+        assert!(en.contains("1 dir ·") && en.contains("1 file ·"), "{en}");
+        let es = pane_footer(one, Marked::default(), None, Lang::Es);
+        assert!(es.contains("1 dir ·") && es.contains("1 fichero ·"), "{es}");
+        let two = Counts {
+            dirs: 2,
+            files: 2,
+            bytes: 0,
+        };
+        let en = pane_footer(two, Marked::default(), None, Lang::En);
+        assert!(en.contains("2 dirs ·") && en.contains("2 files ·"), "{en}");
     }
 
     /// The `..` row does not count, a directory with no size does not add,

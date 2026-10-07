@@ -485,9 +485,28 @@ fn distribute(area: Rect, dir: Dir, sizes: &[Size], floors: &[u16]) -> Vec<Rect>
     });
     let mut assigned: Vec<u64> = vec![0; sizes.len()];
     let mut used: u64 = 0;
+    // A fixed dock stacked with listings takes at most a third of a short
+    // column: its rows are the listing's on a 24-row terminal. Only while
+    // the fixed ones fit: past that, trimming them in order is what keeps
+    // the status bar on a tiny terminal. And only from 12 rows: a third
+    // below that is a dock of under 4 rows, and setting it aside (the
+    // collapse) serves the reader better.
+    let fixed_sum: u64 = sizes
+        .iter()
+        .map(|s| match s {
+            Size::Fixed(n) => u64::from(*n),
+            _ => 0,
+        })
+        .sum();
+    let stacked_cap = (dir == Dir::Vertical
+        && extent >= 12
+        && fixed_sum <= extent
+        && sizes.iter().any(|s| matches!(s, Size::Weight(_))))
+    .then_some((extent / 3).max(1));
     for (i, s) in sizes.iter().enumerate() {
         if let Size::Fixed(n) = s {
-            let fits = u64::from(*n).min(extent.saturating_sub(used));
+            let n = stacked_cap.map_or(u64::from(*n), |cap| u64::from(*n).min(cap));
+            let fits = n.min(extent.saturating_sub(used));
             assigned[i] = fits;
             used = used.saturating_add(fits);
         }
@@ -1143,6 +1162,27 @@ mod tests {
             "neither of the two listings ended up usable: {:?}",
             out.placements
         );
+    }
+
+    /// A bottom dock takes at most a third of a SHORT column: a fixed 12
+    /// rows of log in a 24-row terminal left the listing half the screen
+    /// (review of 2026-10-07). On a tall one it keeps its size.
+    #[test]
+    fn a_fixed_bottom_dock_takes_at_most_a_third_of_a_short_column() {
+        let tree = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(12)],
+            children: vec![browser(1), Node::slot(SlotId(4), KindId::new("viewer"))],
+        };
+        let height = |h: u16| {
+            resolve(r(0, 0, 80, h), &tree, &reg())
+                .placements
+                .iter()
+                .find(|(id, _)| *id == SlotId(4))
+                .map(|(_, re)| re.height)
+        };
+        assert_eq!(height(24), Some(8), "short: a third");
+        assert_eq!(height(60), Some(12), "tall: its own size");
     }
 
     /// Setting aside a tab BEFORE another does not change which one is

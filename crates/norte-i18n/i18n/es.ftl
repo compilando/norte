@@ -591,7 +591,11 @@ col-attr-s3-content-type = Tipo de contenido
 col-attr-archive-method = Método
 col-attr-archive-packed-size = Comprimido
 col-attr-archive-crc32 = CRC-32
-pane-footer-counts = { $dirs } dirs · { $files } ficheros · { $size }
+pane-footer-counts = { $dirs } · { $files } · { $size }
+pane-footer-dirs-one = 1 dir
+pane-footer-dirs = { $n } dirs
+pane-footer-files-one = 1 fichero
+pane-footer-files = { $n } ficheros
 pane-footer-free = { $free } libres
 status-marked = { $n } marcadas, { $size }
 status-marked-with-dirs = { $n } marcadas, { $size } + { $dirs } dirs
@@ -1045,8 +1049,8 @@ places-empty = todavía nada
 # L3: lo que el visor acoplado dice EN VEZ de un fichero. Un directorio no
 # se lee nunca: el preview sigue al cursor, y leer lo que sea es como uno
 # se convierte en abrir un dispositivo de bloque sin querer.
-preview-title = Vista
-preview-directory = directorio
+preview-title = Visor
+preview-directory = Una carpeta. Intro la abre; Detalles y el mapa de disco dicen qué contiene.
 preview-empty = nada seleccionado
 preview-not-a-file = no es un fichero normal
 # La ventana (#291): la lectura falló y el hueco lo dice, en vez de dejar
@@ -1129,7 +1133,7 @@ panelbar-viewer = Visor
 panelbar-processes = Procesos
 panelbar-metadata = Detalles
 panelbar-log = Registro
-panelbar-disk-map = Mapa
+panelbar-disk-map = Mapa de disco
 panelbar-timeline = Historial
 panelbar-terminal = Terminal
 # El pie del panel de terminal: la ÚNICA tecla que el panel no le pasa al
@@ -1137,7 +1141,7 @@ panelbar-terminal = Terminal
 terminal-leave = salir
 terminal-none = No hay ningún shell en este panel.
 # La línea de tiempo del journal (fase 7).
-timeline-title = Línea de tiempo
+timeline-title = Historial
 timeline-empty = todavía no se ha hecho nada
 timeline-loading = leyendo el historial…
 timeline-batch = { $n } de golpe
@@ -1174,14 +1178,14 @@ wizard-preset-far = las teclas de FAR Manager, transcritas.
 wizard-preset-norton = las teclas de Norton Commander.
 wizard-preset-total-commander = las teclas de Total Commander, transcritas.
 wizard-done = Guardado. Cámbialo cuando quieras desde la pantalla de ajustes.
-menu-item-layout-places = Panel de sitios
-menu-item-layout-preview = Visor acoplado
-menu-item-layout-processes = Panel de procesos
+menu-item-layout-places = Sitios
+menu-item-layout-preview = Visor
+menu-item-layout-processes = Procesos
 menu-item-layout-log = Registro
 menu-item-layout-disk-map = Mapa de disco
-menu-item-layout-timeline = Línea de tiempo
-menu-item-layout-terminal = Panel de terminal
-menu-item-layout-metadata = Panel de detalles
+menu-item-layout-timeline = Historial
+menu-item-layout-terminal = Terminal
+menu-item-layout-metadata = Detalles
 menu-item-layout-pick = Disposición...
 menu-item-profile-pick = Perfil...
 menu-item-pane-tab-new = Abrir pestaña
@@ -1302,7 +1306,7 @@ help-cmd-layout-preview = enseñar u ocultar el visor acoplado
 help-cmd-layout-processes = muestra u oculta el panel de procesos
 help-cmd-layout-log = muestra u oculta el registro de esta sesión
 help-cmd-layout-disk-map = muestra u oculta el mapa de disco
-help-cmd-layout-timeline = muestra u oculta la línea de tiempo
+help-cmd-layout-timeline = muestra u oculta el historial
 # No dice «muestra u oculta» como sus vecinos, y es a propósito: el segundo
 # toque devuelve el foco y deja el shell vivo, no lo cierra.
 help-cmd-layout-terminal = abre un terminal en un panel, o le devuelve el foco

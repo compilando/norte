@@ -591,7 +591,11 @@ col-attr-s3-content-type = Content type
 col-attr-archive-method = Method
 col-attr-archive-packed-size = Packed
 col-attr-archive-crc32 = CRC-32
-pane-footer-counts = { $dirs } dirs · { $files } files · { $size }
+pane-footer-counts = { $dirs } · { $files } · { $size }
+pane-footer-dirs-one = 1 dir
+pane-footer-dirs = { $n } dirs
+pane-footer-files-one = 1 file
+pane-footer-files = { $n } files
 pane-footer-free = { $free } free
 status-marked = { $n } marked, { $size }
 status-marked-with-dirs = { $n } marked, { $size } + { $dirs } dirs
@@ -1102,8 +1106,8 @@ metadata-kind-other = other
 # L3: what the docked viewer says INSTEAD of a file. A directory is never
 # read: a preview follows the cursor, so reading whatever the cursor lands
 # on is how one turns into opening a block device by accident.
-preview-title = Preview
-preview-directory = directory
+preview-title = Viewer
+preview-directory = A folder. Enter opens it; Details and the disk map say what it holds.
 preview-empty = nothing selected
 preview-not-a-file = not a regular file
 # The window (#291): the read failed and the slot says so, instead of
@@ -1181,15 +1185,15 @@ menu-item-layout-set-target = Set destination
 panelbar-places = Places
 panelbar-tree = Tree
 panelbar-viewer = Viewer
-panelbar-processes = Jobs
+panelbar-processes = Processes
 panelbar-metadata = Details
 panelbar-log = Log
-panelbar-disk-map = Map
-panelbar-timeline = History
+panelbar-disk-map = Disk map
+panelbar-timeline = Timeline
 # "Shell" and not "Terminal": the button's letter is the initial, and `Tree`
 # already takes the T. In Spanish there is no clash, so it does say
 # "Terminal".
-panelbar-terminal = Shell
+panelbar-terminal = Terminal
 # The terminal panel's footer: the ONLY key the panel does not pass on to the
 # shell, so the only one worth announcing.
 terminal-leave = leave
@@ -1231,14 +1235,14 @@ wizard-preset-far = FAR Manager's bindings, transcribed.
 wizard-preset-norton = Norton Commander's bindings.
 wizard-preset-total-commander = Total Commander's bindings, transcribed.
 wizard-done = Saved. Change any of it later with the settings screen.
-menu-item-layout-places = Places sidebar
-menu-item-layout-preview = Docked viewer
-menu-item-layout-processes = Processes panel
+menu-item-layout-places = Places
+menu-item-layout-preview = Viewer
+menu-item-layout-processes = Processes
 menu-item-layout-log = Log
 menu-item-layout-disk-map = Disk map
 menu-item-layout-timeline = Timeline
-menu-item-layout-terminal = Terminal panel
-menu-item-layout-metadata = Details panel
+menu-item-layout-terminal = Terminal
+menu-item-layout-metadata = Details
 menu-item-layout-pick = Layout...
 menu-item-profile-pick = Profile...
 menu-item-pane-tab-new = New tab

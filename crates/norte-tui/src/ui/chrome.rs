@@ -139,6 +139,22 @@ pub(crate) fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
         // the dropdown seventy columns wide and covered both panes. Piloting
         // the TUI in tmux uncovered it, not the suite.
         let label = norte_i18n::t(&format!("menu-item-{}", id.replace('.', "-")));
+        // A command that toggles a panel says whether it is open — in the
+        // layout, by the same rule as the bar — and its siblings keep the
+        // column: `✓ Log`, `  Tree`.
+        let label = match norte_frontend::panelbar::toggled_kind(&app.kinds, id) {
+            Some(kind)
+                if app
+                    .layout
+                    .slot_ids()
+                    .iter()
+                    .any(|s| app.layout.kind_of(*s).is_some_and(|k| k.as_str() == kind)) =>
+            {
+                format!("✓ {label}")
+            }
+            Some(_) => format!("  {label}"),
+            None => label,
+        };
         // With no key, nothing: a dash on every command with no shortcut
         // was noise that read as "disabled."
         let chord = app
@@ -530,12 +546,23 @@ pub fn panel_buttons(app: &App, area: Rect) -> Vec<norte_frontend::panelbar::Pan
             figure(r.count_at_or_above(norte_config::logline::LogLevel::Warn)),
         ));
     }
+    let present: Vec<&str> = app
+        .layout
+        .slot_ids()
+        .into_iter()
+        .filter_map(|s| {
+            app.layout
+                .kind_of(s)
+                .map(norte_frontend::layout::KindId::as_str)
+        })
+        .collect();
     norte_frontend::panelbar::buttons(
         &app.kinds,
         norte_frontend::panelbar::PanelBarInput {
             open: &open,
             focused: focus,
             attention: &attention,
+            present: &present,
         },
     )
 }
@@ -696,7 +723,8 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
         // when looking at the bar: where are my keys going to go.
         let style = match b.state {
             PanelState::Focused => app.theme.role(Role::Selection),
-            PanelState::Open => app.theme.role(Role::Title),
+            // Behind another tab: lit like open — dimmed, it read as closed.
+            PanelState::Open | PanelState::Behind => app.theme.role(Role::Title),
             // OFF, not another color: the bar's base text, dimmed.
             //
             // It used to be `Role::StatusBar`, which is the STATUS BAR's
@@ -788,6 +816,9 @@ fn draw_rail(frame: &mut Frame<'_>, app: &App, bar: Rect) {
         let (rule, icon_style) = match b.state {
             PanelState::Focused => (Span::styled("▎", app.theme.role(Role::BorderFocus)), on),
             PanelState::Open => (Span::styled("▎", off.remove_modifier(Modifier::DIM)), on),
+            // Behind another tab or dropped for room: lit, with no rule —
+            // there, but not in view.
+            PanelState::Behind => (Span::raw(" "), on),
             PanelState::Closed => (Span::raw(" "), off),
         };
         let glyph = set

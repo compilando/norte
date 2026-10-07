@@ -4562,7 +4562,7 @@ async fn the_preview_slot_follows_the_cursor_and_shows_the_viewer() {
     // listing lands there is no cursor, and THAT note is a different one
     // ("nothing selected"): it waits for the directory's.
     let with_note = snapshot_until(&h, &mut sub, "the preview slot over a directory", |s| {
-        preview_de(s).filter(|p| p.viewer.is_none() && p.note == "directorio")
+        preview_de(s).filter(|p| p.viewer.is_none() && p.note.starts_with("Una carpeta"))
     })
     .await;
     assert!(with_note.viewer.is_none(), "{with_note:?}");
