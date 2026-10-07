@@ -591,7 +591,11 @@ col-attr-s3-content-type = Tipo de contenido
 col-attr-archive-method = Método
 col-attr-archive-packed-size = Comprimido
 col-attr-archive-crc32 = CRC-32
-pane-footer-counts = { $dirs } dirs · { $files } ficheros · { $size }
+pane-footer-counts = { $dirs } · { $files } · { $size }
+pane-footer-dirs-one = 1 dir
+pane-footer-dirs = { $n } dirs
+pane-footer-files-one = 1 fichero
+pane-footer-files = { $n } ficheros
 pane-footer-free = { $free } libres
 status-marked = { $n } marcadas, { $size }
 status-marked-with-dirs = { $n } marcadas, { $size } + { $dirs } dirs
@@ -1046,7 +1050,7 @@ places-empty = todavía nada
 # se lee nunca: el preview sigue al cursor, y leer lo que sea es como uno
 # se convierte en abrir un dispositivo de bloque sin querer.
 preview-title = Visor
-preview-directory = directorio
+preview-directory = Una carpeta. Intro la abre; Detalles y el mapa de disco dicen qué contiene.
 preview-empty = nada seleccionado
 preview-not-a-file = no es un fichero normal
 # La ventana (#291): la lectura falló y el hueco lo dice, en vez de dejar

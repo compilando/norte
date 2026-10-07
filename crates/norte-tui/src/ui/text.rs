@@ -145,6 +145,11 @@ pub(crate) fn two_fields(
         return truncate(&format!(" {left}"), width);
     }
     let room = width - d - 3;
+    // A name that would be cut beside the size but fits alone goes alone:
+    // the size is said again where there is room (the popup, the window).
+    if norte_frontend::cells(left) + 1 > room && norte_frontend::cells(left) < width {
+        return truncate(&format!(" {left}"), width);
+    }
     let i = truncate(&format!(" {left}"), room);
     let slot = room.saturating_sub(norte_frontend::cells(&i)) + 1;
     format!("{i}{}{right} ", " ".repeat(slot))
@@ -451,5 +456,15 @@ mod clamp_spans_tests {
         let output = clamp_spans(spans, 5);
         assert_eq!(output.len(), 3);
         assert_eq!(output[2].content.as_ref(), "e");
+    }
+
+    /// The size gives way before the NAME is cut: "dri…bcds  12G" named no
+    /// drive (review of 2026-10-07). With room for both, both.
+    #[test]
+    fn the_size_gives_way_before_the_name_is_cut() {
+        let row = super::two_fields("drive-bcds", "12G", 14, super::middle);
+        assert_eq!(row.trim(), "drive-bcds");
+        let row = super::two_fields("usb", "12G", 14, super::middle);
+        assert!(row.contains("usb") && row.contains("12G"), "{row:?}");
     }
 }

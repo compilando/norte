@@ -127,10 +127,12 @@ pub fn cell_text(cell: &KeyCell, width: usize) -> String {
     // glance and `1Help` needs the eye to separate it. In narrow cells the
     // space gives way before a letter, which is what actually says what the
     // key does.
-    let separator = usize::from(width >= num.len() + 4);
-    let room = width - num.len();
-    let num = format!("{num}{}", " ".repeat(separator));
-    let room = room - separator;
+    //
+    // And a blank last column whenever there is room for one and a letter:
+    // it is what separates this cell from the next one's number, and it
+    // gives way AFTER that space — `8 Delete9 Menu` at 80 columns read as
+    // one word, `8Delete 9 Menu` reads as two keys.
+    let gap = usize::from(width >= num.len() + 2);
     // Capitalize BEFORE measuring, and what is painted is what is measured:
     // `ß` becomes `SS` and takes up two (review m7).
     let mut chars = cell.label.chars();
@@ -139,6 +141,13 @@ pub fn cell_text(cell: &KeyCell, width: usize) -> String {
         .map(|c| c.to_uppercase().collect::<String>())
         .unwrap_or_default()
         + chars.as_str();
+    let after_num = width - num.len() - gap;
+    let separator = usize::from(
+        width >= num.len() + 4
+            && (after_num > crate::display::cells(&capitalized) || after_num >= 8),
+    );
+    let num = format!("{num}{}", " ".repeat(separator));
+    let room = after_num - separator;
     let mut label = String::new();
     let mut used = 0;
     for c in capitalized.chars() {
@@ -160,7 +169,7 @@ pub fn cell_text(cell: &KeyCell, width: usize) -> String {
         label.truncate(space);
         used = crate::display::cells(&label);
     }
-    format!("{num}{label}{}", " ".repeat(room - used))
+    format!("{num}{label}{}", " ".repeat(room - used + gap))
 }
 
 #[cfg(test)]
@@ -181,9 +190,13 @@ mod tests {
         };
         assert_eq!(cell_text(&c("create directory"), 10), "7 Create  ");
         assert_eq!(cell_text(&c("key bar"), 10), "7 Key bar ");
+        // A label that fills the cell drops the space after the number,
+        // never the gap at the end: `8 Delete9 Menu` ran together at 80
+        // columns (review of 2026-10-07).
+        assert_eq!(cell_text(&c("rename"), 8), "7Rename ");
         // With no whole word to keep, the usual cut: the start of the word
         // says more than nothing.
-        assert_eq!(cell_text(&c("rename"), 8), "7 Rename");
+        assert_eq!(cell_text(&c("renaming"), 8), "7Renami ");
         // And what fits, fits whole.
         assert_eq!(cell_text(&c("view"), 8), "7 View  ");
     }

@@ -544,11 +544,11 @@ async fn the_docked_viewer_over_the_parent_row_says_directory() {
                 SlotView::Preview(p) => Some(p.as_ref().clone()),
                 _ => None,
             })
-            .filter(|p| p.viewer.is_none() && p.note == "directorio")
+            .filter(|p| p.viewer.is_none() && p.note.starts_with("Una carpeta"))
     })
     .await;
-    assert_eq!(
-        view.note, "directorio",
+    assert!(
+        view.note.starts_with("Una carpeta"),
         "`..` leads to a folder: that is what is under the cursor"
     );
 }

@@ -117,7 +117,7 @@ fn the_pane_footer_counts_and_tells_the_free_space() {
     };
     let con = row_down(&app);
     assert!(
-        con.contains("1 dirs") && con.contains("0 ficheros"),
+        con.contains("1 dir ·") && con.contains("0 ficheros"),
         "{con:?}"
     );
     assert!(con.contains("120") && con.contains("libres"), "{con:?}");
@@ -161,11 +161,11 @@ fn the_key_bar_paints_what_is_bound_and_a_click_is_the_key() {
             .collect()
     };
     let ultima = row(&app, 15);
-    // With a space between the number and the label (spec 2026-09-15): in a
-    // cell with room for it, `2 Copiar` reads at a glance and `2Copiar`
-    // needs the eye to split it. The ZONES do not change — they come from
+    // At 80 columns a cell is 8: `Copiar` fills it, so the space after the
+    // number gives way to the blank that separates it from the next cell
+    // (review of 2026-10-07). The ZONES do not change — they come from
     // `keybar::layout`, which splits the row the same way.
-    assert!(ultima.contains("2 Copiar"), "the bound cell: {ultima:?}");
+    assert!(ultima.contains("2Copiar "), "the bound cell: {ultima:?}");
     assert!(
         ultima.starts_with('1'),
         "the empty one only carries the number: {ultima:?}"

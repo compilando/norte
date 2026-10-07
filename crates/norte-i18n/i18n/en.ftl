@@ -591,7 +591,11 @@ col-attr-s3-content-type = Content type
 col-attr-archive-method = Method
 col-attr-archive-packed-size = Packed
 col-attr-archive-crc32 = CRC-32
-pane-footer-counts = { $dirs } dirs · { $files } files · { $size }
+pane-footer-counts = { $dirs } · { $files } · { $size }
+pane-footer-dirs-one = 1 dir
+pane-footer-dirs = { $n } dirs
+pane-footer-files-one = 1 file
+pane-footer-files = { $n } files
 pane-footer-free = { $free } free
 status-marked = { $n } marked, { $size }
 status-marked-with-dirs = { $n } marked, { $size } + { $dirs } dirs
@@ -1103,7 +1107,7 @@ metadata-kind-other = other
 # read: a preview follows the cursor, so reading whatever the cursor lands
 # on is how one turns into opening a block device by accident.
 preview-title = Viewer
-preview-directory = directory
+preview-directory = A folder. Enter opens it; Details and the disk map say what it holds.
 preview-empty = nothing selected
 preview-not-a-file = not a regular file
 # The window (#291): the read failed and the slot says so, instead of
