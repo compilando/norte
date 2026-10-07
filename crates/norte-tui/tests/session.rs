@@ -117,6 +117,19 @@ fn the_shared_open_panels_are_applied_on_start() {
     assert_eq!(saved.open_panels["default"], vec!["disk-map"]);
 }
 
+/// `layout.close-slot` with the keyboard in a side panel closes THAT
+/// panel — it closed nothing, being a listings-only command — and gives
+/// the keyboard back to the listings.
+#[test]
+fn close_slot_closes_the_side_panel_that_has_the_keyboard() {
+    let mut app = app_basica();
+    app.toggle_places();
+    assert_eq!(app.key_owner(), norte_tui::app::KeyOwner::Places);
+    assert_eq!(app.layout_close_slot(), norte_tui::app::Closed::SidePanel);
+    assert!(app.places_slot().is_none());
+    assert_eq!(app.key_owner(), norte_tui::app::KeyOwner::Panes);
+}
+
 /// The STICKY profile arrives with the session and requests the switch.
 ///
 /// It cannot be applied earlier: it lives in the session, the daemon holds

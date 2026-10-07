@@ -344,8 +344,9 @@ fn every_tab_keeps_its_cursor() {
 #[test]
 fn the_last_pane_cannot_be_closed() {
     let mut app = test_app_with(60);
-    assert!(
-        !app.layout_close_slot(),
+    assert_eq!(
+        app.layout_close_slot(),
+        norte_tui::app::Closed::Nothing,
         "with two panels it can no longer be done"
     );
     let _ = paint(&mut app);
@@ -455,7 +456,11 @@ fn with_three_panes_closing_one_goes_back_to_two() {
     let mut app = test_app_with(60);
     app.layout_split(norte_frontend::layout::Dir::Horizontal);
     let _ = paint(&mut app);
-    assert!(app.layout_close_slot(), "with three it CAN be closed");
+    assert_eq!(
+        app.layout_close_slot(),
+        norte_tui::app::Closed::Listing,
+        "with three it CAN be closed"
+    );
     let _ = paint(&mut app);
     let geom =
         ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).expect("there is geometry");

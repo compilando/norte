@@ -210,6 +210,17 @@ enum JournalIndicator {
     Squatted,
 }
 
+/// What `layout.close-slot` closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Closed {
+    /// A listing (there were more than two).
+    Listing,
+    /// The side panel that had the keyboard.
+    SidePanel,
+    /// Nothing: the last two listings are not closed.
+    Nothing,
+}
+
 /// Who holds the keyboard for the body of the screen.
 ///
 /// This is NOT the focus. [`App::focus`] keeps pointing at the LISTING you

@@ -143,20 +143,24 @@ pub async fn dispatch(
         Command::LayoutSplitV => app.layout_split(norte_frontend::layout::Dir::Vertical),
         Command::LayoutFocusNext => app.layout_focus(1),
         Command::LayoutFocusPrev => app.layout_focus(-1),
-        Command::LayoutCloseSlot => {
-            if app.layout_close_slot() {
-                // Said out loud, with the shortcut the current preset really
-                // binds: closing a panel is easy to do by accident and hard
-                // to undo if you do not know how. The same sentence as the
-                // window.
+        Command::LayoutCloseSlot => match app.layout_close_slot() {
+            // Said out loud, with the shortcut the current preset really
+            // binds: closing a listing is easy to do by accident and hard
+            // to undo if you do not know how. The same sentence as the
+            // window.
+            crate::app::Closed::Listing => {
                 app.message = Some(norte_frontend::notes::slot_closed(
                     app.chord_split_h.clone().as_deref(),
                     lang,
                 ));
-            } else {
+            }
+            // A side panel: it vanishing says it, and its key reopens it —
+            // "split again" would be a listings hint.
+            crate::app::Closed::SidePanel => {}
+            crate::app::Closed::Nothing => {
                 app.message = Some(norte_i18n::t("msg-layout-last-panel"));
             }
-        }
+        },
         Command::LayoutGrow => app.layout_resize(1),
         Command::LayoutShrink => app.layout_resize(-1),
         Command::LayoutEqualize => app.layout_equalize(),

@@ -3,8 +3,8 @@
 //! resizing and moving focus from slot to slot.
 
 use super::{
-    ALLOW_DISK_MAP, ALLOW_LOG, ALLOW_PANEL, ALLOW_PROCESSES, App, KeyOwner, PlacesClick, TreeClick,
-    TreeSpot,
+    ALLOW_DISK_MAP, ALLOW_LOG, ALLOW_PANEL, ALLOW_PROCESSES, App, Closed, KeyOwner, PlacesClick,
+    TreeClick, TreeSpot,
 };
 use norte_i18n::t;
 use norte_proto::VPath;
@@ -1530,18 +1530,33 @@ impl App {
     /// source.
     ///
     /// Returns `false` if it couldn't, so the caller can warn.
-    pub fn layout_close_slot(&mut self) -> bool {
+    pub fn layout_close_slot(&mut self) -> Closed {
+        // With the keyboard in a side panel, THAT panel: it was a
+        // listings-only command, and inside a panel it closed nothing.
+        if !matches!(self.key_owner, KeyOwner::Panes | KeyOwner::Preview) {
+            let target = self.resize_target();
+            if target != self.focused_slot()
+                && let Some(new_layout) = self.layout.close_slot(target)
+            {
+                self.layout = new_layout;
+                self.panes.refresh_visible(&self.layout);
+                self.prune_by_tree();
+                self.key_owner = KeyOwner::Panes;
+                self.settle_key_owner();
+                return Closed::SidePanel;
+            }
+        }
         if self.browsers_in_tree() <= 2 {
-            return false;
+            return Closed::Nothing;
         }
         let focus = self.focused_slot();
         let Some(new_layout) = self.layout.close_slot(focus) else {
-            return false;
+            return Closed::Nothing;
         };
         self.layout = new_layout;
         self.panes.refresh_visible(&self.layout);
         self.prune_by_tree();
-        true
+        Closed::Listing
     }
 
     /// The slot `layout.grow`/`layout.shrink` point at: the one that has
