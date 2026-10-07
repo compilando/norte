@@ -50,9 +50,10 @@ export function paintDiskMap(this: Screen, dom: SlotDom, slot: DiskMapSlotView):
   // "measuring", or a failure's reason. In a dock's tab group the strip
   // hides the title, and measuring a big tree left a blank panel.
   if (slot.lines.length === 0) {
-    dom.scroller.replaceChildren(
-      note(title === "" ? this.t("disk-map-measuring") : title),
-    );
+    // No title and not measuring: nothing to claim, so nothing is said.
+    const text =
+      title !== "" ? title : slot.measuring ? this.t("disk-map-measuring") : "";
+    dom.scroller.replaceChildren(...(text === "" ? [] : [note(text)]));
     return;
   }
 

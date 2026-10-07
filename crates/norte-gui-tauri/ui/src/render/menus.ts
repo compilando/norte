@@ -683,7 +683,14 @@ export function paintTabs(
     // activity bar was the only way to close one, and nothing said so. The
     // host closes a panel tab the way its toggle does.
     li.append(close);
-    // The middle button closes, as in every tabbed desktop program.
+    // The middle button closes, as in every tabbed desktop program. Its
+    // press is cancelled too, or WebKitGTK starts autoscroll or pastes the
+    // primary selection.
+    li.addEventListener("mousedown", (e) => {
+      if (e.button === 1) {
+        e.preventDefault();
+      }
+    });
     li.addEventListener("auxclick", (e) => {
       if (e.button === 1) {
         e.preventDefault();
@@ -771,8 +778,15 @@ export function openTabMenu(this: Screen, x: number, y: number, slotId: number):
     box.append(item);
   }
   document.body.append(box);
+  // Kept inside the window: near the right or bottom edge it opened off
+  // screen. Measured after it is in the document; jsdom measures zero.
+  const r = box.getBoundingClientRect();
+  box.style.left = `${String(Math.max(0, Math.min(x, window.innerWidth - r.width)))}px`;
+  box.style.top = `${String(Math.max(0, Math.min(y, window.innerHeight - r.height)))}px`;
   window.addEventListener("pointerdown", outside, true);
   window.addEventListener("keydown", escape, true);
+  window.addEventListener("blur", dismiss, { once: true });
+  window.addEventListener("resize", dismiss, { once: true });
 }
 
 /**

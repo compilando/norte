@@ -189,11 +189,12 @@ impl State {
             Some(effect) => self.apply_effect(effect, backend, mailbox),
             None => self.no_implemented(button_def.command),
         };
-        // A layout that did not change sends nothing, and the focus that
-        // moved would stay painted on the dock.
-        if refocused && outgoing.is_empty() {
+        // The focus that moved travels FIRST, always: `pick` and a refused
+        // split send no layout, and the dock stayed painted as focused. A
+        // later layout or snapshot in `outgoing` supersedes it.
+        if refocused {
             let change = ViewChange::Layout(self.layout());
-            outgoing.push(self.parche(vec![change]));
+            outgoing.insert(0, self.parche(vec![change]));
         }
         (ack, outgoing)
     }

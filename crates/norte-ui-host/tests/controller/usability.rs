@@ -205,6 +205,54 @@ async fn a_split_button_splits_the_listing_not_the_dock() {
     );
 }
 
+/// W2 (review): `pick` from a dock sends no layout of its own, and the
+/// focus it gave back to the listing must still be the one painted.
+#[tokio::test]
+async fn the_layout_picker_from_a_dock_shows_the_listing_focused() {
+    let (h, _snap) = host_docked("processes").await;
+    let mut sub = h.subscribe();
+    let _ = after(&h, &mut sub, UiAction::FocusSlot { slot_id: 9 }).await;
+    let _ = h
+        .dispatch(UiAction::LayoutButtonActivate {
+            id: "pick".to_owned(),
+        })
+        .await
+        .expect("host alive");
+    // What the RENDERER received for this click, without a resync: the
+    // layout patch the button sent.
+    let mut active = None;
+    while let Ok(Some(u)) =
+        tokio::time::timeout(std::time::Duration::from_millis(5), sub.recv()).await
+    {
+        if let Update::Message(m) = u
+            && let UiUpdate::Patch(p) = m.payload
+        {
+            for c in p.changes {
+                if let norte_ui_host::dto::ViewChange::Layout(l) = c {
+                    active = l
+                        .placements
+                        .iter()
+                        .find(|p| p.role == Some(norte_ui_host::dto::SlotRole::Active))
+                        .map(|p| p.slot_id);
+                }
+            }
+        }
+    }
+    assert_eq!(active, Some(1), "the painted focus moved to the listing");
+}
+
+/// W1 (review): a key off the pass-through list stays in the terminal.
+#[tokio::test]
+async fn a_plain_key_stays_in_the_terminal() {
+    let (h, _snap) = host_beside("terminal").await;
+    let mut sub = h.subscribe();
+    let _ = after(&h, &mut sub, UiAction::FocusSlot { slot_id: 9 }).await;
+    let (_, snap) = after(&h, &mut sub, press("j")).await;
+    assert_eq!(focused(&snap), Some(9), "a letter is the shell's");
+    let (_, snap) = after(&h, &mut sub, press("Escape")).await;
+    assert_eq!(focused(&snap), Some(9), "Escape too: vi mode, less, vim");
+}
+
 /// W2: the keyboard's split from a dock does the same.
 #[tokio::test]
 async fn the_split_key_from_a_dock_splits_the_listing() {
@@ -412,6 +460,7 @@ fn tab_order(snap: &norte_ui_host::ViewSnapshot) -> Vec<u32> {
 /// not claimed to be in view.
 #[tokio::test]
 async fn a_panel_behind_a_tab_is_behind_in_the_bar() {
+    use norte_ui_host::dto::PanelButtonState;
     let (h, _snap) = host_panel_tabs().await;
     let mut sub = h.subscribe();
     let (_, snap) = after(&h, &mut sub, UiAction::Resync).await;
@@ -420,10 +469,8 @@ async fn a_panel_behind_a_tab_is_behind_in_the_bar() {
             .buttons
             .iter()
             .find(|b| b.kind == kind)
-            .map(|b| b.state)
-            .unwrap_or_else(|| panic!("{kind} has a button"))
+            .map_or_else(|| panic!("{kind} has a button"), |b| b.state)
     };
-    use norte_ui_host::dto::PanelButtonState;
     assert_eq!(state("processes"), PanelButtonState::Open);
     assert_eq!(state("log"), PanelButtonState::Behind);
 }

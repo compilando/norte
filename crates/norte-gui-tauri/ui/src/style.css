@@ -860,6 +860,9 @@ body {
   direction: rtl;
   text-align: left;
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cut-start-text {
