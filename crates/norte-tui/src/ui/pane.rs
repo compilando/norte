@@ -347,13 +347,10 @@ fn pane_title(
     busy: Option<&norte_frontend::busy::Busy>,
     width: u16,
 ) -> String {
-    let (title, title_hostile) =
-        norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
-    let mut title = if title_hostile {
-        format!("{HOSTILE_BADGE} {title}")
-    } else {
-        title
-    };
+    let (path, title_hostile) = norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
+    // The marks around the path are collected apart so that the PATH is
+    // what gets cut — from the left, keeping the folder you are in.
+    let mut marks = String::new();
     // A listing FILLING UP (pagination, ADR 0017) is ALWAYS marked: an
     // incomplete listing is never silent.
     if pane.loading() {
@@ -362,7 +359,7 @@ fn pane_title(
         // the window's header takes it from; the brackets belong to this
         // header and stay here.
         let _ = write!(
-            title,
+            marks,
             " [{}]",
             norte_frontend::notes::filling(true, pane.entries().len(), norte_i18n::active())
         );
@@ -375,18 +372,31 @@ fn pane_title(
     if pane.unlisted {
         use std::fmt::Write as _;
         let _ = write!(
-            title,
+            marks,
             " [{}]",
             norte_frontend::notes::unlisted(true, norte_i18n::active())
         );
     }
+    let mut lead = String::new();
     // The DESTINATION is marked in the chrome, and only when needed: with
     // two panels the destination is the other one and nobody needs to be
     // told, but from three on a copy toward a panel the reader did not have
     // in mind is silent data loss (ADR 0058 D7).
     if is_dest {
-        title = format!("{TARGET_BADGE} {title}");
+        lead.push_str(TARGET_BADGE);
+        lead.push(' ');
     }
+    if title_hostile {
+        lead.push_str(HOSTILE_BADGE);
+        lead.push(' ');
+    }
+    let room = usize::from(width)
+        .saturating_sub(norte_frontend::display::cells(&lead))
+        .saturating_sub(norte_frontend::display::cells(&marks));
+    let mut title = format!(
+        "{lead}{}{marks}",
+        norte_frontend::display::head_ellipsis(&path, room)
+    );
     // Waiting (#323): the spinner goes UP FRONT and the title becomes the
     // DESTINATION, not the current directory. The body keeps showing the
     // previous listing — on purpose: if the connection fails, the reader
@@ -1170,6 +1180,31 @@ mod draw_pane_attr_tests {
     /// reader with two panels would not know which of the two is waiting
     /// nor for what; and if the body emptied out, a failed connection would
     /// have cost them the place they were at.
+    /// A long path is cut from the LEFT: ratatui cut the tail, which is
+    /// the folder you are in, and left the root everybody knows (review of
+    /// 2026-10-07). The marks after it survive the cut.
+    #[test]
+    fn a_long_title_keeps_its_tail() {
+        let dir = VPath::parse("mem:///uno/dos/tres/cuatro/cinco/la-carpeta").unwrap();
+        let mut pane = Pane::new(dir.clone(), vec![entry(&dir, "x")]);
+        pane.unlisted = true;
+        let title = pane_title(&pane, false, None, 30);
+        assert!(
+            norte_frontend::display::cells(&title) <= 30,
+            "fits: {title:?}"
+        );
+        assert!(title.starts_with('…'), "marks the cut: {title:?}");
+        assert!(title.contains("la-carpeta ["), "keeps the tail: {title:?}");
+        assert!(title.ends_with(']'), "and the mark after it: {title:?}");
+        let short = pane_title(
+            &Pane::new(VPath::parse("mem:///a").unwrap(), Vec::new()),
+            false,
+            None,
+            30,
+        );
+        assert!(!short.contains('…'), "what fits is untouched: {short:?}");
+    }
+
     #[test]
     fn while_waiting_the_header_spins_and_says_the_destination() {
         use norte_frontend::busy::{Busy, BusyKind};
