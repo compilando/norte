@@ -1188,11 +1188,11 @@ panelbar-viewer = Viewer
 panelbar-processes = Processes
 panelbar-metadata = Details
 panelbar-log = Log
-panelbar-disk-map = Disk map
+# "Map", the short form of "Disk map": the bar must fit its names in 80
+# columns, and the long one dropped it to letters (ADR 0171).
+panelbar-disk-map = Map
 panelbar-timeline = Timeline
-# "Shell" and not "Terminal": the button's letter is the initial, and `Tree`
-# already takes the T. In Spanish there is no clash, so it does say
-# "Terminal".
+# `Tree` and `Timeline` take the T first: `letter_of` gives this one another.
 panelbar-terminal = Terminal
 # The terminal panel's footer: the ONLY key the panel does not pass on to the
 # shell, so the only one worth announcing.

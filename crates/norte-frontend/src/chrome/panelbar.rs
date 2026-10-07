@@ -46,8 +46,9 @@ const TOGGLES: &[(&str, &str)] = &[
 pub enum PanelState {
     /// Not even in the layout.
     Closed,
-    /// In the layout but not in view: behind another tab, or dropped for
-    /// lack of room. Its button brings it forward.
+    /// In the layout but not in view: behind another tab (its button
+    /// brings it forward), or dropped for lack of room (it comes back when
+    /// the screen grows).
     Behind,
     /// Open, but the keyboard belongs to the listings or another panel.
     Open,
