@@ -3791,6 +3791,7 @@ async fn dragging_the_edge_splits_the_two_slots() {
     h.dispatch(UiAction::ResizeSlot {
         slot_id: left,
         cells: 40,
+        axis: None,
     })
     .await
     .expect("host alive");
@@ -4225,6 +4226,7 @@ async fn the_details_edge_is_dragged_from_the_second_listing() {
         .dispatch(UiAction::ResizeSlot {
             slot_id: listing,
             cells: meta.x + 10,
+            axis: None,
         })
         .await
         .expect("host alive");
@@ -4297,6 +4299,7 @@ async fn dragged_sizes_come_back_on_open() {
         .dispatch(UiAction::ResizeSlot {
             slot_id: left.slot_id,
             cells: (left.x + left.width * 2) / 3,
+            axis: None,
         })
         .await
         .expect("host alive");
@@ -4396,6 +4399,7 @@ async fn the_log_edge_is_dragged_from_the_details() {
         .dispatch(UiAction::ResizeSlot {
             slot_id: meta_id,
             cells: log.y - 5,
+            axis: None,
         })
         .await
         .expect("host alive");

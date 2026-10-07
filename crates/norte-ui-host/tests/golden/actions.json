@@ -267,6 +267,7 @@
   },
   "resize_slot": {
     "action": "resize_slot",
+    "axis": "row",
     "cells": 42,
     "slot_id": 1
   },

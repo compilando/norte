@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 98;
+export const BRIDGE_VERSION = 99;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -1869,7 +1869,7 @@ export type UiAction =
   | { action: "status_item_activate"; id: string }
   | { action: "layout_button_activate"; id: string }
   | { action: "tab_action"; slot_id: number; verb: "new" | "close" }
-  | { action: "resize_slot"; slot_id: number; cells: number }
+  | { action: "resize_slot"; slot_id: number; cells: number; axis?: "col" | "row" }
   | { action: "move_slot"; slot_id: number; target: number; zone: DropZone }
   | { action: "profile_activate_row"; row: number; generation: number }
   | { action: "resync" };

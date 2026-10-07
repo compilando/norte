@@ -575,7 +575,9 @@ use serde::{Deserialize, Serialize};
 ///   name rows among ALL visible branches.
 /// - **98**: `DiskMapSlotView.empty`: what a finished map with nothing to
 ///   draw says, translated; empty otherwise.
-pub const BRIDGE_VERSION: u32 = 98;
+/// - **99**: `resize_slot { axis }`: which border of the slot was grabbed
+///   (`col` or `row`). Absent = the old guess, right neighbor first.
+pub const BRIDGE_VERSION: u32 = 99;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

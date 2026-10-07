@@ -38,6 +38,26 @@ pub(super) const KIND: &str = "terminal";
 /// SAME one.
 pub(super) const COMMAND: &str = "layout.terminal";
 
+/// The commands whose lone chord still reaches norte from inside the panel:
+/// the ring, the close key and the other panels' toggles. Everything else is
+/// the shell's.
+///
+/// It is the list the TUI's side panels let through (panels-usability plan,
+/// T1); once `norte-frontend` exposes it, this becomes that list.
+const PASS_THROUGH: &[&str] = &[
+    "layout.focus-next",
+    "layout.focus-prev",
+    "layout.close-slot",
+    "layout.places",
+    "layout.preview",
+    "layout.processes",
+    "layout.metadata",
+    "layout.log",
+    "layout.disk-map",
+    "layout.timeline",
+    "pane.tree",
+];
+
 impl State {
     /// Opens the terminal panel, or brings it to the front.
     ///
@@ -281,6 +301,14 @@ impl State {
             // The SAME path that opened it: the key is one, so the way back
             // has to be the same code.
             return Some(self.open_terminal_panel(backend, mailbox));
+        }
+        // The panel keys are not the shell's: without this `alt+o` reached
+        // the shell as `ESC o` and the ring could not leave the panel.
+        if PASS_THROUGH
+            .iter()
+            .any(|c| self.effective.lone_chord(c).as_ref() == Some(&chord))
+        {
+            return None;
         }
         let bytes = norte_frontend::subshell::chord_a_bytes(chord)?;
         self.terminal_write(&bytes);

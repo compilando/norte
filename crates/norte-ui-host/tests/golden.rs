@@ -605,6 +605,7 @@ fn chrome_actions() -> Vec<(&'static str, UiAction)> {
             UiAction::ResizeSlot {
                 slot_id: 1,
                 cells: 42,
+                axis: Some(norte_ui_host::BorderAxis::Row),
             },
         ),
         (

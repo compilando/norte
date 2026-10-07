@@ -213,7 +213,7 @@ impl State {
             .saturating_add(1)
     }
 
-    /// Splits the focused slot and puts another LISTING next to it.
+    /// Splits the active LISTING and puts another one next to it.
     ///
     /// The new one starts in the directory it was split from, which is the
     /// least surprising thing: asking for room to work is not going somewhere
@@ -236,11 +236,15 @@ impl State {
         // tabs — with the tree saving it just the same. The TUI refuses at
         // this same spot (ADR 0077: a decision duplicated between frontends
         // diverges silently).
+        // The LISTING is split, never a dock with the keys: a split adds a
+        // listing, and one born inside the dock sat under its tab strip with
+        // no path bar. `active()` is the focused slot when it is a listing.
+        let base = self.active();
         let room = self
             .split
             .placements
             .iter()
-            .find(|(s, _)| s.0 == self.focused())
+            .find(|(s, _)| s.0 == base)
             .is_none_or(|(_, re)| {
                 norte_frontend::layout::has_room_to_split(*re, dir, &KindId::browser(), &self.kinds)
             });
@@ -254,7 +258,7 @@ impl State {
         }
         let id = self.new_slot();
         let updated = self.tree.split_slot(
-            SlotId(self.focused()),
+            SlotId(base),
             dir,
             &Node::slot(SlotId(id), KindId::browser()),
         );
@@ -276,7 +280,18 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(updated) = self.tree.close_slot(SlotId(self.focused())) else {
+        // A SIDE panel closes the way its own toggle closes it: that path
+        // kills the terminal's shell and lowers the log's capture level,
+        // which a bare `close_slot` skipped. And it does not get the
+        // "splits again" hint, which is about a closed listing.
+        let focus = self.focused();
+        if !self.slots.contains_key(&focus)
+            && let Some(kind) = kind_de(&self.tree, SlotId(focus))
+            && self.slot_of_kind(kind.as_str()) == Some(SlotId(focus))
+        {
+            return self.close_slot_of_kind(kind.as_str(), backend, mailbox);
+        }
+        let Some(updated) = self.tree.close_slot(SlotId(focus)) else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-layout-last-panel".to_owned(),

@@ -176,10 +176,26 @@ impl State {
         let Some(button_def) = norte_frontend::layoutbar::by_id(id) else {
             return (Self::stale(StaleAction::Generation), Vec::new());
         };
-        match crate::commands::effect_of(button_def.command, 1) {
+        // A button in the menu bar is not pressed FROM a dock: it acts on the
+        // listing, so the keys go back to it first. Otherwise equalize and
+        // flip reshaped the dock the reader had last clicked.
+        let refocused = !self.slots.contains_key(&self.focused());
+        if refocused {
+            let listing = self.active();
+            self.roles.set(RoleId::Active, SlotId(listing));
+            self.reconciles_roles();
+        }
+        let (ack, mut outgoing) = match crate::commands::effect_of(button_def.command, 1) {
             Some(effect) => self.apply_effect(effect, backend, mailbox),
             None => self.no_implemented(button_def.command),
+        };
+        // A layout that did not change sends nothing, and the focus that
+        // moved would stay painted on the dock.
+        if refocused && outgoing.is_empty() {
+            let change = ViewChange::Layout(self.layout());
+            outgoing.push(self.parche(vec![change]));
         }
+        (ack, outgoing)
     }
 
     /// A tab bar button (ADR 0133): first it selects the tab — the clicked
