@@ -14,7 +14,7 @@ expression: render_80x24(&app)
 "   │Plugin┌A la papelera─────────────────────────────────────────────┐      │  │"
 "   │      │notas.txt                                                 │      │  │"
 "   │      │recuperable desde la papelera del sistema                 │      │  │"
-"   │      │[Enter] confirmar [y] aprobar [n] denegar [Esc] cancelar  │      │  │"
+"   │      │[Enter] confirmar [Esc] cancelar                          │      │  │"
 "   │      │                                                          │      │  │"
 "   │      └──────────────────────────────────────────────────────────┘      │  │"
 "   │                    Paneles y listado                                   │  │"

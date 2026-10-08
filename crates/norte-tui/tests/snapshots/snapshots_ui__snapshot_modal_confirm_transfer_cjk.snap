@@ -10,7 +10,7 @@ expression: render(&app)
 "   │  @enl┌Copiar────────────────────────────────────────────────────┐         │"
 "   │   not│notas.txt                                                 │         │"
 "   │ ! �.d│A  /otro/日本語のファイル名.txt                           │         │" Hidden by multi-width symbols: [(21, " "), (23, " "), (25, " "), (27, " "), (29, " "), (31, " "), (33, " "), (35, " "), (37, " ")]
-"   │      │[Enter] confirmar [y] aprobar [n] denegar [Esc] cancelar  │         │"
+"   │      │[Enter] confirmar [Esc] cancelar                          │         │"
 "   │      │                                                          │         │"
 "   │      └──────────────────────────────────────────────────────────┘         │"
 "   │                                    ││                                     │"
