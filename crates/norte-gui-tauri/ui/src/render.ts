@@ -647,7 +647,29 @@ export class Screen {
       const footer = document.createElement("footer");
       footer.className = "slot-footer";
       footer.hidden = true;
-      el.append(tabs, title, header, scroller, footer);
+      // The header's actions, VS Code's `×` on hover: a SIBLING over the
+      // title's right end, because every painter replaces the title's
+      // content. Side panels only (CSS), and not over a tab strip, which
+      // carries its own `×`.
+      const actions = document.createElement("div");
+      actions.className = "slot-actions";
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "slot-close";
+      close.textContent = "×";
+      close.title = this.t("menu-item-layout-close-slot");
+      close.setAttribute("aria-label", close.title);
+      close.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+      });
+      close.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.send({ action: "tab_action", slot_id: p.slot_id, verb: "close" });
+      });
+      actions.append(close);
+      // AFTER the title: `.slot-tabs + .slot-title` is an adjacent-sibling
+      // rule.
+      el.append(tabs, title, actions, header, scroller, footer);
       this.root.append(el);
       const busy = document.createElement("p");
       busy.className = "slot-busy";
@@ -1222,7 +1244,11 @@ export class Screen {
         const crumb = document.createElement("button");
         crumb.type = "button";
         crumb.className = "crumb";
-        crumb.textContent = segment;
+        // The LOCAL root reads as what it is, `/`: `(file)` named the
+        // provider on every local listing, the common case, where it says
+        // nothing (2026-10-08). Another scheme keeps its name — there it is
+        // the information.
+        crumb.textContent = i === 0 && /^[(⟨]file[)⟩]$/.test(segment) ? "/" : segment;
         const current = i === crumbs.length - 1;
         crumb.dataset["current"] = String(current);
         // The root (the scheme, `⟨file⟩`) is painted dimmed (phase D): it

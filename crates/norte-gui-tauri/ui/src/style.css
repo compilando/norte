@@ -645,13 +645,84 @@ body {
   white-space: nowrap;
 }
 
+/* Each pane is a CARD (2026-10-08, VS Code's current look): a one-pixel
+   gutter of the board's own colour on every side — two between neighbours —
+   rounded corners, and the frame drawn as an inner outline. The border
+   stays one pixel, so nothing inside moves off the cell grid. */
 .slot {
   position: absolute;
   overflow: hidden;
   background: var(--panel-bg);
-  border: 1px solid var(--border);
+  background-clip: padding-box;
+  border: 1px solid var(--bg);
+  border-radius: 6px;
+  outline: 1px solid var(--border);
+  outline-offset: -1px;
   display: flex;
   flex-direction: column;
+}
+
+/* The header's `×` (2026-10-08): on hover, over the title's right end. */
+.slot-actions {
+  position: absolute;
+  top: 0;
+  right: 4px;
+  height: var(--cell-h);
+  display: none;
+  align-items: center;
+}
+
+.slot:not([data-kind="browser"]):not([data-kind="status"]):not([data-kind="tasks"]):hover
+  > .slot-actions {
+  display: flex;
+}
+
+.slot-tabs[data-open="true"] ~ .slot-actions {
+  display: none !important;
+}
+
+.slot-close {
+  font: inherit;
+  color: var(--title-fg);
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  padding: 0 6px;
+  line-height: calc(var(--cell-h) - 4px);
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.slot-close:hover {
+  opacity: 1;
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+/* Thin scrollbars that stay out of the way, as VS Code's: a six-pixel
+   thumb, transparent track, brighter under the pointer. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--fg) 22%, transparent) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--fg) 18%, transparent);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--fg) 35%, transparent);
 }
 
 /* What is arriving into this directory (ADR 0148): a two-pixel line on the
@@ -674,8 +745,8 @@ body {
 }
 
 .slot[data-role="active"] {
-  border-color: var(--border-focus);
-  background: var(--panel-focus-bg);
+  outline-color: var(--border-focus);
+  background-color: var(--panel-focus-bg);
 }
 
 /* The status bar and the task strip are chrome ROWS, not panels: no title —
@@ -684,6 +755,8 @@ body {
 .slot[data-kind="status"],
 .slot[data-kind="tasks"] {
   border: 0;
+  border-radius: 0;
+  outline: none;
 }
 
 .slot[data-kind="status"] > .slot-title,
@@ -959,16 +1032,17 @@ body {
   color: var(--title-fg);
 }
 
-/* Headers in SMALL CAPS with a bit of breathing room (spec 2026-09-11, V2):
-   told apart from rows without spending color, and with a fixed width they
-   ellipsis-truncate like the cells. `position: relative` is for the
-   border's grip. */
+/* Headers in the CHROME font, a size smaller and dimmed (2026-10-08, VS
+   Code's tables): told apart from rows without spending color — small caps
+   in the listing's monospace shouted. The box keeps its cell width, so the
+   columns stay aligned; a fixed width ellipsis-truncates like the cells.
+   `position: relative` is for the border's grip. */
 .col {
   flex: 0 0 auto;
-  opacity: 0.85;
+  opacity: 0.65;
   position: relative;
-  font-variant-caps: all-small-caps;
-  letter-spacing: 0.05em;
+  font-family: var(--font-ui);
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1225,9 +1299,30 @@ body {
   text-overflow: ellipsis;
 }
 
-.kind-dir .cell-name::before {
+.kind-dir:not(.own-icon) .cell-name::before {
   content: "/";
   opacity: 0.6;
+}
+
+/* The window's own row icon (2026-10-08), when no plugin brings icons: the
+   Tree's folder and a page, in the entry's colour. */
+.row-icon {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 15px;
+  height: 15px;
+  margin-right: 6px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  opacity: 0.85;
+}
+
+.kind-file .row-icon,
+.kind-symlink .row-icon,
+.kind-other .row-icon {
+  opacity: 0.55;
 }
 
 /* The icon column (bridge 62): a fixed width of two cells and a space,
@@ -3882,6 +3977,33 @@ button.status-item:hover {
   touch-action: none;
 }
 
+/* Its centre carries VS Code's dotted grip, faint until hovered: the gutter
+   between cards is empty, and the dots say a border can be grabbed there. */
+.resize-handle::after {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--muted, var(--title-fg));
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.resize-handle.col::after {
+  content: "⋮";
+}
+
+.resize-handle.row::after {
+  content: "⋯";
+}
+
+.resize-handle:hover::after {
+  opacity: 0;
+}
+
 /* On hover or drag, the grip lights up with the focus color (phase D, spec
    2026-09-21), like VS Code's sash: it says "grab here" only while the
    pointer is over it, and a short delay keeps it from flickering when
@@ -5105,6 +5227,28 @@ button.status-item:hover {
 .slot-filling,
 .slot-marked {
   color: var(--title-fg);
+}
+
+/* The path takes the room and pushes the notices to the title's RIGHT end,
+   where they read as badges about the listing and not as more path —
+   "oscar 123 ocultas" glued the count to the folder (2026-10-08). */
+.slot-title > .title-path {
+  margin-right: auto;
+}
+
+.slot-skipped,
+.slot-hidden,
+.slot-filling,
+.slot-names,
+.slot-pruned,
+.slot-marked {
+  font-family: var(--font-ui);
+  font-size: 0.82em;
+  line-height: 1.5;
+  padding: 0 6px;
+  border-radius: 8px;
+  align-self: center;
+  background: color-mix(in srgb, currentcolor 12%, transparent);
 }
 
 /* Waiting for a listing (#323).

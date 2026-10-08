@@ -91,6 +91,8 @@ const SHAPES: Record<string, Shape> = {
   // What is in the tree and in the places (`fs:` prefix).
   // Closed folder: the tab at the top left.
   "fs:folder": { paths: ["M3.5 6.5h6l2 2h9v10h-17z"] },
+  // A file: the page with its corner folded (the listing's rows, 2026-10-08).
+  "fs:file": { paths: ["M6.5 3.5h7l4 4v13h-11z", "M13.5 3.5v4h4"] },
   // Open folder: the lid tilted forward.
   "fs:folder-open": { paths: ["M3.5 18.5v-12h6l2 2h8v2", "M3.5 18.5l3-8h15l-3 8z"] },
   // A drive: the box with its light.

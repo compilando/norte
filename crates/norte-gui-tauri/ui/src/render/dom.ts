@@ -11,6 +11,7 @@ import type {
   UiAction,
   ViewerView,
 } from "../types";
+import { icon as fsIcon } from "./icons";
 
 /**
  * Scrolls just enough for `el` to be visible, if the environment knows how.
@@ -399,6 +400,19 @@ export function updateRow(
       icon.append(badge("△"));
     }
     block.append(icon);
+  } else {
+    // No plugin icons: the window's own folder and page, the Tree's same
+    // drawing (2026-10-08). A `/` glued to the name was the only mark of a
+    // folder; an icon says it at a glance and keeps the names aligned.
+    const own = fsIcon(document, row.kind === "dir" ? "fs:folder" : "fs:file");
+    if (own !== null) {
+      own.classList.add("row-icon");
+      if (row.name_color !== "" && !row.selected) {
+        own.style.color = row.name_color;
+      }
+      block.append(own);
+      el.classList.add("own-icon");
+    }
   }
   block.append(name);
   const nodes: Node[] = [block];

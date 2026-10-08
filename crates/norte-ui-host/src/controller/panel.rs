@@ -654,7 +654,7 @@ impl State {
                 marks.dirs,
                 self.lang,
             )),
-            footer: clamp_display(self.pie_con(target_slot, &marks)),
+            footer: clamp_display(self.pie_con(id, target_slot, &marks)),
             path_segments: Self::crumbs_of(target_slot),
             used_ratio: norte_frontend::space::used_ratio_for(
                 target_slot.pane.dir(),
@@ -686,17 +686,17 @@ impl State {
 
     /// A listing's footer (spec 2026-09-10), drafted by the shared crate;
     /// empty with `[ui] pane_footer` off.
-    pub(super) fn pie_de(&self, target_slot: &Slot) -> String {
+    pub(super) fn pie_de(&self, id: u32, target_slot: &Slot) -> String {
         if !self.config.common.ui_chrome.pane_footer() {
             return String::new();
         }
-        self.pie_con(target_slot, &target_slot.pane.marks_summary(0))
+        self.pie_con(id, target_slot, &target_slot.pane.marks_summary(0))
     }
 
     /// The footer with the marks already summarized: the header requests it
     /// together with its own summary and does not need to walk the listing
     /// again.
-    fn pie_con(&self, target_slot: &Slot, marks: &norte_frontend::MarksSummary) -> String {
+    fn pie_con(&self, id: u32, target_slot: &Slot, marks: &norte_frontend::MarksSummary) -> String {
         if !self.config.common.ui_chrome.pane_footer() {
             return String::new();
         }
@@ -707,7 +707,16 @@ impl State {
             dirs: marks.dirs,
         };
         let free = norte_frontend::space::free_for(target_slot.pane.dir(), &self.volumes_pie);
-        norte_frontend::footer::pane_footer(counts, marked, free, self.lang)
+        let segments = norte_frontend::footer::segments(counts, marked, free, self.lang);
+        // Fitted to the slot like the terminal's: what does not fit drops
+        // WHOLE, by priority — "40.3 MiB ·…" said neither the size nor the
+        // free space (2026-10-08). The two cells are the footer's padding.
+        match self.split.placements.iter().find(|(s, _)| s.0 == id) {
+            Some((_, r)) => {
+                norte_frontend::footer::fit(segments, usize::from(r.width.saturating_sub(2)))
+            }
+            None => norte_frontend::footer::pane_footer(counts, marked, free, self.lang),
+        }
     }
 
     /// Requests the volumes for the footer, if the footer is on and there is
@@ -750,14 +759,14 @@ impl State {
         let before: Vec<(u32, String)> = self
             .slots
             .iter()
-            .map(|(id, h)| (*id, self.pie_de(h)))
+            .map(|(id, h)| (*id, self.pie_de(*id, h)))
             .collect();
         self.volumes_pie = vols;
         let changes: Vec<ViewChange> = before
             .into_iter()
             .filter_map(|(id, old)| {
                 let h = self.slots.get(&id)?;
-                (self.pie_de(h) != old).then(|| self.header_of(id, h))
+                (self.pie_de(id, h) != old).then(|| self.header_of(id, h))
             })
             .collect();
         (!changes.is_empty()).then(|| self.parche(changes))

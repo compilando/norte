@@ -1365,7 +1365,8 @@ describe("breadcrumbs, the space indicator and the toast", () => {
       }),
     );
     const crumbs = root.querySelectorAll(".title-path .crumb");
-    expect([...crumbs].map((m) => m.textContent)).toEqual(["⟨file⟩", "home", "oscar"]);
+    // The local root reads `/` (2026-10-08); another scheme keeps its name.
+    expect([...crumbs].map((m) => m.textContent)).toEqual(["/", "home", "oscar"]);
     expect((crumbs[2] as HTMLButtonElement).disabled).toBe(true);
     // Only the root carries the mark that dims it (spec 2026-09-21, phase D).
     expect([...crumbs].map((m) => (m as HTMLElement).dataset["root"])).toEqual([
@@ -1402,7 +1403,7 @@ describe("breadcrumbs, the space indicator and the toast", () => {
     expect(box.classList.contains("cut-start")).toBe(true);
     const inner = box.querySelector(":scope > .cut-start-text") as HTMLElement;
     expect([...inner.querySelectorAll(".crumb")].map((m) => m.textContent)).toEqual([
-      "⟨file⟩",
+      "/",
       "home",
       "oscar",
     ]);
