@@ -3695,10 +3695,17 @@ button.status-item:hover {
   margin: 0;
   padding: 0 4px;
   list-style: none;
-  overflow-x: auto;
+  /* No scrollbar: in a narrow group the tabs SHRINK instead (below), and
+     the one in front never does. A scrolling strip hid the front tab's
+     name and its `×` past the edge (2026-10-08). */
+  overflow: hidden;
 }
 
 .tab {
+  flex: 0 1 auto;
+  min-width: 3ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
   padding: 0 8px;
   white-space: nowrap;
   opacity: 0.7;
@@ -3707,6 +3714,7 @@ button.status-item:hover {
 }
 
 .tab[data-active="true"] {
+  flex-shrink: 0;
   opacity: 1;
   border-bottom: 2px solid var(--border-focus);
 }

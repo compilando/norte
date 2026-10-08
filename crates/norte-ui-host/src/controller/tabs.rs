@@ -208,7 +208,20 @@ impl State {
         let Some(i) = tabs.iter().position(|t| *t == clicked) else {
             return (Self::stale(StaleAction::Generation), Vec::new());
         };
-        self.activate_tab(clicked, i, &tabs, backend, mailbox)
+        let (ack, mut updates) = self.activate_tab(clicked, i, &tabs, backend, mailbox);
+        // A terminal brought forward with no shell — restored, and not
+        // started on its own (a directory from the command line) — gets one
+        // now: the click or the key IS the gesture. It came forward saying
+        // "no shell in this panel" (2026-10-08).
+        if self
+            .tree
+            .kind_of(clicked)
+            .is_some_and(|k| k.as_str() == super::termpanel::KIND)
+            && norte_frontend::shell::is_local(self.slot().pane.dir())
+        {
+            updates.extend(self.start_si_missing(mailbox));
+        }
+        (ack, updates)
     }
 
     /// The tree's highest slot id, plus one.
