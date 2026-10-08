@@ -1165,6 +1165,27 @@ msg-settings-invalid-status-items = each item once, from: position marks sort en
 msg-settings-no-config-dir = no user config directory (env not set)
 msg-hotlist-persist-failed = favorites not saved: { $error }
 help-cmd-app-menu = menu bar
+# The function-key bar's labels: written to fit a cell at 80 columns (six
+# cells; F10's five), never a command's long name cut mid-phrase.
+keybar-app-help = Help
+keybar-app-menu = Menu
+keybar-app-quit = Quit
+keybar-app-terminal = Shell
+keybar-pane-view = View
+keybar-pane-edit = Edit
+keybar-pane-copy = Copy
+keybar-pane-move = Move
+keybar-pane-mkdir = MkDir
+keybar-pane-delete = Delete
+keybar-pane-rename = Rename
+keybar-pane-refresh = Reread
+keybar-pane-open = Open
+keybar-viewer-close = Close
+keybar-viewer-zoom-in = Zoom+
+keybar-viewer-zoom-out = Zoom-
+keybar-viewer-zoom-fit = Fit
+keybar-viewer-prev = Prev
+keybar-viewer-next = Next
 menu-item-pane-view = View
 menu-item-pane-properties = Properties
 menu-item-pane-dir-size = Space used

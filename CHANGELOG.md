@@ -7,6 +7,13 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The function-key bar has labels written for it**: "Close", "Fit",
+  "Next", "Zoom+" instead of a command's long name cut mid-phrase
+  ("Close the", "Fit the", "Go on to"). Every key of the seven presets
+  reads whole at 80 and 132 columns, in English and Spanish.
+
 ### Added
 
 - **A timeline row shows its details**: Space or a click opens the full
