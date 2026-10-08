@@ -1472,14 +1472,16 @@ impl StatusItems {
     }
 }
 
-/// `[ui] titlebar`: who draws the window's title bar (ADR 0136).
+/// `[ui] titlebar`: who draws the window's title bar (ADR 0136, 0172).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Titlebar {
-    /// The desktop's own. Default: it is the one every other window has,
-    /// and it works with whatever the window manager does.
-    #[default]
+    /// The desktop's own, for a window manager that wants its own
+    /// decorations (tiling, themes).
     Native,
     /// None from the desktop: the menu bar doubles as the title bar.
+    /// Default since ADR 0172: the native bar and the menu row were two
+    /// rows of chrome where VS Code spends one.
+    #[default]
     Custom,
 }
 
@@ -1681,7 +1683,7 @@ pub struct UiChrome {
     pub panel_bar_style: Option<PanelBarStyle>,
     /// `[ui] panel_bar_position` (None = auto), validated.
     pub panel_bar_position: Option<PanelBarPosition>,
-    /// `[ui] titlebar` (None = native), validated.
+    /// `[ui] titlebar` (None = custom), validated.
     pub titlebar: Option<Titlebar>,
     /// `[ui] status_items` (None = [`StatusItems::DEFAULT`]), validated.
     pub status_items: Option<StatusItems>,
@@ -1795,7 +1797,7 @@ impl UiChrome {
     pub fn panel_bar_position(self) -> PanelBarPosition {
         self.panel_bar_position.unwrap_or_default()
     }
-    /// Effective `titlebar` (absent = native).
+    /// Effective `titlebar` (absent = custom).
     #[must_use]
     pub fn titlebar(self) -> Titlebar {
         self.titlebar.unwrap_or_default()
@@ -3957,8 +3959,8 @@ format = "exact"
         assert_eq!(empty.panel_bar_position(), PanelBarPosition::Auto);
         assert_eq!(
             empty.titlebar(),
-            Titlebar::Native,
-            "the desktop's own, by default"
+            Titlebar::Custom,
+            "the menu bar doubles as the title bar, by default (ADR 0172)"
         );
         assert_eq!(empty.status_items(), StatusItems::DEFAULT);
         assert_eq!(empty.date_format(), DateFormat::Smart);

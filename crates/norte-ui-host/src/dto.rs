@@ -271,6 +271,23 @@ pub struct PanelBarView {
     /// the INDEX in this list (`UiAction::PanelBarActivate`), never as a
     /// command: the renderer does not dispatch (ADR 0069).
     pub buttons: Vec<PanelButtonView>,
+    /// The buttons pinned to the column's FOOT (bridge 101): help and
+    /// settings, as VS Code's gear (`norte_frontend::panelbar::FOOTER`). A
+    /// click comes back as the id (`UiAction::ActivityActivate`). Absent
+    /// in an older host = none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footer: Vec<FooterButtonView>,
+}
+
+/// A button at the foot of the activity column (bridge 101).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FooterButtonView {
+    /// Stable id (`settings`, `help`): what comes back and picks the icon.
+    pub id: String,
+    /// Its name, the command's menu entry.
+    pub label: String,
+    /// Its key, painted; `—` if it has none.
+    pub chord: String,
 }
 
 /// An element of the right half of the status bar (ADR 0132).

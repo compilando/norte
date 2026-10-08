@@ -878,6 +878,23 @@ pub enum UiAction {
         /// Where, within `target`.
         zone: norte_frontend::layout::DropZone,
     },
+    /// Presses a chrome button (bridge 101): the activity column's foot
+    /// (`settings`, `help`) or the title bar's command centre (`goto`) —
+    /// `norte_frontend::panelbar::footer_command`'s closed list. An unknown
+    /// id changes nothing and is answered `Unavailable`.
+    ActivityActivate {
+        /// The button's id.
+        id: String,
+    },
+    /// Drops slot `slot_id` on the WINDOW's edge (bridge 100): it takes the
+    /// whole side — full height left/right, full width top/bottom
+    /// (`Node::dock_outer`). `center` changes nothing.
+    DockSlot {
+        /// The slot being dragged.
+        slot_id: u32,
+        /// Which edge of the body.
+        zone: norte_frontend::layout::DropZone,
+    },
     /// Chooses a row of the PROFILE picker and activates it (a click).
     ///
     /// Selects and activates at once, like the sidebar: a profile picker

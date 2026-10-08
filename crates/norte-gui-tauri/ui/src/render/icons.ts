@@ -11,6 +11,9 @@
 // what is already known about it.
 
 import diskMap from "../../../../norte-frontend/assets/panel-icons/disk-map.svg?raw";
+import help from "../../../../norte-frontend/assets/panel-icons/help.svg?raw";
+import settings from "../../../../norte-frontend/assets/panel-icons/settings.svg?raw";
+import terminal from "../../../../norte-frontend/assets/panel-icons/terminal.svg?raw";
 import log from "../../../../norte-frontend/assets/panel-icons/log.svg?raw";
 import metadata from "../../../../norte-frontend/assets/panel-icons/metadata.svg?raw";
 import places from "../../../../norte-frontend/assets/panel-icons/places.svg?raw";
@@ -38,6 +41,10 @@ const PANEL_SVG: Record<string, string> = {
   log,
   "disk-map": diskMap,
   timeline,
+  terminal,
+  // The column's foot (bridge 101), not panels.
+  settings,
+  help,
 };
 
 const SHAPES: Record<string, Shape> = {
@@ -66,6 +73,12 @@ const SHAPES: Record<string, Shape> = {
   },
   // The buttons for a window with its own title bar (ADR 0136), `window:`
   // prefix. Thin and small, like the desktop's.
+  // The remote indicator: two arrows facing, VS Code's `><` (2026-10-08).
+  "ui:remote": { paths: ["M4 8l4 4-4 4", "M20 8l-4 4 4 4"] },
+  // The status bar's notices: a bell (2026-10-08).
+  "ui:bell": { paths: ["M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15z", "M10 20.5h4"] },
+  // The command centre's magnifier (ADR 0172).
+  "ui:search": { paths: ["M15.5 15.5l4 4"], circles: [[10.5, 10.5, 5.5]] },
   // Minimize: a line at the bottom.
   "window:minimize": { paths: ["M7 12.5h10"] },
   // Maximize: a square.
@@ -84,6 +97,8 @@ const SHAPES: Record<string, Shape> = {
   // What is in the tree and in the places (`fs:` prefix).
   // Closed folder: the tab at the top left.
   "fs:folder": { paths: ["M3.5 6.5h6l2 2h9v10h-17z"] },
+  // A file: the page with its corner folded (the listing's rows, 2026-10-08).
+  "fs:file": { paths: ["M6.5 3.5h7l4 4v13h-11z", "M13.5 3.5v4h4"] },
   // Open folder: the lid tilted forward.
   "fs:folder-open": { paths: ["M3.5 18.5v-12h6l2 2h8v2", "M3.5 18.5l3-8h15l-3 8z"] },
   // A drive: the box with its light.

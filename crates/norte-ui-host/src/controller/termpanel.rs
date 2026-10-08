@@ -157,7 +157,7 @@ impl State {
     /// because the second one is the restored-session path: the tree is
     /// saved and the shell is not, so on starting the window there is a slot
     /// with no shell.
-    fn start_si_missing(
+    pub(super) fn start_si_missing(
         &mut self,
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {

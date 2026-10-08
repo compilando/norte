@@ -10,7 +10,9 @@ import type {
   TaskView,
   UiAction,
   ViewerView,
+  ViewSnapshot,
 } from "../types";
+import { icon as fsIcon } from "./icons";
 
 /**
  * Scrolls just enough for `el` to be visible, if the environment knows how.
@@ -399,6 +401,19 @@ export function updateRow(
       icon.append(badge("△"));
     }
     block.append(icon);
+  } else {
+    // No plugin icons: the window's own folder and page, the Tree's same
+    // drawing (2026-10-08). A `/` glued to the name was the only mark of a
+    // folder; an icon says it at a glance and keeps the names aligned.
+    const own = fsIcon(document, row.kind === "dir" ? "fs:folder" : "fs:file");
+    if (own !== null) {
+      own.classList.add("row-icon");
+      if (row.name_color !== "" && !row.selected) {
+        own.style.color = row.name_color;
+      }
+      block.append(own);
+      el.classList.add("own-icon");
+    }
   }
   block.append(name);
   const nodes: Node[] = [block];
@@ -634,6 +649,14 @@ export function statusNodes(
       el.className = "status-item";
       el.dataset["id"] = it.id;
       el.textContent = it.text;
+      // Unread notices with VS Code's bell and the bare count: `!3` is the
+      // terminal's form, where there is no drawing.
+      const bell = it.id === "notices" ? fsIcon(document, "ui:bell") : null;
+      if (bell !== null) {
+        bell.classList.add("status-icon");
+        el.textContent = it.text.replace(/^!/, "");
+        el.prepend(bell);
+      }
       el.title = it.tooltip;
       if (it.progress !== undefined) {
         // The thin bar (ADR 0146): behind the text, slim. With no percentage
@@ -668,6 +691,38 @@ export function statusNodes(
     nodes.push(right);
   }
   return nodes;
+}
+
+/**
+ * Where the active listing lives, if not on this machine: its root crumb
+ * (`⟨sftp⟩host`, already masked by the host), or `""` when local. VS Code's
+ * remote indicator, at the status bar's left end (2026-10-08).
+ */
+export function remoteOf(view: ViewSnapshot): string {
+  const active = view.layout.placements.find((p) => p.role === "active");
+  const slot = view.slots.find(
+    (s) => s.kind === "browser" && s.slot_id === active?.slot_id,
+  );
+  if (slot?.kind !== "browser") {
+    return "";
+  }
+  const root = slot.path_segments?.[0] ?? "";
+  return /^[(⟨]file[)⟩]$/.test(root) ? "" : root;
+}
+
+/** The remote indicator: the two-arrows drawing and where. */
+export function remoteIndicator(where: string): HTMLElement {
+  const el = document.createElement("span");
+  el.className = "status-remote";
+  const icon = fsIcon(document, "ui:remote");
+  if (icon !== null) {
+    icon.classList.add("status-icon");
+    el.append(icon);
+  }
+  const text = document.createElement("span");
+  text.textContent = where;
+  el.append(text);
+  return el;
 }
 
 export function taskNode(t: TaskView, tr: (k: string) => string): HTMLElement {

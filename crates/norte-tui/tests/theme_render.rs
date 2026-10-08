@@ -341,8 +341,8 @@ fn icons_sit_on_the_reserved_cells() {
         assert!(norte_frontend::panelbar::icon_svg(&i.kind).is_some());
     }
     assert!(
-        icons.iter().all(|i| i.kind != "terminal"),
-        "no svg, no pixels"
+        icons.iter().any(|i| i.kind == "terminal"),
+        "the terminal has its picture since 2026-10-08"
     );
     let places = icons.iter().find(|i| i.kind == "places").expect("places");
     assert_eq!(places.rgb, [0xcc, 0xcc, 0xcc], "open: Title");

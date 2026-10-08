@@ -42,10 +42,12 @@ and `"letters"` goes back to letters. On a terminal that paints images
 (kitty, Ghostty, WezTerm, foot, xterm with sixel…) the column shows the window's own icons at
 double size; `images = "off"` keeps the small ones.
 
-In the window, `titlebar = "custom"` removes the desktop's title bar and the
-menu bar does its job, as in VS Code: drag it to move the window,
-double-click to maximize, and minimize, maximize and close sit at its right
-end. The default is `native`. It applies the next time the window opens.
+In the window, `titlebar = "custom"` — the default — removes the desktop's
+title bar and the menu bar does its job, as in VS Code: drag it to move the
+window, double-click to maximize, and minimize, maximize and close sit at its
+right end, with a "Go to…" box in the middle. `native` keeps the desktop's,
+for a window manager that wants its own. It applies the next time the window
+opens.
 
 The pane footer
 ---------------

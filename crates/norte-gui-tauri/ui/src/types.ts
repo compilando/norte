@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 99;
+export const BRIDGE_VERSION = 101;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -1053,6 +1053,16 @@ export interface PanelBarView {
   vertical?: boolean;
   /** A click comes back as the INDEX here, never as a command. */
   buttons: PanelButtonView[];
+  /** The column's foot (bridge 101): help and settings. Absent = none. */
+  footer?: FooterButtonView[];
+}
+
+export interface FooterButtonView {
+  /** `settings`, `help`: comes back with the click and picks the icon. */
+  id: string;
+  label: string;
+  /** Painted key, `—` if it has none. */
+  chord: string;
 }
 
 export interface WhichKeyRowView {
@@ -1884,6 +1894,8 @@ export type UiAction =
     }
   | { action: "resize_slot"; slot_id: number; cells: number; axis?: "col" | "row" }
   | { action: "move_slot"; slot_id: number; target: number; zone: DropZone }
+  | { action: "dock_slot"; slot_id: number; zone: DropZone }
+  | { action: "activity_activate"; id: string }
   | { action: "profile_activate_row"; row: number; generation: number }
   | { action: "resync" };
 

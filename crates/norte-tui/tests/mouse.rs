@@ -671,10 +671,11 @@ fn a_big_rail_reserves_two_by_two_and_clicks_land_on_both_rows() {
     assert!(mouse::hit_test(&app, 5, FILA0 - 1).is_some());
 }
 
-/// A button with no SVG to rasterise (`terminal`, or a plugin's once they
-/// get buttons) keeps its LETTER in a big column, never a blank square.
+/// In a big column every built-in panel has its picture — the terminal too,
+/// since 2026-10-08 — so no letter is left in it. (A kind with no SVG, a
+/// plugin's once they get buttons, keeps its letter: `draw_rail`.)
 #[test]
-fn a_kind_without_svg_paints_its_letter_when_big() {
+fn every_builtin_kind_paints_a_picture_when_big() {
     let mut app = app_painted(5);
     app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Left);
     app.chrome.images = Some(norte_config::Images::Kitty);
@@ -685,18 +686,7 @@ fn a_kind_without_svg_paints_its_letter_when_big() {
         .map(|l| l.chars().nth(2).expect("column 1"))
         .filter(|c| *c != ' ')
         .collect();
-    let terminal = norte_frontend::panelbar::buttons(
-        &app.kinds,
-        norte_frontend::panelbar::PanelBarInput::default(),
-    )
-    .into_iter()
-    .find(|b| b.kind == "terminal")
-    .expect("terminal is a button");
-    assert_eq!(
-        letters,
-        terminal.letter.to_string(),
-        "only the terminal's letter"
-    );
+    assert_eq!(letters, "", "no letter left in a big column");
 }
 
 #[test]
@@ -890,6 +880,52 @@ fn dragging_the_title_moves_the_pane() {
     assert!(a.y > b.y && a.x == b.x, "stacked: {a:?} under {b:?}");
     // Focus stays on its SLOT, even though its position changed.
     assert_eq!(app.focused_slot(), focus);
+}
+
+/// Dropped on the screen's very edge, a panel takes that whole side: the
+/// log dragged to the right border becomes a full-height column. Dropped
+/// on a pane it could only land beside or under that pane (2026-10-08).
+#[test]
+fn dropping_on_the_screen_edge_takes_the_whole_side() {
+    let mut app = app_painted(5);
+    let _ = paint_at(&mut app, 120, 50);
+    // Places: its title row is not a border (a bottom dock's is, and
+    // pressing there resizes).
+    app.toggle_places();
+    let _ = paint_at(&mut app, 120, 50);
+    let log = app.places_slot().expect("places open");
+    let right = app.panes.slot_of(1);
+    let l = app.mouse.slot_rect(log).expect("log placed");
+    let b = app.mouse.slot_rect(right).expect("listing placed");
+    let edge_x = b.x + b.width - 1;
+    let _ = mouse::handle(&mut app, ev(DOWN, l.x + 4, l.y));
+    let _ = mouse::handle(&mut app, ev(DRAG, edge_x, b.y + b.height / 2));
+    assert!(
+        app.mouse.move_target().is_some(),
+        "the strip highlights: log {l:?} listing {b:?} layout {:?}",
+        app.layout
+    );
+    let _ = mouse::handle(&mut app, ev(UP, edge_x, b.y + b.height / 2));
+    let _ = paint_at(&mut app, 120, 50);
+    let l = app.mouse.slot_rect(log).expect("log placed");
+    let b = app.mouse.slot_rect(right).expect("listing placed");
+    assert!(l.x > b.x, "the log went to the right: {l:?} vs {b:?}");
+    assert_eq!(l.y, b.y, "from the top");
+    assert!(l.height >= b.height, "full height: {l:?} vs {b:?}");
+}
+
+/// A title nudged sideways along its own row is not "the whole top": it
+/// restacked the pane across the width (review of 2026-10-08).
+#[test]
+fn a_sideways_drag_along_a_title_moves_nothing() {
+    let mut app = app_painted(5);
+    let _ = paint_at(&mut app, 120, 50);
+    let a = app.mouse.slot_rect(app.panes.slot_of(0)).expect("placed");
+    let before = app.layout.clone();
+    let _ = mouse::handle(&mut app, ev(DOWN, a.x + 4, a.y));
+    let _ = mouse::handle(&mut app, ev(DRAG, a.x + 9, a.y));
+    let _ = mouse::handle(&mut app, ev(UP, a.x + 9, a.y));
+    assert_eq!(app.layout, before);
 }
 
 /// ADR 0134: two panels on the same edge share a spot as tabs, and their

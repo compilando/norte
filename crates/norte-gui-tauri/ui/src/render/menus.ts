@@ -15,7 +15,7 @@ import type {
   WhichKeyView,
   WindowVerb,
 } from "../types";
-import { badge, colVar, revealInView, unchanged } from "./dom";
+import { badge, colVar, cutStart, revealInView, unchanged } from "./dom";
 import type { SlotDom } from "./dom";
 import { badgeCount, icon as panelIcon } from "./icons";
 import { makeDraggable } from "./move";
@@ -117,6 +117,30 @@ export function paintPanelBar(this: Screen, bar: PanelBarView): void {
       this.send({ action: "panel_bar_activate", button: i });
     });
     row.append(button);
+  }
+  // The column's foot: help and settings, pinned to the bottom as VS
+  // Code's gear. Only in the column: the row has the menu right there.
+  if (column && (bar.footer ?? []).length > 0) {
+    const foot = document.createElement("div");
+    foot.className = "panelbar-foot";
+    for (const f of bar.footer ?? []) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "panelbar-button";
+      button.dataset["kind"] = f.id;
+      button.dataset["state"] = "closed";
+      button.title = f.chord === "—" ? f.label : `${f.label} (${f.chord})`;
+      button.setAttribute("aria-label", f.label);
+      const icon = panelIcon(document, f.id);
+      if (icon !== null) {
+        button.append(icon);
+      }
+      button.addEventListener("click", () => {
+        this.send({ action: "activity_activate", id: f.id });
+      });
+      foot.append(button);
+    }
+    row.append(foot);
   }
   this.panelBarRoot.replaceChildren(row);
 }
@@ -312,6 +336,26 @@ export function paintMenu(
       this.send({ action: "menu_open", menu: i });
     });
     bar.append(button);
+  }
+  if (custom) {
+    // The COMMAND CENTRE (ADR 0172): VS Code's box in the middle of its
+    // title bar, which in norte is "go anywhere". Between the menus and the
+    // buttons, in the flow. It names a button, not a command: the host maps
+    // `goto` (ADR 0069).
+    const center = document.createElement("button");
+    center.type = "button";
+    center.className = "command-center";
+    const glass = panelIcon(document, "ui:search");
+    if (glass !== null) {
+      center.append(glass);
+    }
+    const label = document.createElement("span");
+    label.textContent = this.t("menu-item-app-goto");
+    center.append(label);
+    center.addEventListener("click", () => {
+      this.send({ action: "activity_activate", id: "goto" });
+    });
+    bar.append(center);
   }
   // The layout buttons (ADR 0133), on the right edge: one icon per command,
   // with its name and its shortcut on hover. A click comes back as the id;
@@ -541,7 +585,10 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
     item.dataset["hostile"] = String(l.hostile);
     const text = document.createElement("span");
     text.className = "palette-text";
-    text.textContent = l.text;
+    // Cut from the LEFT: these are places, and what tells two of them apart
+    // is their end — three rows of "/tmp/claude-1000/-…" said nothing
+    // (2026-10-08).
+    cutStart(text).textContent = l.text;
     const desc = document.createElement("span");
     desc.className = "palette-desc";
     desc.textContent = l.desc;

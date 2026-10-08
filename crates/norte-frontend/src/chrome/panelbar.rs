@@ -173,6 +173,7 @@ pub fn icon(kind: &str, set: IconSet) -> Option<&'static str> {
         "log" => ("≡", "\u{f03a}"),
         "disk-map" => ("◔", "\u{f200}"),
         "timeline" => ("◷", "\u{f017}"),
+        "terminal" => ("❯", "\u{f120}"),
         _ => return None,
     };
     Some(match set {
@@ -201,8 +202,34 @@ pub fn icon_svg(kind: &str) -> Option<&'static str> {
         "log" => include_str!("../../assets/panel-icons/log.svg"),
         "disk-map" => include_str!("../../assets/panel-icons/disk-map.svg"),
         "timeline" => include_str!("../../assets/panel-icons/timeline.svg"),
+        "terminal" => include_str!("../../assets/panel-icons/terminal.svg"),
+        // The column's foot (`FOOTER`), not panels.
+        "settings" => include_str!("../../assets/panel-icons/settings.svg"),
+        "help" => include_str!("../../assets/panel-icons/help.svg"),
         _ => return None,
     })
+}
+
+/// The buttons pinned to the FOOT of the column, apart from the panels:
+/// settings and help, as VS Code keeps the gear at the bottom of its
+/// activity bar. `(id, command)`; the id comes back with a click and picks
+/// the icon, the label is the command's menu entry.
+pub const FOOTER: [(&str, &str); 2] = [("help", "app.help"), ("settings", "app.settings")];
+
+/// The title bar's centre (ADR 0172): VS Code's command centre, which in
+/// norte is "go anywhere".
+pub const CENTER: (&str, &str) = ("goto", "app.goto");
+
+/// The command of a chrome button's id — the column's foot or the title
+/// bar's centre — if it exists. A closed list: the renderer names a
+/// button, never a command (ADR 0069).
+#[must_use]
+pub fn footer_command(id: &str) -> Option<&'static str> {
+    FOOTER
+        .iter()
+        .chain(std::iter::once(&CENTER))
+        .find(|(i, _)| *i == id)
+        .map(|(_, c)| *c)
 }
 
 /// The panel kind `command` opens and closes — the inverse of each
@@ -486,7 +513,7 @@ mod tests {
     fn every_builtin_button_has_a_shared_svg() {
         let reg = registry();
         for b in buttons(&reg, PanelBarInput::default()) {
-            // `terminal` has no icon in either frontend: both paint its letter.
+            // A kind with no icon paints its letter in both frontends.
             if icon(&b.kind, IconSet::Unicode).is_none() {
                 assert_eq!(icon_svg(&b.kind), None, "{}", b.kind);
                 continue;
@@ -770,6 +797,17 @@ mod tests {
             );
             seen.push(x.letter);
         }
+    }
+
+    /// The renderer names chrome buttons from a CLOSED list: the column's
+    /// foot and the title bar's centre, nothing else (ADR 0069, 0172).
+    #[test]
+    fn a_chrome_button_maps_to_its_command_and_nothing_else_does() {
+        assert_eq!(footer_command("settings"), Some("app.settings"));
+        assert_eq!(footer_command("help"), Some("app.help"));
+        assert_eq!(footer_command("goto"), Some("app.goto"));
+        assert_eq!(footer_command("app.quit"), None);
+        assert_eq!(footer_command(""), None);
     }
 
     /// The command a menu item runs says which panel it opens, so the menu

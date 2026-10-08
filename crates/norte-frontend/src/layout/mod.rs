@@ -136,6 +136,28 @@ pub fn dock_rows(wanted: u16, column: Option<u16>) -> Size {
     })
 }
 
+/// The room a pane gets when dropped on the window's `edge`
+/// ([`Node::dock_outer`]): a listing shares evenly; a panel its usual
+/// width at the sides, and a bottom dock's height ([`dock_rows`]) above or
+/// below.
+///
+/// ```
+/// use norte_frontend::layout::{Edge, Size, outer_dock_size};
+/// assert_eq!(outer_dock_size("tree", Edge::Left, Some(24)), Size::Fixed(24));
+/// assert_eq!(outer_dock_size("log", Edge::Bottom, Some(24)), Size::Fixed(8));
+/// assert_eq!(outer_dock_size("browser", Edge::Right, None), Size::Weight(1));
+/// ```
+#[must_use]
+pub fn outer_dock_size(kind: &str, edge: Edge, column: Option<u16>) -> Size {
+    match (kind, edge) {
+        ("browser", _) => Size::Weight(1),
+        (_, Edge::Top | Edge::Bottom) => dock_rows(12, column),
+        ("places", _) => Size::Fixed(16),
+        ("tree", _) => Size::Fixed(24),
+        _ => Size::Fixed(30),
+    }
+}
+
 /// Validates a tree before using it.
 ///
 /// Only what is INCONSISTENT: what is clampable (an active tab out of

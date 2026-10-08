@@ -5,6 +5,10 @@
     "key": 9,
     "slot_id": 1
   },
+  "activity_activate": {
+    "action": "activity_activate",
+    "id": "settings"
+  },
   "agent_select_row": {
     "action": "agent_select_row",
     "generation": 4,
@@ -63,6 +67,11 @@
   "directory_picked": {
     "action": "directory_picked",
     "path": "/home/oscar/destino"
+  },
+  "dock_slot": {
+    "action": "dock_slot",
+    "slot_id": 3,
+    "zone": "right"
   },
   "extension_govern": {
     "action": "extension_govern",

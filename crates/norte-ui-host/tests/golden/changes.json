@@ -794,6 +794,13 @@
           "state": "behind"
         }
       ],
+      "footer": [
+        {
+          "chord": "—",
+          "id": "settings",
+          "label": "Ajustes"
+        }
+      ],
       "names": true,
       "vertical": true
     }

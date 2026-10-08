@@ -236,6 +236,8 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::TabAction { .. } => "tab_action",
         UiAction::ResizeSlot { .. } => "resize_slot",
         UiAction::MoveSlot { .. } => "move_slot",
+        UiAction::DockSlot { .. } => "dock_slot",
+        UiAction::ActivityActivate { .. } => "activity_activate",
         UiAction::ProfileActivateRow { .. } => "profile_activate_row",
         UiAction::Resync => "resync",
         UiAction::RequestQuit => "request_quit",
@@ -614,6 +616,19 @@ fn chrome_actions() -> Vec<(&'static str, UiAction)> {
                 slot_id: 1,
                 target: 2,
                 zone: norte_frontend::layout::DropZone::Center,
+            },
+        ),
+        (
+            "activity_activate",
+            UiAction::ActivityActivate {
+                id: "settings".to_owned(),
+            },
+        ),
+        (
+            "dock_slot",
+            UiAction::DockSlot {
+                slot_id: 3,
+                zone: norte_frontend::layout::DropZone::Right,
             },
         ),
     ]
@@ -1594,6 +1609,12 @@ fn reference_pane_bar() -> norte_ui_host::dto::PanelBarView {
                 count: 0,
             },
         ],
+        // Bridge 101: the column's foot.
+        footer: vec![norte_ui_host::dto::FooterButtonView {
+            id: "settings".to_owned(),
+            label: "Ajustes".to_owned(),
+            chord: "—".to_owned(),
+        }],
     }
 }
 
@@ -3001,7 +3022,8 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // 97 (#403): the tree's window, `first`/`total` and its range action.
     // 99: `LayoutPickerView.legend`, what each preview letter is, and
     // `PlacesSlotView.favorites_hint`.
-    const SHAPE: u64 = 17_974_543_604_403_547_132;
+    // 101: `PanelBarView.footer`, the activity column's foot.
+    const SHAPE: u64 = 11_559_211_860_079_665_532;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

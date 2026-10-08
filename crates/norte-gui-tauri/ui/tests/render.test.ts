@@ -1365,7 +1365,8 @@ describe("breadcrumbs, the space indicator and the toast", () => {
       }),
     );
     const crumbs = root.querySelectorAll(".title-path .crumb");
-    expect([...crumbs].map((m) => m.textContent)).toEqual(["⟨file⟩", "home", "oscar"]);
+    // The local root reads `/` (2026-10-08); another scheme keeps its name.
+    expect([...crumbs].map((m) => m.textContent)).toEqual(["/", "home", "oscar"]);
     expect((crumbs[2] as HTMLButtonElement).disabled).toBe(true);
     // Only the root carries the mark that dims it (spec 2026-09-21, phase D).
     expect([...crumbs].map((m) => (m as HTMLElement).dataset["root"])).toEqual([
@@ -1402,7 +1403,7 @@ describe("breadcrumbs, the space indicator and the toast", () => {
     expect(box.classList.contains("cut-start")).toBe(true);
     const inner = box.querySelector(":scope > .cut-start-text") as HTMLElement;
     expect([...inner.querySelectorAll(".crumb")].map((m) => m.textContent)).toEqual([
-      "⟨file⟩",
+      "/",
       "home",
       "oscar",
     ]);
@@ -2614,6 +2615,35 @@ describe("moving a panel by dragging it (ADR 0138)", () => {
     expect(document.documentElement.dataset["dragging"]).toBeUndefined();
   });
 
+  it("a title nudged along the top edge is not 'the whole top'", () => {
+    const { screen, sent } = mount();
+    screen.paint(twoListings());
+    sent.length = 0;
+    const title = document.querySelector('[data-slot-id="1"] .slot-title') as HTMLElement;
+    title.dispatchEvent(pointer("pointerdown", 100, 3));
+    window.dispatchEvent(pointer("pointermove", 300, 2));
+    window.dispatchEvent(pointer("pointerup", 300, 2));
+    expect(sent.filter((a) => a.action === "dock_slot")).toEqual([]);
+  });
+
+  it("dropping on the window's very edge sends dock_slot: the whole side", () => {
+    const { screen, sent } = mount();
+    screen.paint(twoListings());
+    sent.length = 0;
+    const title = document.querySelector('[data-slot-id="1"] .slot-title') as HTMLElement;
+    title.dispatchEvent(pointer("pointerdown", 10, 5));
+    window.dispatchEvent(pointer("pointermove", 1195, 200));
+    const veil = document.querySelector(".drop-target") as HTMLElement;
+    expect(veil.dataset["zone"]).toBe("right");
+    expect(veil.dataset["outer"]).toBe("true");
+    // Full height of the body, not half of the pane under the pointer.
+    expect(veil.style.getPropertyValue("height")).toBe("400px");
+    window.dispatchEvent(pointer("pointerup", 1195, 200));
+    expect(
+      sent.filter((a) => a.action === "dock_slot" || a.action === "move_slot"),
+    ).toEqual([{ action: "dock_slot", slot_id: 1, zone: "right" }]);
+  });
+
   it("a click, dropping on itself or on the chrome, and Esc move nothing", () => {
     const { screen, sent } = mount();
     screen.paint(twoListings());
@@ -2738,6 +2768,17 @@ describe("the menu bar", () => {
       expect(sent).toEqual([]);
     });
 
+    it("carries the command centre, which names `goto` to the host (ADR 0172)", () => {
+      const { screen, sent } = mount();
+      screen.paint(withMenu(null));
+      const center = document.querySelector(
+        ".menubar .command-center",
+      ) as HTMLButtonElement;
+      expect(center.textContent).toBe("Ir a…");
+      center.click();
+      expect(sent).toEqual([{ action: "activity_activate", id: "goto" }]);
+    });
+
     it("the free space drags and a double click maximizes; a title doesn't", () => {
       const requests: WindowVerb[] = [];
       const { screen } = mount({ windowControl: (v) => requests.push(v) });
@@ -2814,6 +2855,26 @@ describe("the menu bar", () => {
 
     buttons[1]?.click();
     expect(sent).toEqual([{ action: "panel_bar_activate", button: 1 }]);
+  });
+
+  // 2026-10-08: settings and help at the column's foot, as VS Code's gear.
+  it("the column's foot carries settings and sends its id", () => {
+    const { screen, sent } = mount();
+    const v = view({});
+    v.panel_bar = {
+      ...v.panel_bar,
+      vertical: true,
+      footer: [{ id: "settings", label: "Ajustes", chord: "—" }],
+    };
+    screen.paint(v);
+    const gear = document.querySelector(
+      '.panelbar-foot .panelbar-button[data-kind="settings"]',
+    ) as HTMLButtonElement;
+    expect(gear.title).toBe("Ajustes");
+    expect(gear.querySelector("svg")).not.toBeNull();
+    sent.length = 0;
+    gear.click();
+    expect(sent).toEqual([{ action: "activity_activate", id: "settings" }]);
   });
 
   // W8 (2026-10-07): a panel behind a tab looked closed.
@@ -2956,6 +3017,14 @@ describe("the menu bar", () => {
     expect(sent).toEqual([{ action: "tab_action", slot_id: 1, verb: "new" }]);
   });
 
+  it("a remote active listing shows VS Code's remote indicator on the left", () => {
+    const { screen } = mount();
+    screen.paint(view({ path_segments: ["⟨sftp⟩ana@host", "home"] }));
+    const remote = document.querySelector(".statusbar .status-remote") as HTMLElement;
+    expect(remote.textContent).toBe("⟨sftp⟩ana@host");
+    expect(remote.querySelector("svg")).not.toBeNull();
+  });
+
   it("the status bar's right half paints its items and they're clickable", () => {
     const { screen, sent } = mount();
     const v = view({});
@@ -2967,7 +3036,11 @@ describe("the menu bar", () => {
     const right = document.querySelector(".statusbar .status-items") as HTMLElement;
     expect(right).not.toBeNull();
     const els = [...right.querySelectorAll(".status-item")] as HTMLElement[];
-    expect(els.map((e) => e.textContent)).toEqual(["3/120", "!2"]);
+    // Local listing: no remote indicator on the left.
+    expect(document.querySelector(".statusbar .status-remote")).toBeNull();
+    // Notices: the bell and the bare count (2026-10-08); `!2` is the TUI's.
+    expect(els.map((e) => e.textContent)).toEqual(["3/120", "2"]);
+    expect(els[1]?.querySelector("svg.status-icon")).not.toBeNull();
     // What isn't clickable isn't a button: a reader doesn't announce it as
     // one.
     expect(els[0]?.tagName).toBe("SPAN");

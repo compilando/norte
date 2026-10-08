@@ -20,7 +20,7 @@ expression: render_80x24(&app)
 "   │                                                                           │"
 " ◷ │                                                                           │"
 "   │se van a borrar 2 árboles del destino y NO se van a poder restaurar. Un    │"
-" T │árbol se vuelve a comprobar en el directorio, no por dentro: algo añadido  │"
+" ❯ │árbol se vuelve a comprobar en el directorio, no por dentro: algo añadido  │"
 "   │más abajo desde que aprobaste no detendrá el borrado. ¿Seguir?             │"
 "   │y confirmar · cualquier otra tecla cancela                                 │"
 "   │                                                                           │"

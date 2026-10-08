@@ -9,6 +9,19 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Drop a panel on the window's edge to give it the whole side** (ADR
+  0172): full height at the left or right, full width at the bottom. In
+  the window, drag a panel's title to within a finger of the edge; in the
+  terminal, to the outermost cell. Before, a panel always landed next to
+  or under another one.
+- **The window looks more like VS Code** (ADR 0172): its own title bar
+  with the menus and a "Go to…" box in the middle; settings and help at
+  the bottom of the activity bar; rounded panes with a small gap between
+  them; a × on a panel's header; thin scrollbars; folder and file icons
+  in the listing; notifications as cards; a bell for unread notices; a
+  remote indicator when the active pane is not local.
+  **To keep the desktop's own title bar, set `[ui] titlebar = "native"`.**
+
 - **Big icons in the terminal's panel column** (ADR 0169). On a terminal
   that paints images — kitty's graphics protocol (kitty, Ghostty,
   WezTerm, Konsole) or sixel (foot, xterm `-ti vt340`, mlterm, tmux
@@ -46,6 +59,9 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Window:** a tree or terminal panel restored from the last session no
+  longer comes up empty ("no shell in this panel") until toggled twice.
+- **Window:** the terminal panel has its own icon instead of a "T".
 - A long path in a listing's title is cut from the left, keeping the
   folder you are in.
 - "1 files" in the pane footer; key bar cells running together at 80

@@ -20,7 +20,7 @@ expression: render_80x24(&app)
 "   │                                                                           │"
 " ◷ │                                                                           │"
 "   │                                                                           │"
-" T │                                                                           │"
+" ❯ │                                                                           │"
 "   │                                                                           │"
 "   │                                                                           │"
 "   │↑↓ mover · a aprobar · Esc cerrar                                          │"

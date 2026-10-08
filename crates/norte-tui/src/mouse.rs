@@ -318,7 +318,8 @@ struct MoveDrag {
     /// Past the threshold: no longer a click.
     active: bool,
     /// Where it would land if released now, and the part that gets
-    /// highlighted.
+    /// highlighted. The dragged slot ITSELF as the target means the
+    /// screen's edge: the whole side (`Node::dock_outer`).
     dest: Option<(
         norte_frontend::layout::SlotId,
         norte_frontend::layout::DropZone,
@@ -918,6 +919,58 @@ fn es_chrome(app: &App, slot: norte_frontend::layout::SlotId) -> bool {
         .is_some_and(|k| matches!(k.as_str(), "status" | "tasks"))
 }
 
+/// On the body's outermost cell — the box around every non-chrome panel —
+/// the side under the pointer, with a strip a quarter of the body thick to
+/// highlight. The target is the dragged slot itself: the screen's edge.
+fn outer_dest(
+    app: &App,
+    dragged: norte_frontend::layout::SlotId,
+    col: u16,
+    row: u16,
+    from_row: u16,
+) -> Option<(
+    norte_frontend::layout::SlotId,
+    norte_frontend::layout::DropZone,
+    norte_frontend::layout::Rect,
+)> {
+    use norte_frontend::layout::{DropZone, Rect};
+    let mut body: Option<(u16, u16, u16, u16)> = None;
+    for s in app.mouse.slots.iter().filter(|s| !es_chrome(app, s.slot)) {
+        let (r, b) = (s.x + s.width, s.y + s.height);
+        body = Some(body.map_or((s.x, s.y, r, b), |(x0, y0, x1, y1)| {
+            (x0.min(s.x), y0.min(s.y), x1.max(r), y1.max(b))
+        }));
+    }
+    let (x0, y0, x1, y1) = body?;
+    if col < x0 || col >= x1 || row < y0 || row >= y1 {
+        return None;
+    }
+    let (w, h) = (x1 - x0, y1 - y0);
+    let (tw, th) = ((w / 4).max(1), (h / 4).max(1));
+    // The sides only when the pointer is ON their column. And never the top
+    // from the row the drag started on: that row is the top panes' titles,
+    // and a title nudged sideways restacked its pane across the whole
+    // width (review of 2026-10-08).
+    let zone = if col == x0 {
+        DropZone::Left
+    } else if col + 1 == x1 {
+        DropZone::Right
+    } else if row + 1 == y1 {
+        DropZone::Bottom
+    } else if row == y0 && from_row != y0 {
+        DropZone::Top
+    } else {
+        return None;
+    };
+    let strip = match zone {
+        DropZone::Left => Rect::new(x0, y0, tw, h),
+        DropZone::Right => Rect::new(x1 - tw, y0, tw, h),
+        DropZone::Top => Rect::new(x0, y0, w, th),
+        _ => Rect::new(x0, y1 - th, w, th),
+    };
+    Some((dragged, zone, strip))
+}
+
 /// The gesture to MOVE a panel (ADR 0138): grabbed by its title row, dragged
 /// over another and released on one of its sides or in the center, like in
 /// the window. `None` = the event does not belong to the gesture.
@@ -958,27 +1011,28 @@ fn move_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
                 app.mouse.drag.cancel();
                 app.mouse.last_click = None;
             }
-            m.dest = app
-                .mouse
-                .slots
-                .iter()
-                .find(|s| {
-                    ev.column >= s.x
-                        && ev.column < s.x + s.width
-                        && ev.row >= s.y
-                        && ev.row < s.y + s.height
-                })
-                .filter(|s| s.slot != m.slot && !es_chrome(app, s.slot))
-                .map(|s| {
-                    let r = norte_frontend::layout::Rect {
-                        x: s.x,
-                        y: s.y,
-                        width: s.width,
-                        height: s.height,
-                    };
-                    let zone = norte_frontend::layout::DropZone::at(ev.column, ev.row, r);
-                    (s.slot, zone, zone.part_of(r))
-                });
+            m.dest = outer_dest(app, m.slot, ev.column, ev.row, m.y0).or_else(|| {
+                app.mouse
+                    .slots
+                    .iter()
+                    .find(|s| {
+                        ev.column >= s.x
+                            && ev.column < s.x + s.width
+                            && ev.row >= s.y
+                            && ev.row < s.y + s.height
+                    })
+                    .filter(|s| s.slot != m.slot && !es_chrome(app, s.slot))
+                    .map(|s| {
+                        let r = norte_frontend::layout::Rect {
+                            x: s.x,
+                            y: s.y,
+                            width: s.width,
+                            height: s.height,
+                        };
+                        let zone = norte_frontend::layout::DropZone::at(ev.column, ev.row, r);
+                        (s.slot, zone, zone.part_of(r))
+                    })
+            });
             app.mouse.moving = Some(m);
             Some(After::Nothing)
         }
@@ -987,8 +1041,10 @@ fn move_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
             if !m.active {
                 return None;
             }
-            if let Some((target, zone, _)) = m.dest {
-                app.layout_move(m.slot, target, zone);
+            match m.dest {
+                Some((target, zone, _)) if target == m.slot => app.layout_dock_outer(m.slot, zone),
+                Some((target, zone, _)) => app.layout_move(m.slot, target, zone),
+                None => {}
             }
             Some(After::Nothing)
         }

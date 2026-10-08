@@ -12,7 +12,7 @@ use super::*;
 
 impl State {
     /// A bottom dock's opening size against the last viewport (ADR 0171).
-    fn bottom_dock(&self, rows: u16) -> norte_frontend::layout::Size {
+    pub(super) fn bottom_dock(&self, rows: u16) -> norte_frontend::layout::Size {
         let h = self.viewport.1;
         norte_frontend::layout::dock_rows(rows, (h > 0).then_some(h))
     }
@@ -495,8 +495,9 @@ impl State {
     }
 
     /// What a panel opened by hand starts: the tree's anchoring, the log's
-    /// polling.
-    fn after_opening(
+    /// polling. Also run at startup for the panels a restored session
+    /// brings: placed but never started, the tree came up blank.
+    pub(super) fn after_opening(
         &mut self,
         kind: &str,
         backend: &Arc<dyn HostBackend>,

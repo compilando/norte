@@ -43,10 +43,12 @@ en el que tiene novedades; `panel_bar_style = "nerd"` usa los de Nerd Fonts y
 Ghostty, WezTerm, foot, xterm con sixel…) la columna muestra los iconos de la ventana a doble
 tamaño; `images = "off"` deja los pequeños.
 
-En la ventana, `titlebar = "custom"` quita la barra de título del escritorio
-y la de menús hace su papel, como en VS Code: se arrastra para mover la
-ventana, un doble clic la maximiza, y a la derecha van minimizar, maximizar
-y cerrar. De serie es `native`. Se aplica al volver a abrir la ventana.
+En la ventana, `titlebar = "custom"` —lo de serie— quita la barra de título
+del escritorio y la de menús hace su papel, como en VS Code: se arrastra
+para mover la ventana, un doble clic la maximiza, a la derecha van
+minimizar, maximizar y cerrar, y en el centro una caja «Ir a…». `native`
+conserva la del escritorio, para un gestor de ventanas que quiera la suya.
+Se aplica al volver a abrir la ventana.
 
 El pie del panel
 ----------------
