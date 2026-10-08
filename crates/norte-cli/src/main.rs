@@ -68,6 +68,9 @@ fn exec_frontend(bin: &str, args: &[std::ffi::OsString]) -> anyhow::Result<ExitC
     }
     #[cfg(not(unix))]
     {
+        // Imported HERE: at the top it is unused on Unix, and a cleanup that
+        // removed it there broke only the Windows build (alpha.9's runner).
+        use anyhow::Context as _;
         let status = cmd.status().with_context(|| {
             format!(
                 "could not run `{bin}` ({}) — install it with `cargo install --path crates/{bin}`",
