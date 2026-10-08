@@ -3022,7 +3022,8 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // 97 (#403): the tree's window, `first`/`total` and its range action.
     // 99: `LayoutPickerView.legend`, what each preview letter is, and
     // `PlacesSlotView.favorites_hint`.
-    const SHAPE: u64 = 17_974_543_604_403_547_132;
+    // 101: `PanelBarView.footer`, the activity column's foot.
+    const SHAPE: u64 = 11_559_211_860_079_665_532;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

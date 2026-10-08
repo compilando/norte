@@ -1278,6 +1278,16 @@ impl UiHost {
             state.seed_places();
             state.request_places(&backend, &tx2);
         }
+        // The other panels a restored layout brings start as if opened by
+        // hand: the tree anchors, the log polls, the terminal gets its
+        // shell. Placed and never started, they came up blank — the tree
+        // empty, the terminal saying "no shell" (2026-10-08).
+        for kind in ["tree", logpanel::KIND] {
+            if state.slot_of_kind(kind).is_some() {
+                state.after_opening(kind, &backend, &tx2);
+            }
+        }
+        let _ = state.start_si_missing(&tx2);
         // And which PANES the plugins contribute (phase 3). Without asking
         // whether there is a slot for one: the saved layout can bring one
         // and that slot does not get placed until its kind is declared. The

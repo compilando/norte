@@ -597,3 +597,20 @@ async fn closing_a_side_panel_does_not_offer_the_split() {
         "no split hint for a side panel: {message:?}"
     );
 }
+
+/// A tree a restored layout brings starts as if opened by hand: it came up
+/// BLANK, placed and never anchored (2026-10-08).
+#[tokio::test]
+async fn a_restored_tree_starts_with_its_branches() {
+    let (h, snap) = host_beside("tree").await;
+    if tree_of(&snap).rows.is_empty() {
+        let mut sub = h.subscribe();
+        // Bounded: unstarted, nothing ever comes and the wait never ends.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tree_with_branches(&mut sub, 1),
+        )
+        .await
+        .expect("the restored tree never brought its branches");
+    }
+}

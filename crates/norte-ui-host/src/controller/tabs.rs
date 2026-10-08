@@ -495,8 +495,9 @@ impl State {
     }
 
     /// What a panel opened by hand starts: the tree's anchoring, the log's
-    /// polling.
-    fn after_opening(
+    /// polling. Also run at startup for the panels a restored session
+    /// brings: placed but never started, the tree came up blank.
+    pub(super) fn after_opening(
         &mut self,
         kind: &str,
         backend: &Arc<dyn HostBackend>,
