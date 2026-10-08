@@ -2341,6 +2341,14 @@ describe("a plugin's badge on a row", () => {
     const block = rows[1]?.querySelector(".name-block");
     const children = [...(block?.children ?? [])].map((c) => c.className);
     expect(children).toEqual(["cell-icon", "cell-name", "cell-badge"]);
+    // A folder with the plugin's icon carries no `/` on top of it; one
+    // without any icon keeps it (landing shots, 2026-10-08).
+    expect(rows[0]?.classList.contains("plugin-icon")).toBe(true);
+    expect(rows[2]?.classList.contains("plugin-icon")).toBe(false);
+    const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+    expect(css).toMatch(
+      /\.kind-dir:not\(\.own-icon\):not\(\.plugin-icon\) \.cell-name::before/,
+    );
   });
 
   it("the HOST opens the column, not the visible rows", () => {

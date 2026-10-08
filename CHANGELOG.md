@@ -7,6 +7,14 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The window's first listings get their plugin icons at startup**:
+  until the first change of folder they stayed bare, so two panes side by
+  side painted differently — one with the window's own outline icons, the
+  other with the icon plugin's. The plugin's icon wins where it has one,
+  and a folder with an icon no longer carries a `/` before its name.
+
 ### Added
 
 - **A timeline row shows its details**: Space or a click opens the full

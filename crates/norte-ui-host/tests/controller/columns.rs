@@ -290,6 +290,7 @@ async fn a_plugin_columns_value_reaches_the_row_named_by_its_manifest() {
 #[tokio::test]
 async fn plugins_are_only_asked_about_the_window() {
     const TOTAL: usize = 2000;
+    const DEFAULT_WINDOW: usize = 64;
     let backend = large_tree_with_plugins(TOTAL);
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
@@ -327,11 +328,14 @@ async fn plugins_are_only_asked_about_the_window() {
         let _ = next_snapshot(&mut sub).await;
     }
 
+    // The window: the first screen's DEFAULT one (64 rows, the same the
+    // probes use) before the renderer declares its own, then the declared
+    // 20. Never the directory.
     let batches = backend.decorated.lock().expect("mutex").clone();
     assert!(!batches.is_empty(), "plugins are asked");
     for batch in &batches {
         assert!(
-            batch.len() <= 20,
+            batch.len() <= DEFAULT_WINDOW,
             "a batch of {} paths over {TOTAL} entries: more than the window \
              is being requested",
             batch.len()
@@ -339,7 +343,7 @@ async fn plugins_are_only_asked_about_the_window() {
     }
     let requested: usize = batches.iter().map(Vec::len).sum();
     assert!(
-        requested <= 40,
+        requested <= DEFAULT_WINDOW + 20,
         "in total {requested} of {TOTAL} were requested: the window is 20"
     );
 
@@ -350,11 +354,40 @@ async fn plugins_are_only_asked_about_the_window() {
         assert_eq!(plugin, "acme.git");
         assert_eq!(column, "status");
         assert!(
-            paths.len() <= 20,
+            paths.len() <= DEFAULT_WINDOW,
             "the column is requested for {} paths, not for the window",
             paths.len()
         );
     }
+}
+
+/// The STARTUP listing is decorated too, with no scroll first (landing
+/// shots, 2026-10-08): the first listing lands inside `start`, which probed
+/// it and never asked the plugins, and the renderer declares its window
+/// only on scroll — so the panes stayed bare until the first `cd`, and two
+/// side by side painted differently.
+#[tokio::test]
+async fn the_startup_listing_gets_its_icons_without_a_scroll() {
+    let mut f = Fake::default();
+    f.tree.insert(
+        "mem:///casa".to_owned(),
+        vec![(b"src".to_vec(), true), (b"a.rs".to_vec(), false)],
+    );
+    f.icons
+        .insert("mem:///casa/src".to_owned(), "📁".to_owned());
+    let backend = Arc::new(f);
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+    let mut found = false;
+    for _ in 0..30 {
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = next_snapshot(&mut sub).await;
+        if listing(&snap).rows.iter().any(|r| r.icon == "📁") {
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "the first listing's icons never arrived");
 }
 
 /// ADR 0105: the icon reaches the row in its own field, the badge in its own

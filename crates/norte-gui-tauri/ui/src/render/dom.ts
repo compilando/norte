@@ -397,6 +397,10 @@ export function updateRow(
     }
     icon.dataset["hostile"] = String(row.icon_hostile);
     icon.textContent = row.icon;
+    if (row.icon !== "") {
+      // The plugin's folder already says "folder": no `/` on top of it.
+      el.classList.add("plugin-icon");
+    }
     if (row.icon_hostile) {
       icon.append(badge("△"));
     }

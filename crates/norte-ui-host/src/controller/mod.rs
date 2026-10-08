@@ -1317,6 +1317,11 @@ impl UiHost {
         let visible: Vec<u32> = state.slots.keys().copied().collect();
         for slot in visible {
             state.probe(slot, &backend, &tx2);
+            // And decorated: this listing landed here and not through
+            // `land_listing`, and the renderer declares its window only on
+            // scroll — the first screen stayed without plugin icons until a
+            // `cd`, two panes side by side painting differently (2026-10-08).
+            state.adornar(slot, &backend, &tx2);
         }
         let first_one = state.snapshot();
 
