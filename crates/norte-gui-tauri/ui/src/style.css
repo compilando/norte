@@ -1346,7 +1346,10 @@ body {
   text-overflow: ellipsis;
 }
 
-.kind-dir:not(.own-icon) .cell-name::before {
+/* A folder with no icon at all keeps the `/`; one with the window's own
+   icon or a plugin's does not (landing shots, 2026-10-08: "📁 /src"
+   beside "🗀 src"). */
+.kind-dir:not(.own-icon):not(.plugin-icon) .cell-name::before {
   content: "/";
   opacity: 0.6;
 }

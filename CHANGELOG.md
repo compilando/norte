@@ -31,6 +31,11 @@ independently through `PROTOCOL_VERSION`.
   out, close to what Nautilus hides. A disk under `/srv`, `/opt`,
   `/var/mnt` or your home still shows, and "show everything" lists them
   all (ADR 0174).
+- **The window's first listings get their plugin icons at startup**:
+  until the first change of folder they stayed bare, so two panes side by
+  side painted differently — one with the window's own outline icons, the
+  other with the icon plugin's. The plugin's icon wins where it has one,
+  and a folder with an icon no longer carries a `/` before its name.
 
 ### Added
 
