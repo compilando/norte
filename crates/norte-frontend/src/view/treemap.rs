@@ -437,7 +437,14 @@ pub struct Tile {
     pub percent: u8,
     /// What class of file it is.
     pub class: ChildClass,
+    /// The tone of its class's colour, `0..SHADES` (ADR 0175): two
+    /// rectangles of one class that touch get different ones whenever
+    /// three tones allow it, so a home of folders is not one blue block.
+    pub shade: u8,
 }
+
+/// How many tones of one class colour the map uses ([`Tile::shade`]).
+pub const SHADES: u8 = 3;
 
 /// The map's rectangles as [`Tile`]s, largest first; a child of zero bytes
 /// gets none. The same layout as [`squarify`], so a click on a tile and a
@@ -484,11 +491,37 @@ pub fn tiles(children: &[DirUsageChild], cols: u16, rows: u16) -> Vec<Tile> {
                 },
                 percent,
                 class: class_of(c),
+                shade: 0,
             }
         })
         .collect();
     out.sort_by(|a, b| (u32::from(b.w) * u32::from(b.h)).cmp(&(u32::from(a.w) * u32::from(a.h))));
+    shade(&mut out);
     out
+}
+
+/// Gives each tile, largest first, the lowest tone no tile of its class
+/// that TOUCHES it already has. Greedy: with three tones a rectangle's
+/// same-class neighbours rarely use them all, and when they do it takes
+/// the base tone rather than failing.
+fn shade(tiles: &mut [Tile]) {
+    let touch = |a: &Tile, b: &Tile| {
+        let (ax1, ay1) = (a.x.saturating_add(a.w), a.y.saturating_add(a.h));
+        let (bx1, by1) = (b.x.saturating_add(b.w), b.y.saturating_add(b.h));
+        let rows = a.y < by1 && b.y < ay1;
+        let cols = a.x < bx1 && b.x < ax1;
+        ((ax1 == b.x || bx1 == a.x) && rows) || ((ay1 == b.y || by1 == a.y) && cols)
+    };
+    for i in 0..tiles.len() {
+        let (done, rest) = tiles.split_at_mut(i);
+        let Some(t) = rest.first_mut() else { break };
+        let taken: Vec<u8> = done
+            .iter()
+            .filter(|o| o.class == t.class && touch(o, t))
+            .map(|o| o.shade)
+            .collect();
+        t.shade = (0..SHADES).find(|s| !taken.contains(s)).unwrap_or(0);
+    }
 }
 
 /// A child's label: its masked name and what it takes up.
@@ -789,6 +822,42 @@ mod tests {
         cache.put(vp("mem:///a"), report(99));
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.get(&vp("mem:///a")).map(|r| r.total_bytes), Some(99));
+    }
+
+    /// A home is all folders (landing shots, 2026-10-08): one colour for
+    /// every rectangle and nothing told them apart. Two rectangles of one
+    /// class that TOUCH never share a shade, and the shades vary.
+    #[test]
+    fn touching_rectangles_of_one_class_get_different_shades() {
+        let kids: Vec<DirUsageChild> = [
+            ("Photos", 900),
+            ("Music", 700),
+            ("projects", 500),
+            ("Documents", 400),
+            ("Downloads", 300),
+            ("Videos", 200),
+            ("Desktop", 100),
+        ]
+        .iter()
+        .map(|(n, b)| child(n, *b, EntryKind::Dir))
+        .collect();
+        let tiles = tiles(&kids, 80, 24);
+        let touch = |a: &Tile, b: &Tile| {
+            let (ax1, ay1, bx1, by1) = (a.x + a.w, a.y + a.h, b.x + b.w, b.y + b.h);
+            let rows = a.y < by1 && b.y < ay1;
+            let cols = a.x < bx1 && b.x < ax1;
+            ((ax1 == b.x || bx1 == a.x) && rows) || ((ay1 == b.y || by1 == a.y) && cols)
+        };
+        for (i, a) in tiles.iter().enumerate() {
+            for b in &tiles[i + 1..] {
+                if touch(a, b) {
+                    assert_ne!(a.shade, b.shade, "{} and {} touch", a.name, b.name);
+                }
+            }
+        }
+        let shades: std::collections::BTreeSet<u8> = tiles.iter().map(|t| t.shade).collect();
+        assert!(shades.len() >= 2, "{shades:?}");
+        assert!(tiles.iter().all(|t| t.shade < SHADES), "{tiles:?}");
     }
 
     fn child(name: &str, bytes: u64, kind: EntryKind) -> DirUsageChild {

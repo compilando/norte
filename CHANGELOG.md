@@ -22,15 +22,6 @@ independently through `PROTOCOL_VERSION`.
   "Next", "Zoom+" instead of a command's long name cut mid-phrase
   ("Close the", "Fit the", "Go on to"). Every key of the seven presets
   reads whole at 80 and 132 columns, in English and Spanish.
-### Changed
-
-- **Places no longer lists the system's own mounts as drives** on Linux:
-  a filesystem mounted on or under `/usr`, `/etc`, `/boot`, `/tmp`,
-  `/var/lib`, `/var/log`, `/run` (except `/run/media`) and the like — a
-  container's or sandbox's binds, Docker's, a btrfs subvolume — is left
-  out, close to what Nautilus hides. A disk under `/srv`, `/opt`,
-  `/var/mnt` or your home still shows, and "show everything" lists them
-  all (ADR 0174).
 - **The window's first listings get their plugin icons at startup**:
   until the first change of folder they stayed bare, so two panes side by
   side painted differently — one with the window's own outline icons, the
@@ -52,6 +43,16 @@ independently through `PROTOCOL_VERSION`.
   The window put the timeline, the terminal and the disk map in a narrow
   column on the right. A panel you moved and closed now reopens where
   you had it, across sessions.
+- **Places no longer lists the system's own mounts as drives** on Linux:
+  a filesystem mounted on or under `/usr`, `/etc`, `/boot`, `/tmp`,
+  `/var/lib`, `/var/log`, `/run` (except `/run/media`) and the like — a
+  container's or sandbox's binds, Docker's, a btrfs subvolume — is left
+  out, close to what Nautilus hides. A disk under `/srv`, `/opt`,
+  `/var/mnt` or your home still shows, and "show everything" lists them
+  all (ADR 0174).
+- **The disk map tells neighbouring folders apart**: rectangles of one
+  class that touch take different tones of its colour, in the terminal
+  and in the window. A home, all folders, was one blue block (ADR 0175).
 
 ## [0.3.0-alpha.10] - 2026-10-08
 

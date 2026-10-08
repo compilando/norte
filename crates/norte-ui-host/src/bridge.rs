@@ -593,7 +593,9 @@ use serde::{Deserialize, Serialize};
 ///   counted so far.
 /// - **104**: `TimelineRowView.seq` and `timeline_show_row { slot_id, seq }`: a
 ///   click on a timeline row opens its details.
-pub const BRIDGE_VERSION: u32 = 104;
+/// - **105**: `DiskTileView.shade`: the tone of the class colour, so
+///   touching rectangles of one class (a home of folders) are told apart.
+pub const BRIDGE_VERSION: u32 = 105;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

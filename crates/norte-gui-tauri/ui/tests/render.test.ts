@@ -5130,6 +5130,7 @@ describe("the disk map", () => {
         size: "750M",
         percent: 75,
         class: "media",
+        shade: 0,
       },
       {
         col: 30,
@@ -5141,6 +5142,7 @@ describe("the disk map", () => {
         size: "250M",
         percent: 25,
         class: "directory",
+        shade: 1,
       },
     ];
     screen.paint(v);
@@ -5148,6 +5150,10 @@ describe("the disk map", () => {
       ...root.querySelectorAll('[data-slot-id="7"] .treemap-tile'),
     ] as HTMLElement[];
     expect(tiles).toHaveLength(2);
+    // The tone travels (ADR 0175), and the sheet paints it.
+    expect(tiles[1]?.dataset["shade"]).toBe("1");
+    const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+    expect(css).toMatch(/\.treemap-tile\[data-shade="1"\]\s*\{[^}]*color-mix/);
     expect(tiles[0]?.style.width).toBe("75%");
     expect(tiles[1]?.style.left).toBe("75%");
     expect(tiles[0]?.textContent).toContain("video.mkv");

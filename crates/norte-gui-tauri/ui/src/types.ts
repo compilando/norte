@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 104;
+export const BRIDGE_VERSION = 105;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -410,6 +410,9 @@ export interface DiskTileView {
   percent: number;
   /** directory | code | archive | image | media | document | other */
   class: string;
+  /** The tone of that colour, 0..3 (bridge 105): touching tiles of one
+   *  class get different ones where three allow it. */
+  shade: number;
 }
 
 /** A timeline row (bridge 78), already paintable. */

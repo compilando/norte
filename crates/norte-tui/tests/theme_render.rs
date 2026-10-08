@@ -478,6 +478,53 @@ fn a_landed_disk_map_paints_its_children() {
     );
 }
 
+/// A home is all folders (landing shots, 2026-10-08): every rectangle the
+/// same blue and nothing told them apart. Now touching folders take
+/// different tones of it (ADR 0175).
+#[test]
+fn a_map_of_folders_paints_more_than_one_tone() {
+    use norte_proto::methods::{DirUsageChild, FsDirUsageReportResult};
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.theme = TuiTheme::new(
+        Theme::preset("vscode-dark").unwrap().unwrap(),
+        ColorDepth::Truecolor,
+    );
+    app.open_disk_map();
+    let slot = app.disk_map_slot().expect("open");
+    let dir = app.focused().dir().clone();
+    let children: Vec<DirUsageChild> = [900u64, 700, 500, 400, 300, 200]
+        .iter()
+        .enumerate()
+        .map(|(i, b)| DirUsageChild {
+            name: Segment::new(format!("d{i}").into_bytes()).unwrap(),
+            kind: EntryKind::Dir,
+            bytes: *b,
+            entries: 1,
+            partial: false,
+        })
+        .collect();
+    let map = app.panes.disk_map_mut(slot).expect("map");
+    map.aim(dir);
+    map.land(
+        FsDirUsageReportResult {
+            children,
+            listed: true,
+            ..FsDirUsageReportResult::default()
+        },
+        true,
+    );
+    let mut terminal = Terminal::new(TestBackend::new(116, 37)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let buf = terminal.backend().buffer();
+    let fills: std::collections::BTreeSet<String> = buf
+        .content()
+        .iter()
+        .filter(|c| c.modifier.contains(ratatui::style::Modifier::REVERSED))
+        .map(|c| format!("{:?}", c.fg))
+        .collect();
+    assert!(fills.len() >= 2, "one tone for every folder: {fills:?}");
+}
+
 /// A long measurement says what it has counted in the title: "measuring"
 /// alone for minutes read as stuck (2026-10-08).
 #[test]
