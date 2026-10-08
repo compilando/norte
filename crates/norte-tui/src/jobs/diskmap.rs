@@ -111,6 +111,7 @@ pub fn tend(app: &mut App, work: &mut InFlight) {
     } else if let Some(run) = work.disk_map.take() {
         run.task.cancel();
         run.handle.abort();
+        app.disk_map_settled();
     }
 }
 
@@ -134,6 +135,10 @@ pub fn harvest(
     let Some(run) = work.disk_map.take() else {
         return;
     };
+    // Whatever comes next — the map, a failure, a partial notice — the
+    // "measuring" notice is over (landing shots, 2026-10-08: it stayed
+    // under a map whose title already said done).
+    app.disk_map_settled();
     let (state, report) = match res {
         Ok(pair) => pair,
         // A handoff aborts the old handle and the `select!`'s arm only

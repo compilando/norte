@@ -7,6 +7,12 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **"Measuring the directory…" leaves the terminal's status bar** when
+  the disk map finishes or is closed: it stayed under a map whose title
+  already said done.
+
 ### Added
 
 - **A timeline row shows its details**: Space or a click opens the full
