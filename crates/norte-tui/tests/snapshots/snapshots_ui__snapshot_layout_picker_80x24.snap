@@ -20,7 +20,7 @@ expression: text
 "   │    │                      ·sssssssssssssssssssssssssssssssssssss·│        │"
 " ◷ │    │ la disposición no cambia tus teclas (eso es [keymap] preset)│        │"
 "   │    └ [Enter] confirmar [Esc] cancelar ───────────────────────────┘        │"
-" T │                                    ││                                     │"
+" ❯ │                                    ││                                     │"
 "   │                                    ││                                     │"
 "   │                                    ││                                     │"
 "   │                                    ││                                     │"

@@ -584,7 +584,9 @@ use serde::{Deserialize, Serialize};
 ///   the layout but not in view (behind a tab, or dropped for room).
 /// - **100**: `dock_slot { slot_id, zone }`: a pane dropped on the
 ///   window's edge takes that whole side (`Node::dock_outer`).
-pub const BRIDGE_VERSION: u32 = 100;
+/// - **101**: `PanelBarView.footer` (`FooterButtonView`): the activity
+///   column's foot, help and settings; and `activity_activate { id }`.
+pub const BRIDGE_VERSION: u32 = 101;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

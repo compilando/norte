@@ -878,6 +878,13 @@ pub enum UiAction {
         /// Where, within `target`.
         zone: norte_frontend::layout::DropZone,
     },
+    /// Presses a button at the foot of the activity column (bridge 101):
+    /// `settings`, `help` (`norte_frontend::panelbar::FOOTER`). An unknown id
+    /// changes nothing.
+    ActivityActivate {
+        /// The button's id.
+        id: String,
+    },
     /// Drops slot `slot_id` on the WINDOW's edge (bridge 100): it takes the
     /// whole side — full height left/right, full width top/bottom
     /// (`Node::dock_outer`). `center` changes nothing.

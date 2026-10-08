@@ -5,6 +5,10 @@
     "key": 9,
     "slot_id": 1
   },
+  "activity_activate": {
+    "action": "activity_activate",
+    "id": "settings"
+  },
   "agent_select_row": {
     "action": "agent_select_row",
     "generation": 4,

@@ -11,6 +11,9 @@
 // what is already known about it.
 
 import diskMap from "../../../../norte-frontend/assets/panel-icons/disk-map.svg?raw";
+import help from "../../../../norte-frontend/assets/panel-icons/help.svg?raw";
+import settings from "../../../../norte-frontend/assets/panel-icons/settings.svg?raw";
+import terminal from "../../../../norte-frontend/assets/panel-icons/terminal.svg?raw";
 import log from "../../../../norte-frontend/assets/panel-icons/log.svg?raw";
 import metadata from "../../../../norte-frontend/assets/panel-icons/metadata.svg?raw";
 import places from "../../../../norte-frontend/assets/panel-icons/places.svg?raw";
@@ -38,6 +41,10 @@ const PANEL_SVG: Record<string, string> = {
   log,
   "disk-map": diskMap,
   timeline,
+  terminal,
+  // The column's foot (bridge 101), not panels.
+  settings,
+  help,
 };
 
 const SHAPES: Record<string, Shape> = {

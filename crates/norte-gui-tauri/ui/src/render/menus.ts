@@ -118,6 +118,30 @@ export function paintPanelBar(this: Screen, bar: PanelBarView): void {
     });
     row.append(button);
   }
+  // The column's foot: help and settings, pinned to the bottom as VS
+  // Code's gear. Only in the column: the row has the menu right there.
+  if (column && (bar.footer ?? []).length > 0) {
+    const foot = document.createElement("div");
+    foot.className = "panelbar-foot";
+    for (const f of bar.footer ?? []) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "panelbar-button";
+      button.dataset["kind"] = f.id;
+      button.dataset["state"] = "closed";
+      button.title = f.chord === "—" ? f.label : `${f.label} (${f.chord})`;
+      button.setAttribute("aria-label", f.label);
+      const icon = panelIcon(document, f.id);
+      if (icon !== null) {
+        button.append(icon);
+      }
+      button.addEventListener("click", () => {
+        this.send({ action: "activity_activate", id: f.id });
+      });
+      foot.append(button);
+    }
+    row.append(foot);
+  }
   this.panelBarRoot.replaceChildren(row);
 }
 

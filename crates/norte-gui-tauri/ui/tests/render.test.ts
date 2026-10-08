@@ -2834,6 +2834,26 @@ describe("the menu bar", () => {
     expect(sent).toEqual([{ action: "panel_bar_activate", button: 1 }]);
   });
 
+  // 2026-10-08: settings and help at the column's foot, as VS Code's gear.
+  it("the column's foot carries settings and sends its id", () => {
+    const { screen, sent } = mount();
+    const v = view({});
+    v.panel_bar = {
+      ...v.panel_bar,
+      vertical: true,
+      footer: [{ id: "settings", label: "Ajustes", chord: "—" }],
+    };
+    screen.paint(v);
+    const gear = document.querySelector(
+      '.panelbar-foot .panelbar-button[data-kind="settings"]',
+    ) as HTMLButtonElement;
+    expect(gear.title).toBe("Ajustes");
+    expect(gear.querySelector("svg")).not.toBeNull();
+    sent.length = 0;
+    gear.click();
+    expect(sent).toEqual([{ action: "activity_activate", id: "settings" }]);
+  });
+
   // W8 (2026-10-07): a panel behind a tab looked closed.
   it("a panel behind a tab is lit but has no 'in view' mark", () => {
     const { screen } = mount();

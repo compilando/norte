@@ -4005,6 +4005,14 @@ impl State {
                 target,
                 zone,
             } => self.mover_slot(*slot_id, *target, *zone, backend, mailbox),
+            UiAction::ActivityActivate { id } => {
+                match norte_frontend::panelbar::footer_command(id)
+                    .and_then(|c| crate::commands::effect_of(c, 1))
+                {
+                    Some(effect) => self.apply_effect(effect, backend, mailbox),
+                    None => (Self::stale(StaleAction::Generation), Vec::new()),
+                }
+            }
             UiAction::DockSlot { slot_id, zone } => {
                 self.dock_slot_outer(*slot_id, *zone, backend, mailbox)
             }

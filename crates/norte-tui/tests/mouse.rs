@@ -671,10 +671,11 @@ fn a_big_rail_reserves_two_by_two_and_clicks_land_on_both_rows() {
     assert!(mouse::hit_test(&app, 5, FILA0 - 1).is_some());
 }
 
-/// A button with no SVG to rasterise (`terminal`, or a plugin's once they
-/// get buttons) keeps its LETTER in a big column, never a blank square.
+/// In a big column every built-in panel has its picture — the terminal too,
+/// since 2026-10-08 — so no letter is left in it. (A kind with no SVG, a
+/// plugin's once they get buttons, keeps its letter: `draw_rail`.)
 #[test]
-fn a_kind_without_svg_paints_its_letter_when_big() {
+fn every_builtin_kind_paints_a_picture_when_big() {
     let mut app = app_painted(5);
     app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Left);
     app.chrome.images = Some(norte_config::Images::Kitty);
@@ -685,18 +686,7 @@ fn a_kind_without_svg_paints_its_letter_when_big() {
         .map(|l| l.chars().nth(2).expect("column 1"))
         .filter(|c| *c != ' ')
         .collect();
-    let terminal = norte_frontend::panelbar::buttons(
-        &app.kinds,
-        norte_frontend::panelbar::PanelBarInput::default(),
-    )
-    .into_iter()
-    .find(|b| b.kind == "terminal")
-    .expect("terminal is a button");
-    assert_eq!(
-        letters,
-        terminal.letter.to_string(),
-        "only the terminal's letter"
-    );
+    assert_eq!(letters, "", "no letter left in a big column");
 }
 
 #[test]

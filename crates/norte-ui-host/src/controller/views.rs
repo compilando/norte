@@ -418,6 +418,20 @@ impl State {
                     }
                 })
                 .collect(),
+            footer: norte_frontend::panelbar::FOOTER
+                .iter()
+                .map(|(id, command)| crate::dto::FooterButtonView {
+                    id: (*id).to_owned(),
+                    label: norte_i18n::t_in(
+                        self.lang,
+                        &format!("menu-item-{}", command.replace('.', "-")),
+                    ),
+                    chord: bindings.iter().find(|(_, c)| c == command).map_or_else(
+                        || "—".to_owned(),
+                        |(chord, _)| norte_frontend::keymap::paint_chord(chord),
+                    ),
+                })
+                .collect(),
         }
     }
 

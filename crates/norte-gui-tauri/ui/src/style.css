@@ -292,6 +292,24 @@ body {
   opacity: 0.8;
 }
 
+/* The column's foot (bridge 101): help and settings, pushed to the bottom
+   like VS Code's gear. They open dialogs, they have no "open" state: a
+   steady middle opacity instead of the closed panels' dim. */
+.panelbar-foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.panelbar[data-vertical="true"] .panelbar-foot .panelbar-button {
+  opacity: 0.6;
+  border-left-color: transparent;
+}
+
+.panelbar[data-vertical="true"] .panelbar-foot .panelbar-button:hover {
+  opacity: 1;
+}
+
 .panelbar[data-vertical="true"] .panelbar-button[data-state="open"],
 .panelbar[data-vertical="true"] .panelbar-button[data-state="behind"],
 .panelbar[data-vertical="true"] .panelbar-button[data-state="focused"] {
