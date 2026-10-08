@@ -177,6 +177,7 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::FilesDropped { .. } => "files_dropped",
         UiAction::PanelClick { .. } => "panel_click",
         UiAction::TreeActivateRow { .. } => "tree_activate_row",
+        UiAction::TimelineShowRow { .. } => "timeline_show_row",
         UiAction::TreeToggleRow { .. } => "tree_toggle_row",
         UiAction::TreeSetVisibleRange { .. } => "tree_set_visible_range",
         UiAction::RefreshSlot { .. } => "refresh_slot",
@@ -477,6 +478,13 @@ fn overlay_actions() -> Vec<(&'static str, UiAction)> {
             UiAction::PlaceActivateRow {
                 row: 1,
                 generation: 4,
+            },
+        ),
+        (
+            "timeline_show_row",
+            UiAction::TimelineShowRow {
+                slot_id: 14,
+                seq: 42,
             },
         ),
         (
@@ -1405,6 +1413,7 @@ fn reference_slots() -> Vec<SlotView> {
             title: "Línea de tiempo".to_owned(),
             rows: vec![
                 norte_ui_host::dto::TimelineRowView {
+                    seq: 42,
                     time: "12:00".to_owned(),
                     actor: "user".to_owned(),
                     op: "renamed".to_owned(),
@@ -1413,6 +1422,7 @@ fn reference_slots() -> Vec<SlotView> {
                     tail: String::new(),
                 },
                 norte_ui_host::dto::TimelineRowView {
+                    seq: 41,
                     time: "11:58".to_owned(),
                     actor: "agent".to_owned(),
                     op: "removed".to_owned(),
@@ -3023,7 +3033,7 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // 99: `LayoutPickerView.legend`, what each preview letter is, and
     // `PlacesSlotView.favorites_hint`.
     // 101: `PanelBarView.footer`, the activity column's foot.
-    const SHAPE: u64 = 11_559_211_860_079_665_532;
+    const SHAPE: u64 = 6_549_283_255_068_411_977;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

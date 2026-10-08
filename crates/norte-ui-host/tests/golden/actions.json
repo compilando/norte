@@ -369,6 +369,11 @@
     "slot_id": 3,
     "verb": "close"
   },
+  "timeline_show_row": {
+    "action": "timeline_show_row",
+    "seq": 42,
+    "slot_id": 14
+  },
   "toggle_mark": {
     "action": "toggle_mark",
     "generation": 4,

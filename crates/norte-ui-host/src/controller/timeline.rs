@@ -396,6 +396,54 @@ impl State {
         self.say("msg-timeline-undo-running")
     }
 
+    /// Opens a timeline row's details: the row with journal number `seq` in
+    /// slot `slot_id` (a click, which also moves the cursor there), or the
+    /// focused timeline's cursor row (Space). The lines are
+    /// `timeline::details`, the terminal's same ones.
+    pub(super) fn show_timeline_details(
+        &mut self,
+        clicked: Option<(u32, i64)>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let id = clicked
+            .map(|(slot, _)| slot)
+            .or_else(|| self.line_focused());
+        let Some(state) = id.and_then(|id| self.lines.get_mut(&id)) else {
+            return (self.applied(), Vec::new());
+        };
+        if let Some((_, seq)) = clicked {
+            // By `seq`, the row's identity: the list grows at the TOP when
+            // something new is done, so an index could name another row.
+            let Some(i) = state.model.rows().iter().position(|r| r.seq == seq) else {
+                return (self.applied(), Vec::new());
+            };
+            state.model.set_cursor(i);
+        }
+        let Some(row) = state.model.selected() else {
+            return (self.applied(), Vec::new());
+        };
+        let server_masked = row.hostile;
+        let body = norte_frontend::timeline::details_local(row, self.lang)
+            .into_iter()
+            .map(|line| match line {
+                norte_frontend::ReportLine::Phrase(text) => crate::dto::DialogLine {
+                    text: clamp_display(text),
+                    hostile: false,
+                },
+                // A path the SERVER masked reads clean here: flag it all
+                // the same, as the row does.
+                norte_frontend::ReportLine::Path(p) => {
+                    let mut l = Self::path_line(&p);
+                    l.hostile |= server_masked;
+                    l
+                }
+            })
+            .collect();
+        let (change, fallen) = self.open_report("timeline-detail-title".to_owned(), body, true);
+        let mut outputs = vec![self.parche(vec![change])];
+        outputs.extend(fallen);
+        (self.applied(), outputs)
+    }
+
     /// A timeline's projection.
     pub(super) fn timeline_view(&self, id: u32) -> crate::dto::TimelineSlotView {
         let state = self.lines.get(&id);
@@ -418,6 +466,7 @@ impl State {
                             tail.push(norte_i18n::t_in(self.lang, "timeline-irreversible"));
                         }
                         crate::dto::TimelineRowView {
+                            seq: f.seq,
                             time: norte_frontend::format::time_local(f.ts_ms),
                             actor: clamp_display(f.actor_kind.clone()),
                             op: clamp_display(f.op.clone()),

@@ -4175,6 +4175,9 @@ impl State {
                 self.touch_branch(*row, *generation, false, backend, mailbox)
             }
             UiAction::TreeSetVisibleRange { first, count } => self.tree_range(*first, *count),
+            UiAction::TimelineShowRow { slot_id, seq } => {
+                self.show_timeline_details(Some((*slot_id, *seq)))
+            }
             UiAction::LayoutActivateRow { row } => self.choose_layout(*row, backend, mailbox),
             UiAction::SearchActivateRow { row } => self.go_to_result(*row, backend, mailbox),
             UiAction::HelpActivate { index } => self.activate_in_help(*index, backend, mailbox),

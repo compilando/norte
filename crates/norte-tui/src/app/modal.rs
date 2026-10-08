@@ -24,6 +24,8 @@ pub enum ReportKind {
     Batch,
     /// An undo that didn't return everything.
     Undo,
+    /// A timeline row's details (Space or a click, 2026-10-08).
+    TimelineRow,
 }
 
 impl ReportKind {
@@ -33,6 +35,7 @@ impl ReportKind {
         match self {
             Self::Batch => "modal-batch-report-title",
             Self::Undo => "modal-undo-report-title",
+            Self::TimelineRow => "timeline-detail-title",
         }
     }
 }

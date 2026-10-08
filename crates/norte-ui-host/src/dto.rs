@@ -2240,6 +2240,9 @@ pub struct TimelineSlotView {
 /// A row of the timeline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineRowView {
+    /// The journal number of the row's newest entry: its identity, which
+    /// a click sends back (`timeline_show_row`, bridge 104).
+    pub seq: i64,
     /// The time, already formatted.
     pub time: String,
     /// Who: `user`, `agent`, `plugin`… For the dot's COLOR: what it

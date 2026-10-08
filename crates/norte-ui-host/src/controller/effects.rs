@@ -83,6 +83,10 @@ impl State {
         if self.the_line_has_focus() && matches!(effect, Effect::Enter) {
             return self.ask_undo_until();
         }
+        // Space, like Quick Look: the cursor row's details (2026-10-08).
+        if self.the_line_has_focus() && matches!(effect, Effect::Mark) {
+            return self.show_timeline_details(None);
+        }
         if self.places_have_focus() && matches!(effect, Effect::Enter | Effect::Mark) {
             // Entering and collapsing are handled by the side bar, and the
             // `cd` that comes out goes to the LISTING through the same path

@@ -38,9 +38,9 @@ pub fn default_dock(kind: &str) -> Dock {
         "places" => (Edge::Left, Size::Fixed(16)),
         "tree" => (Edge::Left, Size::Fixed(24)),
         "viewer" => (Edge::Right, Size::Weight(1)),
-        "metadata" => (Edge::Right, Size::Fixed(30)),
         "processes" => (Edge::Bottom, Size::Fixed(8)),
         "log" | "terminal" | "timeline" | "disk-map" => (Edge::Bottom, Size::Fixed(12)),
+        // The details ("metadata"), and any kind nobody knows.
         _ => (Edge::Right, Size::Fixed(30)),
     };
     Dock { edge, size }
@@ -48,18 +48,19 @@ pub fn default_dock(kind: &str) -> Dock {
 
 /// Where a panel of `kind` opens: where the reader last had it, if they
 /// ever placed it, and otherwise its [`default_dock`] — with a bottom
-/// default capped to a third of a short `column` ([`super::dock_rows`]).
-/// A remembered size is the reader's and is not capped.
+/// bottom or top dock capped to a third of a short `column`
+/// ([`super::dock_rows`]): a size remembered on a tall screen must not eat
+/// the listings of a short one.
 #[must_use]
 pub fn dock_for(
     kind: &str,
     memory: &std::collections::BTreeMap<String, Dock>,
     column: Option<u16>,
 ) -> Dock {
-    if let Some(d) = memory.get(kind) {
-        return *d;
-    }
-    let d = default_dock(kind);
+    let d = memory
+        .get(kind)
+        .copied()
+        .unwrap_or_else(|| default_dock(kind));
     match (d.edge, d.size) {
         (Edge::Bottom | Edge::Top, Size::Fixed(n)) => Dock {
             edge: d.edge,
@@ -78,10 +79,19 @@ pub fn docks_in(tree: &Node) -> Vec<(String, Dock)> {
         .into_iter()
         .filter_map(|s| {
             let kind = tree.kind_of(s)?.as_str().to_owned();
-            if matches!(kind.as_str(), "browser" | "status" | "tasks") {
+            if not_a_panel(&kind) {
                 return None;
             }
-            Some((kind, dock_of(tree, s)?))
+            let d = dock_of(tree, s)?;
+            // A WEIGHTED place is a share of the screen, which is a pane
+            // beside a listing (a split under it), not a dock: remembering
+            // it would reopen the panel at half. Only a kind whose normal
+            // place is weighted (the viewer) keeps one.
+            let weighted = |s: Size| matches!(s, Size::Weight(_));
+            if weighted(d.size) && !weighted(default_dock(&kind).size) {
+                return None;
+            }
+            Some((kind, d))
         })
         .collect()
 }
@@ -92,12 +102,28 @@ pub fn docks_in(tree: &Node) -> Vec<(String, Dock)> {
 /// "last". `None` for a slot in the middle, or not in the tree.
 #[must_use]
 pub fn dock_of(tree: &Node, slot: SlotId) -> Option<Dock> {
-    let mut found = None;
+    let mut found = Found::Undecided;
     walk(tree, slot, &mut found);
-    found
+    match found {
+        Found::At(d) => Some(d),
+        Found::Undecided | Found::Nowhere => None,
+    }
 }
 
-fn walk(node: &Node, slot: SlotId, found: &mut Option<Dock>) -> bool {
+/// A listing or chrome: not a panel, and nothing to remember a place for.
+fn not_a_panel(kind: &str) -> bool {
+    matches!(kind, "browser" | "status" | "tasks")
+}
+
+/// What the innermost split holding the slot decided. `Nowhere` must stop
+/// an outer split from claiming the slot for a unit that is not it alone.
+enum Found {
+    Undecided,
+    Nowhere,
+    At(Dock),
+}
+
+fn walk(node: &Node, slot: SlotId, found: &mut Found) -> bool {
     match node {
         Node::Slot { id, .. } => *id == slot,
         Node::Tabs { children, .. } => children.iter().any(|c| walk(c, slot, found)),
@@ -109,31 +135,33 @@ fn walk(node: &Node, slot: SlotId, found: &mut Option<Dock>) -> bool {
             let Some(pos) = children.iter().position(|c| walk(c, slot, found)) else {
                 return false;
             };
-            // The innermost one decides: a deeper `Split` already set it.
-            if found.is_some() {
+            // The innermost one decides.
+            if !matches!(found, Found::Undecided) {
                 return true;
             }
-            let unit = &children[pos];
-            let alone = match unit {
+            *found = Found::Nowhere;
+            // The slot alone, or in a group of PANELS: a panel tabbed with
+            // a listing sits where the listing does, and remembering that
+            // would reopen it at half the screen.
+            let alone = match &children[pos] {
                 Node::Slot { .. } => true,
-                Node::Tabs { children, .. } => {
-                    children.iter().all(|c| matches!(c, Node::Slot { .. }))
-                }
+                Node::Tabs { children, .. } => children
+                    .iter()
+                    .all(|c| matches!(c, Node::Slot { kind, .. } if !not_a_panel(kind.as_str()))),
                 Node::Split { .. } => false,
             };
             if !alone || children.len() < 2 {
                 return true;
             }
-            let last = children.len()
-                - 1
-                - children
-                    .iter()
-                    .rev()
-                    .take_while(|c| {
-                        matches!(c, Node::Slot { kind, .. }
-                            if matches!(kind.as_str(), "status" | "tasks"))
-                    })
-                    .count();
+            let chrome = children
+                .iter()
+                .rev()
+                .take_while(|c| {
+                    matches!(c, Node::Slot { kind, .. }
+                        if matches!(kind.as_str(), "status" | "tasks"))
+                })
+                .count();
+            let last = children.len().saturating_sub(1 + chrome);
             let edge = match (dir, pos) {
                 (Dir::Horizontal, 0) => Some(Edge::Left),
                 (Dir::Vertical, 0) => Some(Edge::Top),
@@ -142,7 +170,7 @@ fn walk(node: &Node, slot: SlotId, found: &mut Option<Dock>) -> bool {
                 _ => None,
             };
             if let (Some(edge), Some(size)) = (edge, sizes.get(pos).copied()) {
-                *found = Some(Dock { edge, size });
+                *found = Found::At(Dock { edge, size });
             }
             true
         }
@@ -250,5 +278,62 @@ mod tests {
         assert_eq!(dock_of(&tree, SlotId(6)).map(|d| d.edge), Some(Edge::Left));
         assert_eq!(dock_of(&tree, SlotId(2)), None, "a listing in the middle");
         assert_eq!(dock_of(&tree, SlotId(99)), None);
+    }
+
+    /// Review of 2026-10-08: a panel TABBED with a listing at an edge, or
+    /// in a weighted split beside one, sits where the listing does. Its
+    /// place is not a dock, and remembering it would reopen the panel at
+    /// half the screen. An outer split must not claim it either.
+    #[test]
+    fn a_panel_sharing_a_listings_room_has_no_place_to_remember() {
+        let tabbed = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Weight(1), Size::Weight(1)],
+            children: vec![
+                s(1, "browser"),
+                Node::Tabs {
+                    children: vec![s(2, "browser"), s(9, "timeline")],
+                    active: 1,
+                },
+            ],
+        };
+        assert_eq!(dock_of(&tabbed, SlotId(9)), None);
+        let nested = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Fixed(16), Size::Weight(1)],
+            children: vec![
+                s(5, "places"),
+                Node::Split {
+                    dir: Dir::Vertical,
+                    sizes: vec![Size::Weight(1), Size::Weight(1)],
+                    children: vec![s(1, "browser"), s(9, "timeline")],
+                },
+            ],
+        };
+        let docks = docks_in(&nested);
+        assert!(docks.iter().all(|(k, _)| k != "timeline"), "{docks:?}");
+        assert!(docks.iter().any(|(k, _)| k == "places"), "{docks:?}");
+        // All chrome: no underflow.
+        let chrome = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Fixed(1), Size::Fixed(1)],
+            children: vec![s(3, "tasks"), s(4, "status")],
+        };
+        let _ = dock_of(&chrome, SlotId(4));
+    }
+
+    /// A size remembered on a tall screen is capped on a short one.
+    #[test]
+    fn a_remembered_bottom_size_is_capped_on_a_short_column() {
+        let mut memory = std::collections::BTreeMap::new();
+        memory.insert(
+            "log".to_owned(),
+            Dock {
+                edge: Edge::Bottom,
+                size: Size::Fixed(30),
+            },
+        );
+        assert_eq!(dock_for("log", &memory, Some(24)).size, Size::Fixed(8));
+        assert_eq!(dock_for("log", &memory, None).size, Size::Fixed(30));
     }
 }

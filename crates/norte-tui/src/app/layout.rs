@@ -862,6 +862,38 @@ impl App {
         self.key_owner = KeyOwner::Timeline;
     }
 
+    /// Opens the selected timeline row's details (Space or a click): the
+    /// full date, who, both paths, the batch, and whether undo will touch it
+    /// (`timeline::details`, the window's same lines).
+    pub fn show_timeline_details(&mut self) {
+        let Some(row) = self
+            .timeline_slot()
+            .and_then(|s| self.panes.timeline(s))
+            .and_then(|t| t.selected())
+        else {
+            return;
+        };
+        let lines = norte_frontend::timeline::details_local(row, norte_i18n::active());
+        self.modal = Some(super::Modal::Report {
+            kind: super::ReportKind::TimelineRow,
+            lines,
+        });
+    }
+
+    /// A click on timeline row `index`: selects it, takes the keyboard, and
+    /// opens its details.
+    pub fn timeline_click(&mut self, index: usize) {
+        let Some(t) = self
+            .timeline_slot()
+            .and_then(|s| self.panes.timeline_mut(s))
+        else {
+            return;
+        };
+        t.set_cursor(index);
+        self.key_owner = KeyOwner::Timeline;
+        self.show_timeline_details();
+    }
+
     /// Closes the timeline if it's open, and hands the keyboard back to the
     /// listings if it had it.
     pub fn close_timeline(&mut self) {

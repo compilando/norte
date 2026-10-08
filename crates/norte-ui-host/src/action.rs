@@ -679,6 +679,15 @@ pub enum UiAction {
         /// How many fit.
         count: u32,
     },
+    /// A click on a timeline row (bridge 104): moves the cursor there and
+    /// opens the row's details.
+    TimelineShowRow {
+        /// The timeline's slot: there can be more than one.
+        slot_id: u32,
+        /// The row's journal number (`TimelineRowView::seq`), not its
+        /// position: the list grows at the top.
+        seq: i64,
+    },
     /// Chooses a layout from the picker (a click) and APPLIES it.
     LayoutActivateRow {
         /// Row, in the order they traveled.

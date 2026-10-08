@@ -1158,6 +1158,21 @@ timeline-undo-count = { $n } entradas se deshacen
 timeline-undo-skipped = { $n } no tienen vuelta y se saltan
 timeline-undo-foreign = { $n } no son tuyas y no se tocan
 timeline-undo-nothing = no hay nada tuyo que deshacer por encima de esa fila
+# Los detalles de una fila (clic o Espacio).
+timeline-detail-title = Qué pasó
+timeline-detail-when = Cuándo
+timeline-detail-who = Quién
+timeline-detail-what = Qué
+timeline-detail-path = Sobre
+timeline-detail-to = Hacia
+timeline-detail-batch = Lote
+timeline-detail-undo = Deshacer
+timeline-detail-seq = Entrada del journal
+timeline-detail-you = tú
+timeline-detail-undo-yes = sí: deshacer hasta antes de ella la recupera
+timeline-detail-undo-done = ya deshecha
+timeline-detail-undo-irreversible = no: no tiene vuelta atrás
+timeline-detail-undo-not-yours = no: no es tuya, deshacer no la toca
 msg-timeline-undo-running = deshaciendo hasta el punto elegido…
 
 # El asistente de primer arranque (spec 2026-09-10): tres preguntas cuando

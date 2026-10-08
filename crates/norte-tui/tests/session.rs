@@ -181,6 +181,44 @@ fn a_moved_panel_reopens_where_the_reader_left_it() {
     );
 }
 
+/// Clicking a timeline row selects it and opens its details (2026-10-08).
+#[test]
+fn a_timeline_click_opens_the_rows_details() {
+    use norte_proto::methods::JournalRow;
+    let mut app = app_basica();
+    app.toggle_timeline();
+    let slot = app.timeline_slot().expect("open");
+    let row = |seq: i64| JournalRow {
+        undoes_seq: None,
+        undone: false,
+        hostile: false,
+        seq,
+        ts_ms: seq,
+        actor_kind: "user".to_owned(),
+        actor_id: None,
+        op: "trashed".to_owned(),
+        path: format!("file:///a/{seq}"),
+        path_to: None,
+        reversible: true,
+        batch_id: None,
+    };
+    *app.panes.timeline_mut(slot).expect("timeline") =
+        norte_frontend::timeline::Timeline::new(&[row(9), row(8)], None);
+    app.timeline_click(1);
+    assert_eq!(
+        app.panes
+            .timeline(slot)
+            .map(norte_frontend::timeline::Timeline::cursor),
+        Some(1)
+    );
+    let Some(norte_tui::app::Modal::Report { kind, lines }) = &app.modal else {
+        panic!("no details: {:?}", app.modal);
+    };
+    assert_eq!(*kind, norte_tui::app::ReportKind::TimelineRow);
+    let text = format!("{lines:?}");
+    assert!(text.contains("/a/8") && text.contains("#8"), "{text}");
+}
+
 /// The STICKY profile arrives with the session and requests the switch.
 ///
 /// It cannot be applied earlier: it lives in the session, the daemon holds

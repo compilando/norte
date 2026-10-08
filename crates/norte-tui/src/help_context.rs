@@ -116,7 +116,8 @@ fn modal_context(modal: &Modal) -> &'static str {
         // the confirm-undo page (`ConfirmUndoAfter`'s); a batch's, to the
         // rename page, which explains what can be undone.
         Modal::Report { kind, .. } => match kind {
-            ReportKind::Undo => "dialog.confirm",
+            // A timeline row's details: the timeline's own page, the undo's.
+            ReportKind::Undo | ReportKind::TimelineRow => "dialog.confirm",
             ReportKind::Batch => "dialog.rename",
         },
         Modal::SemanticQuery { .. } | Modal::SemanticHits { .. } => "dialog.semantic-search",
