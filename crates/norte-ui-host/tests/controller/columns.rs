@@ -344,7 +344,8 @@ async fn plugins_are_only_asked_about_the_window() {
     let requested: usize = batches.iter().map(Vec::len).sum();
     assert!(
         requested <= DEFAULT_WINDOW + 20,
-        "in total {requested} of {TOTAL} were requested: the window is 20"
+        "in total {requested} of {TOTAL} were requested: the startup window \
+         is {DEFAULT_WINDOW}, the declared one 20"
     );
 
     // And the plugin column travels in the same batch, not a separate sweep.
