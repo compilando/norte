@@ -10,7 +10,7 @@ expression: render(&app)
 "   │  @enl┌A la papelera─────────────────────────────────────────────┐         │"
 "   │   not│notas.txt                                                 │         │"
 "   │ ! �.d│recuperable desde la papelera del sistema                 │         │"
-"   │      │[Enter] confirmar [y] aprobar [n] denegar [Esc] cancelar  │         │"
+"   │      │[Enter] confirmar [Esc] cancelar                          │         │"
 "   │      │                                                          │         │"
 "   │      └──────────────────────────────────────────────────────────┘         │"
 "   │      │ ir a la pestaña 3           pane.t…goto-3             —  │         │"

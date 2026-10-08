@@ -295,7 +295,17 @@ impl DialogHints {
             ALLOW_PICKER, ALLOW_PLUGIN_CONFIG, ALLOW_TRUST_HOST, ALLOW_UNINSTALL,
         };
         Self {
-            confirm: dialog_hints(ALLOW_CONFIRM, eff),
+            // `y`/`n` answer a plain question too, as aliases of Enter and
+            // Esc, but are not PRINTED: "y approve · n deny" reads as an
+            // agent's approval, and this is a copy or a delete.
+            confirm: dialog_hints(
+                &ALLOW_CONFIRM
+                    .iter()
+                    .copied()
+                    .filter(|c| !matches!(*c, "dialog.approve" | "dialog.deny"))
+                    .collect::<Vec<_>>(),
+                eff,
+            ),
             collision: dialog_hints(ALLOW_COLLISION, eff),
             approval: dialog_hints(ALLOW_APPROVAL, eff),
             uninstall: dialog_hints(ALLOW_UNINSTALL, eff),
@@ -430,6 +440,27 @@ mod tests {
             .chain(crate::keymap::DIALOG_COMMANDS.iter().copied())
             .collect();
         Effective::build_for(&preset, &[], &known, Screen::Dialog).expect("dialog effective")
+    }
+
+    /// A plain copy, delete or quit question offers Enter and Esc only.
+    /// `y`/`n` still answer it (`ALLOW_CONFIRM`), but printed as "approve"
+    /// and "deny" they read as an AGENT approval, which this is not
+    /// (landing shots, 2026-10-08).
+    #[test]
+    fn a_plain_confirmation_does_not_offer_approve_or_deny() {
+        let eff = orthodox_dialog();
+        let hints = DialogHints::build(&eff);
+        let approve = norte_i18n::t("help-cmd-dialog-approve");
+        let line = &hints.confirm;
+        assert!(line.contains("[Enter]"), "{line}");
+        assert!(line.contains("[Esc]"), "{line}");
+        assert!(!line.contains("[y]") && !line.contains("[n]"), "{line}");
+        assert!(!line.contains(&approve), "{line}");
+        assert!(
+            hints.approval.contains("[y]"),
+            "an agent approval still offers y: {}",
+            hints.approval
+        );
     }
 
     /// Encoding audit H1: a PROJECT `./.norte/keymap.toml` (no trust) can
