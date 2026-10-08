@@ -7,6 +7,8 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+## [0.3.0-alpha.10] - 2026-10-08
+
 ### Changed
 
 - **The disk map is a real treemap.** In the window: coloured rectangles
@@ -8114,7 +8116,8 @@ and some daemon/socket tests are only available in CI environments.
 - Writes inside ZIP archives; list, restore, and purge operations for logical
   trash; and the M5 GUI.
 
-[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.9...HEAD
+[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.10...HEAD
+[0.3.0-alpha.10]: https://github.com/compilando/norte/compare/v0.3.0-alpha.9...v0.3.0-alpha.10
 [0.3.0-alpha.9]: https://github.com/compilando/norte/compare/v0.3.0-alpha.8...v0.3.0-alpha.9
 [0.3.0-alpha.8]: https://github.com/compilando/norte/compare/v0.3.0-alpha.7...v0.3.0-alpha.8
 [0.3.0-alpha.7]: https://github.com/compilando/norte/compare/v0.3.0-alpha.6...v0.3.0-alpha.7
