@@ -7,6 +7,8 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+## [0.3.0-alpha.9] - 2026-10-08
+
 ### Added
 
 - **Drop a panel on the window's edge to give it the whole side** (ADR
@@ -62,6 +64,13 @@ independently through `PROTOCOL_VERSION`.
 - **Window:** a tree or terminal panel restored from the last session no
   longer comes up empty ("no shell in this panel") until toggled twice.
 - **Window:** the terminal panel has its own icon instead of a "T".
+- **Window:** a disk map that is still measuring says so, with its
+  folder, instead of a blank untitled panel for as long as a big folder
+  takes.
+- **Window:** bringing the terminal panel forward with its button or
+  its tab starts its shell if it has none.
+- **Window:** in a narrow group the tab in front always shows whole,
+  with its ×; the others shrink.
 - A long path in a listing's title is cut from the left, keeping the
   folder you are in.
 - "1 files" in the pane footer; key bar cells running together at 80
@@ -8087,7 +8096,8 @@ and some daemon/socket tests are only available in CI environments.
 - Writes inside ZIP archives; list, restore, and purge operations for logical
   trash; and the M5 GUI.
 
-[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.8...HEAD
+[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.9...HEAD
+[0.3.0-alpha.9]: https://github.com/compilando/norte/compare/v0.3.0-alpha.8...v0.3.0-alpha.9
 [0.3.0-alpha.8]: https://github.com/compilando/norte/compare/v0.3.0-alpha.7...v0.3.0-alpha.8
 [0.3.0-alpha.7]: https://github.com/compilando/norte/compare/v0.3.0-alpha.6...v0.3.0-alpha.7
 [0.3.0-alpha.6]: https://github.com/compilando/norte/compare/v0.3.0-alpha.5...v0.3.0-alpha.6
