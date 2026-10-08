@@ -22,6 +22,15 @@ independently through `PROTOCOL_VERSION`.
   "Next", "Zoom+" instead of a command's long name cut mid-phrase
   ("Close the", "Fit the", "Go on to"). Every key of the seven presets
   reads whole at 80 and 132 columns, in English and Spanish.
+### Changed
+
+- **Places no longer lists the system's own mounts as drives** on Linux:
+  a filesystem mounted on or under `/usr`, `/etc`, `/boot`, `/tmp`,
+  `/var/lib`, `/var/log`, `/run` (except `/run/media`) and the like — a
+  container's or sandbox's binds, Docker's, a btrfs subvolume — is left
+  out, close to what Nautilus hides. A disk under `/srv`, `/opt`,
+  `/var/mnt` or your home still shows, and "show everything" lists them
+  all (ADR 0174).
 
 ### Added
 
