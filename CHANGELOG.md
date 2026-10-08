@@ -12,6 +12,9 @@ independently through `PROTOCOL_VERSION`.
 - **A plain copy, move, delete or quit question no longer offers
   "y approve · n deny"** in the terminal: those read as an agent's
   approval. The footer says Enter and Esc; `y` and `n` still answer.
+- **"Measuring the directory…" leaves the terminal's status bar** when
+  the disk map finishes or is closed: it stayed under a map whose title
+  already said done.
 
 ### Added
 

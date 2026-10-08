@@ -796,6 +796,15 @@ impl App {
         }
     }
 
+    /// A measurement ended — landed, failed or cancelled: "measuring the
+    /// directory…" leaves the status bar. Only that notice: anything said
+    /// since stays.
+    pub fn disk_map_settled(&mut self) {
+        if self.message.as_deref() == Some(norte_i18n::t("msg-disk-map-started").as_str()) {
+            self.message = None;
+        }
+    }
+
     /// A measurement just landed: if the directory changed during it,
     /// what landed is from before, and it is measured once more.
     pub fn disk_map_landed(&mut self) {
