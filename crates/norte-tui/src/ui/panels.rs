@@ -435,19 +435,9 @@ fn frame_lines<'a>(marco: &norte_frontend::frame::StyledFrame, theme: &TuiTheme)
         .collect()
 }
 
-/// The disk map (phase 4): what the directory is made of, in rectangles.
-///
-/// The frame is laid out by [`norte_frontend::treemap::squarify`] with the
-/// width and height INSIDE the border: the layout does not know where the
-/// slot landed, just like a plugin's guest does not, and whoever paints
-/// does the arithmetic.
-///
-/// While it is measuring, whatever has arrived is painted — a map builds up
-/// gradually — and the title says so. A half-finished map that does not say
-/// so reads as a small directory, which is the wrong answer.
 /// A class colour in one of the map's tones (ADR 0175): `0` as the theme
 /// gives it, `1` darker, `2` lighter. Only a true colour can be mixed; a
-/// palette colour stays as it is.
+/// palette colour comes back as it is, and the caller dims it instead.
 pub(crate) fn tone(colour: ratatui::style::Color, shade: u8) -> ratatui::style::Color {
     use ratatui::style::Color;
     let Color::Rgb(r, g, b) = colour else {
@@ -464,6 +454,16 @@ pub(crate) fn tone(colour: ratatui::style::Color, shade: u8) -> ratatui::style::
     }
 }
 
+/// The disk map (phase 4): what the directory is made of, in rectangles.
+///
+/// The frame is laid out by [`norte_frontend::treemap::squarify`] with the
+/// width and height INSIDE the border: the layout does not know where the
+/// slot landed, just like a plugin's guest does not, and whoever paints
+/// does the arithmetic.
+///
+/// While it is measuring, whatever has arrived is painted — a map builds up
+/// gradually — and the title says so. A half-finished map that does not say
+/// so reads as a small directory, which is the wrong answer.
 pub(crate) fn draw_disk_map(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -536,12 +536,22 @@ pub(crate) fn draw_disk_map(
         let mut x: u16 = 0;
         for (span, s) in line.spans.iter_mut().zip(src) {
             if s.role.is_some() {
+                let shade = shade_at(x, y);
                 if let Some(fg) = span.style.fg {
-                    span.style.fg = Some(tone(fg, shade_at(x, y)));
+                    let toned = tone(fg, shade);
+                    span.style.fg = Some(toned);
+                    // A palette colour cannot be mixed: the darker tone is
+                    // the dimmed fill, so a 256-colour terminal still tells
+                    // two of them apart.
+                    if toned == fg && shade == 1 {
+                        span.style = span.style.add_modifier(ratatui::style::Modifier::DIM);
+                    }
                 }
                 span.style = span.style.add_modifier(ratatui::style::Modifier::REVERSED);
             }
-            let w = u16::try_from(norte_frontend::display::cells(&s.text)).unwrap_or(u16::MAX);
+            // In the layout's cells, which `squarify` counts as chars: a span
+            // is `cell_count` of them, label and padding.
+            let w = u16::try_from(s.text.chars().count()).unwrap_or(u16::MAX);
             x = x.saturating_add(w);
         }
     }

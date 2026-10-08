@@ -2214,7 +2214,7 @@ pub struct DiskTileView {
     /// `other`: the colour.
     pub class: String,
     /// The tone of that colour, `0..3` (bridge 105, ADR 0175): touching
-    /// rectangles of one class never share it.
+    /// rectangles of one class get different ones where three allow it.
     pub shade: u8,
 }
 

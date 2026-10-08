@@ -411,7 +411,7 @@ export interface DiskTileView {
   /** directory | code | archive | image | media | document | other */
   class: string;
   /** The tone of that colour, 0..3 (bridge 105): touching tiles of one
-   *  class never share it. */
+   *  class get different ones where three allow it. */
   shade: number;
 }
 

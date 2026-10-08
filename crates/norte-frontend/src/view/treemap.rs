@@ -438,8 +438,8 @@ pub struct Tile {
     /// What class of file it is.
     pub class: ChildClass,
     /// The tone of its class's colour, `0..SHADES` (ADR 0175): two
-    /// rectangles of one class that touch never share one, so a home of
-    /// folders is not one blue block.
+    /// rectangles of one class that touch get different ones whenever
+    /// three tones allow it, so a home of folders is not one blue block.
     pub shade: u8,
 }
 

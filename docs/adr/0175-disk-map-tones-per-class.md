@@ -43,15 +43,17 @@ rectangles apart — with no wire change and no new claim about content.
 
 1. Tones. `treemap::tiles` gives each rectangle a `shade` in `0..3`,
    largest first, greedily: the lowest tone that no TOUCHING rectangle of
-   the same class already has. Two neighbouring folders never share a
-   tone. Rectangles of different classes need no tone of their own,
-   because their colours already differ.
+   the same class already has. Two neighbouring folders get different
+   tones whenever three allow it; a rectangle whose same-class neighbours
+   already use all three takes the base one. Rectangles of different
+   classes need no tone of their own, because their colours already
+   differ.
 2. Both frontends paint it from that one field. The window mixes the
    class colour into the panel at 45 % for tone 0, 30 % for tone 1 and
    62 % for tone 2 (bridge 105). The terminal, which fills rectangles with
    the reversed colour, darkens it by 30 % for tone 1 and lightens it by
    25 % for tone 2. A palette colour, on a terminal without true colour,
-   stays as it is.
+   cannot be mixed: tone 1 is the dimmed fill there.
 3. Colouring by content is not taken now, for the costs above. If it is
    ever done, it is a protocol ADR of its own and keeps the tones for
    ties.
@@ -60,5 +62,7 @@ rectangles apart — with no wire change and no new claim about content.
 
 - A map of one class still reads as one class (the legend is unchanged)
   with its rectangles separated.
-- On a 16- or 256-colour terminal the tones fall back to one colour, and
-  the gap between rectangles is all that separates them, as before.
+- On a 16- or 256-colour terminal there are two tones, the colour and its
+  dimmed fill, where the terminal honours dim under reverse.
+- The terminal computes the tones on every draw: `tiles` is quadratic in
+  the rectangles shown, which a panel bounds to a few hundred in practice.
