@@ -15,6 +15,9 @@ independently through `PROTOCOL_VERSION`.
 - **"Measuring the directory…" leaves the terminal's status bar** when
   the disk map finishes or is closed: it stayed under a map whose title
   already said done.
+- **"Go to…" shows the whole place when it fits**: the window cut
+  "/home/ada/Photos/2026-01 Tromsø" to "…tos/2026-01 Tromsø" in a box
+  with room to spare.
 
 ### Added
 
