@@ -2952,6 +2952,9 @@ struct State {
     /// window shrank would mean opening the host for a minute eats the TUI's
     /// layout (ADR 0058 D5).
     tree: Node,
+    /// Where the reader last had each panel kind in THIS window (ADR 0173):
+    /// reopening a panel puts it back there.
+    panel_docks: std::collections::BTreeMap<String, norte_frontend::layout::Dock>,
     /// The kinds this host knows how to declare (minimums, focus, roles).
     kinds: KindRegistry,
     /// The last panel bar that crossed the bridge. `parche` compares it
@@ -3356,6 +3359,7 @@ impl State {
         let roles = Self::roles_initial(&tree, &split, &kinds, active);
         let state = Self {
             labels_plugin: Labels::new(),
+            panel_docks: std::collections::BTreeMap::new(),
             instance,
             sequence: 0,
             token: 0,
@@ -4171,6 +4175,9 @@ impl State {
                 self.touch_branch(*row, *generation, false, backend, mailbox)
             }
             UiAction::TreeSetVisibleRange { first, count } => self.tree_range(*first, *count),
+            UiAction::TimelineShowRow { slot_id, seq } => {
+                self.show_timeline_details(Some((*slot_id, *seq)))
+            }
             UiAction::LayoutActivateRow { row } => self.choose_layout(*row, backend, mailbox),
             UiAction::SearchActivateRow { row } => self.go_to_result(*row, backend, mailbox),
             UiAction::HelpActivate { index } => self.activate_in_help(*index, backend, mailbox),

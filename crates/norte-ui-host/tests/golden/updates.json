@@ -1401,6 +1401,7 @@
             "hostile": false,
             "op": "renamed",
             "path": "/casa/a.txt",
+            "seq": 42,
             "tail": "",
             "time": "12:00"
           },
@@ -1409,6 +1410,7 @@
             "hostile": true,
             "op": "removed",
             "path": "/casa/caf�",
+            "seq": 41,
             "tail": "3 de golpe · sin vuelta",
             "time": "11:58"
           }

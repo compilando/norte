@@ -47,6 +47,7 @@ pub use overlays::{
 };
 pub use pane::painted_len_and_selection;
 pub(crate) use pane::pane_columns;
+pub(crate) use panels::timeline_window;
 pub use panels::{PlaceZone, TreeZone, places_zones, tree_zones};
 pub use pickers::draw_theme_picker;
 pub use status::{SessionZone, StatusItemZone, session_zone, status_item_zones, status_zones};

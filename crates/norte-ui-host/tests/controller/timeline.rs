@@ -138,6 +138,54 @@ async fn the_timeline_requests_its_first_page_and_paints_it() {
     );
 }
 
+/// A click on a row names it by `seq`: the cursor goes there and its
+/// details open; Space on the focused timeline opens the cursor's
+/// (2026-10-08).
+#[tokio::test]
+async fn a_click_or_space_opens_a_rows_details() {
+    let h = host_with_timeline(with_history()).await;
+    let mut sub = h.subscribe();
+    let snap = snapshot_with_rows(&h, &mut sub).await;
+    let seq = line_of(&snap).expect("timeline").rows[1].seq;
+    assert_eq!(seq, 2);
+    h.dispatch(UiAction::TimelineShowRow {
+        slot_id: SLOT_LINE,
+        seq,
+    })
+    .await
+    .expect("host alive");
+    let snap = snapshot_where(&h, &mut sub, "the details", |f| !f.dialogs.is_empty()).await;
+    assert_eq!(line_of(&snap).and_then(|l| l.cursor), Some(1));
+    let d = snap.dialogs.last().expect("details");
+    assert_eq!(d.title_key, "timeline-detail-title");
+    let body: Vec<&str> = d.body.iter().map(|l| l.text.as_str()).collect();
+    assert!(body.iter().any(|l| l.contains("/casa/b.txt")), "{body:?}");
+    assert!(body.iter().any(|l| l.contains("#2")), "{body:?}");
+    h.dispatch(UiAction::Dialog {
+        id: d.id,
+        choice: "ok".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host alive");
+    let _ = snapshot_where(&h, &mut sub, "closed", |f| f.dialogs.is_empty()).await;
+
+    h.dispatch(UiAction::FocusSlot { slot_id: SLOT_LINE })
+        .await
+        .expect("host alive");
+    h.dispatch(press(" ")).await.expect("host alive");
+    let snap = snapshot_where(&h, &mut sub, "the details by Space", |f| {
+        !f.dialogs.is_empty()
+    })
+    .await;
+    let d = snap.dialogs.last().expect("details");
+    assert!(
+        d.body.iter().any(|l| l.text.contains("#2")),
+        "the cursor's row: {:?}",
+        d.body
+    );
+}
+
 /// Down, `Enter`: it asks with the COUNT; confirming sends the cut at the
 /// pointed-to row, which stays.
 #[tokio::test]

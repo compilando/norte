@@ -230,6 +230,8 @@ pub async fn on_timeline_key(
             }
         }
         "dialog.cancel" | "dialog.pane" | "pane.switch" => app.return_keys_to_panes(),
+        // Space, like Quick Look: the row's details (2026-10-08).
+        "dialog.toggle-enabled" => app.show_timeline_details(),
         "dialog.confirm" => {
             let Some(tl) = app.panes.timeline(slot) else {
                 return;

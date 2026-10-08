@@ -75,6 +75,11 @@ impl State {
             // later.
             self.set_tree(tree, None);
         }
+        // Where each panel was last in this window (ADR 0173), BEFORE the
+        // shared set opens any.
+        if let Some(docks) = body.panel_docks.get(&own_key) {
+            self.panel_docks.clone_from(docks);
+        }
         // Which panels are open is the terminal's too (ADR 0170): this
         // window keeps its own places and sizes, and opens or closes to
         // match — on the tree, before anything is published, like the
@@ -597,6 +602,13 @@ impl State {
         }
         body.palette_recent.clone_from(&self.palette_recent);
         body.popular = self.popular.entries().to_vec();
+        // Where each panel was last, under the window's own key (ADR 0173).
+        let mut docks = self.panel_docks.clone();
+        docks.extend(norte_frontend::layout::docks_in(&self.tree));
+        body.panel_docks.insert(
+            norte_frontend::session::window_layout_key(&self.session_key()),
+            docks,
+        );
         // Which panels are open, SHARED with the terminal (ADR 0170).
         body.open_panels.insert(
             self.session_key(),

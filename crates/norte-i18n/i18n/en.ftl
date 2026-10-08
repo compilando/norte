@@ -1226,6 +1226,21 @@ timeline-undo-count = { $n } entries are undone
 timeline-undo-skipped = { $n } have no way back and are skipped
 timeline-undo-foreign = { $n } are not yours and are left alone
 timeline-undo-nothing = there is nothing of yours to undo above that row
+# A row's details (click or Space).
+timeline-detail-title = What happened
+timeline-detail-when = When
+timeline-detail-who = Who
+timeline-detail-what = What
+timeline-detail-path = On
+timeline-detail-to = To
+timeline-detail-batch = Batch
+timeline-detail-undo = Undo
+timeline-detail-seq = Journal entry
+timeline-detail-you = you
+timeline-detail-undo-yes = yes: undoing back past it brings it back
+timeline-detail-undo-done = already undone
+timeline-detail-undo-irreversible = no: it has no way back
+timeline-detail-undo-not-yours = no: it is not yours, undo leaves it alone
 msg-timeline-undo-running = undoing back to the chosen point…
 
 # The first-run wizard (spec 2026-09-10): three questions when there is no

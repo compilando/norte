@@ -11,12 +11,6 @@
 use super::*;
 
 impl State {
-    /// A bottom dock's opening size against the last viewport (ADR 0171).
-    pub(super) fn bottom_dock(&self, rows: u16) -> norte_frontend::layout::Size {
-        let h = self.viewport.1;
-        norte_frontend::layout::dock_rows(rows, (h > 0).then_some(h))
-    }
-
     /// The three effects that touch the LAYOUT, together.
     ///
     /// Grouped here and not in `apply_effect` because that method is a
@@ -463,7 +457,7 @@ impl State {
     /// change of layout wakes, and the start (ADR 0170) before anything is
     /// published.
     pub(super) fn tree_opening(&mut self, kind: &str) -> Option<Node> {
-        use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Size};
+        use norte_frontend::layout::{Bindings, Follow, KindId};
         if self.slot_of_kind(kind).is_some() {
             return None;
         }
@@ -482,28 +476,17 @@ impl State {
             ),
             _ => Node::slot(id, KindId::new(kind)),
         };
-        let (edge, size) = match kind {
-            "places" => (Edge::Left, Size::Fixed(16)),
-            "processes" => (Edge::Bottom, self.bottom_dock(8)),
-            // The log at the bottom, and taller than the board: its lines are
-            // long, and eight rows of which two are chrome do not leave room
-            // to read a trace. It is the same spot the TUI gives it.
-            "log" => (Edge::Bottom, self.bottom_dock(12)),
-            // The tree on the left and with the places bar's width: it is the
-            // same gesture — a navigation column next to the listing — and
-            // two different widths for the same thing stand out.
-            "tree" => (Edge::Left, Size::Fixed(24)),
-            // The viewer on the right and at an EQUAL SPLIT with the listing,
-            // as the TUI places it: thirty cells do not leave room to read a
-            // line.
-            super::preview::KIND => (Edge::Right, Size::Weight(1)),
-            _ => (Edge::Right, Size::Fixed(30)),
-        };
+        // Where the reader last had it, or its NORMAL place — the table both
+        // frontends share (ADR 0173). This window sent every kind it did not
+        // list to a thirty-cell column on the right: the timeline, the
+        // terminal and the disk map came out narrow.
+        let rows = (self.viewport.1 > 0).then_some(self.viewport.1);
+        let d = norte_frontend::layout::dock_for(kind, &self.panel_docks, rows);
         // Grouped (phase F): a panel that reaches an edge with another panel
         // joins it as a tab, like VS Code.
         Some(
             self.tree
-                .dock_grouped(SlotId(self.focused()), edge, size, &leaf),
+                .dock_grouped(SlotId(self.focused()), d.edge, d.size, &leaf),
         )
     }
 

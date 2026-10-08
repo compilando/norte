@@ -19,6 +19,7 @@
 //! each frontend, and it is the only thing that really differs between a
 //! terminal and a window.
 
+use crate::ReportLine;
 use norte_proto::methods::JournalRow;
 
 /// How a row's path is PAINTED: with no `file://` in front (the local scheme
@@ -37,6 +38,80 @@ use norte_proto::methods::JournalRow;
 #[must_use]
 pub fn path_label(path: &str) -> String {
     norte_proto::VPath::parse(path).map_or_else(|_| path.to_owned(), |v| crate::path_display(&v).0)
+}
+
+/// A row's details in `lang`, at the clock of `tz`: what the popup a click
+/// or Space opens says (2026-10-08, ADR 0173). Everything the row
+/// abbreviates — the full date, who exactly, both paths whole, the batch,
+/// and whether undo will touch it and why not — plus its journal number.
+///
+/// Typed like any report (#273): each path goes ALONE on its line, as a
+/// [`ReportLine::Path`] each frontend masks and flags; the journal's own
+/// text (the verb, the actor) is a third party's and goes through
+/// [`crate::display_name`]. A row the server already masked carries the
+/// altered-name badge before its paths.
+#[must_use]
+pub fn details(
+    row: &TimelineRow,
+    lang: norte_i18n::Lang,
+    tz: &jiff::tz::TimeZone,
+) -> Vec<ReportLine> {
+    use norte_i18n::{t_in, ta_in};
+    let phrase =
+        |key: &str, value: &str| ReportLine::Phrase(format!("{}: {value}", t_in(lang, key)));
+    let foreign = |s: &str| crate::display_name(s.as_bytes()).0;
+    let who = match (row.is_from_human(), row.actor_id.as_deref()) {
+        (true, _) => t_in(lang, "timeline-detail-you"),
+        (false, Some(id)) => format!("{} · {}", foreign(&row.actor_kind), foreign(id)),
+        (false, None) => foreign(&row.actor_kind),
+    };
+    let undo = if row.will_undo() {
+        "timeline-detail-undo-yes"
+    } else if row.ya_discard {
+        "timeline-detail-undo-done"
+    } else if !row.reversible {
+        "timeline-detail-undo-irreversible"
+    } else {
+        "timeline-detail-undo-not-yours"
+    };
+    let path = |label: &str, wire: &str, out: &mut Vec<ReportLine>| {
+        out.push(ReportLine::Phrase(format!("{}:", t_in(lang, label))));
+        if row.hostile {
+            out.push(ReportLine::Phrase(t_in(lang, "hostile-name")));
+        }
+        out.push(match norte_proto::VPath::parse(wire) {
+            Ok(p) => ReportLine::Path(p),
+            Err(_) => ReportLine::Phrase(foreign(wire)),
+        });
+    };
+    let mut out = vec![
+        phrase(
+            "timeline-detail-when",
+            &crate::format::datetime_in(row.ts_ms, tz),
+        ),
+        phrase("timeline-detail-who", &who),
+        phrase("timeline-detail-what", &foreign(&row.op)),
+    ];
+    path("timeline-detail-path", &row.path, &mut out);
+    if let Some(to) = &row.path_to {
+        path("timeline-detail-to", to, &mut out);
+    }
+    if row.members > 1 {
+        out.push(phrase(
+            "timeline-detail-batch",
+            &ta_in(lang, "timeline-batch", &[("n", &row.members.to_string())]),
+        ));
+    }
+    out.push(phrase("timeline-detail-undo", &t_in(lang, undo)));
+    out.push(phrase("timeline-detail-seq", &format!("#{}", row.seq)));
+    out
+}
+
+/// [`details`] at the system's clock, the listing's: what both frontends
+/// paint.
+#[must_use]
+pub fn details_local(row: &TimelineRow, lang: norte_i18n::Lang) -> Vec<ReportLine> {
+    details(row, lang, &jiff::tz::TimeZone::system())
 }
 
 /// The human actor's class, exactly as the journal writes it.
@@ -376,6 +451,83 @@ mod tests {
             reversible,
             batch_id: batch,
         }
+    }
+
+    /// A row's details, for the popup a click or Space opens (2026-10-08):
+    /// the full date, who, what, both paths, the batch, whether undo will
+    /// touch it and why not, and its journal number.
+    #[test]
+    fn a_rows_details_say_everything() {
+        let lang = norte_i18n::Lang::En;
+        let mut r = row(42, "user", true, Some(7));
+        r.path_to = Some("file:///b/42".to_owned());
+        let rows = [
+            r,
+            row(41, "user", true, Some(7)),
+            row(3, "agent", true, None),
+        ];
+        let t = Timeline::new(&rows, None);
+        let utc = jiff::tz::TimeZone::UTC;
+        let text = |i: usize| -> String {
+            super::details(&t.rows()[i], lang, &utc)
+                .iter()
+                .map(|l| match l {
+                    crate::ReportLine::Phrase(p) => format!("{p}\n"),
+                    crate::ReportLine::Path(p) => format!("PATH {}\n", crate::path_display(p).0),
+                })
+                .collect()
+        };
+        let d = text(0);
+        for want in [
+            "copied",
+            "PATH /a/42",
+            "PATH /b/42",
+            "2 ",
+            "#42",
+            "1970-01-01 00:00:01",
+        ] {
+            assert!(d.contains(want), "{want} missing in:\n{d}");
+        }
+        let agent = text(1);
+        assert!(agent.contains("agent"), "{agent}");
+        assert!(
+            agent.contains(&norte_i18n::t_in(lang, "timeline-detail-undo-not-yours")),
+            "{agent}"
+        );
+    }
+
+    /// The journal's own text is a third party's: an actor or a verb with
+    /// bidi or control bytes is masked, and a row the server masked carries
+    /// the altered-name badge before its path (review of 2026-10-08).
+    #[test]
+    fn a_hostile_rows_details_are_masked_and_flagged() {
+        let lang = norte_i18n::Lang::En;
+        let mut r = row(5, "agent", true, None);
+        r.actor_id = Some("evil\u{202e}gpj.exe".to_owned());
+        r.op = "copied\u{1b}[2J".to_owned();
+        r.hostile = true;
+        let t = Timeline::new(&[r], None);
+        let lines = super::details(&t.rows()[0], lang, &jiff::tz::TimeZone::UTC);
+        let phrases: Vec<&str> = lines
+            .iter()
+            .filter_map(|l| match l {
+                crate::ReportLine::Phrase(p) => Some(p.as_str()),
+                crate::ReportLine::Path(_) => None,
+            })
+            .collect();
+        for p in &phrases {
+            assert!(!p.contains('\u{202e}') && !p.contains('\u{1b}'), "{p:?}");
+        }
+        assert!(
+            phrases.contains(&norte_i18n::t_in(lang, "hostile-name").as_str()),
+            "{phrases:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| matches!(l, crate::ReportLine::Path(_))),
+            "the path alone on its line"
+        );
     }
 
     /// A batch is ONE row: it is undone whole or not touched, so a list that

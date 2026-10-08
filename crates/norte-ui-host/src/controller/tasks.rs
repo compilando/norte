@@ -1253,7 +1253,8 @@ impl State {
         };
         let mut fallen = Vec::new();
         if hay_that_say_it {
-            let (change, fell) = self.open_report("modal-undo-report-title".to_owned(), body);
+            let (change, fell) =
+                self.open_report("modal-undo-report-title".to_owned(), body, false);
             changes.push(change);
             fallen = fell;
         }
@@ -1359,7 +1360,8 @@ impl State {
         };
         let mut fallen = Vec::new();
         if hay_that_say_it {
-            let (change, fell) = self.open_report("modal-batch-report-title".to_owned(), body);
+            let (change, fell) =
+                self.open_report("modal-batch-report-title".to_owned(), body, false);
             changes.push(change);
             fallen = fell;
         }
@@ -1436,10 +1438,15 @@ impl State {
 
     /// Opens a report's dialog. It only informs: it has nothing to execute,
     /// and its only answer closes it.
+    ///
+    /// `asked`: the reader opened it (a click, a key), so its first answer
+    /// counts; one that opens ON ITS OWN, when the daemon answers, swallows
+    /// a keystroke typed before it appeared.
     pub(super) fn open_report(
         &mut self,
         title_key: String,
         body: Vec<crate::dto::DialogLine>,
+        asked: bool,
     ) -> (ViewChange, Vec<BridgeEnvelope<UiUpdate>>) {
         let id = ModalId(self.next_modal);
         self.next_modal += 1;
@@ -1469,8 +1476,7 @@ impl State {
             id,
             vista,
             typed: Typed::Text(String::new()),
-            // It opens ON ITS OWN, when the daemon answers.
-            recognized: false,
+            recognized: asked,
             on_confirm: None,
         });
         (

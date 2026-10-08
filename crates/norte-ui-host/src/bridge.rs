@@ -591,7 +591,9 @@ use serde::{Deserialize, Serialize};
 ///   rectangles, for a renderer that draws boxes (`DiskTileView`).
 /// - **103**: `DiskMapSlotView.activity`: what a running measurement has
 ///   counted so far.
-pub const BRIDGE_VERSION: u32 = 103;
+/// - **104**: `TimelineRowView.seq` and `timeline_show_row { slot_id, seq }`: a
+///   click on a timeline row opens its details.
+pub const BRIDGE_VERSION: u32 = 104;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

@@ -67,6 +67,12 @@ export function paintTimeline(this: Screen, dom: SlotDom, slot: TimelineSlotView
     // Cut from the LEFT, so the file name shows: the whole path, on hover.
     cutStart(path).textContent = r.path;
     row.title = `${r.op} ${r.path}`;
+    // A click opens the row's details (bridge 104). By `seq`, its identity:
+    // the list grows at the top, so a position could name another row.
+    const seq = r.seq;
+    row.onclick = () => {
+      this.send({ action: "timeline_show_row", slot_id: slot.slot_id, seq });
+    };
     row.append(verb, path);
     if (r.tail !== "") {
       const tail = document.createElement("span");

@@ -835,6 +835,59 @@ fn place_zone_at(app: &App, col: u16, row: u16) -> Option<crate::ui::PlaceZone> 
         .copied()
 }
 
+/// A left press on a side panel's row: places, tree or timeline. Their
+/// cells belong to no listing, so the hit test would land on "outside the
+/// panes" and the panel painted with no way to touch it (#226, #136). The
+/// drag is cancelled: nothing gets dragged from here.
+fn side_panel_click(app: &mut App, col: u16, row: u16) -> Option<After> {
+    if let Some(z) = place_zone_at(app, col, row) {
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        return Some(match app.places_click(z.index) {
+            crate::app::PlacesClick::Focused => After::Nothing,
+            crate::app::PlacesClick::Folded => After::PlacesFolded,
+            crate::app::PlacesClick::Activate => After::PlacesActivate,
+        });
+    }
+    // The tree: pressing the MARK folds or unfolds; the rest of the row
+    // selects, and the second press activates.
+    if let Some(z) = tree_zone_at(app, col, row) {
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        let spot = if col == z.mark_x {
+            crate::app::TreeSpot::Mark
+        } else {
+            crate::app::TreeSpot::Row
+        };
+        return Some(match app.tree_click(z.index, spot) {
+            crate::app::TreeClick::Focused => After::Nothing,
+            crate::app::TreeClick::Activate => After::TreeActivate,
+        });
+    }
+    // A timeline row: selected, and its details open (2026-10-08).
+    let index = timeline_row_at(app, col, row)?;
+    app.mouse.drag.cancel();
+    app.mouse.last_click = None;
+    app.timeline_click(index);
+    Some(After::Nothing)
+}
+
+/// The timeline row under `(col, row)`, inside its border, against the
+/// window `draw_timeline` paints.
+fn timeline_row_at(app: &App, col: u16, row: u16) -> Option<usize> {
+    let slot = app.timeline_slot()?;
+    let rect = app.mouse.slots.iter().find(|s| s.slot == slot)?;
+    col.checked_sub(rect.x.saturating_add(1))
+        .filter(|x| *x < rect.width.saturating_sub(2))?;
+    let y = row
+        .checked_sub(rect.y.saturating_add(1))
+        .filter(|y| *y < rect.height.saturating_sub(2))?;
+    let t = app.panes.timeline(slot)?;
+    let window = crate::ui::timeline_window(t, rect.height.saturating_sub(2));
+    let index = window.start.checked_add(usize::from(y))?;
+    window.contains(&index).then_some(index)
+}
+
 /// The tree row under `(col, row)`, if there is one (#136).
 fn tree_zone_at(app: &App, col: u16, row: u16) -> Option<crate::ui::TreeZone> {
     app.mouse
@@ -1409,40 +1462,10 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
         apply_tab_zone(app, z);
         return After::Nothing;
     }
-    // The places sidebar, for the same reason: its cells belong to no
-    // listing, so a click there would land on "outside the panes" and do
-    // nothing — the panel painted and could not be touched (#226). The drag
-    // is cancelled: nothing gets dragged from here.
     if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left))
-        && let Some(z) = place_zone_at(app, ev.column, ev.row)
+        && let Some(after) = side_panel_click(app, ev.column, ev.row)
     {
-        app.mouse.drag.cancel();
-        app.mouse.last_click = None;
-        return match app.places_click(z.index) {
-            crate::app::PlacesClick::Focused => After::Nothing,
-            crate::app::PlacesClick::Folded => After::PlacesFolded,
-            crate::app::PlacesClick::Activate => After::PlacesActivate,
-        };
-    }
-    // And the tree, for the same reason: its cells are not part of any
-    // listing either, so the click would land on "outside the panes" and the
-    // panel painted with no way to touch it (#136). Pressing the MARK folds
-    // or unfolds; the rest of the row selects, and the second press
-    // activates.
-    if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left))
-        && let Some(z) = tree_zone_at(app, ev.column, ev.row)
-    {
-        app.mouse.drag.cancel();
-        app.mouse.last_click = None;
-        let spot = if ev.column == z.mark_x {
-            crate::app::TreeSpot::Mark
-        } else {
-            crate::app::TreeSpot::Row
-        };
-        return match app.tree_click(z.index, spot) {
-            crate::app::TreeClick::Focused => After::Nothing,
-            crate::app::TreeClick::Activate => After::TreeActivate,
-        };
+        return after;
     }
     let hit = hit_test(app, ev.column, ev.row);
     let m = mods(ev.modifiers);

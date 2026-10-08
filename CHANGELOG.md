@@ -7,6 +7,22 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **A timeline row shows its details**: Space or a click opens the full
+  date, who did it, both paths whole, the batch, whether undo brings it
+  back (and why not) and its journal number. Enter still undoes back to
+  that row, asking first.
+
+### Changed
+
+- **Panels open at their normal place, or where you left them.** Left
+  for places and the tree, right for the viewer and details, bottom for
+  processes, log, terminal, timeline and disk map — in both frontends.
+  The window put the timeline, the terminal and the disk map in a narrow
+  column on the right. A panel you moved and closed now reopens where
+  you had it, across sessions.
+
 ## [0.3.0-alpha.10] - 2026-10-08
 
 ### Changed

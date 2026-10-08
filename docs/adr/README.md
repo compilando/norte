@@ -173,3 +173,4 @@ edits.
 | [0170](0170-the-open-panels-are-shared.md) | Which panels are open is shared between the frontends | accepted |
 | [0171](0171-panels-usability.md) | Side panels: shared keys, a "behind" state, docks that yield | accepted |
 | [0172](0172-the-window-looks-like-vs-code.md) | The window follows VS Code's chrome | accepted |
+| [0173](0173-panels-normal-place-and-timeline-details.md) | Panels open at their normal place; a timeline row shows its details | accepted |

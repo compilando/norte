@@ -573,6 +573,38 @@ async fn a_long_measurement_is_cancelled_by_another_folder_and_by_closing() {
         .await;
 }
 
+/// The timeline opens at its NORMAL place, the bottom, full width: the
+/// window sent it to a thirty-cell column on the right (ADR 0173,
+/// 2026-10-08).
+#[tokio::test]
+async fn the_timeline_opens_at_the_bottom() {
+    let (h, _snap) = host_over(Node::slot(SlotId(1), KindId::browser())).await;
+    let mut sub = h.subscribe();
+    let (_, snap) = after(&h, &mut sub, key_alt("T")).await;
+    let id = snap
+        .slots
+        .iter()
+        .find_map(|s| match s {
+            SlotView::Timeline(t) => Some(t.slot_id),
+            _ => None,
+        })
+        .expect("the timeline opened");
+    let p = snap
+        .layout
+        .placements
+        .iter()
+        .find(|p| p.slot_id == id)
+        .expect("placed");
+    let listing = snap
+        .layout
+        .placements
+        .iter()
+        .find(|p| p.slot_id == 1)
+        .expect("listing");
+    assert!(p.y > listing.y, "below the listing: {p:?} vs {listing:?}");
+    assert_eq!(p.width, listing.width, "full width");
+}
+
 /// A listing on top, and a dock below with two PANEL tabs: processes(9),
 /// log(8).
 async fn host_panel_tabs() -> (UiHost, norte_ui_host::ViewSnapshot) {

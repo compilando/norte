@@ -92,6 +92,27 @@ pub fn time_local(epoch_ms: i64) -> String {
     time_in(epoch_ms, &jiff::tz::TimeZone::system())
 }
 
+/// The full date and time in `tz`, `2026-10-08 13:16:05`: where the time
+/// alone is not enough (a timeline row's details). Out of range (a
+/// hostile timestamp), the bare UTC time, as [`time_in`] paints it.
+///
+/// ```
+/// use norte_frontend::format::datetime_in;
+/// let utc = jiff::tz::TimeZone::UTC;
+/// assert_eq!(datetime_in(0, &utc), "1970-01-01 00:00:00");
+/// assert_eq!(datetime_in(i64::MAX, &utc).len(), 8);
+/// ```
+#[must_use]
+pub fn datetime_in(epoch_ms: i64, tz: &jiff::tz::TimeZone) -> String {
+    match jiff::Timestamp::from_millisecond(epoch_ms) {
+        Ok(ts) => ts
+            .to_zoned(tz.clone())
+            .strftime("%Y-%m-%d %H:%M:%S")
+            .to_string(),
+        Err(_) => time_in(epoch_ms, &jiff::tz::TimeZone::UTC),
+    }
+}
+
 /// [`time_local`] in a GIVEN zone, for tests that must not depend on the
 /// machine's.
 ///

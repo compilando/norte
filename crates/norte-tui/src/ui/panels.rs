@@ -1416,6 +1416,21 @@ fn timeline_line<'a>(
     Line::from(spans)
 }
 
+/// Which timeline rows a body `height` rows tall paints: the same window as
+/// any long list in this binary (`draw_pane`, and the reason measured
+/// there). The click resolves against it too, so both agree on the row.
+pub(crate) fn timeline_window(
+    timeline: &norte_frontend::timeline::Timeline,
+    height: u16,
+) -> std::ops::Range<usize> {
+    let alto = usize::from(height);
+    super::pane::painted_rows(
+        timeline.cursor().saturating_sub(alto.saturating_sub(1) / 2),
+        timeline.len(),
+        alto,
+    )
+}
+
 /// The journal's timeline (phase 7): one row per mutation — or per batch —
 /// from the newest to the oldest, with the cursor over the one that would
 /// be the point to go back to.
@@ -1471,15 +1486,7 @@ pub(crate) fn draw_timeline(
         );
         return;
     }
-    let alto = usize::from(inner.height);
-    // The same window as any long list in this binary: what fits is
-    // painted, not the whole history (`draw_pane`, and the reason measured
-    // there).
-    let window = super::pane::painted_rows(
-        timeline.cursor().saturating_sub(alto.saturating_sub(1) / 2),
-        timeline.len(),
-        alto,
-    );
+    let window = timeline_window(timeline, inner.height);
     let width = usize::from(inner.width);
     let items: Vec<ListItem<'_>> = timeline
         .rows()

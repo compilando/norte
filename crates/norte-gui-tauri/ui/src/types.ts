@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 103;
+export const BRIDGE_VERSION = 104;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -414,6 +414,8 @@ export interface DiskTileView {
 
 /** A timeline row (bridge 78), already paintable. */
 export interface TimelineRowView {
+  /** The row's journal number: what a click sends back (bridge 104). */
+  seq: number;
   time: string;
   /** `user`, `agent`, … — only for the dot's COLOR. */
   actor: string;
@@ -1881,6 +1883,7 @@ export type UiAction =
   | { action: "select_tab"; slot_id: number }
   | { action: "picker_select_row"; row: number; generation: number }
   | { action: "place_activate_row"; row: number; generation: number }
+  | { action: "timeline_show_row"; slot_id: number; seq: number }
   | { action: "tree_activate_row"; row: number; generation: number }
   | { action: "tree_toggle_row"; row: number; generation: number }
   /** The tree rows painted (bridge 97): moves the window that travels. */
