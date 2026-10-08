@@ -2757,6 +2757,17 @@ describe("the menu bar", () => {
       expect(sent).toEqual([]);
     });
 
+    it("carries the command centre, which names `goto` to the host (ADR 0172)", () => {
+      const { screen, sent } = mount();
+      screen.paint(withMenu(null));
+      const center = document.querySelector(
+        ".menubar .command-center",
+      ) as HTMLButtonElement;
+      expect(center.textContent).toBe("Ir a…");
+      center.click();
+      expect(sent).toEqual([{ action: "activity_activate", id: "goto" }]);
+    });
+
     it("the free space drags and a double click maximizes; a title doesn't", () => {
       const requests: WindowVerb[] = [];
       const { screen } = mount({ windowControl: (v) => requests.push(v) });

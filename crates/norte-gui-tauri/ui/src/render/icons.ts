@@ -73,6 +73,8 @@ const SHAPES: Record<string, Shape> = {
   },
   // The buttons for a window with its own title bar (ADR 0136), `window:`
   // prefix. Thin and small, like the desktop's.
+  // The command centre's magnifier (ADR 0172).
+  "ui:search": { paths: ["M15.5 15.5l4 4"], circles: [[10.5, 10.5, 5.5]] },
   // Minimize: a line at the bottom.
   "window:minimize": { paths: ["M7 12.5h10"] },
   // Maximize: a square.

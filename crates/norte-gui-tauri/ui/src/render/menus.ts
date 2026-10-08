@@ -368,6 +368,23 @@ export function paintMenu(
     bar.append(actions);
   }
   if (custom) {
+    // The COMMAND CENTRE (ADR 0172): VS Code's box in the middle of its
+    // title bar, which in norte is "go anywhere". It names a button, not a
+    // command: the host maps `goto` (ADR 0069).
+    const center = document.createElement("button");
+    center.type = "button";
+    center.className = "command-center";
+    const glass = panelIcon(document, "ui:search");
+    if (glass !== null) {
+      center.append(glass);
+    }
+    const label = document.createElement("span");
+    label.textContent = this.t("menu-item-app-goto");
+    center.append(label);
+    center.addEventListener("click", () => {
+      this.send({ action: "activity_activate", id: "goto" });
+    });
+    bar.append(center);
     titleBar.call(this, bar, buttons.length > 0);
   }
   const box = document.createElement("div");

@@ -216,10 +216,20 @@ pub fn icon_svg(kind: &str) -> Option<&'static str> {
 /// the icon, the label is the command's menu entry.
 pub const FOOTER: [(&str, &str); 2] = [("help", "app.help"), ("settings", "app.settings")];
 
-/// The command of a footer button's id, if it exists.
+/// The title bar's centre (ADR 0172): VS Code's command centre, which in
+/// norte is "go anywhere".
+pub const CENTER: (&str, &str) = ("goto", "app.goto");
+
+/// The command of a chrome button's id — the column's foot or the title
+/// bar's centre — if it exists. A closed list: the renderer names a
+/// button, never a command (ADR 0069).
 #[must_use]
 pub fn footer_command(id: &str) -> Option<&'static str> {
-    FOOTER.iter().find(|(i, _)| *i == id).map(|(_, c)| *c)
+    FOOTER
+        .iter()
+        .chain(std::iter::once(&CENTER))
+        .find(|(i, _)| *i == id)
+        .map(|(_, c)| *c)
 }
 
 /// The panel kind `command` opens and closes — the inverse of each
@@ -787,6 +797,17 @@ mod tests {
             );
             seen.push(x.letter);
         }
+    }
+
+    /// The renderer names chrome buttons from a CLOSED list: the column's
+    /// foot and the title bar's centre, nothing else (ADR 0069, 0172).
+    #[test]
+    fn a_chrome_button_maps_to_its_command_and_nothing_else_does() {
+        assert_eq!(footer_command("settings"), Some("app.settings"));
+        assert_eq!(footer_command("help"), Some("app.help"));
+        assert_eq!(footer_command("goto"), Some("app.goto"));
+        assert_eq!(footer_command("app.quit"), None);
+        assert_eq!(footer_command(""), None);
     }
 
     /// The command a menu item runs says which panel it opens, so the menu
