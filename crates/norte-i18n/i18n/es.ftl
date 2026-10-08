@@ -2329,6 +2329,8 @@ processes-has-keyboard = este panel tiene el teclado · Esc lo devuelve
 log-title = Registro
 disk-map-title = Mapa de disco
 disk-map-measuring = midiendo
+# Una medición en curso, con lo que lleva contado.
+disk-map-progress = midiendo · { $entries } elementos · { $size }
 # La leyenda del mapa de disco en la ventana: qué es cada color.
 disk-map-class-directory = Carpetas
 disk-map-class-code = Código

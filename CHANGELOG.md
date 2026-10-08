@@ -19,6 +19,11 @@ independently through `PROTOCOL_VERSION`.
 
 - **The disk map follows the listing while the keyboard is in another
   panel** (the tree): it kept showing the folder from before.
+- **A long disk-map measurement shows it is working** ("measuring ·
+  12345 items · 3.0 GiB", with a pulsing dot in the window), and it is
+  **cancelled when you change folder or close the map**: the window
+  waited for the old measurement to finish before starting the new one,
+  and a closed map kept measuring.
 
 ## [0.3.0-alpha.9] - 2026-10-08
 

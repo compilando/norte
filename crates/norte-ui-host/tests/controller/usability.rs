@@ -500,6 +500,79 @@ async fn the_map_follows_the_listing_while_the_keyboard_is_elsewhere() {
     assert!(after_title.is_some_and(|t| !t.is_empty()));
 }
 
+/// A long measurement is CANCELLED when the listing goes elsewhere — and
+/// the new folder starts measuring at once instead of waiting minutes for
+/// the old one — and when the map closes (2026-10-08).
+#[tokio::test]
+async fn a_long_measurement_is_cancelled_by_another_folder_and_by_closing() {
+    let backend = fake_tree();
+    backend
+        .maps_hold
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: backend.clone(),
+        initial_dir: dir(),
+        initial_dir_requested: false,
+        attach: false,
+        locale: "en".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
+        layout: Node::Split {
+            dir: Dir::Horizontal,
+            children: vec![
+                Node::slot(SlotId(1), KindId::browser()),
+                Node::slot(SlotId(7), KindId::new("disk-map")),
+            ],
+            sizes: vec![
+                norte_frontend::layout::Size::Weight(1),
+                norte_frontend::layout::Size::Fixed(40),
+            ],
+        },
+        viewport: (160, 50),
+        settings: test_settings(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
+        log_ring: None,
+    })
+    .await
+    .expect("starts");
+    let first = backend
+        .until("the first measurement", |f| {
+            f.maps_requests.lock().expect("maps").first().cloned()
+        })
+        .await;
+    let mut sub = h.subscribe();
+    let _ = after(&h, &mut sub, UiAction::Parent { slot_id: 1 }).await;
+    backend
+        .until("the old one cancelled, the new one launched", |f| {
+            let cancelled = f.maps_cancelled.lock().expect("c").clone();
+            (cancelled.first() == Some(&first) && f.maps_requests.lock().expect("m").len() == 2)
+                .then_some(())
+        })
+        .await;
+    let second = backend.maps_requests.lock().expect("m")[1].clone();
+    assert_ne!(second, first);
+    let _ = after(
+        &h,
+        &mut sub,
+        UiAction::TabAction {
+            slot_id: 7,
+            verb: norte_ui_host::action::TabVerb::Close,
+        },
+    )
+    .await;
+    backend
+        .until("closing the map cancels its measurement", |f| {
+            (f.maps_cancelled.lock().expect("c").last() == Some(&second)).then_some(())
+        })
+        .await;
+}
+
 /// A listing on top, and a dock below with two PANEL tabs: processes(9),
 /// log(8).
 async fn host_panel_tabs() -> (UiHost, norte_ui_host::ViewSnapshot) {

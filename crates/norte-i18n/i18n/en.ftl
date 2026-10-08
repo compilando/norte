@@ -1063,6 +1063,8 @@ processes-has-keyboard = this panel has the keyboard · Esc returns it
 log-title = Log
 disk-map-title = Disk map
 disk-map-measuring = measuring
+# A measurement still running, with what it has counted so far.
+disk-map-progress = measuring · { $entries } items · { $size }
 # The disk map's legend in the window: what each colour is.
 disk-map-class-directory = Folders
 disk-map-class-code = Code

@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 102;
+export const BRIDGE_VERSION = 103;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -394,6 +394,8 @@ export interface DiskMapSlotView {
   tiles?: DiskTileView[];
   /** `[cols, rows]` the tiles are laid out in. */
   grid?: [number, number];
+  /** While measuring, what it has counted so far, translated (bridge 103). */
+  activity?: string;
 }
 
 /** A disk map rectangle (bridge 102), in cells of `grid`. */

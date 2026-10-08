@@ -39,7 +39,7 @@ pub use compare::{
     COMPARE_PAGE_STEP, CompareKey, CompareRun, compare_key, drain_compare, launch_compare,
     on_compare_enter, on_compare_key,
 };
-pub use diskmap::{harvest as harvest_disk_map, launch as launch_disk_map};
+pub use diskmap::{harvest as harvest_disk_map, launch as launch_disk_map, tend as tend_disk_map};
 pub use goto::harvest_goto_index;
 pub use inflight::{
     AiRenameRun, ChecksumRun, DiskMapRun, GotoIndexRun, InFlight, OrganizeRun, PendingAiPlan,

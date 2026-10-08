@@ -478,6 +478,32 @@ fn a_landed_disk_map_paints_its_children() {
     );
 }
 
+/// A long measurement says what it has counted in the title: "measuring"
+/// alone for minutes read as stuck (2026-10-08).
+#[test]
+fn a_running_measurement_counts_in_the_title() {
+    let _ = norte_i18n::force(norte_i18n::Lang::En);
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.open_disk_map();
+    let slot = app.disk_map_slot().expect("open");
+    let dir = app.focused().dir().clone();
+    let map = app.panes.disk_map_mut(slot).expect("map");
+    map.aim(dir);
+    map.measuring(norte_proto::TaskId::new(5));
+    map.progress(12_345, 3 << 30);
+    let mut terminal = Terminal::new(TestBackend::new(116, 37)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    let screen: String = (0..37)
+        .map(|y| {
+            (0..116)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_owned())
+                .collect::<String>()
+                + "\n"
+        })
+        .collect();
+    assert!(screen.contains("12345 items"), "{screen}");
+}
+
 /// An empty finished map says so, and the title names WHICH directory it
 /// measured: a blank frame with only "Disk map" could not tell an empty
 /// directory from the other pane's, from one still loading.

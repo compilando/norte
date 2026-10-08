@@ -59,6 +59,8 @@ pub struct DiskMap {
     /// The directory changed while it was being measured: what lands is
     /// from before, and it is measured once more.
     changed: bool,
+    /// Items and bytes the running measurement has counted so far.
+    counted: Option<(u64, u64)>,
 }
 
 impl DiskMap {
@@ -135,6 +137,30 @@ impl DiskMap {
         self.chosen = None;
         self.state = State::Idle;
         self.changed = false;
+        self.counted = None;
+    }
+
+    /// What the running measurement has counted so far: items and bytes.
+    pub fn progress(&mut self, entries: u64, bytes: u64) {
+        self.counted = Some((entries, bytes));
+    }
+
+    /// The measuring note, with what has been counted once anything has:
+    /// `measuring · 12345 items · 3.0 GiB`. A long measurement that only
+    /// said "measuring" for minutes read as stuck (2026-10-08).
+    #[must_use]
+    pub fn activity(&self, lang: norte_i18n::Lang) -> String {
+        match self.counted {
+            Some((entries, bytes)) => norte_i18n::ta_in(
+                lang,
+                "disk-map-progress",
+                &[
+                    ("entries", &entries.to_string()),
+                    ("size", &crate::human_bytes(bytes)),
+                ],
+            ),
+            None => norte_i18n::t_in(lang, "disk-map-measuring"),
+        }
     }
 
     /// Says that a measurement is running.
@@ -232,6 +258,22 @@ impl DiskMap {
 mod tests {
     use super::*;
     use norte_proto::EntryKind;
+
+    /// A long measurement says it is ALIVE: how many items and bytes it has
+    /// counted so far. "home — measuring" for minutes read as stuck
+    /// (2026-10-08). Aiming elsewhere forgets the count.
+    #[test]
+    fn a_measurement_reports_its_progress_and_aiming_forgets_it() {
+        let _ = norte_i18n::force(norte_i18n::Lang::En);
+        let mut m = DiskMap::new();
+        m.aim(VPath::parse("file:///home").expect("vpath"));
+        assert_eq!(m.activity(norte_i18n::Lang::En), "measuring");
+        m.progress(12_345, 3 << 30);
+        let a = m.activity(norte_i18n::Lang::En);
+        assert!(a.contains("12345") && a.contains("GiB"), "{a}");
+        m.aim(VPath::parse("file:///tmp").expect("vpath"));
+        assert_eq!(m.activity(norte_i18n::Lang::En), "measuring");
+    }
 
     fn seg(s: &str) -> Segment {
         Segment::new(s.as_bytes().to_vec()).expect("segment")

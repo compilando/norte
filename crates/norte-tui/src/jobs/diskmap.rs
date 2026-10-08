@@ -91,6 +91,29 @@ pub async fn launch(app: &mut App, backend: &Backend, work: &mut InFlight) {
     }
 }
 
+/// Tends the running measurement, every turn: what it has counted goes to
+/// the map's title, and a map that was CLOSED stops it — minutes of walking
+/// a tree for a panel that is gone (2026-10-08). Another folder already
+/// cancels it in [`launch`].
+pub fn tend(app: &mut App, work: &mut InFlight) {
+    let Some(run) = work.disk_map.as_ref() else {
+        return;
+    };
+    if app.disk_map_slot() == Some(run.slot) {
+        let (entries, bytes) = {
+            let p = run.task.progress();
+            let p = p.borrow();
+            (p.entries_done, p.bytes_done)
+        };
+        if let Some(m) = app.panes.disk_map_mut(run.slot) {
+            m.progress(entries, bytes);
+        }
+    } else if let Some(run) = work.disk_map.take() {
+        run.task.cancel();
+        run.handle.abort();
+    }
+}
+
 /// Lands the report of a measurement that already finished.
 ///
 /// **Whatever arrives late is DISCARDED.** Measuring takes time, and in that
