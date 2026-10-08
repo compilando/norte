@@ -425,6 +425,42 @@ async fn the_disk_map_moved_into_a_dock_still_says_something() {
     );
 }
 
+/// Opening the map says WHAT it measures and that it is measuring, before
+/// the measurement lands: it stayed blank, untitled, for the minutes a
+/// `$HOME` takes, because aiming it published nothing (2026-10-08).
+#[tokio::test]
+async fn an_opened_map_says_it_is_measuring_before_it_lands() {
+    // Any object on the wire that is a map measuring with a title.
+    fn measuring_map(v: &serde_json::Value) -> bool {
+        match v {
+            serde_json::Value::Object(o) => {
+                (o.get("measuring") == Some(&serde_json::Value::Bool(true))
+                    && o.get("title")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|t| !t.is_empty()))
+                    || o.values().any(measuring_map)
+            }
+            serde_json::Value::Array(a) => a.iter().any(measuring_map),
+            _ => false,
+        }
+    }
+    let (h, _snap) = host_over(Node::slot(SlotId(1), KindId::browser())).await;
+    let mut sub = h.subscribe();
+    // WITHOUT a resync: a full snapshot would paper over a patch never sent.
+    h.dispatch(key_alt("z")).await.expect("host alive");
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Some(Update::Message(m)) = sub.recv().await
+                && measuring_map(&serde_json::to_value(&m.payload).expect("json"))
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the map never said it was measuring");
+}
+
 /// A listing on top, and a dock below with two PANEL tabs: processes(9),
 /// log(8).
 async fn host_panel_tabs() -> (UiHost, norte_ui_host::ViewSnapshot) {

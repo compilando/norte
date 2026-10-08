@@ -115,6 +115,11 @@ impl State {
         let alive: Vec<u32> = slots.iter().map(|SlotId(id)| *id).collect();
         self.maps.retain(|id, _| alive.contains(id));
 
+        // The maps aimed now: each one is PUBLISHED with its directory and
+        // "measuring". Without that the window kept the view it opened with
+        // — no title, nothing — for the minutes a `$HOME` takes to measure
+        // (2026-10-08).
+        let mut aimed: Vec<u32> = Vec::new();
         for slot in slots {
             let SlotId(id) = slot;
             let Some((_, dir)) = self.followed_by_map(slot) else {
@@ -134,6 +139,7 @@ impl State {
             self.token += 1;
             let token = RequestToken(self.token);
             self.maps.entry(id).or_default().in_flight = Some((token, dir.clone()));
+            aimed.push(id);
 
             let params = norte_proto::methods::FsDirUsageParams {
                 path: dir.clone(),
@@ -192,7 +198,16 @@ impl State {
                     .await;
             });
         }
-        Vec::new()
+        if aimed.is_empty() {
+            return Vec::new();
+        }
+        let changes = aimed
+            .into_iter()
+            .map(|id| crate::dto::ViewChange::Slot {
+                slot: Box::new(crate::dto::SlotView::DiskMap(Box::new(self.map_view(id)))),
+            })
+            .collect();
+        vec![self.parche(changes)]
     }
 
     /// Lands a measurement: it is shown if the token is that of THAT slot's

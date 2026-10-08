@@ -76,6 +76,8 @@ impl State {
                 .tabs_of(id)
                 .is_some_and(|(t, a)| t.get(a) != Some(&id));
             if behind {
+                // `choose_tab` also starts a missing shell: bringing it
+                // forward is the gesture.
                 return self.choose_tab(id.0, backend, mailbox);
             }
             // Already in front, and here is the DOOR, in both directions. The
