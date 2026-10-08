@@ -2183,6 +2183,11 @@ pub struct DiskMapSlotView {
     /// as fractions of this, whatever its pixels.
     #[serde(default)]
     pub grid: [u16; 2],
+    /// While measuring, what it has counted so far, translated
+    /// (`measuring · 12345 items · 3.0 GiB`); empty otherwise (bridge 103).
+    /// A long measurement that only said "measuring" read as stuck.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub activity: String,
 }
 
 /// A disk map rectangle (bridge 102), in cells of `DiskMapSlotView.grid`.

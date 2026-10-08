@@ -469,7 +469,9 @@ pub(crate) fn draw_disk_map(
         // needs to show is when it is NOT finished, because a half-finished
         // map that does not say so reads as a total.
         State::Idle | State::Done => String::new(),
-        State::Measuring(_) => format!(" — {}", t("disk-map-measuring")),
+        // With what it has counted so far: "measuring" alone for minutes
+        // read as stuck (2026-10-08).
+        State::Measuring(_) => format!(" — {}", map.activity(norte_i18n::active())),
         State::Failure(motivo) => format!(" — {motivo}"),
     };
     // WHICH directory, as the window says it: a map of the other pane's

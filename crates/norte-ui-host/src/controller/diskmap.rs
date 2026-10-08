@@ -54,6 +54,115 @@ pub(super) struct StateMap {
     pub(super) requested: Option<VPath>,
     /// The request in flight, with its token.
     pub(super) in_flight: Option<(RequestToken, VPath)>,
+    /// How to stop the measurement in flight: another folder or a closed
+    /// panel cancels it instead of waiting minutes for an answer nobody
+    /// will look at (2026-10-08).
+    pub(super) stop: Option<Arc<Stop>>,
+}
+
+/// The cancel handle of a measurement, which only exists once the daemon
+/// launched it. A stop requested BEFORE that is remembered, and the task
+/// is cancelled the moment it appears.
+#[derive(Default)]
+pub(super) struct Stop {
+    cancel: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    stopped: std::sync::atomic::AtomicBool,
+}
+
+impl Stop {
+    /// Cancels the measurement, now or as soon as it is launched.
+    pub(super) fn stop(&self) {
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(guard) = self.cancel.lock()
+            && let Some(cancel) = guard.as_ref()
+        {
+            cancel();
+        }
+    }
+
+    /// The launched task's cancel; cancels at once if a stop came first.
+    fn launched(&self, cancel: &Arc<dyn Fn() + Send + Sync>) {
+        if let Ok(mut guard) = self.cancel.lock() {
+            *guard = Some(Arc::clone(cancel));
+        }
+        if self.stopped.load(std::sync::atomic::Ordering::SeqCst) {
+            cancel();
+        }
+    }
+}
+
+/// Measures `dir` for map `slot`, sending what it counts as it goes and the
+/// report at the end, both under `token`.
+async fn measure(
+    backend: Arc<dyn HostBackend>,
+    mailbox: mpsc::Sender<Message>,
+    (id, token): (u32, RequestToken),
+    dir: VPath,
+    stop: Arc<Stop>,
+) {
+    let params = norte_proto::methods::FsDirUsageParams {
+        path: dir,
+        // One level: that is what a map paints, and it is the only thing the
+        // server serves today. Asking for more is REJECTED (ADR 0117).
+        depth: 1,
+    };
+    // The deadline governs the LAUNCH, not the measurement: `fs.dir_usage`
+    // returns the Task as soon as it is queued, and measuring a `$HOME` can
+    // take minutes. A deadline on the measurement would kill it exactly on
+    // the trees for which it exists.
+    let launched =
+        match tokio::time::timeout(super::DEADLINE_PLUGINS, backend.dir_usage(params)).await {
+            Ok(r) => r,
+            Err(_) => Err(norte_proto::Error::ProviderUnavailable { retryable: true }),
+        };
+    let task = match launched {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = mailbox
+                .send(Message::MapContent(Box::new((id, token, Err(e)))))
+                .await;
+            return;
+        }
+    };
+    let task_id = task.id;
+    stop.launched(&task.cancel);
+    let mut prog = task.progress;
+    // The report is only DEFINITIVE once the Task is terminal. Requesting it
+    // earlier would give half a map without saying it is half, and half a
+    // map reads as a small directory.
+    //
+    // Meanwhile what it has COUNTED goes out, at most four times a second: a
+    // measurement that only says "measuring" for minutes reads as stuck.
+    let mut said = std::time::Instant::now();
+    while !prog.borrow().state.is_terminal() {
+        if prog.changed().await.is_err() {
+            break;
+        }
+        if said.elapsed() >= std::time::Duration::from_millis(250) {
+            said = std::time::Instant::now();
+            let (entries, bytes) = {
+                let p = prog.borrow();
+                (p.entries_done, p.bytes_done)
+            };
+            let _ = mailbox
+                .send(Message::MapProgress(id, token, entries, bytes))
+                .await;
+        }
+    }
+    let state_now = prog.borrow().state.clone();
+    let res = if state_now.is_terminal() {
+        backend
+            .dir_usage_report(task_id)
+            .await
+            .map(|report| (state_now, report))
+    } else {
+        // The channel died without reaching terminal: the daemon went down.
+        Err(norte_proto::Error::ProviderUnavailable { retryable: true })
+    };
+    let _ = mailbox
+        .send(Message::MapContent(Box::new((id, token, res))))
+        .await;
 }
 
 impl State {
@@ -117,7 +226,15 @@ impl State {
         // and without pruning, a new slot's map would inherit the previous
         // one's measurement — another directory's sizes, under this title.
         let alive: Vec<u32> = slots.iter().map(|SlotId(id)| *id).collect();
-        self.maps.retain(|id, _| alive.contains(id));
+        // And a CLOSED map stops measuring: minutes of walking a tree for
+        // a panel that is gone (2026-10-08).
+        self.maps.retain(|id, state| {
+            let keep = alive.contains(id);
+            if !keep && let Some(stop) = state.stop.take() {
+                stop.stop();
+            }
+            keep
+        });
 
         // The maps aimed now: each one is PUBLISHED with its directory and
         // "measuring". Without that the window kept the view it opened with
@@ -130,6 +247,18 @@ impl State {
                 continue;
             };
             let state = self.maps.entry(id).or_default();
+            // Measuring ANOTHER folder: that measurement is cancelled and
+            // this one starts now. It waited for the old one to finish — a
+            // `$HOME` takes minutes — while the map said "measuring" under
+            // the new title (2026-10-08).
+            if let Some((_, measuring)) = state.in_flight.as_ref()
+                && *measuring != dir
+            {
+                if let Some(stop) = state.stop.take() {
+                    stop.stop();
+                }
+                state.in_flight = None;
+            }
             if state.requested.as_ref() == Some(&dir) || state.in_flight.is_some() {
                 continue;
             }
@@ -142,65 +271,18 @@ impl State {
             }
             self.token += 1;
             let token = RequestToken(self.token);
-            self.maps.entry(id).or_default().in_flight = Some((token, dir.clone()));
+            let stop = Arc::new(Stop::default());
+            let state = self.maps.entry(id).or_default();
+            state.in_flight = Some((token, dir.clone()));
+            state.stop = Some(Arc::clone(&stop));
             aimed.push(id);
-
-            let params = norte_proto::methods::FsDirUsageParams {
-                path: dir.clone(),
-                // One level: that is what a map paints, and it is the only
-                // thing the server serves today. Asking for more is REJECTED
-                // (ADR 0117).
-                depth: 1,
-            };
-            let backend = Arc::clone(backend);
-            let mailbox = mailbox.clone();
-            tokio::spawn(async move {
-                // The deadline governs the LAUNCH, not the measurement:
-                // `fs.dir_usage` returns the Task as soon as it is queued,
-                // and measuring a `$HOME` can take minutes. A deadline on the
-                // measurement would kill it exactly on the trees for which it
-                // exists.
-                let launched =
-                    match tokio::time::timeout(super::DEADLINE_PLUGINS, backend.dir_usage(params))
-                        .await
-                    {
-                        Ok(r) => r,
-                        Err(_) => Err(norte_proto::Error::ProviderUnavailable { retryable: true }),
-                    };
-                let task = match launched {
-                    Ok(t) => t,
-                    Err(e) => {
-                        let _ = mailbox
-                            .send(Message::MapContent(Box::new((id, token, Err(e)))))
-                            .await;
-                        return;
-                    }
-                };
-                let task_id = task.id;
-                let mut prog = task.progress;
-                // The report is only DEFINITIVE once the Task is terminal.
-                // Requesting it earlier would give half a map without saying
-                // it is half, and half a map reads as a small directory.
-                while !prog.borrow().state.is_terminal() {
-                    if prog.changed().await.is_err() {
-                        break;
-                    }
-                }
-                let state_now = prog.borrow().state.clone();
-                let res = if state_now.is_terminal() {
-                    backend
-                        .dir_usage_report(task_id)
-                        .await
-                        .map(|report| (state_now, report))
-                } else {
-                    // The channel died without reaching terminal: the daemon
-                    // went down.
-                    Err(norte_proto::Error::ProviderUnavailable { retryable: true })
-                };
-                let _ = mailbox
-                    .send(Message::MapContent(Box::new((id, token, res))))
-                    .await;
-            });
+            tokio::spawn(measure(
+                Arc::clone(backend),
+                mailbox.clone(),
+                (id, token),
+                dir,
+                stop,
+            ));
         }
         if aimed.is_empty() {
             return Vec::new();
@@ -212,6 +294,26 @@ impl State {
             })
             .collect();
         vec![self.parche(changes)]
+    }
+
+    /// What a running measurement has counted so far, if it is still THAT
+    /// slot's live one: the map's note, and its slot alone republished.
+    pub(super) fn map_progress(
+        &mut self,
+        slot: u32,
+        token: RequestToken,
+        entries: u64,
+        bytes: u64,
+    ) -> Option<BridgeEnvelope<UiUpdate>> {
+        let state = self.maps.get_mut(&slot)?;
+        if state.in_flight.as_ref().map(|(t, _)| *t) != Some(token) {
+            return None;
+        }
+        state.map.progress(entries, bytes);
+        let change = crate::dto::ViewChange::Slot {
+            slot: Box::new(crate::dto::SlotView::DiskMap(Box::new(self.map_view(slot)))),
+        };
+        Some(self.parche(vec![change]))
     }
 
     /// Lands a measurement: it is shown if the token is that of THAT slot's
@@ -238,6 +340,7 @@ impl State {
             return None;
         }
         let (_, dir) = state.in_flight.take()?;
+        state.stop = None;
         // The attempt is recorded no matter what: without this, a directory
         // that cannot be measured would be retried after every actor
         // message.
@@ -414,6 +517,11 @@ impl State {
             lines,
             hits,
             measuring: state.is_some_and(|e| e.in_flight.is_some()),
+            // "measuring · 12345 items · 3.0 GiB" while it runs (bridge 103).
+            activity: state
+                .filter(|e| e.in_flight.is_some())
+                .map(|e| e.map.activity(self.lang))
+                .unwrap_or_default(),
             // In THIS session's language, like the rest of the window.
             empty: if state.is_some_and(|e| e.in_flight.is_none() && e.map.nothing_to_draw()) {
                 norte_i18n::t_in(self.lang, "disk-map-empty")

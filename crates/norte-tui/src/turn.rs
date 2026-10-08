@@ -151,6 +151,7 @@ pub async fn drain_pending(
     // directory than the listing's (#372). Drained here and not in dispatch
     // because measuring is I/O and this loop owns the backend — same split
     // as the checksums and the comparison.
+    crate::jobs::tend_disk_map(app, work);
     if app.disk_map_wants_measure() {
         app.disk_map_stale = false;
         crate::jobs::launch_disk_map(app, backend, work).await;

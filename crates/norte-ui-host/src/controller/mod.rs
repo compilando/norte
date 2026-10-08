@@ -827,6 +827,9 @@ enum Message {
     /// because one from a cancelled Task is partial, and painting it as
     /// complete turns a huge directory into a small one.
     MapContent(Box<MapMeasure>),
+    /// What a running disk-map measurement has counted so far: slot, token,
+    /// items, bytes. Throttled at the source.
+    MapProgress(u32, RequestToken, u64, u64),
     /// What a probe found out about a few entries (a lazy listing's size and
     /// date).
     ///
@@ -1532,6 +1535,11 @@ async fn actor(
             Message::MapContent(data) => {
                 let (slot, token, res) = *data;
                 if let Some(u) = state.land_map(slot, token, res) {
+                    let _ = updates.send(u);
+                }
+            }
+            Message::MapProgress(slot, token, entries, bytes) => {
+                if let Some(u) = state.map_progress(slot, token, entries, bytes) {
                     let _ = updates.send(u);
                 }
             }

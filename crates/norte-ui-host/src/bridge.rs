@@ -589,7 +589,9 @@ use serde::{Deserialize, Serialize};
 ///   those and the title bar's command centre (`goto`).
 /// - **102**: `DiskMapSlotView.tiles` and `grid`: the disk map's
 ///   rectangles, for a renderer that draws boxes (`DiskTileView`).
-pub const BRIDGE_VERSION: u32 = 102;
+/// - **103**: `DiskMapSlotView.activity`: what a running measurement has
+///   counted so far.
+pub const BRIDGE_VERSION: u32 = 103;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

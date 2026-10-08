@@ -5146,6 +5146,19 @@ describe("the disk map", () => {
     expect(sent).toEqual([{ action: "panel_click", slot_id: 7, row: 0, col: 30 }]);
   });
 
+  // 2026-10-08: "home — measuring" for minutes read as stuck.
+  it("a long measurement says what it has counted and pulses", () => {
+    const { screen, root } = mount();
+    const v = withMap(true, "");
+    const map = v.slots.find((s) => s.kind === "disk_map");
+    if (map?.kind !== "disk_map") throw new Error("no map");
+    map.activity = "measuring · 12345 items · 3.0 GiB";
+    screen.paint(v);
+    const slot = root.querySelector('[data-slot-id="7"]') as HTMLElement;
+    expect(slot.dataset["measuring"]).toBe("true");
+    expect(slot.querySelector(".disk-map")?.textContent).toContain("12345 items");
+  });
+
   it("a finished empty map says so, not 'measuring'", () => {
     const { screen, root } = mount();
     screen.paint(withMap(false, "nada que dibujar"));

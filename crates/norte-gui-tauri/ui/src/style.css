@@ -5629,6 +5629,38 @@ button.status-item:hover {
   overflow: hidden;
 }
 
+/* A measurement in progress PULSES (2026-10-08): the note in the body and
+   the head's title carry a beating dot, so a long one reads as working,
+   not stuck. */
+.slot[data-measuring="true"] .slot-note::before,
+.slot[data-measuring="true"] .treemap-title::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--border-focus);
+  animation: map-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes map-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+:root[data-reduce-motion="true"] .slot[data-measuring="true"] .slot-note::before,
+:root[data-reduce-motion="true"] .slot[data-measuring="true"] .treemap-title::before {
+  animation: none;
+  opacity: 0.8;
+}
+
 /* The head already names the folder: the slot's title would say it twice. */
 .slot:has(.treemap) > .slot-title {
   display: none;

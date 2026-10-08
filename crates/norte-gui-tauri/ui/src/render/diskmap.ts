@@ -26,10 +26,15 @@ import { tramo } from "./panel";
  * this renderer could send.
  */
 export function paintDiskMap(this: Screen, dom: SlotDom, slot: DiskMapSlotView): void {
-  const title = slot.measuring
-    ? `${slot.title} — ${this.t("disk-map-measuring")}`
-    : slot.title;
+  // While measuring, what it has counted so far (bridge 103): "measuring"
+  // alone for minutes read as stuck.
+  const doing =
+    slot.activity !== undefined && slot.activity !== ""
+      ? slot.activity
+      : this.t("disk-map-measuring");
+  const title = slot.measuring ? `${slot.title} — ${doing}` : slot.title;
   dom.root.setAttribute("aria-label", title);
+  dom.root.dataset["measuring"] = String(slot.measuring);
   dom.scroller.className = "disk-map";
   // The node is REUSED as long as the geometry does not change, so a slot
   // that used to be a log or a viewer arrives with the previous one's wheel

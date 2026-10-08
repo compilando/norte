@@ -504,6 +504,13 @@ pub struct Fake {
     /// asking for the same thing again. Without this list, "measured" and
     /// "measures in a loop" look the same.
     pub maps_requests: std::sync::Mutex<Vec<VPath>>,
+    /// Measurements stay RUNNING (2026-10-08): a slow `$HOME`, to see what
+    /// a long measurement says and what cancels it.
+    pub maps_hold: std::sync::atomic::AtomicBool,
+    /// The paths whose measurement was CANCELLED, in order.
+    pub maps_cancelled: Arc<std::sync::Mutex<Vec<VPath>>>,
+    /// The progress senders of held measurements, alive so they stay open.
+    pub maps_running: std::sync::Mutex<Vec<tokio::sync::watch::Sender<norte_proto::TaskProgress>>>,
     /// The task ids whose checksum REPORT was requested, in order.
     ///
     /// It exists so you can wait for the report to have come back: a test
@@ -1842,6 +1849,35 @@ impl HostBackend for Fake {
             .expect("mapas")
             .push(params.path.clone());
         self.heartbeat();
+        if self.maps_hold.load(std::sync::atomic::Ordering::SeqCst) {
+            let (tx, rx) = tokio::sync::watch::channel(norte_proto::TaskProgress {
+                task_id: norte_proto::TaskId::new(12),
+                kind: norte_proto::TaskKind::DirUsage,
+                state: norte_proto::TaskState::Running,
+                bytes_done: 0,
+                bytes_total: None,
+                entries_done: 0,
+                entries_total: None,
+                current: Some(params.path.clone()),
+                unreadable: None,
+                unvisited: None,
+            });
+            self.maps_running.lock().expect("running").push(tx);
+            let cancelled = Arc::clone(&self.maps_cancelled);
+            let path = params.path;
+            return Box::pin(async move {
+                Ok(HostTask {
+                    id: norte_proto::TaskId::new(12),
+                    progress: rx,
+                    cancel: Arc::new(move || {
+                        cancelled.lock().expect("cancelled").push(path.clone());
+                    }),
+                    pause: None,
+                    cola: None,
+                    foreign: false,
+                })
+            });
+        }
         // Already finished: the host asks for the report as soon as the Task
         // is terminal, so a double that left it running would never manage
         // to land anything and the test would be measuring silence.
