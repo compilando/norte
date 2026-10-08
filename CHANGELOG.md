@@ -7,6 +7,12 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **"Go to…" shows the whole place when it fits**: the window cut
+  "/home/ada/Photos/2026-01 Tromsø" to "…tos/2026-01 Tromsø" in a box
+  with room to spare.
+
 ### Added
 
 - **A timeline row shows its details**: Space or a click opens the full

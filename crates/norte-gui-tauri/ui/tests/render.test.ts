@@ -190,6 +190,17 @@ describe("go to anywhere (#357)", () => {
     expect(rows[1]?.getAttribute("data-hostile")).toBe("true");
   });
 
+  it("a row's place takes the room, and is cut only when it does not fit", () => {
+    // Landing shots, 2026-10-08: "…tos/2026-01 Tromsø" in a box with room
+    // for "/home/ada/Photos/2026-01 Tromsø". The palette's id column is a
+    // fixed 22ch; here the place IS the row, so it grows.
+    const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+    const text = /\.goto \.palette-text\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(text).toMatch(/flex:\s*1 1 auto/);
+    const desc = /\.goto \.palette-desc\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(desc).toMatch(/flex:\s*0 1 auto/);
+  });
+
   it("with no lines says nothing matches, and closed leaves nothing", () => {
     const { screen } = mount();
     const v = view({});

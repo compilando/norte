@@ -1620,6 +1620,22 @@ button.status-item:hover {
 
 /* "Go to" (#357): each section's header. Not a row: it is not chosen, and
    it reads as the title of what is below it. */
+/* In "go to" the PLACE is the row: it takes the room and is cut (from the
+   left, `cutStart`) only when it really does not fit. The palette's 22ch
+   id column cut "/home/ada/Photos/2026-01 Tromsø" in a box with room to
+   spare (landing shots, 2026-10-08). What comes after is the aside. */
+.goto .palette-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  opacity: 1;
+}
+
+.goto .palette-desc {
+  flex: 0 1 auto;
+  max-width: 40%;
+  opacity: 0.6;
+}
+
 .goto-header {
   padding: 0.35em 0.75em 0.15em;
   font-size: 0.85em;
