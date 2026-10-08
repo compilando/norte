@@ -10,10 +10,12 @@ independently through `PROTOCOL_VERSION`.
 ### Changed
 
 - **Places no longer lists the system's own mounts as drives** on Linux:
-  a filesystem mounted on `/usr`, `/etc`, `/var`, `/boot`, `/opt`,
-  `/tmp`, `/run` (except `/run/media`) or `/home` itself — a container's
-  or sandbox's binds, Docker's, a btrfs subvolume — is left out, as
-  Nautilus does. "Show everything" still lists them (ADR 0174).
+  a filesystem mounted on or under `/usr`, `/etc`, `/boot`, `/tmp`,
+  `/var/lib`, `/var/log`, `/run` (except `/run/media`) and the like — a
+  container's or sandbox's binds, Docker's, a btrfs subvolume — is left
+  out, close to what Nautilus hides. A disk under `/srv`, `/opt`,
+  `/var/mnt` or your home still shows, and "show everything" lists them
+  all (ADR 0174).
 
 ### Added
 

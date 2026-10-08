@@ -24,16 +24,26 @@ person would open from a sidebar.
 
 ## Decision
 
-Leave out, unless asked for everything, a mount whose PATH is a system
-directory or lies under one (`volumes::is_system_mount`): `/bin`, `/boot`,
-`/dev`, `/etc`, `/lib*`, `/opt`, `/proc`, `/root`, `/sbin`, `/snap`,
-`/srv`, `/sys`, `/tmp`, `/usr`, `/var`; `/run` except `/run/media`, where
-the desktop mounts removable drives; and `/home` itself, but not a mount
-inside someone's home. `/` stays: it is the computer.
+Leave out, unless asked for everything, a mount whose PATH is the
+system's (`volumes::is_system_mount`), in two lists:
 
-It is GIO's rule (`g_unix_is_mount_path_system_internal`), which Nautilus
-and the GTK file chooser apply, so a person sees in norte the drives they
-see elsewhere.
+- **Trees**, hidden with everything under them: `/bin`, `/boot`, `/dev`,
+  `/etc`, `/lib*`, `/proc`, `/root`, `/sbin`, `/snap`, `/sys`, `/tmp`,
+  `/usr`, and `/var/lib`, `/var/log`, `/var/cache`, `/var/tmp`,
+  `/var/spool`, `/var/run`; plus `/run` except `/run/media`, where the
+  desktop mounts removable drives.
+- **Points**, hidden only themselves: `/home`, `/opt`, `/srv`, `/var`.
+  People mount their own disks under these — a NAS on `/srv/nas`, a disk
+  on `/opt/data`, `/var/mnt` on an ostree system (where `/mnt` points),
+  a share inside their home — and those stay.
+
+`/` stays: it is the computer.
+
+The list follows GIO's `g_unix_is_mount_path_system_internal`, which
+Nautilus and the GTK file chooser apply; GIO names a few members of some
+trees (`/var/log/audit`) where this hides the tree. A first version hid
+whole trees under `/srv`, `/opt` and `/var` too, and the review caught
+that it lost those people's drives.
 
 ## Alternatives not taken
 

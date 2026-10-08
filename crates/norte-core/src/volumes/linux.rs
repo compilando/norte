@@ -536,11 +536,16 @@ mod tests {
             b"/dev/nvme0n1p2 /usr ext4 ro,relatime 0 0",
             b"/dev/nvme0n1p2 /etc ext4 ro,relatime 0 0",
             b"/dev/nvme0n1p2 /etc/passwd ext4 ro,relatime 0 0",
-            b"/dev/nvme0n1p2 /opt/norte ext4 ro,relatime 0 0",
+            // The shots bind their binaries from a tmpfs: hidden by TYPE. An
+            // ext4 bind there could not be told from a disk on `/opt/data`.
+            b"tmpfs /opt/norte tmpfs ro,relatime 0 0",
             b"/dev/nvme0n1p2 /tmp ext4 rw,relatime 0 0",
             b"/dev/nvme0n1p2 /home/ada ext4 rw,relatime 0 0",
             b"/dev/sdb1 /run/media/ada/USB vfat rw 0 0",
             b"/dev/nvme0n1p3 /var/lib/docker btrfs rw 0 0",
+            b"nas:/export /srv/nas nfs4 rw 0 0",
+            b"/dev/sdc1 /opt/data ext4 rw 0 0",
+            b"/dev/sdd1 /var/mnt/disk xfs rw 0 0",
         ];
         let kept: Vec<String> = table
             .iter()
@@ -548,7 +553,19 @@ mod tests {
             .filter(|r| keep(r, false))
             .map(|r| String::from_utf8_lossy(&r.mount).into_owned())
             .collect();
-        assert_eq!(kept, ["/", "/home/ada", "/run/media/ada/USB"]);
+        // A person's drives under `/srv`, `/opt` and `/var/mnt` stay
+        // (review of 2026-10-08: hiding whole trees there lost them).
+        assert_eq!(
+            kept,
+            [
+                "/",
+                "/home/ada",
+                "/run/media/ada/USB",
+                "/srv/nas",
+                "/opt/data",
+                "/var/mnt/disk"
+            ]
+        );
         let all = table
             .iter()
             .filter_map(|l| parse_line(l))
