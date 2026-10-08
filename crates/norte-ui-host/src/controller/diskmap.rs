@@ -68,6 +68,10 @@ impl State {
         let followed =
             norte_frontend::layout::resolve_follow(&self.tree, slot, &self.roles, &mut diags)
                 .or_else(|| self.roles.get(norte_frontend::layout::RoleId::Active))
+                // Only a LISTING has a directory: with the keyboard in the
+                // tree the active role named the tree, and the map kept the
+                // previous folder (2026-10-08). Then the remembered listing.
+                .filter(|SlotId(id)| self.slots.contains_key(id))
                 .unwrap_or(SlotId(self.active()));
         let SlotId(id) = followed;
         let slot_state = self.slots.get(&id)?;

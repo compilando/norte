@@ -461,6 +461,45 @@ async fn an_opened_map_says_it_is_measuring_before_it_lands() {
     .expect("the map never said it was measuring");
 }
 
+/// With the keyboard in ANOTHER side panel (the tree), the map still
+/// follows the listing: the active role pointed at the tree, which has no
+/// directory, and the map kept the folder before (2026-10-08).
+#[tokio::test]
+async fn the_map_follows_the_listing_while_the_keyboard_is_elsewhere() {
+    let (h, _snap) = host_over(Node::Split {
+        dir: Dir::Horizontal,
+        children: vec![
+            Node::slot(SlotId(5), KindId::new("tree")),
+            Node::slot(SlotId(1), KindId::browser()),
+            Node::slot(SlotId(7), KindId::new("disk-map")),
+        ],
+        sizes: vec![
+            norte_frontend::layout::Size::Fixed(30),
+            norte_frontend::layout::Size::Weight(1),
+            norte_frontend::layout::Size::Fixed(40),
+        ],
+    })
+    .await;
+    let mut sub = h.subscribe();
+    let _ = after(&h, &mut sub, UiAction::FocusSlot { slot_id: 5 }).await;
+    let before = after(&h, &mut sub, UiAction::Resync).await.1;
+    let title = |snap: &norte_ui_host::ViewSnapshot| {
+        snap.slots.iter().find_map(|s| match s {
+            SlotView::DiskMap(m) => Some(m.title.clone()),
+            _ => None,
+        })
+    };
+    // The listing goes up while the keyboard stays in the tree.
+    let (_, snap) = after(&h, &mut sub, UiAction::Parent { slot_id: 1 }).await;
+    let after_title = title(&snap);
+    assert_ne!(
+        after_title,
+        title(&before),
+        "the map moved with the listing"
+    );
+    assert!(after_title.is_some_and(|t| !t.is_empty()));
+}
+
 /// A listing on top, and a dock below with two PANEL tabs: processes(9),
 /// log(8).
 async fn host_panel_tabs() -> (UiHost, norte_ui_host::ViewSnapshot) {
