@@ -198,6 +198,50 @@ pub fn is_pseudo(fs_type: &str) -> bool {
     PSEUDO_FS.contains(&fs_type)
 }
 
+/// The system's own directories (ADR 0174): a mount ON one of them, or
+/// under it, is the system's plumbing, not a drive a person put there.
+/// After GIO's `g_unix_is_mount_path_system_internal`, which Nautilus and
+/// the GTK file chooser use. `/` is NOT here: it is the computer itself.
+pub const SYSTEM_MOUNT_DIRS: &[&str] = &[
+    "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib32", "/lib64", "/libx32", "/opt",
+    "/proc", "/root", "/sbin", "/snap", "/srv", "/sys", "/tmp", "/usr", "/var",
+];
+
+/// `true` if `mount` (bytes, rule 1) is a system directory or lies under
+/// one, so the places bar leaves it out unless asked for everything.
+///
+/// A bind mount of `/usr` (a container, a sandbox), the Docker and Flatpak
+/// mounts under `/var/lib`, a btrfs subvolume on `/var/log`: real
+/// filesystems with a real `fs_type`, which [`is_pseudo`] cannot see. Two
+/// exceptions: `/home` hides only ITSELF — a mount inside a person's home
+/// is theirs — and `/run` hides everything but `/run/media`, where the
+/// desktop mounts removable drives.
+///
+/// ```
+/// use norte_core::volumes::is_system_mount;
+/// assert!(is_system_mount(b"/usr"));
+/// assert!(is_system_mount(b"/var/lib/docker/overlay2/x"));
+/// assert!(is_system_mount(b"/run/user/1000/doc"));
+/// assert!(!is_system_mount(b"/"));
+/// assert!(!is_system_mount(b"/run/media/ada/USB"));
+/// assert!(!is_system_mount(b"/home/ada/nas"));
+/// assert!(!is_system_mount(b"/mnt/backup"));
+/// assert!(!is_system_mount(b"/usrdata"), "a prefix of the NAME is not under it");
+/// ```
+#[must_use]
+pub fn is_system_mount(mount: &[u8]) -> bool {
+    let under = |dir: &[u8]| {
+        mount == dir || (mount.starts_with(dir) && mount.get(dir.len()) == Some(&b'/'))
+    };
+    if under(b"/run") {
+        return !under(b"/run/media");
+    }
+    if under(b"/home") {
+        return mount == b"/home";
+    }
+    SYSTEM_MOUNT_DIRS.iter().any(|d| under(d.as_bytes()))
+}
+
 /// Failure to enumerate the host's volumes.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

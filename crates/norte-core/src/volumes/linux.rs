@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use crate::blocking::spawn_blocking;
 
-use super::{Error, Volume, VolumeKind, is_pseudo};
+use super::{Error, Volume, VolumeKind, is_pseudo, is_system_mount};
 
 /// Where the kernel publishes the mount table.
 const PROC_MOUNTS: &str = "/proc/mounts";
@@ -225,6 +225,13 @@ struct Classified {
     read_only: bool,
 }
 
+/// Whether a mount goes in the list: everything when asked for everything,
+/// and otherwise not the system's plumbing, by fs type or by place (ADR
+/// 0174).
+fn keep(rec: &MountRecord, include_pseudo: bool) -> bool {
+    include_pseudo || !(is_pseudo(&rec.fs_type) || is_system_mount(&rec.mount))
+}
+
 /// Reads and parses `/proc/mounts` and classifies each surviving line.
 /// Synchronous: the caller runs this inside [`spawn_blocking`] (rule 2 — this
 /// is `std::fs::read` plus, per mount, a small `/sys` read for the removable
@@ -241,7 +248,7 @@ fn read_and_classify(include_pseudo: bool) -> Result<Vec<Classified>, Error> {
             tracing::debug!("volumes: skipping an unparseable /proc/mounts line");
             continue;
         };
-        if !include_pseudo && is_pseudo(&rec.fs_type) {
+        if !keep(&rec, include_pseudo) {
             continue;
         }
         let kind = classify_kind(&rec.source, &rec.fs_type);
@@ -516,6 +523,38 @@ mod tests {
         let (total, free) =
             space_with_deadline(|| Ok((1_000, 400)), Duration::from_millis(200)).await;
         assert_eq!((total, free), (Some(1_000), Some(400)));
+    }
+
+    /// A bwrap sandbox's mount table (the landing shots, 2026-10-08): the
+    /// binds of `/usr`, `/etc`, a file over `/etc/passwd` and a tool under
+    /// `/opt` are ext4 like the root, and showed up as drives. Only `/` and
+    /// a drive a person mounted stay; "show everything" brings them back.
+    #[test]
+    fn a_sandboxs_system_binds_are_not_drives() {
+        let table: &[&[u8]] = &[
+            b"/dev/nvme0n1p2 / ext4 rw,relatime 0 0",
+            b"/dev/nvme0n1p2 /usr ext4 ro,relatime 0 0",
+            b"/dev/nvme0n1p2 /etc ext4 ro,relatime 0 0",
+            b"/dev/nvme0n1p2 /etc/passwd ext4 ro,relatime 0 0",
+            b"/dev/nvme0n1p2 /opt/norte ext4 ro,relatime 0 0",
+            b"/dev/nvme0n1p2 /tmp ext4 rw,relatime 0 0",
+            b"/dev/nvme0n1p2 /home/ada ext4 rw,relatime 0 0",
+            b"/dev/sdb1 /run/media/ada/USB vfat rw 0 0",
+            b"/dev/nvme0n1p3 /var/lib/docker btrfs rw 0 0",
+        ];
+        let kept: Vec<String> = table
+            .iter()
+            .filter_map(|l| parse_line(l))
+            .filter(|r| keep(r, false))
+            .map(|r| String::from_utf8_lossy(&r.mount).into_owned())
+            .collect();
+        assert_eq!(kept, ["/", "/home/ada", "/run/media/ada/USB"]);
+        let all = table
+            .iter()
+            .filter_map(|l| parse_line(l))
+            .filter(|r| keep(r, true))
+            .count();
+        assert_eq!(all, table.len(), "show everything shows everything");
     }
 
     /// `enumerate` against the REAL `/proc/mounts` of this machine: not a
