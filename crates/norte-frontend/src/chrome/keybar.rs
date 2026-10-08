@@ -234,8 +234,8 @@ mod tests {
     #[test]
     fn every_bundled_f_key_label_fits_whole() {
         use crate::keymap::{Effective, Screen, parse_keymap, preset_commands, presets};
-        // 80 columns: cells of 8; 132: cells of 13.
-        let widths = [8, 13];
+        // The narrowest cell `layout` gives at 80 and at 132 columns.
+        let widths = [80, 132].map(|cols| layout(cols).iter().map(|(_, w)| *w).min().unwrap_or(0));
         for name in presets::NAMES {
             let preset = parse_keymap(presets::source(name).expect("bundled")).expect("parses");
             for screen in [Screen::Browse, Screen::Viewer, Screen::Dialog] {
