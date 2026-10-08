@@ -49,11 +49,79 @@ export function paintDiskMap(this: Screen, dom: SlotDom, slot: DiskMapSlotView):
   // Nothing drawn: the TITLE goes in the body too — the directory and
   // "measuring", or a failure's reason. In a dock's tab group the strip
   // hides the title, and measuring a big tree left a blank panel.
-  if (slot.lines.length === 0) {
+  if (slot.lines.length === 0 && (slot.tiles ?? []).length === 0) {
     // No title and not measuring: nothing to claim, so nothing is said.
     const text =
       title !== "" ? title : slot.measuring ? this.t("disk-map-measuring") : "";
     dom.scroller.replaceChildren(...(text === "" ? [] : [note(text)]));
+    return;
+  }
+
+  // REAL rectangles when the host sends them (bridge 102): boxes in the
+  // class colour, a gap between them, name and size inside when they fit,
+  // the whole story on hover. The text lines were spaces in a foreground
+  // colour — nothing — and a map read as one loose label (2026-10-08).
+  const tiles = slot.tiles ?? [];
+  const [cols, rows] = slot.grid ?? [0, 0];
+  if (tiles.length > 0 && cols > 0 && rows > 0) {
+    // The head: WHICH folder (in a tab group the slot's title is hidden)
+    // and a legend of the classes present, in the order of their area.
+    const head = document.createElement("div");
+    head.className = "treemap-head";
+    const which = document.createElement("span");
+    which.className = "treemap-title";
+    which.textContent = title;
+    head.append(which);
+    const seen: string[] = [];
+    for (const t of tiles) {
+      if (!seen.includes(t.class)) {
+        seen.push(t.class);
+      }
+    }
+    for (const c of seen) {
+      const chip = document.createElement("span");
+      chip.className = "treemap-legend";
+      chip.dataset["class"] = c;
+      chip.textContent = this.t(`disk-map-class-${c}`);
+      head.append(chip);
+    }
+    const board = document.createElement("div");
+    board.className = "treemap";
+    for (const t of tiles) {
+      const box = document.createElement("button");
+      box.type = "button";
+      box.className = "treemap-tile";
+      box.dataset["class"] = t.class;
+      box.style.left = `${String((t.col / cols) * 100)}%`;
+      box.style.top = `${String((t.row / rows) * 100)}%`;
+      box.style.width = `${String((t.width / cols) * 100)}%`;
+      box.style.height = `${String((t.height / rows) * 100)}%`;
+      box.title = `${t.name} — ${t.size} (${String(t.percent)}%)`;
+      // Name and size always; the STYLESHEET hides them when the box is too
+      // small in real pixels (container queries). Deciding it here in grid
+      // cells hid the label of a 200-pixel box: the host's cells are not
+      // the text's.
+      const name = document.createElement("span");
+      name.className = "treemap-name";
+      name.textContent = t.name;
+      if (t.hostile) {
+        name.dataset["hostile"] = "true";
+      }
+      const size = document.createElement("span");
+      size.className = "treemap-size";
+      size.textContent = `${t.size} · ${String(t.percent)}%`;
+      box.append(name, size);
+      box.addEventListener("click", () => {
+        this.send({
+          action: "panel_click",
+          slot_id: slot.slot_id,
+          row: t.row,
+          col: t.col,
+        });
+      });
+      board.append(box);
+    }
+    dom.scroller.replaceChildren(head, board);
     return;
   }
 

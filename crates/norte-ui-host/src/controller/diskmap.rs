@@ -365,6 +365,26 @@ impl State {
             .find(|(SlotId(s), _)| *s == id)
             .map(|(_, r)| (r.width.saturating_sub(2), r.height.saturating_sub(2)));
 
+        let (tiles, grid) = match (state, cells) {
+            (Some(e), Some((cols, rows))) => (
+                norte_frontend::treemap::tiles(&e.map.report().children, cols, rows)
+                    .into_iter()
+                    .map(|t| crate::dto::DiskTileView {
+                        col: t.x,
+                        row: t.y,
+                        width: t.w,
+                        height: t.h,
+                        name: clamp_display(t.name),
+                        hostile: t.masked,
+                        size: t.size,
+                        percent: t.percent,
+                        class: t.class.as_str().to_owned(),
+                    })
+                    .collect(),
+                [cols, rows],
+            ),
+            _ => (Vec::new(), [0, 0]),
+        };
         let (lines, hits) = match (state, cells) {
             (Some(e), Some((cols, rows))) => {
                 let frame = norte_frontend::treemap::squarify(&e.map.report().children, cols, rows);
@@ -400,6 +420,8 @@ impl State {
             } else {
                 String::new()
             },
+            tiles,
+            grid,
         }
     }
 }

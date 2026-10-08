@@ -65,6 +65,10 @@ const NO_SON_COLOR: &[&str] = &[
     // one band per run of marked spans. Its color comes from `--mark-bg` and
     // `--fg`, which ARE the theme's.
     "mark-ruler",
+    // A disk map tile's colour by class (2026-10-08): ALIASES set in the
+    // sheet itself from the theme's own variables (`info-fg`,
+    // `warning-fg`…), never a colour of its own.
+    "tile",
 ];
 
 /// KNOWN orphans, with an owner and a date. Empty since the `muted` and

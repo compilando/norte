@@ -5617,3 +5617,149 @@ button.status-item:hover {
   color: var(--warning-fg);
   unicode-bidi: isolate;
 }
+
+/* The disk map drawn as a real treemap (bridge 102, 2026-10-08): a head
+   with the folder and the legend, and boxes in the class colour with a
+   gap between them. */
+.disk-map {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The head already names the folder: the slot's title would say it twice. */
+.slot:has(.treemap) > .slot-title {
+  display: none;
+}
+
+.treemap-head {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 4px 6px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  color: var(--muted, var(--title-fg));
+}
+
+.treemap-title {
+  color: var(--fg);
+  font-weight: 600;
+  margin-right: auto;
+  unicode-bidi: isolate;
+}
+
+.treemap-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.treemap-legend::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--tile);
+}
+
+.treemap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 4px 4px;
+}
+
+.treemap-tile {
+  position: absolute;
+  box-sizing: border-box;
+  /* The gap: a border in the panel's own colour. */
+  border: 2px solid var(--panel-bg);
+  border-radius: 5px;
+  padding: 3px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  overflow: hidden;
+  font: inherit;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  text-align: left;
+  color: var(--fg);
+  background: color-mix(in oklab, var(--tile) 45%, var(--panel-bg));
+  cursor: pointer;
+  /* Its text shows only where it fits, measured in its own pixels. */
+  container-type: size;
+}
+
+@container (width < 48px) or (height < 22px) {
+  .treemap-name,
+  .treemap-size {
+    display: none;
+  }
+}
+
+@container (height < 40px) {
+  .treemap-size {
+    display: none;
+  }
+}
+
+.treemap-tile:hover {
+  background: color-mix(in oklab, var(--tile) 65%, var(--panel-bg));
+}
+
+.treemap-name,
+.treemap-size {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  unicode-bidi: isolate;
+}
+
+.treemap-name {
+  font-weight: 600;
+}
+
+.treemap-name[data-hostile="true"] {
+  color: var(--hostile-fg);
+}
+
+.treemap-size {
+  opacity: 0.8;
+}
+
+/* One colour per class, from the theme's own roles (ADR 0037). */
+[data-class="directory"] {
+  --tile: var(--info-fg);
+}
+
+[data-class="code"] {
+  --tile: var(--border-focus);
+}
+
+[data-class="archive"] {
+  --tile: var(--warning-fg);
+}
+
+[data-class="image"] {
+  --tile: var(--badge-bg, var(--info-fg));
+}
+
+[data-class="media"] {
+  --tile: var(--selection-bg);
+}
+
+[data-class="document"] {
+  --tile: var(--title-fg);
+}
+
+[data-class="other"] {
+  --tile: var(--muted, var(--border));
+}

@@ -459,6 +459,23 @@ fn a_landed_disk_map_paints_its_children() {
         "the biggest file is labelled:\n{}",
         screen.join("\n")
     );
+    // And the rectangles are FILLED: the label's cell carries the class
+    // colour as its background (reversed), not as text on nothing.
+    let buf = terminal.backend().buffer();
+    let (y, line) = screen
+        .iter()
+        .enumerate()
+        .find(|(_, l)| l.contains("f5.pdf"))
+        .expect("labelled");
+    let x = line
+        .find("f5.pdf")
+        .map(|b| line[..b].chars().count())
+        .expect("x");
+    let cell = &buf[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())];
+    assert!(
+        cell.modifier.contains(ratatui::style::Modifier::REVERSED),
+        "a filled rectangle: {cell:?}"
+    );
 }
 
 /// An empty finished map says so, and the title names WHICH directory it

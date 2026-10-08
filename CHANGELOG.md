@@ -7,6 +7,19 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Changed
+
+- **The disk map is a real treemap.** In the window: coloured rectangles
+  by type with a gap between them, name, size and share inside when
+  they fit, the whole story on hover, and a legend. In the terminal the
+  rectangles are filled with their type's colour. It used to be
+  invisible blocks with a single label.
+
+### Fixed
+
+- **The disk map follows the listing while the keyboard is in another
+  panel** (the tree): it kept showing the folder from before.
+
 ## [0.3.0-alpha.9] - 2026-10-08
 
 ### Added

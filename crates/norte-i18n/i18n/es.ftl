@@ -2329,6 +2329,14 @@ processes-has-keyboard = este panel tiene el teclado · Esc lo devuelve
 log-title = Registro
 disk-map-title = Mapa de disco
 disk-map-measuring = midiendo
+# La leyenda del mapa de disco en la ventana: qué es cada color.
+disk-map-class-directory = Carpetas
+disk-map-class-code = Código
+disk-map-class-archive = Archivos comprimidos
+disk-map-class-image = Imágenes
+disk-map-class-media = Audio y vídeo
+disk-map-class-document = Documentos
+disk-map-class-other = Otros
 disk-map-empty = Nada que dibujar: el directorio está vacío o lo que tiene no ocupa espacio.
 slot-retry = reintentar
 # Esperando un listado (#323). Tres piezas y no una frase: el renderer las

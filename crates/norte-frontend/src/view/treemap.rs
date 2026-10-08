@@ -63,6 +63,21 @@ pub enum ChildClass {
 }
 
 impl ChildClass {
+    /// Its stable name on the wire (`directory`, `code`…): the window picks
+    /// the colour from it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Directory => "directory",
+            Self::Code => "code",
+            Self::Archive => "archive",
+            Self::Image => "image",
+            Self::Media => "media",
+            Self::Document => "document",
+            Self::Other => "other",
+        }
+    }
+
     /// The theme role it is painted with.
     ///
     /// Roles and not raw colors (ADR 0037): the theme rules, and a map
@@ -371,10 +386,109 @@ pub fn squarify(children: &[DirUsageChild], cols: u16, rows: u16) -> StyledFrame
         }
     }
 
+    // A blank cell on each edge shared with a neighbour, for rectangles of
+    // three cells or more on that axis: filled with colour, two rectangles
+    // of one class read as one (2026-10-08). The owner grid keeps them —
+    // a click on the gap still lands on its rectangle.
+    let mut painted = owner.clone();
+    for r in &rects {
+        let (x1, y1) = (
+            usize::from(r.x) + usize::from(r.w),
+            usize::from(r.y) + usize::from(r.h),
+        );
+        if r.w >= 3 && x1 < width {
+            for y in usize::from(r.y)..y1.min(height) {
+                painted[y * width + x1 - 1] = None;
+            }
+        }
+        if r.h >= 3 && y1 < height {
+            for x in usize::from(r.x)..x1.min(width) {
+                painted[(y1 - 1) * width + x] = None;
+            }
+        }
+    }
     let labels: Vec<String> = children.iter().map(label_of).collect();
-    let lines = paint(&owner, children, &labels, &rects, width, height);
+    let lines = paint(&painted, children, &labels, &rects, width, height);
     let hits = hit_zones(children, &rects);
     StyledFrame::clamped(lines, hits)
+}
+
+/// A rectangle of the map with what a graphical frontend needs to DRAW it:
+/// where (in cells of the same `cols`×`rows` frame as [`squarify`]), what,
+/// how much and of what class. The window paints real boxes from these;
+/// the terminal paints [`squarify`]'s lines.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tile {
+    /// Column of the top-left corner.
+    pub x: u16,
+    /// Row of the top-left corner.
+    pub y: u16,
+    /// Width in cells.
+    pub w: u16,
+    /// Height in cells.
+    pub h: u16,
+    /// The name, MASKED for display ([`crate::display_name`]).
+    pub name: String,
+    /// Whether masking changed it.
+    pub masked: bool,
+    /// What it takes up, short (`158K`), with `≈` when it is a lower bound.
+    pub size: String,
+    /// Its share of the directory, 0–100.
+    pub percent: u8,
+    /// What class of file it is.
+    pub class: ChildClass,
+}
+
+/// The map's rectangles as [`Tile`]s, largest first; a child of zero bytes
+/// gets none. The same layout as [`squarify`], so a click on a tile and a
+/// click on the painted cells resolve to the same child.
+#[must_use]
+pub fn tiles(children: &[DirUsageChild], cols: u16, rows: u16) -> Vec<Tile> {
+    if cols == 0 || rows == 0 || children.is_empty() {
+        return Vec::new();
+    }
+    let weights: Vec<u64> = children.iter().map(|c| c.bytes).collect();
+    let total: u64 = weights.iter().sum();
+    let rects = distribute(
+        &weights,
+        Rect {
+            x: 0,
+            y: 0,
+            w: cols,
+            h: rows,
+        },
+    );
+    let mut out: Vec<Tile> = children
+        .iter()
+        .zip(rects)
+        .filter(|(_, r)| r.w > 0 && r.h > 0)
+        .map(|(c, r)| {
+            let (name, masked) = crate::display_name(c.name.as_bytes());
+            let size = crate::human_bytes_short(c.bytes);
+            let percent = c
+                .bytes
+                .saturating_mul(100)
+                .checked_div(total)
+                .map_or(0, |p| u8::try_from(p.min(100)).unwrap_or(100));
+            Tile {
+                x: r.x,
+                y: r.y,
+                w: r.w,
+                h: r.h,
+                name,
+                masked,
+                size: if c.partial {
+                    format!("{PARTIAL_MARK}{size}")
+                } else {
+                    size
+                },
+                percent,
+                class: class_of(c),
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| (u32::from(b.w) * u32::from(b.h)).cmp(&(u32::from(a.w) * u32::from(a.h))));
+    out
 }
 
 /// A child's label: its masked name and what it takes up.
@@ -685,6 +799,46 @@ mod tests {
             entries: 1,
             partial: false,
         }
+    }
+
+    /// The tiles are the rectangles with what a window needs to draw them
+    /// for real: where, what, how much, and of what class (2026-10-08 —
+    /// the map was invisible blocks of spaces with one label).
+    #[test]
+    fn tiles_carry_geometry_name_size_share_and_class() {
+        let kids = [
+            child("video.mkv", 750, EntryKind::File),
+            child("src", 250, EntryKind::Dir),
+            child("empty", 0, EntryKind::File),
+        ];
+        let tiles = tiles(&kids, 40, 10);
+        assert_eq!(tiles.len(), 2, "a zero-byte child gets no tile");
+        let video = &tiles[0];
+        assert_eq!(video.name, "video.mkv");
+        assert_eq!(video.percent, 75);
+        assert_eq!(video.class, ChildClass::Media);
+        assert_eq!(tiles[1].class, ChildClass::Directory);
+        let area: u32 = tiles.iter().map(|t| u32::from(t.w) * u32::from(t.h)).sum();
+        assert_eq!(area, 400, "they cover the frame");
+    }
+
+    /// Neighbouring rectangles are SEPARATED by a blank cell on the shared
+    /// edge: filled with colour, two rectangles of one class merged into one.
+    #[test]
+    fn neighbouring_rectangles_leave_a_gap() {
+        let kids = [
+            child("a", 50, EntryKind::File),
+            child("b", 50, EntryKind::File),
+        ];
+        let frame = squarify(&kids, 20, 6);
+        let row: Vec<(usize, Option<Role>)> = frame.lines[0]
+            .iter()
+            .map(|s| (s.text.chars().count(), s.role))
+            .collect();
+        assert!(
+            row.iter().any(|(_, r)| r.is_none()),
+            "a blank, roleless gap between the two: {row:?}"
+        );
     }
 
     /// The layout COVERS the area and does not overlap: every cell has an

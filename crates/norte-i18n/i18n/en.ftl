@@ -1063,6 +1063,14 @@ processes-has-keyboard = this panel has the keyboard · Esc returns it
 log-title = Log
 disk-map-title = Disk map
 disk-map-measuring = measuring
+# The disk map's legend in the window: what each colour is.
+disk-map-class-directory = Folders
+disk-map-class-code = Code
+disk-map-class-archive = Archives
+disk-map-class-image = Images
+disk-map-class-media = Audio and video
+disk-map-class-document = Documents
+disk-map-class-other = Other
 disk-map-empty = Nothing to draw: the directory is empty, or nothing in it takes up space.
 slot-retry = retry
 # Waiting for a listing (#323). Three pieces and not one sentence: the renderer
