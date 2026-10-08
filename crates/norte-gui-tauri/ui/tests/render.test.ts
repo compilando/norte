@@ -2615,6 +2615,17 @@ describe("moving a panel by dragging it (ADR 0138)", () => {
     expect(document.documentElement.dataset["dragging"]).toBeUndefined();
   });
 
+  it("a title nudged along the top edge is not 'the whole top'", () => {
+    const { screen, sent } = mount();
+    screen.paint(twoListings());
+    sent.length = 0;
+    const title = document.querySelector('[data-slot-id="1"] .slot-title') as HTMLElement;
+    title.dispatchEvent(pointer("pointerdown", 100, 3));
+    window.dispatchEvent(pointer("pointermove", 300, 2));
+    window.dispatchEvent(pointer("pointerup", 300, 2));
+    expect(sent.filter((a) => a.action === "dock_slot")).toEqual([]);
+  });
+
   it("dropping on the window's very edge sends dock_slot: the whole side", () => {
     const { screen, sent } = mount();
     screen.paint(twoListings());

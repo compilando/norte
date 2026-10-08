@@ -666,8 +666,23 @@ impl State {
         self.wake_visible(backend, mailbox);
         // And to the session now: a size is a decision about the tree.
         self.push_session(backend, mailbox);
-        let change = ViewChange::Layout(self.layout());
-        (self.applied(), vec![self.parche(vec![change])])
+        let mut changes = vec![ViewChange::Layout(self.layout())];
+        // A listing whose WIDTH changed gets its header again: its footer is
+        // fitted to that width, and it kept the old fit until something else
+        // resent it (review of 2026-10-08).
+        let width = |split: &norte_frontend::layout::Resolved, id: u32| {
+            split
+                .placements
+                .iter()
+                .find(|(s, _)| s.0 == id)
+                .map(|(_, r)| r.width)
+        };
+        for (id, slot) in &self.slots {
+            if width(&before, *id) != width(&self.split, *id) {
+                changes.push(self.header_of(*id, slot));
+            }
+        }
+        (self.applied(), vec![self.parche(changes)])
     }
 
     /// This size's split, with the roles set.

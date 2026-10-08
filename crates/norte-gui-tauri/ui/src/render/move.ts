@@ -50,16 +50,18 @@ function bodyRect(screen: Screen): DOMRect | null {
 }
 
 /** The body's side under the point, if it is within `OUTER` of it. */
-function outerIn(body: DOMRect, x: number, y: number): DropZone | null {
+function outerIn(body: DOMRect, x: number, y: number, fromY: number): DropZone | null {
   if (x < body.left || x >= body.right || y < body.top || y >= body.bottom) {
     return null;
   }
+  // The top band is thinner — the top panes' titles sit on it — and never
+  // offered to a drag that STARTED on a top title: one nudged sideways
+  // restacked its pane across the whole width (review of 2026-10-08).
+  const fromTopTitle = fromY - body.top < OUTER;
   const sides: [DropZone, number][] = [
     ["left", x - body.left],
     ["right", body.right - x],
-    // The top band is thinner: the top panes' titles sit on it, and a drag
-    // sliding along a title is not asking for the whole top.
-    ["top", (y - body.top) * 3],
+    ["top", fromTopTitle ? Number.POSITIVE_INFINITY : (y - body.top) * 3],
     ["bottom", body.bottom - y],
   ];
   const near = sides.filter(([, d]) => d < OUTER).sort((a, b) => a[1] - b[1])[0];
@@ -94,10 +96,16 @@ export function zoneOf(
 
 /** The pane under the point and the zone, or `null` over itself, the chrome
  *  or nothing. */
-function targetIn(screen: Screen, x: number, y: number, origin: number): Target | null {
+function targetIn(
+  screen: Screen,
+  x: number,
+  y: number,
+  origin: number,
+  fromY: number,
+): Target | null {
   // The body's very edge first: the whole side, whoever is under it.
   const body = bodyRect(screen);
-  const side = body === null ? null : outerIn(body, x, y);
+  const side = body === null ? null : outerIn(body, x, y, fromY);
   if (body !== null && side !== null) {
     return { slot: origin, zone: side, rect: body, outer: true };
   }
@@ -209,7 +217,7 @@ export function makeDraggable(screen: Screen, handle: HTMLElement, slotId: numbe
         doc.documentElement.dataset["dragging"] = "slot";
         screen.root.append(veil);
       }
-      target = targetIn(screen, ev.clientX, ev.clientY, slotId);
+      target = targetIn(screen, ev.clientX, ev.clientY, slotId, y0);
       paintVeil(veil, screen.root.getBoundingClientRect(), target);
     };
     const release = (): void => {

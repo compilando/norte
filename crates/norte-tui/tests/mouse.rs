@@ -914,6 +914,20 @@ fn dropping_on_the_screen_edge_takes_the_whole_side() {
     assert!(l.height >= b.height, "full height: {l:?} vs {b:?}");
 }
 
+/// A title nudged sideways along its own row is not "the whole top": it
+/// restacked the pane across the width (review of 2026-10-08).
+#[test]
+fn a_sideways_drag_along_a_title_moves_nothing() {
+    let mut app = app_painted(5);
+    let _ = paint_at(&mut app, 120, 50);
+    let a = app.mouse.slot_rect(app.panes.slot_of(0)).expect("placed");
+    let before = app.layout.clone();
+    let _ = mouse::handle(&mut app, ev(DOWN, a.x + 4, a.y));
+    let _ = mouse::handle(&mut app, ev(DRAG, a.x + 9, a.y));
+    let _ = mouse::handle(&mut app, ev(UP, a.x + 9, a.y));
+    assert_eq!(app.layout, before);
+}
+
 /// ADR 0134: two panels on the same edge share a spot as tabs, and their
 /// slot's first row is the STRIP with both names. Clicking the hidden one
 /// runs its command (which reveals it); the one in front is not a zone.

@@ -878,9 +878,10 @@ pub enum UiAction {
         /// Where, within `target`.
         zone: norte_frontend::layout::DropZone,
     },
-    /// Presses a button at the foot of the activity column (bridge 101):
-    /// `settings`, `help` (`norte_frontend::panelbar::FOOTER`). An unknown id
-    /// changes nothing.
+    /// Presses a chrome button (bridge 101): the activity column's foot
+    /// (`settings`, `help`) or the title bar's command centre (`goto`) —
+    /// `norte_frontend::panelbar::footer_command`'s closed list. An unknown
+    /// id changes nothing and is answered `Unavailable`.
     ActivityActivate {
         /// The button's id.
         id: String,

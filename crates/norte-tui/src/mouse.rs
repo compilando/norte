@@ -927,6 +927,7 @@ fn outer_dest(
     dragged: norte_frontend::layout::SlotId,
     col: u16,
     row: u16,
+    from_row: u16,
 ) -> Option<(
     norte_frontend::layout::SlotId,
     norte_frontend::layout::DropZone,
@@ -946,15 +947,17 @@ fn outer_dest(
     }
     let (w, h) = (x1 - x0, y1 - y0);
     let (tw, th) = ((w / 4).max(1), (h / 4).max(1));
-    // Rows first: the top row is also the title the drag started from, so
-    // the sides win there only when the pointer is ON their column.
+    // The sides only when the pointer is ON their column. And never the top
+    // from the row the drag started on: that row is the top panes' titles,
+    // and a title nudged sideways restacked its pane across the whole
+    // width (review of 2026-10-08).
     let zone = if col == x0 {
         DropZone::Left
     } else if col + 1 == x1 {
         DropZone::Right
     } else if row + 1 == y1 {
         DropZone::Bottom
-    } else if row == y0 {
+    } else if row == y0 && from_row != y0 {
         DropZone::Top
     } else {
         return None;
@@ -1008,7 +1011,7 @@ fn move_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
                 app.mouse.drag.cancel();
                 app.mouse.last_click = None;
             }
-            m.dest = outer_dest(app, m.slot, ev.column, ev.row).or_else(|| {
+            m.dest = outer_dest(app, m.slot, ev.column, ev.row, m.y0).or_else(|| {
                 app.mouse
                     .slots
                     .iter()

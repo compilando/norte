@@ -956,6 +956,16 @@ impl Node {
         let Some(rest) = self.close_slot(id) else {
             return self.clone();
         };
+        // With no other PANE left, the body would be chrome: the status bar
+        // took half the screen (review of 2026-10-08). Nothing to dock beside.
+        let panes_left = rest
+            .slot_ids()
+            .into_iter()
+            .filter(|s| rest.find_slot(*s).is_some_and(|n| !es_chrome(n)))
+            .count();
+        if panes_left == 0 {
+            return self.clone();
+        }
         // The body, and the chrome rows that stay at the bottom.
         let (body, chrome): (Self, Vec<(Self, Size)>) = match &rest {
             Self::Split {
@@ -994,8 +1004,11 @@ impl Node {
                 mut sizes,
             } if dir == edge.axis() => {
                 let at = if edge.is_front() { 0 } else { children.len() };
+                // On the siblings' scale: after a border drag they can be
+                // `[W100, W100]`, and a raw `W1` got 1/201 of the room.
+                let share = weight_between_hermanos(size, &sizes);
                 children.insert(at, node);
-                sizes.insert(at, size);
+                sizes.insert(at, share);
                 Self::Split {
                     dir,
                     children,
@@ -1981,6 +1994,64 @@ mod tests {
 
         // Chrome never moves, and the only listing cannot leave itself.
         assert_eq!(tree.dock_outer(SlotId(9), Edge::Left, Size::Fixed(5)), tree);
+    }
+
+    /// The ONLY pane next to chrome stays put: docking it made the status
+    /// bar the body and gave it half the screen (review of 2026-10-08).
+    /// And whatever moves, nothing is lost and every level stays coherent.
+    #[test]
+    fn docking_the_only_pane_changes_nothing_and_levels_stay_coherent() {
+        let s = |i: u32, k: &str| Node::slot(SlotId(i), KindId::new(k));
+        let lone = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Auto, Size::Fixed(1)],
+            children: vec![s(1, "browser"), s(2, "tasks"), s(3, "status")],
+        };
+        for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+            assert_eq!(lone.dock_outer(SlotId(1), edge, Size::Weight(1)), lone);
+        }
+        assert_eq!(
+            s(1, "browser").dock_outer(SlotId(1), Edge::Left, Size::Weight(1)),
+            s(1, "browser")
+        );
+
+        // Siblings with dragged weights: the newcomer gets a share of
+        // THEIR scale, not 1/201 of the width.
+        let dragged = Node::Split {
+            dir: Dir::Horizontal,
+            sizes: vec![Size::Weight(100), Size::Weight(100)],
+            children: vec![
+                s(1, "browser"),
+                Node::Split {
+                    dir: Dir::Vertical,
+                    sizes: vec![Size::Weight(1), Size::Weight(1)],
+                    children: vec![s(2, "browser"), s(4, "browser")],
+                },
+            ],
+        };
+        let out = dragged.dock_outer(SlotId(4), Edge::Right, Size::Weight(1));
+        let Node::Split {
+            sizes, children, ..
+        } = &out
+        else {
+            panic!("{out:?}");
+        };
+        assert_eq!(sizes.len(), children.len());
+        assert!(
+            matches!(sizes.last(), Some(Size::Weight(w)) if *w >= 50),
+            "a share on the siblings' scale: {sizes:?}"
+        );
+        assert_eq!(out.slot_ids().len(), 3);
+
+        // A Tabs root keeps every slot.
+        let tabs = Node::Tabs {
+            children: vec![s(1, "browser"), s(2, "log")],
+            active: 0,
+        };
+        let out = tabs.dock_outer(SlotId(2), Edge::Bottom, Size::Fixed(8));
+        let mut ids = out.slot_ids();
+        ids.sort();
+        assert_eq!(ids, vec![SlotId(1), SlotId(2)]);
     }
 
     /// **Bringing a hidden slot to light activates ITS tab** (#329).

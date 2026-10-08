@@ -12,7 +12,7 @@ expression: render_80x24(&app)
 "   │Teclado y ratón 4     Tipografía monoespaciada                          │  │"
 "   │Comportamiento 5      Tamaño de letra                                   │  │"
 "   │Plugins 1             Reducir movimiento           false                │  │"
-"   │                      Barra de título              native               │  │"
+"   │                      Barra de título              custom               │  │"
 "   │                      Filas a rayas                false                │  │"
 "   │                      Imágenes en el visor         auto                 │  │"
 "   │                      Tema con el escritorio claro                      │  │"

@@ -1266,6 +1266,9 @@ impl UiHost {
                 target_slot.pane.begin_loading(dest);
             }
         }
+        // Read before pinning, which takes it: the restored shell below
+        // depends on whether a human typed the directory.
+        let typed_dir = state.dir_requested.is_some();
         state.pin_dir_requested();
         // The first listing is requested BEFORE publishing anything:
         // snapshot 0 describes a screen that already exists, not a promise.
@@ -1287,7 +1290,14 @@ impl UiHost {
                 state.after_opening(kind, &backend, &tx2);
             }
         }
-        let _ = state.start_si_missing(&tx2);
+        // The shell, though, only where the reader worked before: a LOCAL
+        // directory the session restored. A directory from the command line
+        // ("Open with norte" on a downloaded folder) would run the shell's
+        // prompt hooks — git, direnv — there without a gesture; there the
+        // panel waits for its key, as it did (review of 2026-10-08).
+        if !typed_dir && norte_frontend::shell::is_local(state.slot().pane.dir()) {
+            let _ = state.start_si_missing(&tx2);
+        }
         // And which PANES the plugins contribute (phase 3). Without asking
         // whether there is a slot for one: the saved layout can bring one
         // and that slot does not get placed until its kind is declared. The
@@ -4020,7 +4030,14 @@ impl State {
                     .and_then(|c| crate::commands::effect_of(c, 1))
                 {
                     Some(effect) => self.apply_effect(effect, backend, mailbox),
-                    None => (Self::stale(StaleAction::Generation), Vec::new()),
+                    // Not stale — nothing newer would make it valid — just
+                    // not a button this host has: no resync for it.
+                    None => (
+                        ActionAck::Unavailable {
+                            reason_key: "cmd-not-here".to_owned(),
+                        },
+                        Vec::new(),
+                    ),
                 }
             }
             UiAction::DockSlot { slot_id, zone } => {

@@ -172,3 +172,4 @@ edits.
 | [0169](0169-the-terminal-panel-column-draws-pictures.md) | The terminal's panel column draws pictures | accepted |
 | [0170](0170-the-open-panels-are-shared.md) | Which panels are open is shared between the frontends | accepted |
 | [0171](0171-panels-usability.md) | Side panels: shared keys, a "behind" state, docks that yield | accepted |
+| [0172](0172-the-window-looks-like-vs-code.md) | The window follows VS Code's chrome | accepted |

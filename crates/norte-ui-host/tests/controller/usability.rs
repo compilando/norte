@@ -598,6 +598,28 @@ async fn closing_a_side_panel_does_not_offer_the_split() {
     );
 }
 
+/// The header's `×` closes a LONE side panel: it went through the tab path
+/// and came back stale, because a lone panel is in no tab group (review of
+/// 2026-10-08).
+#[tokio::test]
+async fn the_header_close_closes_a_lone_panel() {
+    let (h, _snap) = host_beside("tree").await;
+    let mut sub = h.subscribe();
+    let (_, snap) = after(
+        &h,
+        &mut sub,
+        UiAction::TabAction {
+            slot_id: 9,
+            verb: norte_ui_host::action::TabVerb::Close,
+        },
+    )
+    .await;
+    assert!(
+        !snap.layout.placements.iter().any(|p| p.slot_id == 9),
+        "the tree closed"
+    );
+}
+
 /// A tree a restored layout brings starts as if opened by hand: it came up
 /// BLANK, placed and never anchored (2026-10-08).
 #[tokio::test]

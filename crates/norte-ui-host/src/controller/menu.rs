@@ -209,6 +209,21 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // A LONE panel's header `×` (ADR 0172): no tab group to go through,
+        // so it closes the way `layout.close-slot` does from inside it — the
+        // panel's own cleanup included.
+        let id = norte_frontend::layout::SlotId(slot_id);
+        if verb == crate::action::TabVerb::Close
+            && self.tree.tabs_of(id).is_none()
+            && self.tree.kind_of(id).is_some()
+        {
+            self.roles.set(norte_frontend::layout::RoleId::Active, id);
+            self.reconciles_roles();
+            return match crate::commands::effect_of("layout.close-slot", 1) {
+                Some(effect) => self.apply_effect(effect, backend, mailbox),
+                None => self.no_implemented("layout.close-slot"),
+            };
+        }
         let (ack, mut outputs) = self.choose_tab(slot_id, backend, mailbox);
         if matches!(ack, ActionAck::Stale { .. }) {
             return (ack, outputs);
