@@ -892,6 +892,38 @@ fn dragging_the_title_moves_the_pane() {
     assert_eq!(app.focused_slot(), focus);
 }
 
+/// Dropped on the screen's very edge, a panel takes that whole side: the
+/// log dragged to the right border becomes a full-height column. Dropped
+/// on a pane it could only land beside or under that pane (2026-10-08).
+#[test]
+fn dropping_on_the_screen_edge_takes_the_whole_side() {
+    let mut app = app_painted(5);
+    let _ = paint_at(&mut app, 120, 50);
+    // Places: its title row is not a border (a bottom dock's is, and
+    // pressing there resizes).
+    app.toggle_places();
+    let _ = paint_at(&mut app, 120, 50);
+    let log = app.places_slot().expect("places open");
+    let right = app.panes.slot_of(1);
+    let l = app.mouse.slot_rect(log).expect("log placed");
+    let b = app.mouse.slot_rect(right).expect("listing placed");
+    let edge_x = b.x + b.width - 1;
+    let _ = mouse::handle(&mut app, ev(DOWN, l.x + 4, l.y));
+    let _ = mouse::handle(&mut app, ev(DRAG, edge_x, b.y + b.height / 2));
+    assert!(
+        app.mouse.move_target().is_some(),
+        "the strip highlights: log {l:?} listing {b:?} layout {:?}",
+        app.layout
+    );
+    let _ = mouse::handle(&mut app, ev(UP, edge_x, b.y + b.height / 2));
+    let _ = paint_at(&mut app, 120, 50);
+    let l = app.mouse.slot_rect(log).expect("log placed");
+    let b = app.mouse.slot_rect(right).expect("listing placed");
+    assert!(l.x > b.x, "the log went to the right: {l:?} vs {b:?}");
+    assert_eq!(l.y, b.y, "from the top");
+    assert!(l.height >= b.height, "full height: {l:?} vs {b:?}");
+}
+
 /// ADR 0134: two panels on the same edge share a spot as tabs, and their
 /// slot's first row is the STRIP with both names. Clicking the hidden one
 /// runs its command (which reveals it); the one in front is not a zone.

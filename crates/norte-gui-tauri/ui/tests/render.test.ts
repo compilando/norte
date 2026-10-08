@@ -2614,6 +2614,24 @@ describe("moving a panel by dragging it (ADR 0138)", () => {
     expect(document.documentElement.dataset["dragging"]).toBeUndefined();
   });
 
+  it("dropping on the window's very edge sends dock_slot: the whole side", () => {
+    const { screen, sent } = mount();
+    screen.paint(twoListings());
+    sent.length = 0;
+    const title = document.querySelector('[data-slot-id="1"] .slot-title') as HTMLElement;
+    title.dispatchEvent(pointer("pointerdown", 10, 5));
+    window.dispatchEvent(pointer("pointermove", 1195, 200));
+    const veil = document.querySelector(".drop-target") as HTMLElement;
+    expect(veil.dataset["zone"]).toBe("right");
+    expect(veil.dataset["outer"]).toBe("true");
+    // Full height of the body, not half of the pane under the pointer.
+    expect(veil.style.getPropertyValue("height")).toBe("400px");
+    window.dispatchEvent(pointer("pointerup", 1195, 200));
+    expect(
+      sent.filter((a) => a.action === "dock_slot" || a.action === "move_slot"),
+    ).toEqual([{ action: "dock_slot", slot_id: 1, zone: "right" }]);
+  });
+
   it("a click, dropping on itself or on the chrome, and Esc move nothing", () => {
     const { screen, sent } = mount();
     screen.paint(twoListings());

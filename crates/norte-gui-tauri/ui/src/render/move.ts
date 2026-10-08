@@ -1,7 +1,9 @@
 // Moving a pane by dragging its title or its tab (ADR 0138), like VS Code:
 // passing over another pane shows where it would land — one of its halves, or
-// the whole pane to join as a tab — and releasing sends `move_slot`. What
-// happens to the tree is decided by the host.
+// the whole pane to join as a tab — and releasing sends `move_slot`. On the
+// body's very edge it shows a strip along that whole side, and releasing
+// sends `dock_slot`: full height or width. What happens to the tree is
+// decided by the host.
 
 import type { Screen } from "../render";
 import type { DropZone } from "../types";
@@ -16,6 +18,53 @@ const EDGE = 0.25;
 
 /** The chrome slots: they neither drag nor receive. */
 const CHROME = new Set(["status", "tasks"]);
+
+/** Pixels from the body's edge that mean "the whole side" (VS Code's
+ *  outer drop): dropped there, the pane takes the full height or width. */
+const OUTER = 24;
+
+/** How thick the outer veil is: the share of the body a docked side takes. */
+const OUTER_SHARE = 0.25;
+
+type Target = { slot: number; zone: DropZone; rect: DOMRect; outer: boolean };
+
+/** The body: the box around every pane that is not chrome. */
+function bodyRect(screen: Screen): DOMRect | null {
+  let [l, t, r, b] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const [, dom] of screen.slots) {
+    if (CHROME.has(dom.root.dataset["kind"] ?? "")) {
+      continue;
+    }
+    const x = dom.root.getBoundingClientRect();
+    if (x.width === 0 || x.height === 0) {
+      continue;
+    }
+    [l, t, r, b] = [
+      Math.min(l, x.left),
+      Math.min(t, x.top),
+      Math.max(r, x.right),
+      Math.max(b, x.bottom),
+    ];
+  }
+  return l < r && t < b ? new DOMRect(l, t, r - l, b - t) : null;
+}
+
+/** The body's side under the point, if it is within `OUTER` of it. */
+function outerIn(body: DOMRect, x: number, y: number): DropZone | null {
+  if (x < body.left || x >= body.right || y < body.top || y >= body.bottom) {
+    return null;
+  }
+  const sides: [DropZone, number][] = [
+    ["left", x - body.left],
+    ["right", body.right - x],
+    // The top band is thinner: the top panes' titles sit on it, and a drag
+    // sliding along a title is not asking for the whole top.
+    ["top", (y - body.top) * 3],
+    ["bottom", body.bottom - y],
+  ];
+  const near = sides.filter(([, d]) => d < OUTER).sort((a, b) => a[1] - b[1])[0];
+  return near === undefined ? null : near[0];
+}
 
 /**
  * The zone of `rect` under the point: the nearest side if it is within a
@@ -45,12 +94,13 @@ export function zoneOf(
 
 /** The pane under the point and the zone, or `null` over itself, the chrome
  *  or nothing. */
-function targetIn(
-  screen: Screen,
-  x: number,
-  y: number,
-  origin: number,
-): { slot: number; zone: DropZone; rect: DOMRect } | null {
+function targetIn(screen: Screen, x: number, y: number, origin: number): Target | null {
+  // The body's very edge first: the whole side, whoever is under it.
+  const body = bodyRect(screen);
+  const side = body === null ? null : outerIn(body, x, y);
+  if (body !== null && side !== null) {
+    return { slot: origin, zone: side, rect: body, outer: true };
+  }
   for (const [id, dom] of screen.slots) {
     if (CHROME.has(dom.root.dataset["kind"] ?? "")) {
       continue;
@@ -59,23 +109,23 @@ function targetIn(
     if (x < r.left || x >= r.right || y < r.top || y >= r.bottom) {
       continue;
     }
-    return id === origin ? null : { slot: id, zone: zoneOf(x, y, r), rect: r };
+    return id === origin
+      ? null
+      : { slot: id, zone: zoneOf(x, y, r), rect: r, outer: false };
   }
   return null;
 }
 
-/** The zone's rectangle, relative to the board. */
-function paintVeil(
-  veil: HTMLElement,
-  board: DOMRect,
-  d: { zone: DropZone; rect: DOMRect } | null,
-): void {
+/** The zone's rectangle, relative to the board: half of the pane, or — on
+ *  the body's edge — a strip along that whole side. */
+function paintVeil(veil: HTMLElement, board: DOMRect, d: Target | null): void {
   if (d === null) {
     veil.hidden = true;
     return;
   }
   veil.hidden = false;
   veil.dataset["zone"] = d.zone;
+  veil.dataset["outer"] = String(d.outer);
   const r = d.rect;
   let [left, top, width, height] = [
     r.left - board.left,
@@ -83,15 +133,16 @@ function paintVeil(
     r.width,
     r.height,
   ];
+  const share = d.outer ? OUTER_SHARE : 0.5;
   if (d.zone === "left" || d.zone === "right") {
-    width = r.width / 2;
+    width = r.width * share;
     if (d.zone === "right") {
-      left += r.width / 2;
+      left += r.width - width;
     }
   } else if (d.zone === "top" || d.zone === "bottom") {
-    height = r.height / 2;
+    height = r.height * share;
     if (d.zone === "bottom") {
-      top += r.height / 2;
+      top += r.height - height;
     }
   }
   veil.style.setProperty("left", `${String(left)}px`);
@@ -121,7 +172,7 @@ export function makeDraggable(screen: Screen, handle: HTMLElement, slotId: numbe
     }
     const [x0, y0] = [e.clientX, e.clientY];
     let dragging = false;
-    let target: { slot: number; zone: DropZone; rect: DOMRect } | null = null;
+    let target: Target | null = null;
     const veil = doc.createElement("div");
     veil.className = "drop-target";
     veil.hidden = true;
@@ -167,7 +218,9 @@ export function makeDraggable(screen: Screen, handle: HTMLElement, slotId: numbe
         return;
       }
       swallowClick();
-      if (target !== null) {
+      if (target?.outer === true) {
+        screen.send({ action: "dock_slot", slot_id: slotId, zone: target.zone });
+      } else if (target !== null) {
         screen.send({
           action: "move_slot",
           slot_id: slotId,

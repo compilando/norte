@@ -582,7 +582,9 @@ use serde::{Deserialize, Serialize};
 ///   the preview is; and `PlacesSlotView.favorites_hint`, what an empty
 ///   Favorites section says. And `PanelButtonState::Behind`: a panel in
 ///   the layout but not in view (behind a tab, or dropped for room).
-pub const BRIDGE_VERSION: u32 = 99;
+/// - **100**: `dock_slot { slot_id, zone }`: a pane dropped on the
+///   window's edge takes that whole side (`Node::dock_outer`).
+pub const BRIDGE_VERSION: u32 = 100;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

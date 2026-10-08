@@ -587,6 +587,33 @@ impl State {
         self.apply_si_fits(updated, tolerated, backend, mailbox)
     }
 
+    /// Docks `slot` on the window's `zone` edge, across the whole body
+    /// (`Node::dock_outer`): what dropping on the edge does.
+    pub(super) fn dock_slot_outer(
+        &mut self,
+        slot: u32,
+        zone: norte_frontend::layout::DropZone,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        use norte_frontend::layout::{DropZone, Edge};
+        let id = SlotId(slot);
+        let edge = match zone {
+            DropZone::Left => Edge::Left,
+            DropZone::Right => Edge::Right,
+            DropZone::Top => Edge::Top,
+            DropZone::Bottom => Edge::Bottom,
+            DropZone::Center => return (self.applied(), Vec::new()),
+        };
+        let Some(kind) = self.tree.kind_of(id).map(|k| k.as_str().to_owned()) else {
+            return (self.applied(), Vec::new());
+        };
+        let rows = (self.viewport.1 > 0).then_some(self.viewport.1);
+        let size = norte_frontend::layout::outer_dock_size(&kind, edge, rows);
+        let updated = self.tree.dock_outer(id, edge, size);
+        self.apply_si_fits(updated, None, backend, mailbox)
+    }
+
     /// Like [`Self::apply_tree`], but only if `new` leaves visible what
     /// was visible (`keeps_on_screen`, the SAME rule as the TUI's). If not, it
     /// touches nothing and says so on the bar, like splitting with no room.

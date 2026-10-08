@@ -1639,6 +1639,31 @@ impl App {
         self.change_layout(new_layout, tolerated);
     }
 
+    /// Moves slot `id` to the whole `zone` edge of the body
+    /// (`Node::dock_outer`): what dropping a panel on the screen's edge
+    /// does. The center changes nothing.
+    pub fn layout_dock_outer(
+        &mut self,
+        id: norte_frontend::layout::SlotId,
+        zone: norte_frontend::layout::DropZone,
+    ) {
+        use norte_frontend::layout::{DropZone, Edge};
+        let edge = match zone {
+            DropZone::Left => Edge::Left,
+            DropZone::Right => Edge::Right,
+            DropZone::Top => Edge::Top,
+            DropZone::Bottom => Edge::Bottom,
+            DropZone::Center => return,
+        };
+        let Some(kind) = self.layout.kind_of(id).map(|k| k.as_str().to_owned()) else {
+            return;
+        };
+        let size =
+            norte_frontend::layout::outer_dock_size(&kind, edge, self.last_frame.map(|a| a.height));
+        let new_layout = self.layout.dock_outer(id, edge, size);
+        self.change_layout(new_layout, None);
+    }
+
     /// Keeps `new_layout` if it leaves visible what was visible
     /// (`keeps_on_screen`, over the LAST frame), and brings the panes,
     /// their histories and the keyboard's owner up to date, with focus on

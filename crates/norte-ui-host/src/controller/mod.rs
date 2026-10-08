@@ -4005,6 +4005,9 @@ impl State {
                 target,
                 zone,
             } => self.mover_slot(*slot_id, *target, *zone, backend, mailbox),
+            UiAction::DockSlot { slot_id, zone } => {
+                self.dock_slot_outer(*slot_id, *zone, backend, mailbox)
+            }
             UiAction::ResizeSlot {
                 slot_id,
                 cells,

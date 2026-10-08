@@ -941,6 +941,102 @@ impl Node {
         }
     }
 
+    /// Moves slot `id` to the WHOLE `edge` of the body: full height at
+    /// left/right, full width at top/bottom, always inside the trailing
+    /// chrome rows (tasks, status). Dropping on the window's edge, as in VS
+    /// Code; [`Self::move_slot`] can only land beside another pane.
+    ///
+    /// `size` is the room it gets on that axis. The tree comes back as is
+    /// for chrome, a missing slot or the only one.
+    #[must_use]
+    pub fn dock_outer(&self, id: SlotId, edge: Edge, size: Size) -> Self {
+        let Some(node) = self.find_slot(id).filter(|n| !es_chrome(n)).cloned() else {
+            return self.clone();
+        };
+        let Some(rest) = self.close_slot(id) else {
+            return self.clone();
+        };
+        // The body, and the chrome rows that stay at the bottom.
+        let (body, chrome): (Self, Vec<(Self, Size)>) = match &rest {
+            Self::Split {
+                dir: Dir::Vertical,
+                children,
+                sizes,
+            } => {
+                let n = children.iter().rev().take_while(|c| es_chrome(c)).count();
+                if n == 0 || n == children.len() {
+                    (rest.clone(), Vec::new())
+                } else {
+                    let cut = children.len() - n;
+                    let chrome = children[cut..]
+                        .iter()
+                        .cloned()
+                        .zip(sizes[cut..].iter().copied())
+                        .collect();
+                    let body = if cut == 1 {
+                        children[0].clone()
+                    } else {
+                        Self::Split {
+                            dir: Dir::Vertical,
+                            children: children[..cut].to_vec(),
+                            sizes: sizes[..cut].to_vec(),
+                        }
+                    };
+                    (body, chrome)
+                }
+            }
+            _ => (rest.clone(), Vec::new()),
+        };
+        let body = match body {
+            Self::Split {
+                dir,
+                mut children,
+                mut sizes,
+            } if dir == edge.axis() => {
+                let at = if edge.is_front() { 0 } else { children.len() };
+                children.insert(at, node);
+                sizes.insert(at, size);
+                Self::Split {
+                    dir,
+                    children,
+                    sizes,
+                }
+            }
+            other => {
+                let (children, sizes) = if edge.is_front() {
+                    (vec![node, other], vec![size, Size::Weight(1)])
+                } else {
+                    (vec![other, node], vec![Size::Weight(1), size])
+                };
+                Self::Split {
+                    dir: edge.axis(),
+                    children,
+                    sizes,
+                }
+            }
+        };
+        if chrome.is_empty() {
+            return body;
+        }
+        let (mut children, mut sizes) = match body {
+            Self::Split {
+                dir: Dir::Vertical,
+                children,
+                sizes,
+            } => (children, sizes),
+            other => (vec![other], vec![Size::Weight(1)]),
+        };
+        for (c, s) in chrome {
+            children.push(c);
+            sizes.push(s);
+        }
+        Self::Split {
+            dir: Dir::Vertical,
+            children,
+            sizes,
+        }
+    }
+
     /// The LEAF node of slot `id`.
     fn find_slot(&self, id: SlotId) -> Option<&Self> {
         match self {
@@ -1828,6 +1924,64 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dropping a panel on the WINDOW's edge gives it the whole edge: full
+    /// height at left/right, above the status bar. Dropped on another
+    /// panel it could only ever land beside or under THAT one (2026-10-08).
+    #[test]
+    fn docking_at_the_outer_edge_takes_the_whole_height() {
+        let s = |i: u32, k: &str| Node::slot(SlotId(i), KindId::new(k));
+        let tree = Node::Split {
+            dir: Dir::Vertical,
+            sizes: vec![Size::Weight(1), Size::Fixed(1)],
+            children: vec![
+                Node::Split {
+                    dir: Dir::Horizontal,
+                    sizes: vec![Size::Weight(1), Size::Weight(1)],
+                    children: vec![
+                        s(1, "browser"),
+                        Node::Split {
+                            dir: Dir::Vertical,
+                            sizes: vec![Size::Weight(1), Size::Fixed(12)],
+                            children: vec![s(2, "browser"), s(3, "log")],
+                        },
+                    ],
+                },
+                s(9, "status"),
+            ],
+        };
+        let out = tree.dock_outer(SlotId(3), Edge::Right, Size::Fixed(30));
+        // Root: [ body-with-the-log-at-the-right , status ]
+        let Node::Split { dir, children, .. } = &out else {
+            panic!("{out:?}");
+        };
+        assert_eq!(*dir, Dir::Vertical);
+        assert!(matches!(&children[1], Node::Slot { id, .. } if *id == SlotId(9)));
+        let Node::Split {
+            dir,
+            children,
+            sizes,
+        } = &children[0]
+        else {
+            panic!("{out:?}");
+        };
+        assert_eq!(*dir, Dir::Horizontal);
+        assert!(matches!(children.last(), Some(Node::Slot { id, .. }) if *id == SlotId(3)));
+        assert_eq!(sizes.last(), Some(&Size::Fixed(30)));
+        assert_eq!(out.slot_ids().len(), 4, "nothing lost, nothing made");
+
+        // At the bottom: a row of its own, above the status bar.
+        let out = tree.dock_outer(SlotId(3), Edge::Bottom, Size::Fixed(8));
+        let Node::Split { children, .. } = &out else {
+            panic!("{out:?}");
+        };
+        assert_eq!(children.len(), 3);
+        assert!(matches!(&children[1], Node::Slot { id, .. } if *id == SlotId(3)));
+        assert!(matches!(&children[2], Node::Slot { id, .. } if *id == SlotId(9)));
+
+        // Chrome never moves, and the only listing cannot leave itself.
+        assert_eq!(tree.dock_outer(SlotId(9), Edge::Left, Size::Fixed(5)), tree);
+    }
 
     /// **Bringing a hidden slot to light activates ITS tab** (#329).
     ///

@@ -236,6 +236,7 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::TabAction { .. } => "tab_action",
         UiAction::ResizeSlot { .. } => "resize_slot",
         UiAction::MoveSlot { .. } => "move_slot",
+        UiAction::DockSlot { .. } => "dock_slot",
         UiAction::ProfileActivateRow { .. } => "profile_activate_row",
         UiAction::Resync => "resync",
         UiAction::RequestQuit => "request_quit",
@@ -614,6 +615,13 @@ fn chrome_actions() -> Vec<(&'static str, UiAction)> {
                 slot_id: 1,
                 target: 2,
                 zone: norte_frontend::layout::DropZone::Center,
+            },
+        ),
+        (
+            "dock_slot",
+            UiAction::DockSlot {
+                slot_id: 3,
+                zone: norte_frontend::layout::DropZone::Right,
             },
         ),
     ]
