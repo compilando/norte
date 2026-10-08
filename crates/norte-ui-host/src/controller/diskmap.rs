@@ -68,6 +68,10 @@ impl State {
         let followed =
             norte_frontend::layout::resolve_follow(&self.tree, slot, &self.roles, &mut diags)
                 .or_else(|| self.roles.get(norte_frontend::layout::RoleId::Active))
+                // Only a LISTING has a directory: with the keyboard in the
+                // tree the active role named the tree, and the map kept the
+                // previous folder (2026-10-08). Then the remembered listing.
+                .filter(|SlotId(id)| self.slots.contains_key(id))
                 .unwrap_or(SlotId(self.active()));
         let SlotId(id) = followed;
         let slot_state = self.slots.get(&id)?;
@@ -361,6 +365,26 @@ impl State {
             .find(|(SlotId(s), _)| *s == id)
             .map(|(_, r)| (r.width.saturating_sub(2), r.height.saturating_sub(2)));
 
+        let (tiles, grid) = match (state, cells) {
+            (Some(e), Some((cols, rows))) => (
+                norte_frontend::treemap::tiles(&e.map.report().children, cols, rows)
+                    .into_iter()
+                    .map(|t| crate::dto::DiskTileView {
+                        col: t.x,
+                        row: t.y,
+                        width: t.w,
+                        height: t.h,
+                        name: clamp_display(t.name),
+                        hostile: t.masked,
+                        size: t.size,
+                        percent: t.percent,
+                        class: t.class.as_str().to_owned(),
+                    })
+                    .collect(),
+                [cols, rows],
+            ),
+            _ => (Vec::new(), [0, 0]),
+        };
         let (lines, hits) = match (state, cells) {
             (Some(e), Some((cols, rows))) => {
                 let frame = norte_frontend::treemap::squarify(&e.map.report().children, cols, rows);
@@ -396,6 +420,8 @@ impl State {
             } else {
                 String::new()
             },
+            tiles,
+            grid,
         }
     }
 }

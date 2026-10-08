@@ -496,7 +496,17 @@ pub(crate) fn draw_disk_map(
     }
     let marco =
         norte_frontend::treemap::squarify(&map.report().children, inside.width, inside.height);
-    let lines = frame_lines(&marco, &app.theme);
+    // FILLED: the class colour as the background. As a foreground only, a
+    // rectangle was spaces in blue — nothing — and the map read as one loose
+    // label (2026-10-08). The gaps carry no role and stay the panel's.
+    let mut lines = frame_lines(&marco, &app.theme);
+    for (line, src) in lines.iter_mut().zip(&marco.lines) {
+        for (span, s) in line.spans.iter_mut().zip(src) {
+            if s.role.is_some() {
+                span.style = span.style.add_modifier(ratatui::style::Modifier::REVERSED);
+            }
+        }
+    }
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 

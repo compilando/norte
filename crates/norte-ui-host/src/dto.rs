@@ -2173,6 +2173,41 @@ pub struct DiskMapSlotView {
     /// empty otherwise. An empty frame read as "still loading" or "broken"
     /// (bridge 98).
     pub empty: String,
+    /// The same layout as RECTANGLES (bridge 102), for a renderer that
+    /// draws boxes instead of text lines: `lines` painted spaces in a
+    /// foreground colour, and a map read as one loose label. Largest first.
+    /// Absent in an older host.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tiles: Vec<DiskTileView>,
+    /// `[cols, rows]` the tiles are laid out in: the renderer places them
+    /// as fractions of this, whatever its pixels.
+    #[serde(default)]
+    pub grid: [u16; 2],
+}
+
+/// A disk map rectangle (bridge 102), in cells of `DiskMapSlotView.grid`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiskTileView {
+    /// Column of the top-left corner. A click sends it with `row`
+    /// (`panel_click`), and the host resolves the child.
+    pub col: u16,
+    /// Row of the top-left corner.
+    pub row: u16,
+    /// Width in cells.
+    pub width: u16,
+    /// Height in cells.
+    pub height: u16,
+    /// The child's name, masked and bounded.
+    pub name: String,
+    /// The painted name differs from the one on disk.
+    pub hostile: bool,
+    /// What it takes up, short (`158K`; `≈` = lower bound).
+    pub size: String,
+    /// Its share of the directory, 0–100.
+    pub percent: u8,
+    /// `directory`, `code`, `archive`, `image`, `media`, `document` or
+    /// `other`: the colour.
+    pub class: String,
 }
 
 /// The journal timeline (#359, bridge 78).

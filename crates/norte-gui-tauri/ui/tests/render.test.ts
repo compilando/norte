@@ -5092,6 +5092,60 @@ describe("the disk map", () => {
     expect(body.textContent).toContain("⟨file⟩/casa");
   });
 
+  // 2026-10-08: the map was spaces in a foreground colour — invisible
+  // blocks and one loose label. With tiles it is a real treemap.
+  it("draws real rectangles from the tiles, with a legend and a click per tile", () => {
+    const { screen, root, sent } = mount();
+    const v = withMap(false, "");
+    const map = v.slots.find((s) => s.kind === "disk_map");
+    if (map?.kind !== "disk_map") throw new Error("no map");
+    map.grid = [40, 10];
+    map.tiles = [
+      {
+        col: 0,
+        row: 0,
+        width: 30,
+        height: 10,
+        name: "video.mkv",
+        hostile: false,
+        size: "750M",
+        percent: 75,
+        class: "media",
+      },
+      {
+        col: 30,
+        row: 0,
+        width: 10,
+        height: 10,
+        name: "src",
+        hostile: false,
+        size: "250M",
+        percent: 25,
+        class: "directory",
+      },
+    ];
+    screen.paint(v);
+    const tiles = [
+      ...root.querySelectorAll('[data-slot-id="7"] .treemap-tile'),
+    ] as HTMLElement[];
+    expect(tiles).toHaveLength(2);
+    expect(tiles[0]?.style.width).toBe("75%");
+    expect(tiles[1]?.style.left).toBe("75%");
+    expect(tiles[0]?.textContent).toContain("video.mkv");
+    expect(tiles[0]?.textContent).toContain("75%");
+    expect(tiles[1]?.title).toBe("src — 250M (25%)");
+    const legend = [...root.querySelectorAll(".treemap-legend")].map(
+      (l) => l.textContent,
+    );
+    expect(legend).toEqual([
+      realCatalog()["disk-map-class-media"],
+      realCatalog()["disk-map-class-directory"],
+    ]);
+    sent.length = 0;
+    tiles[1]?.click();
+    expect(sent).toEqual([{ action: "panel_click", slot_id: 7, row: 0, col: 30 }]);
+  });
+
   it("a finished empty map says so, not 'measuring'", () => {
     const { screen, root } = mount();
     screen.paint(withMap(false, "nada que dibujar"));

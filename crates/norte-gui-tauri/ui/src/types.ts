@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 101;
+export const BRIDGE_VERSION = 102;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -389,6 +389,25 @@ export interface DiskMapSlotView {
   /** What a finished map with nothing to draw says, translated; "" otherwise
    *  (bridge 98). */
   empty: string;
+  /** The same layout as rectangles (bridge 102), largest first. Absent in
+   *  an older host: then the `lines` are painted. */
+  tiles?: DiskTileView[];
+  /** `[cols, rows]` the tiles are laid out in. */
+  grid?: [number, number];
+}
+
+/** A disk map rectangle (bridge 102), in cells of `grid`. */
+export interface DiskTileView {
+  col: number;
+  row: number;
+  width: number;
+  height: number;
+  name: string;
+  hostile: boolean;
+  size: string;
+  percent: number;
+  /** directory | code | archive | image | media | document | other */
+  class: string;
 }
 
 /** A timeline row (bridge 78), already paintable. */

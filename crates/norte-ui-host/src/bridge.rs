@@ -587,7 +587,9 @@ use serde::{Deserialize, Serialize};
 /// - **101**: `PanelBarView.footer` (`FooterButtonView`): the activity
 ///   column's foot, help and settings; and `activity_activate { id }`, for
 ///   those and the title bar's command centre (`goto`).
-pub const BRIDGE_VERSION: u32 = 101;
+/// - **102**: `DiskMapSlotView.tiles` and `grid`: the disk map's
+///   rectangles, for a renderer that draws boxes (`DiskTileView`).
+pub const BRIDGE_VERSION: u32 = 102;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///
