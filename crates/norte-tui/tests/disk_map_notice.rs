@@ -51,9 +51,14 @@ async fn the_measuring_notice_goes_when_the_map_is_closed() {
     let mut work = norte_tui::jobs::InFlight::default();
     app.open_disk_map();
     norte_tui::jobs::launch_disk_map(&mut app, &backend, &mut work).await;
-    while app.disk_map_slot().is_some() {
+    // Three states (open, focused, closed): at most three presses.
+    for _ in 0..3 {
+        if app.disk_map_slot().is_none() {
+            break;
+        }
         app.toggle_disk_map();
     }
+    assert!(app.disk_map_slot().is_none(), "closed");
     norte_tui::jobs::tend_disk_map(&mut app, &mut work);
     assert!(work.disk_map.is_none(), "cancelled");
     assert_eq!(app.message, None);
