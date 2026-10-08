@@ -2213,6 +2213,9 @@ pub struct DiskTileView {
     /// `directory`, `code`, `archive`, `image`, `media`, `document` or
     /// `other`: the colour.
     pub class: String,
+    /// The tone of that colour, `0..3` (bridge 105, ADR 0175): touching
+    /// rectangles of one class never share it.
+    pub shade: u8,
 }
 
 /// The journal timeline (#359, bridge 78).

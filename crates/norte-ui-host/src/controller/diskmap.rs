@@ -482,6 +482,7 @@ impl State {
                         size: t.size,
                         percent: t.percent,
                         class: t.class.as_str().to_owned(),
+                        shade: t.shade,
                     })
                     .collect(),
                 [cols, rows],

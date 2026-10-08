@@ -5742,8 +5742,18 @@ button.status-item:hover {
   }
 }
 
+/* The tones of one class (ADR 0175): touching tiles of a class never share
+   one, so a home of folders is not one block. */
+.treemap-tile[data-shade="1"] {
+  background: color-mix(in oklab, var(--tile) 30%, var(--panel-bg));
+}
+
+.treemap-tile[data-shade="2"] {
+  background: color-mix(in oklab, var(--tile) 62%, var(--panel-bg));
+}
+
 .treemap-tile:hover {
-  background: color-mix(in oklab, var(--tile) 65%, var(--panel-bg));
+  background: color-mix(in oklab, var(--tile) 75%, var(--panel-bg));
 }
 
 .treemap-name,

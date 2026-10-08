@@ -7,6 +7,12 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Changed
+
+- **The disk map tells neighbouring folders apart**: rectangles of one
+  class that touch take different tones of its colour, in the terminal
+  and in the window. A home, all folders, was one blue block (ADR 0175).
+
 ### Added
 
 - **A timeline row shows its details**: Space or a click opens the full

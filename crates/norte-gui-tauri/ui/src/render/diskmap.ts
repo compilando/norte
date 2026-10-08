@@ -97,6 +97,7 @@ export function paintDiskMap(this: Screen, dom: SlotDom, slot: DiskMapSlotView):
       box.type = "button";
       box.className = "treemap-tile";
       box.dataset["class"] = t.class;
+      box.dataset["shade"] = String(t.shade);
       box.style.left = `${String((t.col / cols) * 100)}%`;
       box.style.top = `${String((t.row / rows) * 100)}%`;
       box.style.width = `${String((t.width / cols) * 100)}%`;
