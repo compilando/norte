@@ -94,6 +94,12 @@ impl App {
                 self.panels_owned_elsewhere(),
             ),
         );
+        // Where each panel was last (ADR 0173): what is placed now, over what
+        // was remembered of panels that are closed.
+        let mut panel_docks = self.session.other_docks.clone();
+        let mut docks = self.session.docks.clone();
+        docks.extend(norte_frontend::layout::docks_in(&self.layout));
+        panel_docks.insert(self.session_key(), docks);
         let mut body = SessionBody {
             active: self.session_key_active(),
             layouts,
@@ -101,6 +107,7 @@ impl App {
             palette_recent: self.palette_recent.clone(),
             popular: self.popular.entries().to_vec(),
             open_panels,
+            panel_docks,
         };
         for id in self.layout.slot_ids() {
             let Some(pane) = self.panes.browser(id) else {
@@ -183,6 +190,14 @@ impl App {
         if let Some(tree) = body.layouts.get(&key) {
             self.set_layout(tree.clone());
         }
+        // Where panels were last BEFORE opening any of them (ADR 0173).
+        self.session.docks = body.panel_docks.get(&key).cloned().unwrap_or_default();
+        self.session.other_docks = body
+            .panel_docks
+            .iter()
+            .filter(|(k, _)| **k != key)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         // Which panels are open is the window's too (ADR 0170): this
         // frontend's layout keeps its own places and sizes, and opens or
         // closes to match.

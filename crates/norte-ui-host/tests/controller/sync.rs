@@ -4077,15 +4077,16 @@ async fn the_pane_bar_shows_the_panes_and_a_click_opens_them() {
 async fn panes_on_one_edge_share_room_as_tabs() {
     let (h, _snap) = host_tree(fake_tree()).await;
     let mut sub = h.subscribe();
+    // Both at the BOTTOM, their normal place (ADR 0173).
     run_by_palette(&h, &mut sub, "layout.timeline").await;
-    run_by_palette(&h, &mut sub, "layout.metadata").await;
+    run_by_palette(&h, &mut sub, "layout.log").await;
     let snapshot = snapshot_until(&h, &mut sub, "a panels group", |s| {
         s.layout.tabs.iter().find(|g| g.panels).cloned()
     })
     .await;
     let titles: Vec<&str> = snapshot.tabs.iter().map(|t| t.title.as_str()).collect();
     // The panel bar's names, not the kind ids.
-    assert_eq!(titles, ["Historial", "Detalles"], "{snapshot:?}");
+    assert_eq!(titles, ["Historial", "Registro"], "{snapshot:?}");
     assert_eq!(snapshot.active, 1, "the one that arrives stays in front");
 
     // The timeline is hidden: pressing it SHOWS it.

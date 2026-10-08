@@ -491,6 +491,10 @@ impl State {
         // A slot that debuts is born like the startup ones: with the
         // configuration's hidden-files setting applied.
         let hidden_default = self.config.common.ui_show_hidden.unwrap_or(true);
+        // Where every panel is BEFORE the tree changes (ADR 0173): a panel
+        // closed here is reopened there.
+        self.panel_docks
+            .extend(norte_frontend::layout::docks_in(&self.tree));
         self.tree = tree;
         self.split = resolve(rect(self.viewport), &self.tree, &self.kinds);
         // From the TREE, not from the layout. `placements` and `hidden`
@@ -651,6 +655,8 @@ impl State {
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let before = self.split.clone();
+        self.panel_docks
+            .extend(norte_frontend::layout::docks_in(&self.tree));
         let tree_before = std::mem::replace(&mut self.tree, new);
         self.split = resolve(rect(self.viewport), &self.tree, &self.kinds);
         // The same on screen AND in the tree: nothing to say. The split alone

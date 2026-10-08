@@ -227,6 +227,13 @@ pub struct SessionBody {
     /// apart (ADR 0139, ADR 0170). Additive like [`Self::palette_recent`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub open_panels: BTreeMap<String, Vec<String>>,
+    /// Where the reader last had each panel kind (ADR 0173), by the same
+    /// key as `layouts` — each frontend arranges its own: a panel closed
+    /// and opened again goes back THERE, and only one never placed takes
+    /// [`crate::layout::default_dock`]. Additive: an older session has
+    /// none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub panel_docks: BTreeMap<String, BTreeMap<String, crate::layout::Dock>>,
 }
 
 /// The panels open in `tree`: the panel bar's kinds it places, in the
@@ -1472,6 +1479,7 @@ mod tests {
             palette_recent: Vec::new(),
             popular: Vec::new(),
             open_panels: BTreeMap::new(),
+            panel_docks: BTreeMap::new(),
         };
         let v = body.to_value();
         assert!(matches!(

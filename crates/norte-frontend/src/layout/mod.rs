@@ -25,6 +25,7 @@
 
 mod by_slot;
 pub mod config;
+mod docks;
 mod focus;
 mod kinds;
 pub mod presets;
@@ -34,6 +35,7 @@ mod store;
 mod tree;
 
 pub use by_slot::BySlot;
+pub use docks::{Dock, default_dock, dock_for, dock_of, docks_in};
 pub use focus::{focus_next, focus_prev};
 pub use kinds::{KindDecl, KindRegistry, panel_kind_id};
 pub use resolve::{Resolved, border_span, has_room_to_split, keeps_on_screen, resolve};

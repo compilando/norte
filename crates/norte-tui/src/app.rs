@@ -473,6 +473,14 @@ pub struct SessionUi {
     /// The other profiles' open panels (ADR 0170), written back as they
     /// came for the same reason.
     other_open_panels: std::collections::BTreeMap<String, Vec<String>>,
+    /// Where the reader last had each panel kind in THIS frontend (ADR
+    /// 0173): reopening a panel puts it back there.
+    pub(crate) docks: std::collections::BTreeMap<String, norte_frontend::layout::Dock>,
+    /// The other profiles' docks, written back as they came.
+    other_docks: std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, norte_frontend::layout::Dock>,
+    >,
     /// When each slot was last touched (epoch ms), for the age-based sweep.
     /// Stored instead of stamped at capture time because capturing is not
     /// touching: two captures of the same screen back to back have to

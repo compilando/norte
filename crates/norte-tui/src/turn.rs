@@ -152,6 +152,7 @@ pub async fn drain_pending(
     // because measuring is I/O and this loop owns the backend — same split
     // as the checksums and the comparison.
     crate::jobs::tend_disk_map(app, work);
+    app.remember_docks();
     if app.disk_map_wants_measure() {
         app.disk_map_stale = false;
         crate::jobs::launch_disk_map(app, backend, work).await;

@@ -305,7 +305,7 @@ impl App {
     /// Opening it does NOT touch the listings: not how many there are, not
     /// which is focused, not where its cursor is.
     pub fn toggle_places(&mut self) {
-        use norte_frontend::layout::{Edge, KindId, Node};
+        use norte_frontend::layout::{KindId, Node};
         match self.places_slot() {
             // `se_ve` in the guard since #329: a panel hidden in a tab
             // doesn't close, it gets shown. Closing what the reader doesn't
@@ -327,12 +327,13 @@ impl App {
                 let id = self.mint_slot();
                 self.panes
                     .insert_places(id, norte_frontend::places::PlacesState::new());
+                // Its normal place, 16 cells on the left (the kind's
+                // minimum is 14), or where the reader last had it.
+                let d = self.dock_for("places");
                 self.layout = self.layout.dock_grouped(
                     self.focused_slot(),
-                    Edge::Left,
-                    // 16 cells: the kind's minimum is 14 and a `Fixed` beats
-                    // the minimum, so this number is the real width.
-                    norte_frontend::layout::Size::Fixed(16),
+                    d.edge,
+                    d.size,
                     &Node::slot(id, KindId::new("places")),
                 );
                 self.panes.refresh_visible(&self.layout);
@@ -506,7 +507,7 @@ impl App {
     /// (ADR 0058), so a pinned viewer and one that follows the cursor are
     /// the SAME renderer.
     pub fn toggle_preview(&mut self) {
-        use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Node, RoleId, Size};
+        use norte_frontend::layout::{Bindings, Follow, KindId, Node, RoleId};
         match self.preview_slot() {
             Some(id) if self.key_owner == KeyOwner::Preview && self.is_visible(id) => {
                 if let Some(new_layout) = self.layout.close_slot(id) {
@@ -529,10 +530,11 @@ impl App {
                 let id = self.mint_slot();
                 self.panes
                     .insert_preview(id, crate::preview::Preview::new());
+                let d = self.dock_for(crate::preview::KIND);
                 self.layout = self.layout.dock_grouped(
                     self.focused_slot(),
-                    Edge::Right,
-                    Size::Weight(1),
+                    d.edge,
+                    d.size,
                     &Node::slot_bound(
                         id,
                         KindId::new(crate::preview::KIND),
@@ -562,7 +564,7 @@ impl App {
     /// off the system's root would show ten thousand branches to reach
     /// where you already are.
     pub fn toggle_tree(&mut self) {
-        use norte_frontend::layout::{Edge, KindId, Node};
+        use norte_frontend::layout::{KindId, Node};
         match self.tree_slot() {
             Some(id) if self.key_owner == KeyOwner::Tree && self.is_visible(id) => {
                 if let Some(new_layout) = self.layout.close_slot(id) {
@@ -588,14 +590,11 @@ impl App {
                 // Near the listing and not ON it (2026-09-21 capture).
                 tree.anchor_near(self.focused().dir(), &norte_frontend::shell::home_vpath());
                 self.panes.insert_tree(id, tree);
+                let d = self.dock_for(crate::tree::KIND);
                 self.layout = self.layout.dock_grouped(
                     self.focused_slot(),
-                    Edge::Left,
-                    // On the left and with the sidebar's width: it's the
-                    // same gesture — a navigation column next to the
-                    // listing — and two different widths for the same
-                    // thing get noticed.
-                    norte_frontend::layout::Size::Fixed(24),
+                    d.edge,
+                    d.size,
                     &Node::slot(id, KindId::new(crate::tree::KIND)),
                 );
                 self.panes.refresh_visible(&self.layout);
@@ -841,7 +840,7 @@ impl App {
     /// Places the timeline if it wasn't there, and reveals it if it was
     /// hidden.
     pub fn open_timeline(&mut self) {
-        use norte_frontend::layout::{Edge, KindId, Node};
+        use norte_frontend::layout::{KindId, Node};
         if let Some(id) = self.timeline_slot() {
             self.reveal(id);
             self.key_owner = KeyOwner::Timeline;
@@ -850,13 +849,13 @@ impl App {
         let id = self.mint_slot();
         self.panes
             .insert_timeline(id, norte_frontend::timeline::Timeline::default());
+        // Twelve rows at the bottom by default: a list you pick a point from
+        // needs to see several at once (the kind's minimum is four).
+        let d = self.dock_for(crate::timeline::KIND);
         self.layout = self.layout.dock_grouped(
             self.focused_slot(),
-            Edge::Bottom,
-            // Twelve rows: a list you pick a point from needs to see
-            // several at once to compare them, and the kind's minimum is
-            // four, which only shows two rows with the frame.
-            self.bottom_dock(12),
+            d.edge,
+            d.size,
             &Node::slot(id, KindId::new(crate::timeline::KIND)),
         );
         self.panes.refresh_visible(&self.layout);
@@ -906,7 +905,7 @@ impl App {
     /// Places the disk map if it wasn't there, and reveals it if it was
     /// hidden.
     pub fn open_disk_map(&mut self) {
-        use norte_frontend::layout::{Edge, KindId, Node};
+        use norte_frontend::layout::{KindId, Node};
         if let Some(id) = self.disk_map_slot() {
             self.reveal(id);
             self.key_owner = KeyOwner::DiskMap;
@@ -915,13 +914,13 @@ impl App {
         let id = self.mint_slot();
         self.panes
             .insert_disk_map(id, norte_frontend::diskmap::DiskMap::new());
+        // Twelve rows at the bottom by default: a treemap needs height to
+        // lay out in strips (the kind's minimum is six).
+        let d = self.dock_for(crate::diskmap::KIND);
         self.layout = self.layout.dock_grouped(
             self.focused_slot(),
-            Edge::Bottom,
-            // Twelve rows: a treemap needs height to lay out in strips —
-            // with four it's a bar — and the kind's minimum is six. Twelve
-            // lets the shape show without eating into the listing.
-            self.bottom_dock(12),
+            d.edge,
+            d.size,
             &Node::slot(id, KindId::new(crate::diskmap::KIND)),
         );
         self.panes.refresh_visible(&self.layout);
@@ -986,7 +985,7 @@ impl App {
     /// a copy just started is looking at their listing — stealing the
     /// keyboard there would be taking the arrows away mid-sentence.
     pub fn open_processes(&mut self, with_keyboard: bool) {
-        use norte_frontend::layout::{Edge, KindId, Node};
+        use norte_frontend::layout::{KindId, Node};
         if let Some(id) = self.processes_slot() {
             self.reveal(id);
             if with_keyboard {
@@ -997,13 +996,14 @@ impl App {
         let id = self.mint_slot();
         self.panes
             .insert_processes(id, crate::processes::Processes::default());
+        // Eight rows at the bottom by default: six of tasks — the
+        // `TaskBoard`'s cap — plus the frame. Fixed, not `Auto` (the strip's,
+        // zero at rest): a panel opened by hand doesn't disappear.
+        let d = self.dock_for(crate::processes::KIND);
         self.layout = self.layout.dock_grouped(
             self.focused_slot(),
-            Edge::Bottom,
-            // Eight rows: six of tasks — the `TaskBoard`'s cap — plus the
-            // frame. `Auto` belongs to the strip, which is zero at rest; a
-            // panel opened by hand doesn't disappear.
-            self.bottom_dock(8),
+            d.edge,
+            d.size,
             &Node::slot(id, KindId::new(crate::processes::KIND)),
         );
         self.panes.refresh_visible(&self.layout);
@@ -1131,7 +1131,7 @@ impl App {
     /// The shell starts in the focused listing's directory, same as
     /// `app.terminal`.
     pub fn toggle_terminal(&mut self) {
-        use norte_frontend::layout::{Edge, KindId, Node};
+        use norte_frontend::layout::{KindId, Node};
         // With no loose chord to pull the keyboard out, the panel opens but
         // does NOT take it: inside, every key would belong to the shell and
         // none would come back. It's the same rule the subshell applies
@@ -1152,15 +1152,13 @@ impl App {
             }
             None => {
                 let id = self.mint_slot();
+                // Twelve rows at the bottom by default: ten of shell plus
+                // the frame — with fewer, every answer erases the last one.
+                let d = self.dock_for(crate::termpanel::KIND);
                 self.layout = self.layout.dock_grouped(
                     self.focused_slot(),
-                    Edge::Bottom,
-                    // Twelve rows: ten of shell plus the frame. With fewer,
-                    // every order that answers something erases the
-                    // previous one and what's left isn't a terminal, it's a
-                    // blinking little window — the same reason the log asks
-                    // for ten.
-                    self.bottom_dock(12),
+                    d.edge,
+                    d.size,
                     &Node::slot(id, KindId::new(crate::termpanel::KIND)),
                 );
                 self.panes.refresh_visible(&self.layout);
@@ -1199,7 +1197,7 @@ impl App {
     /// There's no per-slot state to insert: there's one log panel and its
     /// level and its filter belong to the session, not to where you put it.
     pub fn toggle_log(&mut self) {
-        use norte_frontend::layout::{Edge, KindId, Node};
+        use norte_frontend::layout::{KindId, Node};
         match self.log_slot() {
             Some(id) if self.key_owner == KeyOwner::Log && self.is_visible(id) => {
                 if let Some(new_layout) = self.layout.close_slot(id) {
@@ -1238,13 +1236,13 @@ impl App {
             }
             None => {
                 let id = self.mint_slot();
+                // At the bottom by default, twelve rows like the window's: a
+                // four-line log forces scrolling to read one sentence.
+                let d = self.dock_for(crate::logview::KIND);
                 self.layout = self.layout.dock_grouped(
                     self.focused_slot(),
-                    Edge::Bottom,
-                    // Ten rows: eight of messages plus the frame. A
-                    // four-line log forces scrolling to read a sentence
-                    // that takes two, and then it doesn't get used.
-                    self.bottom_dock(10),
+                    d.edge,
+                    d.size,
                     &Node::slot(id, KindId::new(crate::logview::KIND)),
                 );
                 self.panes.refresh_visible(&self.layout);
@@ -1474,7 +1472,7 @@ impl App {
     /// that closed it (#243).
     /// Docks to the RIGHT with `follows: Role(Active)`.
     pub fn toggle_metadata(&mut self) {
-        use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Node, RoleId, Size};
+        use norte_frontend::layout::{Bindings, Follow, KindId, Node, RoleId};
         if let Some(id) = self.metadata_slot() {
             // #329: if it's hidden behind a tab, this key SHOWS it. The
             // attribute sheet doesn't take the keyboard — it's looked at,
@@ -1490,13 +1488,13 @@ impl App {
         } else {
             let id = self.mint_slot();
             self.panes.insert_metadata(id, None);
+            // Thirty cells on the right by default: an attribute sheet
+            // gains nothing from half the screen.
+            let d = self.dock_for(crate::metadata::KIND);
             self.layout = self.layout.dock_grouped(
                 self.focused_slot(),
-                Edge::Right,
-                // Thirty cells: the longest label plus its value next to
-                // it. Fixed and not weighted because an attribute sheet
-                // gains nothing from half the screen.
-                Size::Fixed(30),
+                d.edge,
+                d.size,
                 &Node::slot_bound(
                     id,
                     KindId::new(crate::metadata::KIND),
@@ -1599,9 +1597,23 @@ impl App {
         .unwrap_or_else(|| self.focused_slot())
     }
 
-    /// A bottom dock's opening size against the last frame (ADR 0171).
-    fn bottom_dock(&self, rows: u16) -> norte_frontend::layout::Size {
-        norte_frontend::layout::dock_rows(rows, self.last_frame.map(|a| a.height))
+    /// Where a panel of `kind` opens (ADR 0173): where the reader last had
+    /// it, or its normal place — a bottom one capped on a short screen.
+    fn dock_for(&self, kind: &str) -> norte_frontend::layout::Dock {
+        norte_frontend::layout::dock_for(
+            kind,
+            &self.session.docks,
+            self.last_frame.map(|a| a.height),
+        )
+    }
+
+    /// Notes where every placed panel is now, so closing and reopening one
+    /// puts it back there (ADR 0173). Every turn: cheap, and a panel closed
+    /// by any of its many paths was noted the turn before.
+    pub fn remember_docks(&mut self) {
+        self.session
+            .docks
+            .extend(norte_frontend::layout::docks_in(&self.layout));
     }
 
     /// Grows (`delta > 0`) or shrinks the panel that has the keyboard.
