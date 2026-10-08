@@ -1100,6 +1100,28 @@ msg-settings-invalid-status-items = cada elemento una vez, de: position marks so
 msg-settings-no-config-dir = sin directorio de config de usuario (entorno sin definir)
 msg-hotlist-persist-failed = favoritos no guardados: { $error }
 help-cmd-app-menu = barra de menús
+# Las etiquetas de la barra de teclas de función: escritas para caber en
+# una celda a 80 columnas (seis celdas; la de F10, cinco), nunca el nombre
+# largo de la orden cortado a media frase.
+keybar-app-help = Ayuda
+keybar-app-menu = Menú
+keybar-app-quit = Salir
+keybar-app-terminal = Shell
+keybar-pane-view = Ver
+keybar-pane-edit = Editar
+keybar-pane-copy = Copiar
+keybar-pane-move = Mover
+keybar-pane-mkdir = CrDir
+keybar-pane-delete = Borrar
+keybar-pane-rename = Renom.
+keybar-pane-refresh = Releer
+keybar-pane-open = Abrir
+keybar-viewer-close = Salir
+keybar-viewer-zoom-in = Zoom+
+keybar-viewer-zoom-out = Zoom-
+keybar-viewer-zoom-fit = Ajust.
+keybar-viewer-prev = Ant.
+keybar-viewer-next = Sig.
 menu-item-pane-view = Ver
 menu-item-pane-properties = Propiedades
 menu-item-pane-dir-size = Cuánto ocupa

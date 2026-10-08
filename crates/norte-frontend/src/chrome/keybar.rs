@@ -26,10 +26,11 @@ pub const CELLS: u8 = 10;
 
 /// The ten cells of a screen, in the given language.
 ///
-/// The label is the MENU's (`menu-item-<cmd>`, which exists for every live
-/// command), and if there is none, the help description (`help-cmd-<cmd>`),
-/// and if there is not one either, the last segment of the id: a plugin
-/// command or one nobody translated still says something.
+/// The label is the bar's own (`keybar-<cmd>`, short: every F-key of the
+/// bundled presets has one), then the MENU's (`menu-item-<cmd>`), then the
+/// help description (`help-cmd-<cmd>`), and if there is not one either, the
+/// last segment of the id: a plugin command or one nobody translated still
+/// says something.
 ///
 /// ```
 /// use norte_frontend::keybar::cells_in;
@@ -70,10 +71,12 @@ pub fn cells_in(eff: &Effective, lang: Lang) -> Vec<KeyCell> {
         .collect()
 }
 
-/// The short label of a command, in the given language.
+/// The short label of a command, in the given language: the bar's own
+/// (`keybar-<cmd>`, written to fit a cell at 80 columns), then the menu's,
+/// then the help's — a key a user or a plugin bound still says something.
 fn label_in(command: &str, lang: Lang) -> String {
     let dashed = command.replace('.', "-");
-    for prefix in ["menu-item-", "help-cmd-"] {
+    for prefix in ["keybar-", "menu-item-", "help-cmd-"] {
         let key = format!("{prefix}{dashed}");
         let text = t_in(lang, &key);
         // `t_in`'s contract is to return the key when it is missing.
@@ -222,6 +225,50 @@ mod tests {
             command: None,
         };
         assert_eq!(cell_text(&empty, 6), "7     ");
+    }
+
+    /// Every F-key of every preset, on every screen, in both languages,
+    /// reads WHOLE at 80 and at 132 columns: a label written for the bar,
+    /// never a command's long name cut mid-phrase ("Close the", "Fit the",
+    /// "Go on to", landing shots 2026-10-08).
+    #[test]
+    fn every_bundled_f_key_label_fits_whole() {
+        use crate::keymap::{Effective, Screen, parse_keymap, preset_commands, presets};
+        // The narrowest cell `layout` gives at 80 and at 132 columns.
+        let widths = [80, 132].map(|cols| layout(cols).iter().map(|(_, w)| *w).min().unwrap_or(0));
+        for name in presets::NAMES {
+            let preset = parse_keymap(presets::source(name).expect("bundled")).expect("parses");
+            for screen in [Screen::Browse, Screen::Viewer, Screen::Dialog] {
+                let known = preset_commands(screen);
+                let known: Vec<&str> = known.iter().map(String::as_str).collect();
+                let eff = Effective::build_for(&preset, &[], &known, screen).expect("builds");
+                for lang in [Lang::En, Lang::Es] {
+                    for cell in cells_in(&eff, lang) {
+                        let Some(cmd) = &cell.command else { continue };
+                        let key = format!("keybar-{}", cmd.replace('.', "-"));
+                        assert_ne!(
+                            t_in(lang, &key),
+                            key,
+                            "{name} {screen:?} {lang:?}: no {key}"
+                        );
+                        let mut chars = cell.label.chars();
+                        let cap: String = chars
+                            .next()
+                            .map(|c| c.to_uppercase().collect::<String>())
+                            .unwrap_or_default()
+                            + chars.as_str();
+                        for w in widths {
+                            let text = cell_text(&cell, w);
+                            assert!(
+                                text.contains(&cap),
+                                "{name} {screen:?} {lang:?} F{}: {cap:?} cut to {text:?} at {w}",
+                                cell.key
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// With no menu or help translation, the last segment of the id.

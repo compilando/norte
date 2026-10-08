@@ -18,6 +18,10 @@ independently through `PROTOCOL_VERSION`.
 - **"Go to…" shows the whole place when it fits**: the window cut
   "/home/ada/Photos/2026-01 Tromsø" to "…tos/2026-01 Tromsø" in a box
   with room to spare.
+- **The function-key bar has labels written for it**: "Close", "Fit",
+  "Next", "Zoom+" instead of a command's long name cut mid-phrase
+  ("Close the", "Fit the", "Go on to"). Every key of the seven presets
+  reads whole at 80 and 132 columns, in English and Spanish.
 
 ### Added
 
