@@ -1457,6 +1457,31 @@ button.status-item:hover {
 
 .status-item[data-id="notices"] {
   color: var(--warning-fg);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* The remote indicator (2026-10-08): the left end, in the accent, like VS
+   Code's — the one thing on the bar that says "not this machine". */
+.status-remote {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: stretch;
+  margin-left: -6px;
+  padding: 0 8px;
+  background: var(--border-focus);
+  color: var(--bg);
+  font-family: var(--font-ui);
+}
+
+.status-icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 1.6;
 }
 
 /* The tasks item's thin progress bar (ADR 0146): slim, behind the text,
@@ -2295,20 +2320,27 @@ button.status-item:hover {
   display: none;
 }
 
+/* A NOTIFICATION CARD, as VS Code's (2026-10-08): the panels' background,
+   an accent stripe on the left, wrapping text up to a fixed width — the
+   one-line pill in the selection colour cut long messages and read as a
+   selected row. */
 .status-message {
   position: fixed;
   right: 12px;
   bottom: calc(var(--cell-h) + 10px);
-  max-width: 50vw;
-  padding: 4px 12px;
+  width: max-content;
+  max-width: min(440px, 60vw);
+  padding: 10px 14px 10px 16px;
   border-radius: 6px;
-  background: var(--selection-bg);
-  color: var(--selection-fg);
-  border: 1px solid var(--border-focus);
-  box-shadow: 0 4px 16px var(--widget-shadow, rgb(0 0 0 / 35%));
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  background: var(--widget-bg, var(--panel-bg));
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-focus);
+  box-shadow: 0 6px 20px var(--widget-shadow, rgb(0 0 0 / 40%));
+  font-family: var(--font-ui);
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
   animation: toast-in 120ms ease-out;
 }
 

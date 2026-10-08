@@ -3006,6 +3006,14 @@ describe("the menu bar", () => {
     expect(sent).toEqual([{ action: "tab_action", slot_id: 1, verb: "new" }]);
   });
 
+  it("a remote active listing shows VS Code's remote indicator on the left", () => {
+    const { screen } = mount();
+    screen.paint(view({ path_segments: ["⟨sftp⟩ana@host", "home"] }));
+    const remote = document.querySelector(".statusbar .status-remote") as HTMLElement;
+    expect(remote.textContent).toBe("⟨sftp⟩ana@host");
+    expect(remote.querySelector("svg")).not.toBeNull();
+  });
+
   it("the status bar's right half paints its items and they're clickable", () => {
     const { screen, sent } = mount();
     const v = view({});
@@ -3017,7 +3025,11 @@ describe("the menu bar", () => {
     const right = document.querySelector(".statusbar .status-items") as HTMLElement;
     expect(right).not.toBeNull();
     const els = [...right.querySelectorAll(".status-item")] as HTMLElement[];
-    expect(els.map((e) => e.textContent)).toEqual(["3/120", "!2"]);
+    // Local listing: no remote indicator on the left.
+    expect(document.querySelector(".statusbar .status-remote")).toBeNull();
+    // Notices: the bell and the bare count (2026-10-08); `!2` is the TUI's.
+    expect(els.map((e) => e.textContent)).toEqual(["3/120", "2"]);
+    expect(els[1]?.querySelector("svg.status-icon")).not.toBeNull();
     // What isn't clickable isn't a button: a reader doesn't announce it as
     // one.
     expect(els[0]?.tagName).toBe("SPAN");

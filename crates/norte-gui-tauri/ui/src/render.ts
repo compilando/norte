@@ -36,6 +36,8 @@ import {
   errorNode,
   statusNodes,
   taskNode,
+  remoteOf,
+  remoteIndicator,
 } from "./render/dom";
 import type { Send, SlotDom } from "./render/dom";
 import { makeDraggable } from "./render/move";
@@ -1119,9 +1121,10 @@ export class Screen {
     // and the rebuild restarted the progress bar's animation. The session
     // replaces each input when it changes, so the same objects are the same
     // bar.
+    const remote = kindName === "status" ? remoteOf(view) : "";
     const inputs =
       kindName === "status"
-        ? [view.status, view.status_items, view.connection.state, this.rejection]
+        ? [view.status, view.status_items, view.connection.state, this.rejection, remote]
         : kindName === "tasks"
           ? [view.tasks]
           : null;
@@ -1155,6 +1158,9 @@ export class Screen {
           },
         ),
       );
+      if (remote !== "") {
+        dom.scroller.prepend(remoteIndicator(remote));
+      }
       return;
     }
     if (kindName === "tasks") {

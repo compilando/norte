@@ -73,6 +73,10 @@ const SHAPES: Record<string, Shape> = {
   },
   // The buttons for a window with its own title bar (ADR 0136), `window:`
   // prefix. Thin and small, like the desktop's.
+  // The remote indicator: two arrows facing, VS Code's `><` (2026-10-08).
+  "ui:remote": { paths: ["M4 8l4 4-4 4", "M20 8l-4 4 4 4"] },
+  // The status bar's notices: a bell (2026-10-08).
+  "ui:bell": { paths: ["M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15z", "M10 20.5h4"] },
   // The command centre's magnifier (ADR 0172).
   "ui:search": { paths: ["M15.5 15.5l4 4"], circles: [[10.5, 10.5, 5.5]] },
   // Minimize: a line at the bottom.
