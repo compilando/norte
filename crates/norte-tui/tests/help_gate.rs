@@ -39,6 +39,7 @@
 //! why the pending list has written, line by line, why each context is
 //! still there.
 
+use norte_frontend::keymap::{CATALOGUE, Status};
 use norte_help::{Issue, check_commands, check_contexts, check_corpus};
 use norte_tui::keymap::{COMMANDS, DIALOG_COMMANDS};
 
@@ -61,6 +62,26 @@ fn vocabulary() -> Vec<&'static str> {
         .iter()
         .copied()
         .chain(DIALOG_COMMANDS.iter().copied())
+        .collect()
+}
+
+/// [`check_commands`] over [`vocabulary`], minus the window's own commands.
+///
+/// The corpus is shared, and a page about the window may name a command
+/// only the window runs: `mouse` names `pane.context-menu`, which the TUI
+/// does not dispatch but answers "not here" for, because it is Live in the
+/// shared [`CATALOGUE`]. That command EXISTS, so `UnknownCommand` would be
+/// false. Only that direction is widened: the TUI's own vocabulary still
+/// has to be documented, and a typo is in no catalogue.
+fn command_issues() -> Vec<Issue> {
+    check_commands(&vocabulary(), &[])
+        .into_iter()
+        .filter(|i| match i {
+            Issue::UnknownCommand { command, .. } => !CATALOGUE
+                .iter()
+                .any(|d| d.name == command && matches!(d.status, Status::Live)),
+            _ => true,
+        })
         .collect()
 }
 
@@ -97,7 +118,7 @@ fn the_corpus_does_not_name_commands_that_do_not_exist() {
     // promises a key that does nothing, or a misspelled id. There is no
     // debt to paper over here, only typos to fix — and since H3h there is
     // no allowlist left to pass in the other direction either.
-    let unknown: Vec<Issue> = check_commands(&vocabulary(), &[])
+    let unknown: Vec<Issue> = command_issues()
         .into_iter()
         .filter(|i| matches!(i, Issue::UnknownCommand { .. }))
         .collect();
@@ -113,7 +134,7 @@ fn every_command_in_the_vocabulary_is_documented() {
     // `&[]` and not an allowlist: since H3h there is no debt to paper over.
     // A command with no page is a failure with a single fix — write the
     // paragraph — and there is no line left to postpone it with.
-    let issues = check_commands(&vocabulary(), &[]);
+    let issues = command_issues();
 
     let sin_documentar: Vec<&Issue> = issues
         .iter()
