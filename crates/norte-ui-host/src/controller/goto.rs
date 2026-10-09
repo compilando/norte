@@ -15,8 +15,8 @@ use super::*;
 
 use norte_frontend::goto::{
     Action, BROUGHT_BY_LIST, FixedSource, Goto, GotoLine, GotoRow, GotoSource, INDEX_CAP,
-    MINIMUM_FOR_THE_INDEX, PathSource, SECTION_COMMANDS, SECTION_CONNECTIONS, SECTION_FAVORITES,
-    SECTION_HISTORY, SECTION_INDEX, SECTION_POPULAR,
+    PathSource, SECTION_COMMANDS, SECTION_CONNECTIONS, SECTION_FAVORITES, SECTION_HISTORY,
+    SECTION_INDEX, SECTION_POPULAR,
 };
 
 impl State {
@@ -114,9 +114,7 @@ impl State {
         // palette already resolves which ones this host implements and with
         // what effects.
         let commands = norte_frontend::goto::command_rows(self.palette_rows());
-        out.push(Box::new(
-            FixedSource::new(SECTION_COMMANDS, commands).only_with_query(),
-        ));
+        out.push(Box::new(FixedSource::new(SECTION_COMMANDS, commands)));
         out
     }
 
@@ -149,9 +147,9 @@ impl State {
     /// Asks the index about what is typed, if it is worth it.
     ///
     /// Relaunching ABORTS the previous question. Below
-    /// [`MINIMUM_FOR_THE_INDEX`] it does not ask and EMPTIES the section:
-    /// leaving there what answered a longer query is showing an answer to a
-    /// question that is no longer being asked.
+    /// [`norte_frontend::goto::MINIMUM_FOR_THE_INDEX`] it does not ask and
+    /// EMPTIES the section: leaving there what answered a longer query is
+    /// showing an answer to a question that is no longer being asked.
     fn request_goto_from_index(
         &mut self,
         backend: &Arc<dyn HostBackend>,
@@ -163,22 +161,19 @@ impl State {
         let Some(goto) = self.ir_a.as_mut() else {
             return;
         };
-        let query = goto.query().to_owned();
         // Three cases where it does not ask, and all three EMPTY the section:
-        // - a short query cannot be good;
+        // - a short query cannot be good, and a `>`/`?` query is not a place;
         // - a typed PATH is not a semantic query, and sending it to an
         //   embeddings provider — maybe remote — is sending it the name of a
         //   directory of the reader's;
         // - a read-only window does not let queries leave the process, same
         //   as its explicit semantic search (`QuerySemantic`).
         let read_only = self.effects == crate::commands::Effects::SoloRead;
-        if query.chars().count() < MINIMUM_FOR_THE_INDEX
-            || norte_frontend::goto::looks_path(&query).is_some()
-            || read_only
-        {
+        let query = goto.index_query().map(str::to_owned);
+        let Some(query) = query.filter(|_| !read_only) else {
             goto.replace_section(SECTION_INDEX, Vec::new(), true);
             return;
-        }
+        };
         let generation = self.gen_ir_a;
         let backend = Arc::clone(backend);
         let mailbox = mailbox.clone();
@@ -218,7 +213,7 @@ impl State {
             return None;
         }
         let goto = self.ir_a.as_mut()?;
-        if goto.query() != query {
+        if goto.index_query() != Some(query) {
             return None;
         }
         let hits = norte_frontend::validate_semantic_hits(res.ok()?)?;

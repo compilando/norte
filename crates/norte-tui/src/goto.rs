@@ -89,9 +89,7 @@ pub fn sources(app: &App, connections: &[(String, String)]) -> Vec<Box<dyn GotoS
         &app.palette_rows,
         app.viewer.is_some(),
     ));
-    out.push(Box::new(
-        FixedSource::new(SECTION_COMMANDS, commands).only_with_query(),
-    ));
+    out.push(Box::new(FixedSource::new(SECTION_COMMANDS, commands)));
 
     out
 }

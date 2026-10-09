@@ -827,6 +827,7 @@ goto-section-index = Found by the index
 goto-empty = nothing matches that
 goto-index-off = the semantic index is not switched on
 goto-path-desc = go to this path
+goto-hint = > commands · ? help
 msg-goto-bad-path = that path cannot be read as a destination
 msg-goto-no-home = there is no HOME in the environment, so "~" names nothing
 help-cmd-app-settings = settings

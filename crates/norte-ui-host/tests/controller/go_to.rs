@@ -96,7 +96,7 @@ async fn a_typed_path_is_offered_and_enter_goes_there() {
 }
 
 /// A COMMAND runs from "goto" through the same path as a keystroke: its rows
-/// are this window's palette's.
+/// are this window's palette's, behind `>`, in one flat list.
 #[tokio::test]
 async fn a_command_runs_like_its_key() {
     let (h, snap) = host_tree(fake_tree()).await;
@@ -104,17 +104,17 @@ async fn a_command_runs_like_its_key() {
     let mut sub = h.subscribe();
     h.dispatch(ctrl_g()).await.expect("host alive");
     let _ = next_goto(&mut sub).await;
-    for c in "cursor.bottom".chars() {
+    for c in ">cursor.bottom".chars() {
         h.dispatch(press(&c.to_string())).await.expect("host alive");
     }
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let v = next_snapshot(&mut sub).await.goto.expect("open");
     assert!(
-        v.lines.iter().any(|l| matches!(
-            l,
-            norte_ui_host::dto::GotoLineView::Header { title } if title == "Comandos"
-        )),
-        "commands come out with their header: {:?}",
+        !v.lines.is_empty()
+            && v.lines
+                .iter()
+                .all(|l| matches!(l, norte_ui_host::dto::GotoLineView::Row { .. })),
+        "commands come out as one flat list: {:?}",
         v.lines
     );
     h.dispatch(press("Enter")).await.expect("host alive");

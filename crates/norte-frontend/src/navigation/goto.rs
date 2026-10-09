@@ -1,8 +1,11 @@
 //! "Go to anywhere" (phase 6 of the WOW program): a single screen that
-//! brings together what used to live in five — the command palette,
-//! history, popular places, favorites and connections — and adds what had
-//! no home: a TYPED path and, once it arrives, what the semantic index
-//! found.
+//! brings together what used to live in five — the `>` commands list and
+//! the `?` help list, history, popular places, favorites and connections —
+//! and adds what had no home: a TYPED path and, once it arrives, what the
+//! semantic index found.
+//!
+//! The mode comes from the query's first character: `>` commands, `?`
+//! help, anything else places ([`Mode::of`]).
 //!
 //! What this module contributes and what it leaves out, on purpose:
 //!
@@ -22,7 +25,57 @@
 //! There is nowhere else to touch: filtering, headers, order and the cursor
 //! all live here.
 
-use crate::fuzzy::is_subsequence;
+/// The prefix that turns the box into the commands list.
+pub const PREFIX_COMMANDS: &str = ">";
+/// The prefix that turns the box into the help list.
+pub const PREFIX_HELP: &str = "?";
+
+/// What the box is listing, chosen by the query's first character.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Where to go: the sections in [`ORDEN`].
+    Places,
+    /// What to do: one flat list of commands, behind [`PREFIX_COMMANDS`].
+    Commands,
+    /// What to read: one flat list of help rows, behind [`PREFIX_HELP`].
+    Help,
+}
+
+impl Mode {
+    /// The mode `query` asks for. Only the FIRST character counts: a `>`
+    /// further on is a letter like any other.
+    #[must_use]
+    pub fn of(query: &str) -> Self {
+        if query.starts_with(PREFIX_COMMANDS) {
+            Self::Commands
+        } else if query.starts_with(PREFIX_HELP) {
+            Self::Help
+        } else {
+            Self::Places
+        }
+    }
+
+    /// A stable name for the frontends: `"places"`, `"commands"` or `"help"`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Places => "places",
+            Self::Commands => "commands",
+            Self::Help => "help",
+        }
+    }
+}
+
+/// What is searched for: the query without its mode prefix and without
+/// leading spaces.
+#[must_use]
+pub fn needle(query: &str) -> &str {
+    query
+        .strip_prefix(PREFIX_COMMANDS)
+        .or_else(|| query.strip_prefix(PREFIX_HELP))
+        .unwrap_or(query)
+        .trim_start()
+}
 
 /// A "go to" section: a stable id and its title's Fluent key.
 ///
@@ -68,11 +121,21 @@ pub const SECTION_CONNECTIONS: GotoSection = GotoSection {
     title_key: "goto-section-connections",
 };
 
-/// The catalogue's commands — the usual palette, here as one more section.
+/// The catalogue's commands, behind `>`.
 pub const SECTION_COMMANDS: GotoSection = GotoSection {
     id: "commands",
     title_key: "goto-section-commands",
 };
+
+/// Plugin command rows: a section of their own so a late `replace_section`
+/// does not touch the built-ins; painted in the same flat list.
+pub const SECTION_PLUGINS: GotoSection = GotoSection {
+    id: "plugins",
+    title_key: "goto-section-commands",
+};
+
+/// The help rows' section id, until the help source exists.
+const SECTION_HELP_ID: &str = "help";
 
 /// What the semantic index found. Arrives LATE (it is a question to the
 /// core, not a list in memory) and that is why it goes last: a section
@@ -83,24 +146,25 @@ pub const SECTION_INDEX: GotoSection = GotoSection {
     title_key: "goto-section-index",
 };
 
-/// The ORDER the sections are painted in, and the only place it lives.
+/// The ORDER the PLACES sections are painted in, and the only place it
+/// lives. Commands and help are not here: they are flat lists of their own
+/// mode.
 ///
 /// Fixed and not configurable: it is the order a reader searches in — what
-/// they just typed, where they have been, what they saved, what they can
-/// do — and a list that reorders itself is a list where nothing can be
-/// learned about where anything is.
+/// they just typed, where they have been, what they saved — and a list
+/// that reorders itself is a list where nothing can be learned about where
+/// anything is.
 pub const ORDEN: &[GotoSection] = &[
     SECTION_PATH,
     SECTION_HISTORY,
     SECTION_POPULAR,
     SECTION_FAVORITES,
     SECTION_CONNECTIONS,
-    SECTION_COMMANDS,
     SECTION_INDEX,
 ];
 
 /// A "go to" row.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GotoRow {
     /// Id of the section it belongs to (one of the ones in [`ORDEN`]).
     pub section: &'static str,
@@ -118,28 +182,37 @@ pub struct GotoRow {
     /// string that travels without its flag reads as faithful, and this is
     /// a screen where where-to-go is chosen.
     pub hostile: bool,
+    /// The command's key chord, already painted, if it has one.
+    pub chord: Option<String>,
+    /// The command's category, already translated, if it has one.
+    pub category: Option<String>,
+    /// Why the command cannot run here (already translated), or `None`.
+    pub unavailable: Option<String>,
+    /// Set by the model: the row leads the list because it was run lately.
+    pub recent: bool,
+    /// Set by the model: the char indices of `text` the query matched.
+    pub positions: Vec<u32>,
 }
 
 /// A source of "go to" rows.
 ///
 /// The contract is short on purpose: give the rows it contributes for a
-/// query. Everything else — filtering by subsequence, putting up the
-/// header, ordering the sections, moving the cursor — belongs to the
-/// model, so a new source does not have to get any of those four things
-/// right.
+/// query. Everything else — fuzzy ranking, putting up the header, ordering
+/// the sections, moving the cursor — belongs to the model, so a new source
+/// does not have to get any of those four things right.
 ///
 /// `query` is passed in case the source knows how to filter BETTER than the
-/// generic subsequence (the semantic index asks the core with it, and the
+/// generic fuzzy match (the semantic index asks the core with it, and the
 /// typed path IS the query). A source with nothing special to do can
-/// return everything: [`Goto::refresh`] filters afterward, so filtering
-/// is a single thing for all of them.
+/// return everything: [`Goto::refresh`] ranks afterward, so filtering is a
+/// single thing for all of them.
 pub trait GotoSource {
     /// The section its rows fall into.
     fn section(&self) -> GotoSection;
     /// The rows it contributes for `query`.
     fn rows(&self, query: &str) -> Vec<GotoRow>;
     /// Whether its rows ALREADY come filtered and the model should not run
-    /// the subsequence over them again.
+    /// the fuzzy match over them again.
     ///
     /// `false` by default, which is what an in-memory list wants. The
     /// semantic index sets it to `true`: it asked the core with the whole
@@ -147,19 +220,6 @@ pub trait GotoSource {
     /// subsequence filter on top would throw away exactly what makes it
     /// useful.
     fn ya_filtered(&self) -> bool {
-        false
-    }
-
-    /// Whether this source only contributes rows when something has been
-    /// typed.
-    ///
-    /// `false` by default. The COMMANDS section sets it to `true`: with an
-    /// empty query that is hundreds of rows burying the four destination
-    /// lists, and whoever opens "go to" without typing anything is asking
-    /// where they can go, not what verbs exist. As soon as they type
-    /// something they come back, and the whole catalogue still lives in
-    /// the palette, which is its own screen.
-    fn only_with_query(&self) -> bool {
         false
     }
 }
@@ -182,7 +242,6 @@ pub struct FixedSource {
     section: GotoSection,
     rows: Vec<GotoRow>,
     ya_filtered: bool,
-    only_with_query: bool,
 }
 
 impl FixedSource {
@@ -193,7 +252,6 @@ impl FixedSource {
             section,
             rows,
             ya_filtered: false,
-            only_with_query: false,
         }
     }
 
@@ -205,17 +263,8 @@ impl FixedSource {
             section,
             rows,
             ya_filtered: false,
-            only_with_query: false,
         }
         .with_already_filtered()
-    }
-
-    /// Declares that this source only contributes with something typed
-    /// (see [`GotoSource::only_with_query`]).
-    #[must_use]
-    pub fn only_with_query(mut self) -> Self {
-        self.only_with_query = true;
-        self
     }
 
     /// Marks its rows as already filtered.
@@ -235,9 +284,6 @@ impl GotoSource for FixedSource {
     }
     fn ya_filtered(&self) -> bool {
         self.ya_filtered
-    }
-    fn only_with_query(&self) -> bool {
-        self.only_with_query
     }
 }
 
@@ -276,7 +322,7 @@ impl GotoSource for PathSource {
                 // them they made a mistake.
                 text: path.to_owned(),
                 desc: self.desc.clone(),
-                hostile: false,
+                ..GotoRow::default()
             }]
         })
     }
@@ -307,6 +353,8 @@ pub struct Goto {
     rows: Vec<GotoRow>,
     lines: Vec<GotoLine>,
     cursor: usize,
+    /// Command ids run lately, most recent first (without [`K_CMD`]).
+    recent: Vec<String>,
 }
 
 /// By hand because [`GotoSource`] is a trait object and cannot derive
@@ -321,6 +369,7 @@ impl std::fmt::Debug for Goto {
             .field("rows", &self.rows)
             .field("lines", &self.lines)
             .field("cursor", &self.cursor)
+            .field("recent", &self.recent)
             .finish()
     }
 }
@@ -335,9 +384,19 @@ impl Goto {
             rows: Vec::new(),
             lines: Vec::new(),
             cursor: 0,
+            recent: Vec::new(),
         };
         goto.refresh();
         goto
+    }
+
+    /// The command ids run lately, most recent first; they lead an empty
+    /// `>` list.
+    #[must_use]
+    pub fn with_recent(mut self, recent: &[String]) -> Self {
+        self.recent = recent.to_vec();
+        self.refresh();
+        self
     }
 
     /// Asks every source again and rebuilds what is visible.
@@ -346,39 +405,85 @@ impl Goto {
     /// under the cursor is probably gone, and leaving it where it was is
     /// how an Enter ends up going somewhere the reader never got to read.
     pub fn refresh(&mut self) {
-        let q = self.query.to_lowercase();
         self.rows.clear();
         self.lines.clear();
+        let needle = needle(&self.query).to_owned();
+        match self.mode() {
+            Mode::Places => self.refresh_places(&needle),
+            Mode::Commands => {
+                self.refresh_flat(&[SECTION_COMMANDS.id, SECTION_PLUGINS.id], &needle, true);
+            }
+            Mode::Help => self.refresh_flat(&[SECTION_HELP_ID], &needle, false),
+        }
+        self.cursor = self.first_row().unwrap_or(0);
+    }
+
+    /// The places: each section of [`ORDEN`] under its header, ranked
+    /// inside itself, capped at [`CAP_PER_SECTION`].
+    fn refresh_places(&mut self, needle: &str) {
         for section in ORDEN {
-            let mut from_this: Vec<GotoRow> = Vec::new();
+            let mut kept: Vec<GotoRow> = Vec::new();
+            let mut to_rank: Vec<GotoRow> = Vec::new();
             for source in &self.sources {
                 if source.section().id != section.id {
                     continue;
                 }
-                if source.only_with_query() && q.is_empty() {
-                    continue;
-                }
                 let raw = source.rows(&self.query);
-                if source.ya_filtered() || q.is_empty() {
-                    from_this.extend(raw);
+                if source.ya_filtered() || needle.is_empty() {
+                    kept.extend(raw.into_iter().map(unmarked));
                 } else {
-                    from_this.extend(
-                        raw.into_iter()
-                            .filter(|r| is_subsequence(&q, &r.text.to_lowercase())),
-                    );
+                    to_rank.extend(raw);
                 }
             }
-            if from_this.is_empty() {
+            kept.extend(rank(to_rank, needle, false));
+            if kept.is_empty() {
                 continue;
             }
-            from_this.truncate(CAP_PER_SECTION);
+            kept.truncate(CAP_PER_SECTION);
             self.lines.push(GotoLine::Header(*section));
-            for row in from_this {
-                self.lines.push(GotoLine::Row(self.rows.len()));
-                self.rows.push(row);
+            for row in kept {
+                self.push_row(row);
             }
         }
-        self.cursor = self.first_row().unwrap_or(0);
+    }
+
+    /// One list with no headers: the commands (built-in and plugin) or the
+    /// help rows. With nothing typed, recent commands first, in their order.
+    fn refresh_flat(&mut self, sections: &[&str], needle: &str, recents: bool) {
+        let mut all: Vec<GotoRow> = Vec::new();
+        for source in &self.sources {
+            if sections.contains(&source.section().id) {
+                all.extend(source.rows(&self.query));
+            }
+        }
+        let rows = if needle.is_empty() {
+            let mut all: Vec<GotoRow> = all.into_iter().map(unmarked).collect();
+            let mut out = Vec::new();
+            if recents {
+                for k in &self.recent {
+                    if let Some(i) = all
+                        .iter()
+                        .position(|r| r.key.strip_prefix(K_CMD) == Some(k.as_str()))
+                    {
+                        let mut r = all.remove(i);
+                        r.recent = true;
+                        out.push(r);
+                    }
+                }
+            }
+            out.extend(all);
+            out
+        } else {
+            rank(all, needle, true)
+        };
+        for row in rows {
+            self.push_row(row);
+        }
+    }
+
+    fn push_row(&mut self, row: GotoRow) {
+        self.lines.push(GotoLine::Row(self.rows.len()));
+        self.rows.push(row);
     }
 
     /// Replaces a section's rows with others, and repaints.
@@ -431,10 +536,58 @@ impl Goto {
         self.refresh();
     }
 
+    /// Replaces the whole query.
+    pub fn set_query(&mut self, q: &str) {
+        q.clone_into(&mut self.query);
+        self.refresh();
+    }
+
+    /// Appends a paste to the query, with ONE refresh.
+    pub fn push_str(&mut self, s: &str) {
+        self.query.push_str(s);
+        self.refresh();
+    }
+
     /// The query as is.
     #[must_use]
     pub fn query(&self) -> &str {
         &self.query
+    }
+
+    /// The query for painting, with terminal hazards masked.
+    #[must_use]
+    pub fn query_display(&self) -> String {
+        self.query
+            .chars()
+            .map(|c| {
+                if norte_encoding::is_terminal_hazard(c) {
+                    '\u{FFFD}'
+                } else {
+                    c
+                }
+            })
+            .collect()
+    }
+
+    /// What the box is listing now.
+    #[must_use]
+    pub fn mode(&self) -> Mode {
+        Mode::of(&self.query)
+    }
+
+    /// The Fluent key of the hint an empty places box shows, or `None`.
+    #[must_use]
+    pub fn hint(&self) -> Option<&'static str> {
+        (self.mode() == Mode::Places && self.query.trim().is_empty()).then_some("goto-hint")
+    }
+
+    /// What to ask the semantic index, if anything: only a places query of
+    /// [`MINIMUM_FOR_THE_INDEX`] chars or more that is not a typed path.
+    #[must_use]
+    pub fn index_query(&self) -> Option<&str> {
+        (self.mode() == Mode::Places)
+            .then(|| needle(&self.query))
+            .filter(|q| q.chars().count() >= MINIMUM_FOR_THE_INDEX && looks_path(q).is_none())
     }
 
     /// Moves up to the previous row, skipping headers. Stops at the top.
@@ -459,6 +612,47 @@ impl Goto {
                 return;
             }
         }
+    }
+
+    /// Moves up `n` rows (at least one).
+    pub fn page_up(&mut self, n: usize) {
+        for _ in 0..n.max(1) {
+            self.up();
+        }
+    }
+
+    /// Moves down `n` rows (at least one).
+    pub fn page_down(&mut self, n: usize) {
+        for _ in 0..n.max(1) {
+            self.down();
+        }
+    }
+
+    /// Moves to the first row.
+    pub fn home(&mut self) {
+        if let Some(i) = self.first_row() {
+            self.cursor = i;
+        }
+    }
+
+    /// Moves to the last row.
+    pub fn end(&mut self) {
+        if let Some(i) = self
+            .lines
+            .iter()
+            .rposition(|l| matches!(l, GotoLine::Row(_)))
+        {
+            self.cursor = i;
+        }
+    }
+
+    /// Puts the cursor on `line` if it is a row (a click); says whether it did.
+    pub fn point(&mut self, line: usize) -> bool {
+        let is_row = matches!(self.lines.get(line), Some(GotoLine::Row(_)));
+        if is_row {
+            self.cursor = line;
+        }
+        is_row
     }
 
     /// What is painted, in order.
@@ -499,6 +693,44 @@ impl Goto {
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
+}
+
+/// A row as a source gave it, with what only the model sets cleared.
+fn unmarked(mut r: GotoRow) -> GotoRow {
+    r.recent = false;
+    r.positions.clear();
+    r
+}
+
+/// Scores `rows` against `needle`, drops what does not match and sorts the
+/// rest best first; ties go to the shorter text, then to arrival order
+/// (`sort_by` is stable). `with_desc`: a row whose desc matches still counts,
+/// at half that score — a word of a command's help line finds it, below a
+/// command whose name matches.
+fn rank(rows: Vec<GotoRow>, needle: &str, with_desc: bool) -> Vec<GotoRow> {
+    let mut scored: Vec<(i32, usize, GotoRow)> = rows
+        .into_iter()
+        .filter_map(|mut r| {
+            let on_text = crate::fuzzy::score(needle, &r.text);
+            let on_desc = if with_desc {
+                crate::fuzzy::score(needle, &r.desc).map(|m| m.score / 2)
+            } else {
+                None
+            };
+            let best = match (&on_text, on_desc) {
+                (Some(m), Some(d)) => m.score.max(d),
+                (Some(m), None) => m.score,
+                (None, Some(d)) => d,
+                (None, None) => return None,
+            };
+            r.positions = on_text.map(|m| m.positions).unwrap_or_default();
+            r.recent = false;
+            let len = r.text.chars().count();
+            Some((best, len, r))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    scored.into_iter().map(|(_, _, r)| r).collect()
 }
 
 /// Whether what was TYPED looks like a path to go to, and not text to
@@ -596,6 +828,7 @@ pub fn row_path(
         text,
         desc,
         hostile,
+        ..GotoRow::default()
     }
 }
 
@@ -621,6 +854,7 @@ pub fn row_connection(name: &str, url: &str) -> GotoRow {
         text: nt,
         desc: content,
         hostile: nh || hostile_name,
+        ..GotoRow::default()
     }
 }
 
@@ -636,6 +870,7 @@ pub fn command_rows(rows: Vec<crate::palette::Row>) -> Vec<GotoRow> {
             text: r.text,
             desc: r.desc,
             hostile: r.hostile,
+            ..GotoRow::default()
         })
         .collect()
 }
@@ -816,8 +1051,8 @@ mod dispatch_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        CAP_PER_SECTION, Goto, GotoLine, GotoRow, GotoSection, GotoSource, SECTION_COMMANDS,
-        SECTION_HISTORY, SECTION_INDEX, looks_path,
+        CAP_PER_SECTION, Goto, GotoLine, GotoRow, GotoSection, GotoSource, Mode, SECTION_COMMANDS,
+        SECTION_FAVORITES, SECTION_HISTORY, SECTION_INDEX, SECTION_PLUGINS, looks_path, needle,
     };
 
     /// A fake source with fixed rows.
@@ -825,7 +1060,6 @@ mod tests {
         section: GotoSection,
         texts: Vec<&'static str>,
         ya_filtered: bool,
-        only_with_query: bool,
     }
 
     impl GotoSource for Fixed {
@@ -839,16 +1073,12 @@ mod tests {
                     section: self.section.id,
                     key: (*t).to_owned(),
                     text: (*t).to_owned(),
-                    desc: String::new(),
-                    hostile: false,
+                    ..GotoRow::default()
                 })
                 .collect()
         }
         fn ya_filtered(&self) -> bool {
             self.ya_filtered
-        }
-        fn only_with_query(&self) -> bool {
-            self.only_with_query
         }
     }
 
@@ -857,7 +1087,6 @@ mod tests {
             section,
             texts: texts.to_vec(),
             ya_filtered: false,
-            only_with_query: false,
         })
     }
 
@@ -866,7 +1095,7 @@ mod tests {
     #[test]
     fn sections_come_out_in_fixed_order() {
         let goto = Goto::new(vec![
-            source(SECTION_COMMANDS, &["app.quit"]),
+            source(SECTION_FAVORITES, &["quitar"]),
             source(SECTION_HISTORY, &["/etc"]),
         ]);
         let headers: Vec<&str> = goto
@@ -877,7 +1106,7 @@ mod tests {
                 GotoLine::Row(_) => None,
             })
             .collect();
-        assert_eq!(headers, vec!["history", "commands"]);
+        assert_eq!(headers, vec!["history", "favorites"]);
     }
 
     /// A section with no rows paints no header: an empty header says
@@ -885,7 +1114,7 @@ mod tests {
     #[test]
     fn an_empty_section_paints_no_header() {
         let mut goto = Goto::new(vec![
-            source(SECTION_COMMANDS, &["app.quit"]),
+            source(SECTION_FAVORITES, &["quitar"]),
             source(SECTION_HISTORY, &["/etc"]),
         ]);
         for c in "quit".chars() {
@@ -899,7 +1128,7 @@ mod tests {
                 GotoLine::Row(_) => None,
             })
             .collect();
-        assert_eq!(headers, vec!["commands"], "/etc does not match \"quit\"");
+        assert_eq!(headers, vec!["favorites"], "/etc does not match \"quit\"");
     }
 
     /// The cursor never lands on a header, whether going down or up.
@@ -907,7 +1136,7 @@ mod tests {
     fn the_cursor_skips_the_headers() {
         let mut goto = Goto::new(vec![
             source(SECTION_HISTORY, &["/etc", "/var"]),
-            source(SECTION_COMMANDS, &["app.quit"]),
+            source(SECTION_FAVORITES, &["quitar"]),
         ]);
         let mut seen = Vec::new();
         for _ in 0..5 {
@@ -919,9 +1148,9 @@ mod tests {
             vec![
                 Some("/etc".to_owned()),
                 Some("/var".to_owned()),
-                Some("app.quit".to_owned()),
-                Some("app.quit".to_owned()),
-                Some("app.quit".to_owned()),
+                Some("quitar".to_owned()),
+                Some("quitar".to_owned()),
+                Some("quitar".to_owned()),
             ],
             "goes down row by row and stops at the last one, without falling into the header"
         );
@@ -940,7 +1169,6 @@ mod tests {
             section: SECTION_INDEX,
             texts: vec!["la factura del gas"],
             ya_filtered: true,
-            only_with_query: false,
         });
         let mut goto = Goto::new(vec![index, source(SECTION_HISTORY, &["/etc"])]);
         for c in "recibo".chars() {
@@ -979,8 +1207,7 @@ mod tests {
                 section: SECTION_INDEX.id,
                 key: "x".to_owned(),
                 text: "lo que encontró el índice".to_owned(),
-                desc: String::new(),
-                hostile: false,
+                ..GotoRow::default()
             }],
             true,
         );
@@ -1005,8 +1232,7 @@ mod tests {
                     section: SECTION_INDEX.id,
                     key: text.to_owned(),
                     text: text.to_owned(),
-                    desc: String::new(),
-                    hostile: false,
+                    ..GotoRow::default()
                 }],
                 true,
             );
@@ -1020,27 +1246,220 @@ mod tests {
         assert_eq!(from_index, vec!["segunda"]);
     }
 
-    /// With nothing typed, the commands section does not show up: whoever
-    /// opens "go to" and does not type is asking WHERE they can go, and
-    /// hundreds of verbs would bury the destination lists above them. With
-    /// one letter, they come back.
+    fn row(section: GotoSection, key: &str, text: &str, desc: &str) -> GotoRow {
+        GotoRow {
+            section: section.id,
+            key: key.to_owned(),
+            text: text.to_owned(),
+            desc: desc.to_owned(),
+            ..GotoRow::default()
+        }
+    }
+
+    fn fixed(section: GotoSection, rows: Vec<GotoRow>) -> Box<dyn GotoSource + Send> {
+        Box::new(super::FixedSource::new(section, rows))
+    }
+
+    fn commands(texts: &[&str]) -> Box<dyn GotoSource + Send> {
+        fixed(
+            SECTION_COMMANDS,
+            texts
+                .iter()
+                .map(|t| row(SECTION_COMMANDS, &format!("cmd:{t}"), t, ""))
+                .collect(),
+        )
+    }
+
+    fn texts(goto: &Goto) -> Vec<&str> {
+        goto.lines()
+            .iter()
+            .filter_map(|l| match l {
+                GotoLine::Row(i) => goto.rows().get(*i).map(|r| r.text.as_str()),
+                GotoLine::Header(_) => None,
+            })
+            .collect()
+    }
+
+    /// The mode is the query's FIRST character; a `>` later is a letter.
     #[test]
-    fn commands_do_not_show_until_typed() {
-        let commands = Box::new(Fixed {
-            section: SECTION_COMMANDS,
-            texts: vec!["app.quit"],
-            ya_filtered: false,
-            only_with_query: true,
-        });
-        let mut goto = Goto::new(vec![commands, source(SECTION_HISTORY, &["/etc"])]);
-        assert_eq!(goto.len(), 1, "only history");
+    fn the_first_character_chooses_the_mode() {
+        assert_eq!(Mode::of(">copy"), Mode::Commands);
+        assert_eq!(Mode::of("?"), Mode::Help);
+        assert_eq!(Mode::of(""), Mode::Places);
+        assert_eq!(Mode::of(" >x"), Mode::Places);
+        assert_eq!(Mode::of("a>b"), Mode::Places);
+        assert_eq!(needle(">  copy"), "copy");
+        assert_eq!(needle("  etc"), "etc");
+        assert_eq!(needle("?"), "");
+    }
 
+    /// Backspace over the `>` switches to places without closing, and places
+    /// has no commands: they live behind the prefix.
+    #[test]
+    fn backspace_over_the_prefix_switches_to_places() {
+        let mut goto = Goto::new(vec![
+            commands(&["app.quit"]),
+            source(SECTION_HISTORY, &["/etc"]),
+        ]);
+        goto.set_query(">");
+        assert_eq!(goto.mode(), Mode::Commands);
+        assert_eq!(texts(&goto), vec!["app.quit"]);
+        assert!(
+            goto.lines().iter().all(|l| matches!(l, GotoLine::Row(_))),
+            "one flat list"
+        );
+        goto.backspace();
+        assert_eq!(goto.mode(), Mode::Places);
+        assert_eq!(texts(&goto), vec!["/etc"]);
         goto.push_char('q');
+        assert!(
+            texts(&goto).is_empty(),
+            "no commands in places, even typing"
+        );
+    }
 
+    /// The empty places box says where the other lists are.
+    #[test]
+    fn an_empty_places_box_shows_the_prefix_hint() {
+        let mut goto = Goto::new(vec![source(SECTION_HISTORY, &["/etc"])]);
+        assert_eq!(goto.hint(), Some("goto-hint"));
+        goto.push_char('e');
+        assert_eq!(goto.hint(), None);
+        goto.set_query(">");
+        assert_eq!(goto.hint(), None);
+    }
+
+    /// Ranked by score inside a section, with the matched chars; ties go to
+    /// the shorter text.
+    #[test]
+    fn places_rank_inside_their_section() {
+        let mut goto = Goto::new(vec![source(
+            SECTION_HISTORY,
+            &["/srv/capable", "/srv/copy path"],
+        )]);
+        goto.set_query("pa");
+        assert_eq!(texts(&goto), vec!["/srv/copy path", "/srv/capable"]);
         assert_eq!(
-            goto.rows().first().map(|r| r.text.as_str()),
-            Some("app.quit"),
-            "with something typed, the command comes back"
+            goto.selected().map(|r| r.positions.clone()),
+            Some(vec![10, 11])
+        );
+        let mut goto = Goto::new(vec![commands(&["copy path", "copy"])]);
+        goto.set_query(">copy");
+        assert_eq!(
+            texts(&goto),
+            vec!["copy", "copy path"],
+            "a tie goes to the shorter"
+        );
+    }
+
+    /// The help line still finds a command, below one whose name matches.
+    #[test]
+    fn a_command_is_found_by_its_desc_too() {
+        let mut goto = Goto::new(vec![fixed(
+            SECTION_COMMANDS,
+            vec![
+                row(
+                    SECTION_COMMANDS,
+                    "cmd:layout.split-h",
+                    "split side by side",
+                    "layout.split-h",
+                ),
+                row(SECTION_COMMANDS, "cmd:x", "split-h here", "x"),
+            ],
+        )]);
+        goto.set_query(">split-h");
+        assert_eq!(texts(&goto), vec!["split-h here", "split side by side"]);
+        assert!(
+            goto.rows()[1].positions.is_empty(),
+            "matched by desc: nothing to mark in the text"
+        );
+    }
+
+    /// With nothing typed after `>`, the recent ones go first, in their
+    /// order, and say so; a recent key with no row paints nothing; typing
+    /// returns to the ranked order and nothing is "recent".
+    #[test]
+    fn recents_go_first_only_with_an_empty_command_query() {
+        let mut goto = Goto::new(vec![commands(&["app.quit", "app.help"])])
+            .with_recent(&["app.help".to_owned(), "plugin:gone:x".to_owned()]);
+        goto.set_query(">");
+        assert_eq!(texts(&goto), vec!["app.help", "app.quit"]);
+        assert!(goto.rows()[0].recent && !goto.rows()[1].recent);
+        goto.push_char('q');
+        assert!(goto.rows().iter().all(|r| !r.recent));
+        assert_eq!(goto.selected().map(|r| r.text.as_str()), Some("app.quit"));
+    }
+
+    /// Plugin rows arriving late join the commands list without losing the
+    /// query or the row under the cursor (Review Focus 3).
+    #[test]
+    fn late_plugin_rows_keep_the_query_and_the_cursor() {
+        let mut goto = Goto::new(vec![commands(&["a1", "a2"])]);
+        goto.set_query(">a");
+        goto.down();
+        assert_eq!(goto.selected().map(|r| r.text.as_str()), Some("a2"));
+        goto.replace_section(
+            SECTION_PLUGINS,
+            vec![row(SECTION_PLUGINS, "cmd:plugin:p:c", "[ext] a3", "")],
+            false,
+        );
+        assert_eq!(goto.query(), ">a");
+        assert_eq!(goto.selected().map(|r| r.text.as_str()), Some("a2"));
+        assert_eq!(goto.len(), 3);
+    }
+
+    #[test]
+    fn paging_home_end_and_pointing() {
+        let names: Vec<String> = (0..30).map(|i| format!("c{i:02}")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut goto = Goto::new(vec![commands(&refs)]);
+        goto.set_query(">");
+        goto.page_down(10);
+        assert_eq!(goto.cursor(), 10);
+        goto.page_up(3);
+        assert_eq!(goto.cursor(), 7);
+        goto.end();
+        assert_eq!(goto.cursor(), 29);
+        goto.home();
+        assert_eq!(goto.cursor(), 0);
+        assert!(goto.point(5));
+        assert_eq!(goto.cursor(), 5);
+        assert!(!goto.point(99));
+        let mut places = Goto::new(vec![source(SECTION_HISTORY, &["/a"])]);
+        assert!(!places.point(0), "a header is not a row");
+        assert_eq!(places.cursor(), 1);
+    }
+
+    /// Only a places query of three chars that is not a path goes to the
+    /// semantic index; a command or help query never does (Review Focus 1).
+    #[test]
+    fn only_a_places_query_reaches_the_index() {
+        let mut goto = Goto::new(Vec::new());
+        for (q, want) in [
+            (">copy", None),
+            ("?copy", None),
+            ("fa", None),
+            ("/etc", None),
+            ("factura", Some("factura")),
+            ("  factura", Some("factura")),
+        ] {
+            goto.set_query(q);
+            assert_eq!(goto.index_query(), want, "{q:?}");
+        }
+    }
+
+    /// A paste is one refresh, and a hostile query paints masked.
+    #[test]
+    fn push_str_and_a_masked_query() {
+        let mut goto = Goto::new(vec![commands(&["copy"])]);
+        goto.push_str(">co");
+        assert_eq!(texts(&goto), vec!["copy"]);
+        goto.set_query("a\u{202E}b");
+        assert!(
+            !goto
+                .query_display()
+                .chars()
+                .any(norte_encoding::is_terminal_hazard)
         );
     }
 

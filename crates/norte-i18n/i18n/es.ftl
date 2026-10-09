@@ -832,6 +832,7 @@ goto-section-index = Encontrado por el índice
 goto-empty = nada casa con eso
 goto-index-off = el índice semántico no está encendido
 goto-path-desc = ir a esta ruta
+goto-hint = > comandos · ? ayuda
 msg-goto-bad-path = esa ruta no se puede leer como destino
 msg-goto-no-home = no hay HOME en el entorno, así que «~» no nombra nada
 help-cmd-app-settings = ajustes
