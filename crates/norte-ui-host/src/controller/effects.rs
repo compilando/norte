@@ -244,6 +244,7 @@ impl State {
             | Effect::Agents
             | Effect::Theme
             | Effect::Menu
+            | Effect::ContextMenu
             | Effect::Exit
             | Effect::ProfileChoose
             | Effect::ProfileSaveAs
@@ -792,6 +793,7 @@ impl State {
             Effect::Agents => self.open_agents(),
             Effect::Theme => self.open_theme(),
             Effect::Menu => self.open_menu(),
+            Effect::ContextMenu => self.open_context_menu_on_focus(),
             Effect::Exit => self.request_exit(),
             Effect::ProfileChoose => self.request_profiles(None, mailbox),
             Effect::ProfileSaveAs => self.request_save_profile(),

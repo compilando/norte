@@ -4056,10 +4056,11 @@ impl State {
             } => self.open_header_menu(*slot_id, column, Some((*x, *y))),
             UiAction::ContextMenuPointRow { row } => self.point_in_context_menu(*row),
             UiAction::ContextMenuClose => self.close_context_menu(),
-            // Task 5: places and tree branches. Task 4: running an entry.
-            UiAction::ContextMenuPlace { .. }
-            | UiAction::ContextMenuBranch { .. }
-            | UiAction::ContextMenuActivateRow { .. } => {
+            UiAction::ContextMenuActivateRow { row } => {
+                self.activate_context_menu(*row, backend, mailbox)
+            }
+            // Task 5: places and tree branches.
+            UiAction::ContextMenuPlace { .. } | UiAction::ContextMenuBranch { .. } => {
                 (Self::stale(StaleAction::Modal), Vec::new())
             }
             UiAction::WizardOpen => self.open_wizard(),

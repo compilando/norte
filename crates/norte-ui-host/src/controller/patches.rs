@@ -23,7 +23,28 @@ impl State {
         ActionAck::Stale { reason }
     }
 
-    pub(super) fn over(&mut self, u: UiUpdate) -> BridgeEnvelope<UiUpdate> {
+    pub(super) fn over(&mut self, mut u: UiUpdate) -> BridgeEnvelope<UiUpdate> {
+        // The right-click menu closes on its own when something takes the
+        // screen from it (a dialog, help, the palette, the menu bar), and it
+        // is decided HERE, where every frame passes, for the panel bar's
+        // reason: the openers are many and some land long after the
+        // gesture. The close rides in the frame that carries the new
+        // surface. A notice carries no view, so it waits for the next frame
+        // rather than dropping the menu without saying so.
+        if self.context_menu_lost_the_screen() {
+            match &mut u {
+                UiUpdate::Patch(p) => {
+                    self.forget_context_menu();
+                    p.changes
+                        .push(ViewChange::ContextMenu { context_menu: None });
+                }
+                UiUpdate::Snapshot(s) => {
+                    self.forget_context_menu();
+                    s.context_menu = None;
+                }
+                UiUpdate::Notice(_) => {}
+            }
+        }
         // A whole snapshot carries the bar inside: it is the last thing the
         // renderer saw of it, and what the next patch compares against.
         if let UiUpdate::Snapshot(s) = &u {

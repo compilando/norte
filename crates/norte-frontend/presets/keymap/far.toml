@@ -201,7 +201,8 @@ keymap = [
     # F3 also computes/shows folder sizes when the cursor is on a folder —
     # native dual behaviour of one key, not a second binding.
     { on = ["f3"], run = "pane.view" },
-    { on = ["shift+f10", "menu"], run = "pane.context-menu" },
+    { on = ["shift+f10"], run = "pane.context-menu" },
+    { on = ["menu"], run = "pane.context-menu" },
     # F4 on a folder opens the change-attributes dialog instead of the
     # editor — same one-key-two-meanings shape as F3 above, still the
     # closest catalogue command for the file case.

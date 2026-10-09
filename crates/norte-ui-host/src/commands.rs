@@ -139,6 +139,9 @@ pub const IMPLEMENTED: &[&str] = &[
     "pane.compare-files",
     "pane.edit",
     "pane.copy-path",
+    // The right-click menu from the keyboard (Shift+F10, the Menu key): the
+    // same menu a right click opens, on the focused row.
+    "pane.context-menu",
     "app.theme",
     "app.menu",
     // Quit via the key, like in the terminal: the window used to treat it
@@ -592,6 +595,10 @@ pub enum Effect {
     /// offers the same catalogue commands, sorted by topic, for whoever
     /// does not know the name of what they are looking for.
     Menu,
+    /// Opens the right-click menu on whatever has the keyboard, with no
+    /// pixel anchor. Inert: it only opens a list whose entries are catalogue
+    /// commands, each still gated by this window's own list when chosen.
+    ContextMenu,
     /// Asks to close the window: the same path as the close button, with
     /// the same `[ui] confirm_quit` question.
     Exit,
@@ -968,6 +975,7 @@ pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
         "app.handoff" => Effect::Handoff,
         "app.theme" => Effect::Theme,
         "app.menu" => Effect::Menu,
+        "pane.context-menu" => Effect::ContextMenu,
         "profile.pick" => Effect::ProfileChoose,
         "profile.save-as" => Effect::ProfileSaveAs,
         "profile.next" => Effect::ProfileNeighbor { back: false },

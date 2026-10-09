@@ -13,18 +13,14 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-use norte_frontend::context_menu::{Action, Surface, Verb};
+use norte_frontend::context_menu::{Action, Entry, Surface, Verb};
 
 /// The open right-click menu.
 ///
 /// Everything it acts on is decided ONCE, at opening: the target, the
 /// facts the verdicts are read from, and what the pane looked like. The
 /// verdicts do not change under the pointer, and the fingerprint is what
-/// lets an activation notice the pane moved underneath (Task 4).
-#[expect(
-    dead_code,
-    reason = "slot, fingerprint and subject are read when an entry runs (Task 4/5)"
-)]
+/// lets an activation notice the pane moved underneath.
 pub(super) struct ContextMenu {
     /// What the pointer was over, reduced for the shared model.
     pub(super) surface: Surface,
@@ -150,13 +146,7 @@ impl State {
             )
         };
         let header = norte_i18n::ta_in(self.lang, "gui-menu-acts-on", &[("target", &target_text)]);
-        let fingerprint = Fingerprint {
-            entry: pane
-                .cursor_entry()
-                .and_then(|e| e.path.file_name())
-                .map(|s| s.as_bytes().to_vec()),
-            marks: pane.marks_len(),
-        };
+        let fingerprint = self.fingerprint_of(slot_id);
         let surface = Surface::Row(target);
         let bar = self.install_context_menu(ContextMenu {
             surface,
@@ -165,7 +155,7 @@ impl State {
             cursor: 0,
             slot: slot_id,
             header: clamp_display(header),
-            fingerprint: Some(fingerprint),
+            fingerprint,
             subject: Subject::Listing,
             anchor,
         });
@@ -308,33 +298,18 @@ impl State {
     /// row and the hand learns it once.
     pub(super) fn vista_context_menu(&self) -> Option<crate::dto::ContextMenuView> {
         let m = self.context_menu.as_ref()?;
-        let runnable = crate::commands::all_with(self.effects);
         let items = m
             .entries
             .iter()
             .map(|e| {
-                let (chord, reason, role) = match e.action {
-                    Action::Command(c) => {
-                        let reason = if runnable.contains(&c) {
-                            norte_frontend::availability::verdict(c, &m.facts)
-                                .reason()
-                                .map(norte_frontend::availability::reason_key)
-                        } else {
-                            Some("reason-unavailable")
-                        };
-                        (
-                            norte_frontend::palette::first_chord(c, &self.effective)
-                                .unwrap_or_default(),
-                            reason,
-                            norte_frontend::menu::role(c).as_str(),
-                        )
-                    }
-                    Action::Verb(v) => {
-                        let reason = (v == Verb::HideColumn
-                            && m.surface == (Surface::Header { hideable: false }))
-                        .then_some("reason-wrong-target");
-                        (String::new(), reason, "normal")
-                    }
+                let reason = self.reason_against(m, e);
+                let (chord, role) = match e.action {
+                    Action::Command(c) => (
+                        norte_frontend::palette::first_chord(c, &self.effective)
+                            .unwrap_or_default(),
+                        norte_frontend::menu::role(c).as_str(),
+                    ),
+                    Action::Verb(_) => (String::new(), "normal"),
                 };
                 crate::dto::ContextItemView {
                     label: clamp_display(norte_i18n::t_in(self.lang, e.label_key)),
@@ -360,6 +335,202 @@ impl State {
             cursor: m.cursor as u64,
             x: m.anchor.map(|(x, _)| x),
             y: m.anchor.map(|(_, y)| y),
+        })
+    }
+
+    /// Why entry `e` of `m` cannot run, as a Fluent reason key, or `None`
+    /// when it can.
+    ///
+    /// ONE function for the two questions — what the menu PAINTS dimmed and
+    /// what a click REFUSES — so the two cannot disagree: an entry painted
+    /// enabled that refused, or the reverse, would be a menu lying about
+    /// itself. The criteria are the shared table's verdict on the facts
+    /// frozen at opening, plus "this window does not run it"; there is no
+    /// third.
+    fn reason_against(&self, m: &ContextMenu, e: &Entry) -> Option<&'static str> {
+        match e.action {
+            Action::Command(c) => {
+                if crate::commands::all_with(self.effects).contains(&c) {
+                    norte_frontend::availability::verdict(c, &m.facts)
+                        .reason()
+                        .map(norte_frontend::availability::reason_key)
+                } else {
+                    Some("reason-unavailable")
+                }
+            }
+            Action::Verb(v) => (v == Verb::HideColumn
+                && m.surface == (Surface::Header { hideable: false }))
+            .then_some("reason-wrong-target"),
+        }
+    }
+
+    /// What a row menu on `slot` would remember if it opened NOW: the
+    /// cursor entry's last component and the marks count. `None` for a slot
+    /// that is not a listing.
+    fn fingerprint_of(&self, slot: u32) -> Option<Fingerprint> {
+        let pane = &self.slots.get(&slot)?.pane;
+        Some(Fingerprint {
+            entry: pane
+                .cursor_entry()
+                .and_then(|e| e.path.file_name())
+                .map(|s| s.as_bytes().to_vec()),
+            marks: pane.marks_len(),
+        })
+    }
+
+    /// A click (or `Enter`) on entry `row`: runs it, through the SAME
+    /// dispatch as its key.
+    ///
+    /// Resolved against the HOST's entries, never the renderer's: a row
+    /// outside the menu is a race with an earlier one. A disabled entry
+    /// answers applied, runs nothing and leaves the menu up — the reader
+    /// pointed at a reason, and taking the menu away would take the reason
+    /// with it.
+    ///
+    /// A row menu checks its fingerprint first. Every command acts on what
+    /// the pane points at NOW, and the menu SAID what it acts on when it
+    /// opened: if a copy finished and re-listed, or a mark went on under
+    /// the pointer, running would act on something the header never named.
+    /// So it closes, answers `Stale` and runs nothing; the reader opens it
+    /// again and reads the new target.
+    pub(super) fn activate_context_menu(
+        &mut self,
+        row: u32,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(m) = self.context_menu.as_ref() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
+        };
+        let Some(&entry) = m.entries.get(row as usize) else {
+            return (Self::stale(StaleAction::Generation), Vec::new());
+        };
+        if self.reason_against(m, &entry).is_some() {
+            return (self.applied(), Vec::new());
+        }
+        // The listing it was opened on has to be the one commands act on:
+        // `apply_effect` runs over the ACTIVE slot.
+        let moved =
+            matches!(m.subject, Subject::Listing | Subject::Column(_)) && m.slot != self.active();
+        let changed = m
+            .fingerprint
+            .as_ref()
+            .is_some_and(|f| self.fingerprint_of(m.slot).as_ref() != Some(f));
+        if moved || changed {
+            let (_, closing) = self.close_context_menu();
+            return (Self::stale(StaleAction::Generation), closing);
+        }
+        self.run_context_entry(entry, backend, mailbox)
+    }
+
+    /// Closes the menu and runs `entry`.
+    ///
+    /// The close travels in its OWN patch and BEFORE the effect, in
+    /// `run_from_menu`'s order and for its reason: the command may open a
+    /// dialog, and a menu still up behind it would keep the keys the
+    /// dialog needs. A catalogue command goes through `effect_of(c, 1)` →
+    /// `apply_effect`, the one dispatcher; the menu is another door into
+    /// the catalogue, not a second dispatcher.
+    pub(super) fn run_context_entry(
+        &mut self,
+        entry: Entry,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.forget_context_menu();
+        let closing = self.parche(vec![ViewChange::ContextMenu { context_menu: None }]);
+        let (ack, mut rest) = match entry.action {
+            Action::Command(c) => match effect_of(c, 1) {
+                Some(effect) => self.apply_effect(effect, backend, mailbox),
+                None => self.no_implemented(c),
+            },
+            // Task 5: the menu-local verbs (open here / in the other pane /
+            // in a tab, copy path, favorites, fold, sort, hide column).
+            Action::Verb(_) => self.no_implemented("context-menu verb"),
+        };
+        let mut outgoing = vec![closing];
+        outgoing.append(&mut rest);
+        (ack, outgoing)
+    }
+
+    /// The keys while the menu is open.
+    ///
+    /// FIXED, like the menu bar's and for the same reason: there are no
+    /// catalogue verbs for "next menu entry". The arrows walk with wrap —
+    /// disabled entries included, so their reason can be read — `Enter`
+    /// runs and `Escape` closes; anything else is swallowed instead of
+    /// falling through to the listing underneath, which would be acted on
+    /// for a screen the reader is not looking at.
+    pub(super) fn key_in_context_menu(
+        &mut self,
+        k: &crate::keys::KeyInput,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(m) = self.context_menu.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
+        };
+        let len = m.entries.len();
+        match k.key.as_str() {
+            "Escape" | "esc" => self.close_context_menu(),
+            "ArrowUp" | "up" if len > 0 => {
+                m.cursor = (m.cursor + len - 1) % len;
+                self.context_menu_patch(Vec::new())
+            }
+            "ArrowDown" | "down" if len > 0 => {
+                m.cursor = (m.cursor + 1) % len;
+                self.context_menu_patch(Vec::new())
+            }
+            "Enter" | "enter" => {
+                let row = u32::try_from(m.cursor).unwrap_or(u32::MAX);
+                self.activate_context_menu(row, backend, mailbox)
+            }
+            _ => (self.applied(), Vec::new()),
+        }
+    }
+
+    /// `pane.context-menu` (Shift+F10, the Menu key): the menu on whatever
+    /// has the keyboard, with no pixel anchor — the renderer places it at
+    /// the focused row.
+    ///
+    /// On a listing it is EXACTLY a right click on the cursor row, marks
+    /// rule included: an unmarked cursor row drops the marks. A key that
+    /// opened a menu saying "acts on c.txt" over eleven marks would be the
+    /// same lie the rule exists to prevent. An empty listing opens the
+    /// folder's menu.
+    pub(super) fn open_context_menu_on_focus(
+        &mut self,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // Task 5: the Places cursor row (`places_have_focus()`) and the
+        // tree's cursor branch open their own menus here. Until then they
+        // fall through to the active listing.
+        let slot = self.active();
+        let pane = &self.slot().pane;
+        if pane.entries().is_empty() {
+            return self.open_empty_menu(slot, None);
+        }
+        let key = RowKey(pane.cursor() as u64);
+        let generation = pane.listing_epoch();
+        self.open_row_menu(slot, key, generation, None)
+    }
+
+    /// Whether the open menu has to go because something took the screen
+    /// from it: a surface that keeps the keys (a dialog, help, the
+    /// palette…), the menu bar's dropdown, or the listing it was opened on
+    /// went away.
+    ///
+    /// Asked in ONE place, [`State::over`], on every patch and snapshot that
+    /// crosses: the dialogs alone are pushed from two dozen places, some of
+    /// them answers that land long after the gesture (a drop, a conflict,
+    /// a plugin), and a close wired into each opener would be the one the
+    /// next opener forgets — the same reasoning that derives the panel bar
+    /// there.
+    pub(super) fn context_menu_lost_the_screen(&self) -> bool {
+        self.context_menu.as_ref().is_some_and(|m| {
+            self.something_keeps_the_keys()
+                || self.menu.is_some()
+                || (matches!(m.subject, Subject::Listing | Subject::Column(_))
+                    && !self.slots.contains_key(&m.slot))
         })
     }
 
