@@ -68,6 +68,10 @@ independently through `PROTOCOL_VERSION`.
   in the terminal — each column is resized from the edge that opens it.
   It used to be a three-pixel strip on the column's far side. A click on
   the edge without moving no longer saves a width.
+- **The window's menus no longer flicker under the pointer**: moving
+  across a dropdown redrew the whole menu bar and replayed the opening
+  slide on every row; now only the highlight moves, and the slide plays
+  once, when the menu opens. The right-click menu likewise stays put.
 
 ### Added
 

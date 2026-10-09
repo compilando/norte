@@ -626,6 +626,12 @@ body {
   animation: norte-emerge 90ms ease-out;
 }
 
+/* A dropdown rebuilt while already down (an entry changed) must not slide
+   in again: only the paint that opens it marks `data-emerge`. */
+.menu-items:not([data-emerge="true"]) {
+  animation: none;
+}
+
 .menu-item {
   display: flex;
   align-items: center;
