@@ -1354,7 +1354,9 @@ describe("the header", () => {
     const grip = root.querySelector(".col-grip") as HTMLElement;
     grip.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 100 }));
     expect(sent.some((a) => a.action === "sort_by")).toBe(false);
-    document.dispatchEvent(new MouseEvent("mousemove", { clientX: 140 }));
+    // The grip is the edge that OPENS the column, as in the TUI: the name
+    // takes the remainder, so moving it LEFT widens the column.
+    document.dispatchEvent(new MouseEvent("mousemove", { clientX: 60 }));
     // While dragging, only the variable changes: no dispatch.
     const slot = root.querySelector(".slot") as HTMLElement;
     expect(slot.style.getPropertyValue("--colw-size")).toBe("40px");
@@ -1366,6 +1368,53 @@ describe("the header", () => {
       column: "size",
       cells: 5,
     });
+  });
+
+  it("a grip pressed and released in place writes no width and does not sort", () => {
+    const { screen, sent, root } = mount();
+    document.documentElement.style.setProperty("--cell-w", "8px");
+    screen.paint(view({}));
+    const grip = root.querySelector(".col-grip") as HTMLElement;
+    grip.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 100 }));
+    document.dispatchEvent(new MouseEvent("mouseup", { clientX: 100 }));
+    expect(sent.some((a) => a.action === "resize_column")).toBe(false);
+    expect(sent.some((a) => a.action === "sort_by")).toBe(false);
+  });
+
+  /**
+   * Pins that the grip is reachable: on the Name|Size boundary (the edge
+   * that OPENS Size), wide, and not clipped by the header box — it once was
+   * six pixels on the right edge with half of them under `overflow: hidden`.
+   */
+  it("the grip straddles the edge that opens its column, and the box does not clip it", () => {
+    const { screen, root } = mount();
+    screen.paint(view({}));
+    const size = root.querySelectorAll(".slot-columns .col")[1] as HTMLElement;
+    expect(size.firstElementChild?.classList.contains("col-grip")).toBe(true);
+    expect(size.querySelector(".col-label")?.textContent).toBe("Tamaño");
+    const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+    const rule = (sel: string): string =>
+      new RegExp(`\\n${sel.replace(".", "\\.")}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+    expect(rule(".col")).not.toMatch(/overflow:\s*hidden/);
+    expect(rule(".col-label")).toMatch(/overflow:\s*hidden/);
+    expect(rule(".col-label")).toMatch(/text-overflow:\s*ellipsis/);
+    expect(rule(".col-grip")).toMatch(/left:/);
+    expect(rule(".col-grip")).not.toMatch(/right:/);
+    const width = /width:\s*(\d+)px/.exec(rule(".col-grip"))?.[1];
+    expect(Number(width)).toBeGreaterThanOrEqual(8);
+  });
+
+  it("the first column has no grip even when it is not the name", () => {
+    const { screen, root } = mount();
+    const v = view({});
+    const slot = v.slots[0];
+    if (slot?.kind === "browser") {
+      slot.columns = [...slot.columns].reverse();
+    }
+    screen.paint(v);
+    const cols = root.querySelectorAll(".slot-columns .col");
+    expect(cols[0]?.querySelector(".col-grip")).toBeNull();
+    expect(cols[1]?.querySelector(".col-grip")).toBeNull();
   });
 });
 
@@ -3239,6 +3288,76 @@ describe("the menu bar", () => {
       { action: "menu_activate_row", row: 0 },
       { action: "menu_close" },
     ]);
+  });
+
+  /**
+   * Pins the hover path: every `mousemove` used to send `menu_point_row`,
+   * the host answered with the whole menu, and the bar, the title bar and
+   * the dropdown were rebuilt — replaying the open animation on each row
+   * the pointer crossed.
+   */
+  it("a cursor-only change moves the mark on the SAME nodes", () => {
+    const { screen } = mount();
+    screen.paint(withMenu(1));
+    const bar = document.querySelector(".menubar");
+    const list = document.querySelector(".menu-items") as HTMLElement;
+    const rows = [...document.querySelectorAll(".menu-item")];
+    const moved = withMenu(1);
+    moved.menu.cursor = 2;
+    screen.paint(moved);
+    expect(document.querySelector(".menubar")).toBe(bar);
+    expect(document.querySelector(".menu-items")).toBe(list);
+    expect([...document.querySelectorAll(".menu-item")]).toEqual(rows);
+    expect(list.getAttribute("aria-activedescendant")).toBe("menu-item-2");
+    expect(rows.map((r) => (r as HTMLElement).dataset["current"])).toEqual([
+      "false",
+      "false",
+      "true",
+    ]);
+  });
+
+  it("the pointer sends a row only when it changes row", () => {
+    const { screen, sent } = mount();
+    screen.paint(withMenu(1));
+    const rows = [...document.querySelectorAll(".menu-item")] as HTMLElement[];
+    // Already the cursor: nothing to say.
+    rows[1]?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    rows[0]?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    rows[0]?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    expect(sent).toEqual([{ action: "menu_point_row", row: 0 }]);
+    // The keyboard moved it elsewhere: row 0 is news again.
+    const back = withMenu(1);
+    back.menu.cursor = 2;
+    screen.paint(back);
+    rows[0]?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    expect(sent.filter((a) => a.action === "menu_point_row")).toHaveLength(2);
+  });
+
+  it("the dropdown emerges when it opens, not when it is repainted", () => {
+    const { screen } = mount();
+    screen.paint(withMenu(1));
+    const first = document.querySelector(".menu-items") as HTMLElement;
+    expect(first.dataset["emerge"]).toBe("true");
+    // Same menu, different contents (an entry became runnable): rebuilt,
+    // but it did not open.
+    const changed = withMenu(1);
+    const entry = changed.menu.items[1];
+    if (entry !== undefined) {
+      entry.enabled = true;
+    }
+    screen.paint(changed);
+    const rebuilt = document.querySelector(".menu-items") as HTMLElement;
+    expect(rebuilt).not.toBe(first);
+    expect(rebuilt.dataset["emerge"]).toBeUndefined();
+    // Another title IS an opening.
+    screen.paint(withMenu(0));
+    expect((document.querySelector(".menu-items") as HTMLElement).dataset["emerge"]).toBe(
+      "true",
+    );
+    const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+    expect(css).toMatch(
+      /\.menu-items:not\(\[data-emerge="true"\]\)\s*\{[^}]*animation:\s*none/,
+    );
   });
 });
 
@@ -5895,6 +6014,36 @@ describe("context menu", () => {
     expect(sent.at(-1)).toEqual({ action: "context_menu_close" });
     window.dispatchEvent(new Event("blur"));
     expect(sent.at(-1)).toEqual({ action: "context_menu_close" });
+  });
+
+  it("the same menu with another cursor keeps its nodes and its place", () => {
+    const { screen, sent } = mount();
+    screen.paint({ ...view({}), context_menu: menuView() });
+    const box = document.querySelector(".context-menu") as HTMLElement;
+    const items = [...box.querySelectorAll(".context-menu-item")] as HTMLElement[];
+    // A marker the placement would overwrite if it ran again.
+    box.style.left = "77px";
+    screen.paint({ ...view({}), context_menu: menuView({ cursor: 2 }) });
+    expect(document.querySelectorAll(".context-menu")).toHaveLength(1);
+    expect(document.querySelector(".context-menu")).toBe(box);
+    expect([...box.querySelectorAll(".context-menu-item")]).toEqual(items);
+    expect(box.style.left).toBe("77px");
+    expect(items.map((i) => i.getAttribute("aria-selected"))).toEqual([
+      "false",
+      "false",
+      "true",
+    ]);
+    // The reused rows know the new cursor: hovering it says nothing.
+    items[2]?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    items[0]?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    items[0]?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    expect(sent.filter((a) => a.action === "context_menu_point_row")).toEqual([
+      { action: "context_menu_point_row", row: 0 },
+    ]);
+    // Other entries are another menu: rebuilt.
+    screen.paint({ ...view({}), context_menu: menuView({ header: "acts on b.txt" }) });
+    expect(document.querySelector(".context-menu")).not.toBe(box);
+    expect(document.querySelectorAll(".context-menu")).toHaveLength(1);
   });
 
   // Final review 5 (spec §5): a scroll of the slot closes it.

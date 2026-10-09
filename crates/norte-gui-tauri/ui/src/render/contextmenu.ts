@@ -14,6 +14,17 @@ import { dismissPopupMenu, placeInsideWindow } from "./menus";
 /** Takes down the painted menu's window listeners; `null` with none. */
 let teardown: (() => void) | null = null;
 
+/** The painted menu: its shape without the cursor, and its entries. */
+interface Shown {
+  signature: string;
+  box: HTMLElement;
+  items: HTMLElement[];
+  /** The row the host last heard of: the cursor, or the one pointed since. */
+  pointed: number;
+}
+
+let shown: Shown | null = null;
+
 const guarded = new WeakSet<Document>();
 
 /**
@@ -66,8 +77,19 @@ function cursorAnchor(): { x: number; y: number } {
  * reason, and still sends its click: the host decides what that means.
  */
 export function paintContextMenu(this: Screen, menu: ContextMenuView | null): void {
+  // The same menu with another cursor is a hover: move the mark in place,
+  // without a rebuild nor a new placement under the pointer.
+  const signature = menu === null ? "" : JSON.stringify({ ...menu, cursor: 0 });
+  if (menu !== null && shown?.box.isConnected === true && shown.signature === signature) {
+    shown.pointed = menu.cursor;
+    for (const [i, el] of shown.items.entries()) {
+      el.setAttribute("aria-selected", String(i === menu.cursor));
+    }
+    return;
+  }
   teardown?.();
   teardown = null;
+  shown = null;
   document.querySelector(".context-menu")?.remove();
   if (menu === null) {
     return;
@@ -82,6 +104,7 @@ export function paintContextMenu(this: Screen, menu: ContextMenuView | null): vo
   header.className = "context-menu-header";
   header.textContent = menu.header;
   box.append(header);
+  const painted: Shown = { signature, box, items: [], pointed: menu.cursor };
   for (const [i, item] of menu.items.entries()) {
     if (item.section !== null) {
       const rule = document.createElement("div");
@@ -118,16 +141,19 @@ export function paintContextMenu(this: Screen, menu: ContextMenuView | null): vo
       el.append(reason);
     }
     el.addEventListener("mousemove", () => {
-      if (i !== menu.cursor) {
+      if (i !== painted.pointed) {
+        painted.pointed = i;
         this.send({ action: "context_menu_point_row", row: i });
       }
     });
     el.addEventListener("click", () => {
       this.send({ action: "context_menu_activate_row", row: i });
     });
+    painted.items.push(el);
     box.append(el);
   }
   document.body.append(box);
+  shown = painted;
   const anchor =
     menu.x !== null && menu.y !== null ? { x: menu.x, y: menu.y } : cursorAnchor();
   placeInsideWindow(box, anchor.x, anchor.y);

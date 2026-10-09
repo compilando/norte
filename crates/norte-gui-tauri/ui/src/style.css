@@ -626,6 +626,12 @@ body {
   animation: norte-emerge 90ms ease-out;
 }
 
+/* A dropdown rebuilt while already down (an entry changed) must not slide
+   in again: only the paint that opens it marks `data-emerge`. */
+.menu-items:not([data-emerge="true"]) {
+  animation: none;
+}
+
 .menu-item {
   display: flex;
   align-items: center;
@@ -1083,13 +1089,21 @@ body {
    Code's tables): told apart from rows without spending color — small caps
    in the listing's monospace shouted. The box keeps its cell width, so the
    columns stay aligned; a fixed width ellipsis-truncates like the cells.
-   `position: relative` is for the border's grip. */
+   `position: relative` is for the border's grip, and the clipping lives in
+   `.col-label` because here it would clip the grip too. `min-width: 0` is
+   what `overflow: hidden` used to give for free: the name shrinks below
+   its label instead of pushing the columns out. */
 .col {
   flex: 0 0 auto;
+  min-width: 0;
   opacity: 0.65;
   position: relative;
   font-family: var(--font-ui);
   font-size: 12px;
+}
+
+.col-label {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1116,20 +1130,22 @@ body {
   color: var(--border-focus);
 }
 
-/* A header's right-border grip: six pixels that change the cursor.
-   Dragging it fixes the column's width (`resize_column`). */
+/* The grip of the edge that OPENS a column (the TUI's), centred on the gap
+   before it: ten pixels to hit, a two-pixel line to see. Dragging it fixes
+   the column's width (`resize_column`). */
 .col-grip {
   position: absolute;
   top: 0;
-  right: -3px;
-  width: 6px;
+  left: calc(var(--cell-w) / -2 - 5px);
+  width: 10px;
   height: 100%;
   cursor: col-resize;
 }
 
 .col-grip:hover,
 .col[data-resizing="true"] .col-grip {
-  background: var(--border-focus);
+  background: linear-gradient(var(--border-focus), var(--border-focus)) center / 2px 100%
+    no-repeat;
   opacity: 0.6;
 }
 
