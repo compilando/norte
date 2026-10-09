@@ -2981,6 +2981,34 @@ describe("the menu bar", () => {
     expect(sent).toEqual([{ action: "tab_action", slot_id: 7, verb: "close" }]);
   });
 
+  // Two menus at once is never right: opening a popup closes the host's.
+  it("opening the tab menu closes a painted host context menu", () => {
+    const { screen, sent } = mount();
+    screen.paint({
+      ...panelGroup(),
+      context_menu: { header: "h", items: [], cursor: 0, x: 1, y: 2 },
+    });
+    expect(document.querySelector(".context-menu")).not.toBeNull();
+    const tab = document.querySelectorAll(".tab")[1] as HTMLElement;
+    tab.dispatchEvent(
+      new MouseEvent("contextmenu", { button: 2, bubbles: true, cancelable: true }),
+    );
+    expect(sent.filter((a) => a.action === "context_menu_close")).toEqual([
+      { action: "context_menu_close" },
+    ]);
+  });
+
+  it("opening the tab menu with no host menu sends no context_menu_close", () => {
+    const { screen, sent } = mount();
+    screen.paint(panelGroup());
+    const tab = document.querySelectorAll(".tab")[1] as HTMLElement;
+    tab.dispatchEvent(
+      new MouseEvent("contextmenu", { button: 2, bubbles: true, cancelable: true }),
+    );
+    expect(document.querySelector(".tab-menu")).not.toBeNull();
+    expect(sent.filter((a) => a.action === "context_menu_close")).toEqual([]);
+  });
+
   it("a right click opens OUR menu: close, move left, move right", () => {
     const { screen, sent } = mount();
     screen.paint(panelGroup());
