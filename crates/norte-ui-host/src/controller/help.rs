@@ -246,6 +246,8 @@ impl State {
                     // And saving the profile asks for a NAME, which ends up
                     // being a directory: same single-field dialog (#318).
                     | Pending::SaveProfile
+                    // And a terminal's name: same single-field dialog.
+                    | Pending::RenameTerminal { .. }
                     // And a text setting's value: a prefilled field and two
                     // buttons.
                     | Pending::EditSetting { .. }

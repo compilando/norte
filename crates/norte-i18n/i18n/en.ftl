@@ -1234,6 +1234,14 @@ panelbar-terminal = Terminal
 # shell, so the only one worth announcing.
 terminal-leave = leave
 terminal-none = No shell in this panel.
+terminal-exited = exited with code { $code }
+terminal-new = New terminal
+terminal-close = Close terminal
+terminal-shell-profiles = Choose a shell
+terminal-rename-prompt = Terminal name (empty = automatic)
+terminal-decorate-title = Icon and colour
+terminal-icon-none = No icon
+terminal-color-none = No colour
 # The journal timeline (phase 7).
 timeline-title = Timeline
 timeline-empty = nothing has been done yet
@@ -1293,6 +1301,13 @@ menu-item-layout-log = Log
 menu-item-layout-disk-map = Disk map
 menu-item-layout-timeline = Timeline
 menu-item-layout-terminal = Terminal
+menu-item-terminal-new = New terminal
+menu-item-terminal-new-profile = New terminal with…
+menu-item-terminal-next = Next terminal
+menu-item-terminal-prev = Previous terminal
+menu-item-terminal-rename = Rename terminal…
+menu-item-terminal-decorate = Terminal icon and colour…
+menu-item-terminal-close = Close terminal
 menu-item-layout-metadata = Details
 menu-item-layout-pick = Layout...
 menu-item-profile-pick = Profile...
@@ -1337,6 +1352,7 @@ menu-section-contents = Contents
 menu-section-split = Split
 menu-section-compare = Compare
 menu-section-side-panels = Side panels
+menu-section-terminal = Terminals
 menu-section-profiles = Profiles
 # Ten groups (2026-09-10): three new titles, and labels for what until now
 # was reachable only by key or from the palette.
@@ -1418,6 +1434,13 @@ help-cmd-layout-timeline = show or hide the timeline
 # Not "show or hide" like its neighbours, and deliberately: the second press
 # hands the keyboard back and leaves the shell running, it does not close it.
 help-cmd-layout-terminal = open a terminal in a panel, or give it the keyboard
+help-cmd-terminal-new = start another shell in the terminal panel
+help-cmd-terminal-new-profile = start another shell in the terminal panel, choosing which one
+help-cmd-terminal-close = close the terminal in front, killing its shell
+help-cmd-terminal-next = bring the next terminal of the panel to the front
+help-cmd-terminal-prev = bring the previous terminal of the panel to the front
+help-cmd-terminal-rename = name the terminal in front
+help-cmd-terminal-decorate = give the terminal in front an icon and a colour
 help-cmd-layout-metadata = show or hide the details panel
 help-cmd-layout-pick = choose a layout
 help-cmd-profile-pick = choose a profile
@@ -2534,6 +2557,7 @@ host-no-such-tab = there are not that many tabs
 host-task-running = that task is still running: stopping it is another key
 host-nothing-selected = nothing is selected
 host-not-local = that is not on this disk: there is no native path to hand the desktop
+host-shell-failed = the shell did not start (see the log panel)
 host-no-desktop = this window has no desktop behind it: it cannot copy to the clipboard or launch anything
 # #303: same wording as the TUI's msg-edit-created-changed, and for the same
 # reason: one message for all three causes (a link, a folder, gone).

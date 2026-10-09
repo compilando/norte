@@ -341,6 +341,20 @@ pub const MENUS: &[Menu] = &[
                     "layout.terminal",
                 ],
             ),
+            // The terminal panel's instances, right under the panel that
+            // holds them.
+            sec(
+                Some("menu-section-terminal"),
+                &[
+                    "terminal.new",
+                    "terminal.new-profile",
+                    "terminal.next",
+                    "terminal.prev",
+                    "terminal.rename",
+                    "terminal.decorate",
+                    "terminal.close",
+                ],
+            ),
             sec(None, &["layout.pick", "app.theme"]),
         ],
     },

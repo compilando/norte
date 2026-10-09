@@ -40,6 +40,13 @@ commands = [
     "layout.disk-map",
     "layout.timeline",
     "layout.terminal",
+    "terminal.new",
+    "terminal.new-profile",
+    "terminal.next",
+    "terminal.prev",
+    "terminal.rename",
+    "terminal.decorate",
+    "terminal.close",
     "layout.pick",
 
     "pane.tree",]
@@ -308,6 +315,39 @@ Está en los dos sitios, la terminal y la ventana, con el mismo shell y la misma
 rejilla por dentro. Sobre un panel remoto se niega a abrirse y lo dice: un shell
 se sienta en un directorio del sistema de ficheros, y en un `sftp://` no hay
 dónde sentarlo.
+
+El panel tiene **varios shells**. {{cmd:terminal.new}} arranca otro y lo trae
+delante; {{cmd:terminal.next}} y {{cmd:terminal.prev}} pasan de uno a otro;
+{{cmd:terminal.close}} cierra el de delante y mata su shell. Con dos o más, el
+panel los lista —en la terminal, como pestañas en su borde de arriba; en la
+ventana, como una lista a su derecha— y un `●` marca el que escribió mientras
+mirabas otro. Un shell que termina bien sale de la lista; uno que termina con
+error se queda, enseñando su última pantalla y el código, hasta que lo cierras.
+
+{{cmd:terminal.rename}} le pone nombre al de delante (un nombre vacío devuelve
+el automático: el título que pone el programa, o el nombre del shell), y
+{{cmd:terminal.decorate}} le da icono y color. Esas dos y
+{{cmd:terminal.new-profile}} no tienen tecla en ningún preset: dentro del panel
+cada tecla que se asigna es una tecla que se le quita al shell. Están en el
+menú y en la paleta.
+
+Qué shells ofrece {{cmd:terminal.new-profile}} se escribe en `terminal.toml`,
+junto a `norte.toml`:
+
+```toml
+default = "fish"
+
+[[shell]]
+name = "fish"
+program = "/usr/bin/fish"
+args = ["-l"]
+icon = "terminal"   # terminal, code, server, debug, package, star
+color = 4           # de 1 a 6, lo pinta el tema
+```
+
+`program` tiene que ser una ruta absoluta. Un `terminal.toml` dentro del
+directorio `.norte` de un proyecto se ignora: un repositorio no elige qué
+programas ejecuta norte.
 
 {{cmd:layout.timeline}} abre el historial: qué se ha hecho en esta
 máquina, de lo más reciente hacia atrás, con la hora, quién lo hizo —tú, un

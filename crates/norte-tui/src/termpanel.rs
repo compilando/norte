@@ -92,6 +92,7 @@ pub fn open(dir: &std::path::Path, size: (u16, u16)) -> std::io::Result<TermPane
             // look it up via `cwd`, which here is the directory the reader is
             // looking at.
             program: &norte_frontend::shell::login_shell(),
+            args: &[],
             dir,
             tam: size,
             // The child knows it is INSIDE norte, just like the subshell and

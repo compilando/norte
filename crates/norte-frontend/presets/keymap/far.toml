@@ -168,6 +168,13 @@ keymap = [
     # screen, which in norte is what `app.toggle-panels` does—, so this is
     # not a transcription: norte's common chord goes here. See orthodox.toml.
     { on = ["ctrl+alt+s"], run = "layout.terminal" },
+    # The panel's instances: norte's common family, not a transcription (see
+    # orthodox.toml). Far's `ctrl+pageup` is "parent folder", which is why
+    # the family is `ctrl+alt+`.
+    { on = ["ctrl+alt+n"], run = "terminal.new" },
+    { on = ["ctrl+alt+w"], run = "terminal.close" },
+    { on = ["ctrl+alt+pgdn"], run = "terminal.next" },
+    { on = ["ctrl+alt+pgup"], run = "terminal.prev" },
     # The rest of the `layout.*` family, with the same chords as in the
     # other six presets: see the long note in `orthodox.toml`.
     { on = ["alt+x"], run = "layout.close-slot" },

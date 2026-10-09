@@ -70,6 +70,8 @@ pub struct Startup<'a> {
     /// is not one, and a file manager's `cwd` is the directory being looked
     /// at — a `bash` left there would get executed (#302, ADR 0082).
     pub program: &'a std::path::Path,
+    /// Its arguments, as argv: no shell interpolation.
+    pub args: &'a [std::ffi::OsString],
     /// Where it sits.
     pub dir: &'a std::path::Path,
     /// Columns and rows.
@@ -164,6 +166,7 @@ impl Shell {
             })
             .map_err(std::io::Error::other)?;
         let mut cmd = portable_pty::CommandBuilder::new(a.program);
+        cmd.args(a.args);
         cmd.cwd(a.dir);
         for (k, v) in a.env {
             cmd.env(k, v);
@@ -272,11 +275,25 @@ impl Shell {
         mailbox_of(&self.mailbox).closed || matches!(self.child.try_wait(), Ok(Some(_)))
     }
 
-    /// How the shell ended: `None` while it runs.
+    /// How the shell ended: `None` while it runs — and ALSO while what it
+    /// wrote has not been read and pumped yet.
+    ///
+    /// The second half is what makes a kept "last screen" hold the last
+    /// thing the shell said: the reader thread runs on its own, so the child
+    /// can be reaped before its final bytes reach the mailbox. Only once the
+    /// reader saw end-of-file and nothing is pending is it over. (A
+    /// background job still holding the pty keeps it "running", as in any
+    /// terminal.)
     ///
     /// A death by signal is non-zero — `portable_pty` folds it into the
     /// code, and a test pins that rather than assuming it.
     pub fn exit_code(&mut self) -> Option<i32> {
+        {
+            let b = mailbox_of(&self.mailbox);
+            if !b.closed || !b.pending.is_empty() {
+                return None;
+            }
+        }
         match self.child.try_wait() {
             Ok(Some(st)) => Some(i32::try_from(st.exit_code()).unwrap_or(i32::MAX)),
             _ => None,
@@ -416,6 +433,7 @@ mod tests {
         let mut sh = Shell::open(
             &Startup {
                 program: std::path::Path::new("/bin/sh"),
+                args: &[],
                 dir: &dir,
                 tam: (40, 5),
                 env: &[],
@@ -443,6 +461,7 @@ mod tests {
         Shell::open(
             &Startup {
                 program: std::path::Path::new("/bin/sh"),
+                args: &[],
                 dir: &dir,
                 tam: (40, 5),
                 env: &[],
@@ -475,6 +494,54 @@ mod tests {
             sh.write(cmd.as_bytes());
             assert_eq!(wait_exit(&mut sh), Some(want), "{cmd}");
         }
+    }
+
+    /// The exit is only reported once the last output is in the grid: the
+    /// kept screen of a failed shell exists to show that line.
+    #[test]
+    fn the_last_output_is_on_screen_when_the_exit_is_reported() {
+        for _ in 0..20 {
+            let dir = std::env::temp_dir();
+            let args = ["-c".into(), "printf lastword; exit 3".into()];
+            let mut sh = Shell::open(
+                &Startup {
+                    program: std::path::Path::new("/bin/sh"),
+                    args: &args,
+                    dir: &dir,
+                    tam: (40, 5),
+                    env: &[],
+                },
+                |_| None,
+            )
+            .expect("a shell");
+            assert_eq!(wait_exit(&mut sh), Some(3));
+            let row: String = sh
+                .screen()
+                .row_tramos(0)
+                .into_iter()
+                .map(|(t, _)| t)
+                .collect();
+            assert!(row.contains("lastword"), "{row:?}");
+        }
+    }
+
+    /// A shell profile's arguments reach the program as argv.
+    #[test]
+    fn args_reach_the_program() {
+        let dir = std::env::temp_dir();
+        let args = ["-c".into(), "exit 7".into()];
+        let mut sh = Shell::open(
+            &Startup {
+                program: std::path::Path::new("/bin/sh"),
+                args: &args,
+                dir: &dir,
+                tam: (40, 5),
+                env: &[],
+            },
+            |_| None,
+        )
+        .expect("a shell");
+        assert_eq!(wait_exit(&mut sh), Some(7));
     }
 
     /// Killed by a signal is NOT a clean exit: something killed it, and the

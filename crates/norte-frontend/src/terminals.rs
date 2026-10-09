@@ -88,6 +88,29 @@ impl TerminalIcon {
     }
 }
 
+/// What [`Terminals::tick`] needs from a shell. A trait so the rules are
+/// tested without a pty; each frontend implements it over `norte-term`'s.
+pub trait TerminalShell {
+    /// Feeds what the shell wrote into its grid; `true` if there was any.
+    fn pump(&mut self) -> bool;
+    /// Fits the grid and the pty to the slot.
+    fn resize(&mut self, size: (u16, u16));
+    /// The title the program set since the last call.
+    fn take_title(&mut self) -> Option<String>;
+    /// `Some(code)` once the shell ended.
+    fn exit_code(&mut self) -> Option<i32>;
+}
+
+/// What one [`Terminals::tick`] changed, so the frontend repaints only
+/// what it must.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TickReport {
+    /// The grid in front changed (output, or a new instance came forward).
+    pub active_output: bool,
+    /// The list changed: a title, an unseen mark, an exit.
+    pub list_changed: bool,
+}
+
 /// One shell of the panel, with what the reader sees of it.
 #[derive(Debug)]
 pub struct Instance<S> {
@@ -107,8 +130,9 @@ pub struct Instance<S> {
     pub exited: Option<i32>,
     /// Output arrived while another instance was in front.
     pub unseen: bool,
-    /// The shell; `None` once it exited.
-    pub shell: Option<S>,
+    /// The shell. Kept after a non-zero exit: dead, it still holds the last
+    /// screen the reader has to see.
+    pub shell: S,
 }
 
 /// The panel's instances and which one is in front.
@@ -195,7 +219,7 @@ impl<S> Terminals<S> {
             color,
             exited: None,
             unseen: false,
-            shell: Some(shell),
+            shell,
         });
         self.active = Some(id);
         id
@@ -207,13 +231,25 @@ impl<S> Terminals<S> {
         let pos = self.position(id)?;
         let gone = self.instances.remove(pos);
         if self.active == Some(id) {
-            self.active = self
+            self.active = None;
+            let next = self
                 .instances
                 .get(pos)
                 .or_else(|| pos.checked_sub(1).and_then(|p| self.instances.get(p)))
                 .map(|i| i.id);
+            // Through `select`: the one coming forward is now being seen.
+            if let Some(next) = next {
+                self.select(next);
+            }
         }
         Some(gone)
+    }
+
+    /// Hands every instance out, emptying the list — so the caller decides
+    /// WHERE their shells die (killing one can block).
+    pub fn drain(&mut self) -> Vec<Instance<S>> {
+        self.active = None;
+        std::mem::take(&mut self.instances)
     }
 
     /// Puts it in front; `false` if there is no such instance.
@@ -236,9 +272,22 @@ impl<S> Terminals<S> {
         self.step(self.instances.len().saturating_sub(1));
     }
 
-    /// Names it; a name blank after trimming clears the name.
+    /// Names it; a name blank after trimming clears the name. It comes from
+    /// a renderer, so it is cleaned like a program's title: no control or
+    /// bidi characters, at most 128 characters.
     pub fn rename(&mut self, id: InstanceId, name: &str) {
         if let Some(i) = self.get_mut(id) {
+            let name: String = name
+                .chars()
+                .filter(|c| {
+                    !c.is_control()
+                        && !matches!(
+                            c,
+                            '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+                        )
+                })
+                .take(128)
+                .collect();
             let name = name.trim();
             i.name = (!name.is_empty()).then(|| name.to_owned());
         }
@@ -263,8 +312,8 @@ impl<S> Terminals<S> {
         if code == 0 {
             self.close(id);
         } else if let Some(i) = self.get_mut(id) {
+            // The dead shell stays: it holds the last screen.
             i.exited = Some(code);
-            i.shell = None;
         }
     }
 
@@ -302,6 +351,60 @@ impl<S> Terminals<S> {
     pub fn clear(&mut self) {
         self.instances.clear();
         self.active = None;
+    }
+
+    /// One turn of every live shell: resize (`None` = the slot is not
+    /// placed, keep the last good size), pump, collect title and exit.
+    ///
+    /// EVERY shell, not only the one in front: the pty keeps only a tail of
+    /// what nobody pumped, so a shell left behind would come back with a
+    /// corrupted screen.
+    pub fn tick(&mut self, size: Option<(u16, u16)>) -> TickReport
+    where
+        S: TerminalShell,
+    {
+        let mut report = TickReport::default();
+        let mut exits = Vec::new();
+        let front = self.active;
+        for i in &mut self.instances {
+            // An exited one is a still picture: nothing to pump, and its exit
+            // was already counted.
+            if i.exited.is_some() {
+                continue;
+            }
+            let shell = &mut i.shell;
+            if let Some(size) = size {
+                shell.resize(size);
+            }
+            // Pumped BEFORE asking for the exit, so the last screen holds
+            // the last thing the shell said.
+            if shell.pump() {
+                if Some(i.id) == front {
+                    report.active_output = true;
+                } else if !i.unseen {
+                    i.unseen = true;
+                    report.list_changed = true;
+                }
+            }
+            if let Some(title) = shell.take_title() {
+                let title = (!title.is_empty()).then_some(title);
+                if title != i.title {
+                    i.title = title;
+                    report.list_changed = true;
+                }
+            }
+            if let Some(code) = shell.exit_code() {
+                exits.push((i.id, code));
+            }
+        }
+        for (id, code) in exits {
+            report.list_changed = true;
+            if Some(id) == front {
+                report.active_output = true;
+            }
+            self.on_exit(id, code);
+        }
+        report
     }
 
     fn get(&self, id: InstanceId) -> Option<&Instance<S>> {
@@ -362,6 +465,36 @@ mod tests {
         assert!(t.is_empty());
     }
 
+    /// The one that comes forward after a close is being SEEN: its mark
+    /// goes, or the list keeps announcing output the reader is looking at.
+    #[test]
+    fn the_one_that_comes_forward_loses_its_unseen_mark() {
+        let (mut t, [_, b, c]) = three();
+        t.on_output(b);
+        t.close(c);
+        assert_eq!(t.active_id(), Some(b));
+        assert!(!t.active().expect("b").unseen);
+    }
+
+    /// A name comes from the renderer: no control or bidi characters, and
+    /// capped like a title.
+    #[test]
+    fn a_name_is_sanitised_and_capped() {
+        let (mut t, [a, ..]) = three();
+        t.rename(a, "a\u{202e}b\u{1b}c");
+        assert_eq!(t.display_title(a), Some("abc"));
+        t.rename(a, &"x".repeat(1000));
+        assert_eq!(t.display_title(a).map(|s| s.chars().count()), Some(128));
+    }
+
+    #[test]
+    fn drain_hands_every_instance_out() {
+        let (mut t, _) = three();
+        assert_eq!(t.drain().len(), 3);
+        assert!(t.is_empty());
+        assert_eq!(t.active_id(), None);
+    }
+
     #[test]
     fn closing_an_inactive_one_keeps_the_active() {
         let (mut t, [a, _, c]) = three();
@@ -387,14 +520,14 @@ mod tests {
     }
 
     #[test]
-    fn exit_zero_removes_and_non_zero_stays_without_shell() {
+    fn exit_zero_removes_and_non_zero_stays_with_its_last_screen() {
         let (mut t, [a, b, _]) = three();
         t.on_exit(a, 0);
         assert!(t.iter().all(|i| i.id != a));
         t.on_exit(b, 3);
         let i = t.iter().find(|i| i.id == b).expect("stays");
         assert_eq!(i.exited, Some(3));
-        assert!(i.shell.is_none());
+        assert_eq!(i.shell, "b", "the dead shell keeps the last screen");
     }
 
     /// A clean exit of the ACTIVE one moves the focus like a close does.
@@ -465,6 +598,137 @@ mod tests {
         t.clear();
         assert!(t.is_empty());
         assert_eq!(t.active_id(), None);
+    }
+
+    /// A shell that says what the test tells it to.
+    #[derive(Debug, Default)]
+    struct Fake {
+        output: bool,
+        title: Option<String>,
+        code: Option<i32>,
+        size: Option<(u16, u16)>,
+        pumped: u32,
+    }
+
+    impl TerminalShell for Fake {
+        fn pump(&mut self) -> bool {
+            self.pumped += 1;
+            std::mem::take(&mut self.output)
+        }
+        fn resize(&mut self, size: (u16, u16)) {
+            self.size = Some(size);
+        }
+        fn take_title(&mut self) -> Option<String> {
+            self.title.take()
+        }
+        fn exit_code(&mut self) -> Option<i32> {
+            self.code
+        }
+    }
+
+    fn fakes() -> (Terminals<Fake>, [InstanceId; 2]) {
+        let mut t = Terminals::new();
+        let a = t.push("sh".into(), None, None, Fake::default());
+        let b = t.push("sh".into(), None, None, Fake::default());
+        (t, [a, b])
+    }
+
+    fn shell(t: &mut Terminals<Fake>, id: InstanceId) -> &mut Fake {
+        &mut t
+            .iter_mut()
+            .find(|i| i.id == id)
+            .expect("an instance")
+            .shell
+    }
+
+    /// A quiet tick reports nothing: the renderer is not woken.
+    #[test]
+    fn a_quiet_tick_reports_nothing() {
+        let (mut t, _) = fakes();
+        assert_eq!(t.tick(Some((80, 24))), TickReport::default());
+    }
+
+    /// EVERY shell is pumped and resized, not only the one in front: the
+    /// pty's buffer keeps only a tail, so an unpumped shell's screen would
+    /// come back corrupted.
+    #[test]
+    fn every_shell_is_pumped_and_resized() {
+        let (mut t, [a, b]) = fakes();
+        let _ = t.tick(Some((100, 30)));
+        for id in [a, b] {
+            let s = shell(&mut t, id);
+            assert_eq!((s.pumped, s.size), (1, Some((100, 30))));
+        }
+        let _ = t.tick(None);
+        assert_eq!(
+            shell(&mut t, a).size,
+            Some((100, 30)),
+            "None does not resize"
+        );
+    }
+
+    /// Output behind: marked unseen, the list changes, the front does not.
+    #[test]
+    fn output_behind_marks_unseen_once() {
+        let (mut t, [a, _]) = fakes();
+        shell(&mut t, a).output = true;
+        assert_eq!(
+            t.tick(None),
+            TickReport {
+                active_output: false,
+                list_changed: true
+            }
+        );
+        shell(&mut t, a).output = true;
+        assert_eq!(
+            t.tick(None),
+            TickReport::default(),
+            "already unseen: nothing new"
+        );
+    }
+
+    #[test]
+    fn output_in_front_repaints() {
+        let (mut t, [_, b]) = fakes();
+        shell(&mut t, b).output = true;
+        assert!(t.tick(None).active_output);
+    }
+
+    /// A title only changes the list if it is a different one.
+    #[test]
+    fn a_new_title_changes_the_list() {
+        let (mut t, [a, _]) = fakes();
+        shell(&mut t, a).title = Some("vim".into());
+        assert!(t.tick(None).list_changed);
+        assert_eq!(t.display_title(a), Some("vim"));
+        shell(&mut t, a).title = Some("vim".into());
+        assert!(!t.tick(None).list_changed, "same title");
+    }
+
+    /// The front exits 0: removed, the neighbour comes forward and must be
+    /// painted.
+    #[test]
+    fn the_front_exiting_cleanly_repaints_the_neighbour() {
+        let (mut t, [a, b]) = fakes();
+        shell(&mut t, b).code = Some(0);
+        let r = t.tick(None);
+        assert!(r.list_changed && r.active_output);
+        assert_eq!(t.active_id(), Some(a));
+    }
+
+    /// The front exits 3: it stays, and it is repainted to say so.
+    #[test]
+    fn the_front_failing_stays_and_repaints() {
+        let (mut t, [_, b]) = fakes();
+        shell(&mut t, b).code = Some(3);
+        let r = t.tick(None);
+        assert!(r.list_changed && r.active_output);
+        assert_eq!(t.active().map(|i| i.exited), Some(Some(3)));
+        assert_eq!(
+            t.tick(None),
+            TickReport::default(),
+            "an exited one is not pumped"
+        );
     }
 
     #[test]

@@ -213,6 +213,11 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::ExtensionHelp { .. } => "extension_help",
         UiAction::AgentSelectRow { .. } => "agent_select_row",
         UiAction::SelectTab { .. } => "select_tab",
+        UiAction::TerminalSelect { .. } => "terminal_select",
+        UiAction::TerminalClose { .. } => "terminal_close",
+        UiAction::TerminalNew { .. } => "terminal_new",
+        UiAction::TerminalRename { .. } => "terminal_rename",
+        UiAction::TerminalDecorate { .. } => "terminal_decorate",
         UiAction::PickerSelectRow { .. } => "picker_select_row",
         UiAction::PlaceActivateRow { .. } => "place_activate_row",
         UiAction::LayoutActivateRow { .. } => "layout_activate_row",
@@ -434,6 +439,7 @@ fn a_canceled_selector_travels_as_null() {
 /// Two carry generation — the sidebar and the picker fill from a background
 /// task, so their list changes without the user touching anything — and the
 /// rest do not, because they cannot change without a gesture from them.
+#[expect(clippy::too_many_lines, reason = "list of literals, no logic")]
 fn overlay_actions() -> Vec<(&'static str, UiAction)> {
     vec![
         (
@@ -459,6 +465,29 @@ fn overlay_actions() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("select_tab", UiAction::SelectTab { slot_id: 3 }),
+        ("terminal_select", UiAction::TerminalSelect { id: 2 }),
+        ("terminal_close", UiAction::TerminalClose { id: 2 }),
+        (
+            "terminal_new",
+            UiAction::TerminalNew {
+                profile: Some("bash".to_owned()),
+            },
+        ),
+        (
+            "terminal_rename",
+            UiAction::TerminalRename {
+                id: 2,
+                name: "build".to_owned(),
+            },
+        ),
+        (
+            "terminal_decorate",
+            UiAction::TerminalDecorate {
+                id: 2,
+                icon: Some("server".to_owned()),
+                color: Some(2),
+            },
+        ),
         (
             "agent_select_row",
             UiAction::AgentSelectRow {
@@ -2752,6 +2781,27 @@ fn rest_changes() -> Vec<(&'static str, ViewChange)> {
                     }]],
                     cursor: Some((0, 4)),
                     no_shell: false,
+                    instances: vec![
+                        norte_ui_host::dto::TerminalInstanceView {
+                            id: 1,
+                            title: "build".to_owned(),
+                            icon: Some("server".to_owned()),
+                            color: Some(2),
+                            exited: Some(3),
+                            unseen: false,
+                        },
+                        norte_ui_host::dto::TerminalInstanceView {
+                            id: 2,
+                            title: "fish".to_owned(),
+                            icon: None,
+                            color: None,
+                            exited: None,
+                            unseen: true,
+                        },
+                    ],
+                    active: Some(1),
+                    exited: Some(3),
+                    profiles: vec!["fish".to_owned(), "bash".to_owned()],
                 }),
             },
         ),
@@ -3033,7 +3083,7 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // 99: `LayoutPickerView.legend`, what each preview letter is, and
     // `PlacesSlotView.favorites_hint`.
     // 101: `PanelBarView.footer`, the activity column's foot.
-    const SHAPE: u64 = 6_549_283_255_068_411_977;
+    const SHAPE: u64 = 3_517_097_438_094_189_866;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

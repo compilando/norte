@@ -101,6 +101,13 @@ pub const IMPLEMENTED: &[&str] = &[
     "layout.disk-map",
     "layout.timeline",
     "layout.terminal",
+    "terminal.new",
+    "terminal.new-profile",
+    "terminal.close",
+    "terminal.next",
+    "terminal.prev",
+    "terminal.rename",
+    "terminal.decorate",
     "layout.metadata",
     "layout.preview",
     "pane.tree",
@@ -496,6 +503,23 @@ pub enum Effect {
     /// that cannot be what the same key that enters it does. To close it
     /// there is `layout.close-slot`, named for what it does.
     OpenTerminal,
+    /// Another shell in the terminal panel; `pick` = choose the shell
+    /// profile first.
+    TerminalNew {
+        /// Through the shell profile picker.
+        pick: bool,
+    },
+    /// Closes the terminal in front, killing its shell.
+    TerminalClose,
+    /// The next (or previous) terminal to the front.
+    TerminalStep {
+        /// Next, not previous.
+        forward: bool,
+    },
+    /// Names the terminal in front.
+    TerminalRename,
+    /// Gives the terminal in front an icon and a colour.
+    TerminalDecorate,
     /// Opens — or closes — the auxiliary slot of this kind.
     ToggleSlot {
         /// `places`, `processes`, `metadata` or `tree`: the ones this window
@@ -883,6 +907,13 @@ pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
         "layout.processes" => Effect::ToggleSlot { kind: "processes" },
         "layout.log" => Effect::ToggleSlot { kind: "log" },
         "layout.terminal" => Effect::OpenTerminal,
+        "terminal.new" => Effect::TerminalNew { pick: false },
+        "terminal.new-profile" => Effect::TerminalNew { pick: true },
+        "terminal.close" => Effect::TerminalClose,
+        "terminal.next" => Effect::TerminalStep { forward: true },
+        "terminal.prev" => Effect::TerminalStep { forward: false },
+        "terminal.rename" => Effect::TerminalRename,
+        "terminal.decorate" => Effect::TerminalDecorate,
         "layout.disk-map" => Effect::ToggleSlot { kind: "disk-map" },
         "layout.timeline" => Effect::ToggleSlot { kind: "timeline" },
         // The last of the seven from ADR 0058 (#291): the docked viewer.
@@ -1112,6 +1143,10 @@ mod tests {
                 "pane.split-file",
                 "pane.sync-dirs",
                 "pane.unpack",
+                // The panel's instances: starting a shell, and killing one.
+                "terminal.close",
+                "terminal.new",
+                "terminal.new-profile",
             ]
         );
         for c in &solo_read {

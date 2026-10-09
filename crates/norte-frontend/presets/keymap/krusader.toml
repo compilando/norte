@@ -172,6 +172,13 @@ keymap = [
     # and it is noted: if Krusader's documentation says another one, this
     # binding changes and the change is one line.
     { on = ["ctrl+alt+s"], run = "layout.terminal" },
+    # The panel's instances: norte's common family (see orthodox.toml), NOT
+    # a transcription — Krusader's emulator holds one shell. `terminal.new`
+    # has NO chord here: `ctrl+alt+n` is this preset's `pane.tab-new`, and
+    # the menu, palette and the panel's `+` start another shell.
+    { on = ["ctrl+alt+w"], run = "terminal.close" },
+    { on = ["ctrl+alt+pgdn"], run = "terminal.next" },
+    { on = ["ctrl+alt+pgup"], run = "terminal.prev" },
     # The rest of the `layout.*` family, with the same chords as in the
     # other six presets: see the long note in `orthodox.toml`. Krusader has
     # its own for panel layout (`Ctrl+Alt+R` orientation, `Ctrl+Alt+=`

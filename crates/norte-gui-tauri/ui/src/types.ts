@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 105;
+export const BRIDGE_VERSION = 106;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -621,6 +621,28 @@ export interface TerminalSlotView {
   cursor: [number, number] | null;
   /** There is no shell: it left, or it could not start. The slot stays. */
   no_shell?: boolean;
+  /** The panel's shells, in list order (bridge 106). The list is shown
+   *  only with two or more. */
+  instances?: TerminalInstanceView[];
+  /** The one in front: its grid is `rows`/`cursor`. */
+  active?: number | null;
+  /** The one in front ended with this non-zero code: `rows` is its last
+   *  screen. */
+  exited?: number | null;
+  /** Shell profiles for the `+` menu, default first. */
+  profiles?: string[];
+}
+
+/** One shell of the terminal panel (bridge 106). `title` may come from the
+ *  program: paint it as text, never as markup. */
+export interface TerminalInstanceView {
+  id: number;
+  title: string;
+  icon: string | null;
+  /** ANSI index 1..6, painted as `var(--term-N)`. */
+  color: number | null;
+  exited: number | null;
+  unseen: boolean;
 }
 
 export interface PendingView {
@@ -1884,6 +1906,11 @@ export type UiAction =
   | { action: "extension_help"; row: number; id: string }
   | { action: "agent_select_row"; row: number; generation: number }
   | { action: "select_tab"; slot_id: number }
+  | { action: "terminal_select"; id: number }
+  | { action: "terminal_close"; id: number }
+  | { action: "terminal_new"; profile: string | null }
+  | { action: "terminal_rename"; id: number; name: string }
+  | { action: "terminal_decorate"; id: number; icon: string | null; color: number | null }
   | { action: "picker_select_row"; row: number; generation: number }
   | { action: "place_activate_row"; row: number; generation: number }
   | { action: "timeline_show_row"; slot_id: number; seq: number }

@@ -2448,6 +2448,12 @@ enum Pending {
     /// here the question is "how is the screen set up?", which only makes
     /// sense NOW.
     SaveProfile,
+    /// Name a terminal panel instance. The name is what is typed; it
+    /// changes what a tab says, nothing on disk.
+    RenameTerminal {
+        /// The instance.
+        id: u32,
+    },
     /// The value of a TEXT entry in the settings (F11). What is typed is the
     /// value; `id` is which entry was asked about.
     ///
@@ -2983,12 +2989,13 @@ struct State {
     /// How many one-second ticks `status.message` has been on the bar (spec
     /// 2026-09-10): in TICKS so a test can advance it without sleeping.
     message_ticks: u32,
-    /// The terminal panel's shell (#362), if one is alive.
+    /// The terminal panel's shells (#362, spec 2026-10-09).
     ///
     /// Here and not in the slot because the kind is `multi: false`: there is
-    /// one, and it survives the panel being hidden behind a tab. What kills
-    /// it is closing the slot, and its `Drop` does it.
-    terminal: Option<norte_term::pty::Shell>,
+    /// one panel, and its shells survive it being hidden behind a tab. What
+    /// kills them is closing the slot (each `Drop` does it) or closing an
+    /// instance by name.
+    terminals: termpanel::PanelShells,
     /// The terminal panel's epoch: bumps on closing it, and the timer in
     /// flight is left to die without rearming.
     terminal_epoch: u64,
@@ -3463,7 +3470,7 @@ impl State {
             // Lazy, like in the terminal: a per-session shell nobody is going
             // to use is a process, a pty and someone's `.bashrc` running just
             // in case.
-            terminal: None,
+            terminals: termpanel::PanelShells::new(),
             terminal_epoch: 0,
             message_counted: None,
             split,
@@ -4129,6 +4136,13 @@ impl State {
                 failed,
             } => self.program_finished(title_key, command, output, *truncated, *failed),
             UiAction::FilesDropped { paths } => self.released(paths, backend, mailbox),
+            UiAction::TerminalSelect { id } => self.select_terminal(*id),
+            UiAction::TerminalClose { id } => self.close_terminal(Some(*id)),
+            UiAction::TerminalNew { profile } => self.new_terminal(profile.as_deref(), mailbox),
+            UiAction::TerminalRename { id, name } => self.rename_terminal(*id, name),
+            UiAction::TerminalDecorate { id, icon, color } => {
+                self.decorate_terminal(*id, icon.as_deref(), *color)
+            }
             UiAction::WindowFocus { focused } => {
                 self.focused = *focused;
                 (self.applied(), Vec::new())

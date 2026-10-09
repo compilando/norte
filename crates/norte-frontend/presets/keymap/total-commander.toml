@@ -137,6 +137,13 @@ keymap = [
     # it opens a separate one, which in norte is `app.terminal`. This is not
     # a transcription, and norte's common chord goes here. See orthodox.toml.
     { on = ["ctrl+alt+s"], run = "layout.terminal" },
+    # The panel's instances: norte's common family, not a transcription (see
+    # orthodox.toml). TC's `ctrl+pageup` is "parent directory", which is why
+    # the family is `ctrl+alt+`.
+    { on = ["ctrl+alt+n"], run = "terminal.new" },
+    { on = ["ctrl+alt+w"], run = "terminal.close" },
+    { on = ["ctrl+alt+pgdn"], run = "terminal.next" },
+    { on = ["ctrl+alt+pgup"], run = "terminal.prev" },
     # The rest of the `layout.*` family, with the same chords as in the
     # other six presets: see the long note in `orthodox.toml`.
     { on = ["alt+x"], run = "layout.close-slot" },

@@ -62,7 +62,17 @@ async fn f1_opens_the_contexts_help_and_its_prose_arrives_in_blocks() {
     // text the reader should never see.
     let text = format!("{:?}", help.blocks);
     assert!(!text.contains("{{cmd:"), "an unresolved marker: {text}");
-    assert!(!text.contains("[["), "an unresolved link: {text}");
+    // Outside code blocks: a TOML example's `[[shell]]` is literal text, not
+    // a link that failed to resolve.
+    let prose: Vec<_> = help
+        .blocks
+        .iter()
+        .filter(|b| !matches!(b, norte_ui_host::dto::HelpBlockView::Code { .. }))
+        .collect();
+    assert!(
+        !format!("{prose:?}").contains("[["),
+        "an unresolved link in the prose"
+    );
     assert!(!text.contains("help-cmd-"), "a raw Fluent key");
     // A group header arrives TRANSLATED, not as its tag.
     let groups: Vec<&norte_ui_host::dto::HelpSidebarRowView> = help

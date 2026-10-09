@@ -46,6 +46,12 @@ keymap = [
     # The terminal panel (#362), with norte's common chord. See
     # orthodox.toml for why `ctrl+alt+s` and not `ctrl+alt+t`.
     { on = ["ctrl+alt+s"], run = "layout.terminal" },
+    # The panel's instances: the common family, see orthodox.toml (also why
+    # three of the seven `terminal.*` have no chord).
+    { on = ["ctrl+alt+n"], run = "terminal.new" },
+    { on = ["ctrl+alt+w"], run = "terminal.close" },
+    { on = ["ctrl+alt+pgdn"], run = "terminal.next" },
+    { on = ["ctrl+alt+pgup"], run = "terminal.prev" },
     # The live shell behind the panels (#142): the orthodox chord. CUA's
     # Ctrl+O ("open a file") has no meaning in a file manager's panel, where
     # opening is Enter.

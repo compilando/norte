@@ -403,6 +403,22 @@ enum SelectorKind {
     History,
     /// The session's popular ones: same as history.
     Popular,
+    /// The terminal panel's shell profiles: choosing one STARTS it.
+    ShellProfile,
+    /// The terminal panel's icons and colours: choosing one marks the
+    /// instance in front.
+    TerminalDecorate,
+}
+
+/// What a terminal picker's row does, read from its raw name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TerminalChoice {
+    /// Start this shell profile.
+    Profile(String),
+    /// Set (or clear) the icon.
+    Icon(Option<norte_frontend::terminals::TerminalIcon>),
+    /// Set (or clear) the colour.
+    Color(Option<norte_frontend::terminals::AnsiColor>),
 }
 
 /// A row with what is needed to ACT, besides what is needed to paint.
@@ -637,6 +653,92 @@ impl Selector {
             kind: SelectorKind::Hotlist,
             filter: None,
         }
+    }
+
+    /// The shell profiles `terminal.new-profile` offers, default first.
+    pub(crate) fn shell_profiles(slot: u32, names: &[String]) -> Self {
+        let rows = names
+            .iter()
+            .map(|n| Row {
+                view: PickerRowView {
+                    // A name the reader wrote in `terminal.toml`: painted
+                    // the shared way, like a favorite's.
+                    label: clamp_display(norte_frontend::display_name(n.as_bytes()).0),
+                    hostile: norte_frontend::display_name(n.as_bytes()).1,
+                    detail: String::new(),
+                },
+                destination: None,
+                name: Some(format!("profile:{n}")),
+            })
+            .collect();
+        Self {
+            rows,
+            cursor: 0,
+            empty_key: "terminal-none",
+            title: "terminal-shell-profiles",
+            slot,
+            kind: SelectorKind::ShellProfile,
+            filter: None,
+        }
+    }
+
+    /// Icons and colours for the terminal in front, each with a "none".
+    pub(crate) fn terminal_decorations(slot: u32, lang: Lang) -> Self {
+        use norte_frontend::terminals::TerminalIcon;
+        let row = |label: String, name: String| Row {
+            view: PickerRowView {
+                label,
+                hostile: false,
+                detail: String::new(),
+            },
+            destination: None,
+            name: Some(name),
+        };
+        let mut rows = vec![row(
+            norte_i18n::t_in(lang, "terminal-icon-none"),
+            "icon:".into(),
+        )];
+        rows.extend(
+            TerminalIcon::ALL
+                .iter()
+                .map(|i| row(i.as_str().to_owned(), format!("icon:{}", i.as_str()))),
+        );
+        rows.push(row(
+            norte_i18n::t_in(lang, "terminal-color-none"),
+            "color:".into(),
+        ));
+        rows.extend((1..=6).map(|c| row(format!("■ {c}"), format!("color:{c}"))));
+        Self {
+            rows,
+            cursor: 0,
+            empty_key: "terminal-none",
+            title: "terminal-decorate-title",
+            slot,
+            kind: SelectorKind::TerminalDecorate,
+            filter: None,
+        }
+    }
+
+    /// What the cursor's row does, if this is a terminal picker.
+    pub(crate) fn terminal_choice(&self) -> Option<TerminalChoice> {
+        use norte_frontend::terminals::{AnsiColor, TerminalIcon};
+        if !matches!(
+            self.kind,
+            SelectorKind::ShellProfile | SelectorKind::TerminalDecorate
+        ) {
+            return None;
+        }
+        let raw = self.name_raw()?;
+        if let Some(n) = raw.strip_prefix("profile:") {
+            return Some(TerminalChoice::Profile(n.to_owned()));
+        }
+        if let Some(i) = raw.strip_prefix("icon:") {
+            return Some(TerminalChoice::Icon(TerminalIcon::parse(i)));
+        }
+        let c = raw.strip_prefix("color:")?;
+        Some(TerminalChoice::Color(
+            c.parse().ok().and_then(AnsiColor::new),
+        ))
     }
 
     /// Which slot what gets chosen here navigates to.

@@ -288,6 +288,19 @@ pub const CATALOGUE: &[CommandDef] = &[
     // process of the reader's, and that is what `layout.close-slot` is
     // for, and says so.
     live("layout.terminal", false, Launches),
+    // The panel's instances (spec 2026-10-09), VS Code style. Run from
+    // INSIDE the panel, so every chord bound to them is taken from the shell:
+    // the presets bind only four, with chords no shell uses daily, and say
+    // why the other three have none. Each refuses when the panel is not
+    // open.
+    live("terminal.new", false, Launches),
+    live("terminal.new-profile", false, Launches),
+    // Kills a process of the reader's, by name: that is a destruction.
+    live("terminal.close", false, Destroys),
+    live("terminal.next", false, Inert),
+    live("terminal.prev", false, Inert),
+    live("terminal.rename", false, Inert),
+    live("terminal.decorate", false, Inert),
     // The layout picker. No chord for the same #228, and also because a
     // layout's name is NOT a keymap preset's even when they coincide: the
     // dialog says so in its footer.
@@ -753,6 +766,11 @@ mod tests {
                 ("pane.split-file", Writes),
                 ("pane.sync-dirs", Writes),
                 ("pane.unpack", Writes),
+                // Kills a shell of the reader's, by name.
+                ("terminal.close", Destroys),
+                // Start a shell, like `layout.terminal`.
+                ("terminal.new", Launches),
+                ("terminal.new-profile", Launches),
             ],
             "a command changed effect: see ADR 0126 before touching this list"
         );

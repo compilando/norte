@@ -369,6 +369,29 @@
     "slot_id": 3,
     "verb": "close"
   },
+  "terminal_close": {
+    "action": "terminal_close",
+    "id": 2
+  },
+  "terminal_decorate": {
+    "action": "terminal_decorate",
+    "color": 2,
+    "icon": "server",
+    "id": 2
+  },
+  "terminal_new": {
+    "action": "terminal_new",
+    "profile": "bash"
+  },
+  "terminal_rename": {
+    "action": "terminal_rename",
+    "id": 2,
+    "name": "build"
+  },
+  "terminal_select": {
+    "action": "terminal_select",
+    "id": 2
+  },
   "timeline_show_row": {
     "action": "timeline_show_row",
     "seq": 42,
