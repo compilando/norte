@@ -9,7 +9,7 @@
 
 import type { Screen } from "../render";
 import type { ContextMenuView } from "../types";
-import { placeInsideWindow } from "./menus";
+import { dismissPopupMenu, placeInsideWindow } from "./menus";
 
 /** Takes down the painted menu's window listeners; `null` with none. */
 let teardown: (() => void) | null = null;
@@ -72,6 +72,9 @@ export function paintContextMenu(this: Screen, menu: ContextMenuView | null): vo
   if (menu === null) {
     return;
   }
+  // The other way round from `closeHostMenu`: a menu opened by KEY over a
+  // tab's or a terminal's popup takes that popup down, listeners included.
+  dismissPopupMenu();
   const box = document.createElement("div");
   box.className = "context-menu";
   box.setAttribute("role", "menu");
@@ -137,11 +140,18 @@ export function paintContextMenu(this: Screen, menu: ContextMenuView | null): vo
       close();
     }
   };
+  // A scroll of the slot under it moves the rows the menu was opened on
+  // away from it (spec §5). The wheel in CAPTURE, on the window: listings
+  // scroll in their own scrollers, whose `scroll` does not bubble. A wheel
+  // INSIDE the menu is the menu scrolling (a tall one does), not a close:
+  // the same "outside" test as a press.
   window.addEventListener("pointerdown", outside, true);
+  window.addEventListener("wheel", outside, { capture: true, passive: true });
   window.addEventListener("blur", close);
   window.addEventListener("resize", close);
   teardown = () => {
     window.removeEventListener("pointerdown", outside, true);
+    window.removeEventListener("wheel", outside, true);
     window.removeEventListener("blur", close);
     window.removeEventListener("resize", close);
   };

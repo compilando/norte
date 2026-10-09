@@ -832,6 +832,22 @@ export interface PopupEntry {
   verb?: string;
 }
 
+/** Takes down the open [`popupMenu`] with its window listeners; `null` with
+ *  none open. */
+let dismissOpen: (() => void) | null = null;
+
+/**
+ * Closes the open [`popupMenu`], if any, WITH its window listeners — just
+ * removing the node would leave its capture-phase `Escape` swallowing the
+ * key the host needs. Used when the host's own context menu is painted:
+ * two menus at once is never right.
+ */
+export function dismissPopupMenu(): void {
+  dismissOpen?.();
+  // A node some other path left behind (none today) goes too.
+  document.querySelector(".tab-menu")?.remove();
+}
+
 /**
  * A small menu at the pointer — the tabs', the terminal's. Only one is ever
  * open; it closes on a choice, `Escape`, a press outside, the window losing
@@ -848,7 +864,7 @@ export function popupMenu(
   onOpen?: () => void,
 ): void {
   onOpen?.();
-  document.querySelector(".tab-menu")?.remove();
+  dismissPopupMenu();
   const box = document.createElement("ul");
   box.className = "tab-menu";
   box.setAttribute("role", "menu");
@@ -858,7 +874,13 @@ export function popupMenu(
     box.remove();
     window.removeEventListener("pointerdown", outside, true);
     window.removeEventListener("keydown", escape, true);
+    window.removeEventListener("blur", dismiss);
+    window.removeEventListener("resize", dismiss);
+    if (dismissOpen === dismiss) {
+      dismissOpen = null;
+    }
   };
+  dismissOpen = dismiss;
   const outside = (e: Event): void => {
     if (!(e.target instanceof Node) || !box.contains(e.target)) {
       dismiss();

@@ -3009,6 +3009,29 @@ describe("the menu bar", () => {
     expect(sent.filter((a) => a.action === "context_menu_close")).toEqual([]);
   });
 
+  // Final review 6 (spec §5): the other way round — the host's menu, opened
+  // by key, takes an open tab popup down WITH its listeners: a leftover
+  // capture-phase Escape would swallow the key the host's menu needs.
+  it("painting a host context menu dismisses an open tab menu", () => {
+    const { screen } = mount();
+    screen.paint(panelGroup());
+    const tab = document.querySelectorAll(".tab")[1] as HTMLElement;
+    tab.dispatchEvent(
+      new MouseEvent("contextmenu", { button: 2, bubbles: true, cancelable: true }),
+    );
+    expect(document.querySelector(".tab-menu")).not.toBeNull();
+    const removed = vi.spyOn(window, "removeEventListener");
+    screen.paint({
+      ...panelGroup(),
+      context_menu: { header: "h", items: [], cursor: 0, x: 1, y: 2 },
+    });
+    expect(document.querySelector(".tab-menu")).toBeNull();
+    expect(document.querySelector(".context-menu")).not.toBeNull();
+    const types = removed.mock.calls.map(([type]) => type);
+    expect(types).toContain("keydown");
+    removed.mockRestore();
+  });
+
   it("a right click opens OUR menu: close, move left, move right", () => {
     const { screen, sent } = mount();
     screen.paint(panelGroup());
@@ -5872,6 +5895,29 @@ describe("context menu", () => {
     expect(sent.at(-1)).toEqual({ action: "context_menu_close" });
     window.dispatchEvent(new Event("blur"));
     expect(sent.at(-1)).toEqual({ action: "context_menu_close" });
+  });
+
+  // Final review 5 (spec §5): a scroll of the slot closes it.
+  it("a wheel over the listing closes it; a wheel inside the menu does not", () => {
+    const { screen, sent } = mount();
+    screen.paint({ ...view({}), context_menu: menuView() });
+    const item = document.querySelector(".context-menu-item") as HTMLElement;
+    item.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 40 }));
+    expect(sent.filter((a) => a.action === "context_menu_close")).toEqual([]);
+    (document.querySelector(".scroller") as HTMLElement).dispatchEvent(
+      new WheelEvent("wheel", { bubbles: true, deltaY: 40 }),
+    );
+    expect(sent.at(-1)).toEqual({ action: "context_menu_close" });
+  });
+
+  it("taken down, its wheel listener goes with it", () => {
+    const { screen, sent } = mount();
+    screen.paint({ ...view({}), context_menu: menuView() });
+    screen.paint({ ...view({}), context_menu: null });
+    (document.querySelector(".scroller") as HTMLElement).dispatchEvent(
+      new WheelEvent("wheel", { bubbles: true, deltaY: 40 }),
+    );
+    expect(sent.filter((a) => a.action === "context_menu_close")).toEqual([]);
   });
 
   it("stays inside the window near the bottom-right corner", () => {
