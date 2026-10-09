@@ -288,7 +288,7 @@ impl Shell {
     /// thing the shell said: the reader thread runs on its own, so the child
     /// can be reaped before its final bytes reach the mailbox. So it is over
     /// once the reader saw end-of-file with nothing pending — or, if the
-    /// end-of-file never comes, [`EXIT_GRACE`] after the child was reaped.
+    /// end-of-file never comes, half a second after the child was reaped.
     /// On Linux the hang-up of a session leader's tty brings the end-of-file
     /// anyway; `ConPTY`'s pipe may stay open until the console closes, and
     /// without the grace a Windows shell that left would never be seen to.
