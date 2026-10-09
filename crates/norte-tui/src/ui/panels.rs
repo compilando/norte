@@ -1202,13 +1202,19 @@ pub(crate) fn draw_terminal(frame: &mut Frame<'_>, area: Rect, app: &App, with_k
         .borders(Borders::ALL)
         .title_style(theme.role(Role::Title))
         .border_style(theme.role(border));
-    // With two or more shells the top border IS the list (spec 2026-10-09):
-    // no column is taken from the shell. With one, the panel's name.
-    block = if app.terminals.len() >= 2 {
-        block.title(terminal_strip(app, area.width.saturating_sub(4)))
-    } else {
-        block.title(format!(" {} ", t("panelbar-terminal")))
-    };
+    // The name on the left, the buttons on the right — mouse-only, so they
+    // work in every preset, krusader's included, which binds no
+    // `terminal.new` (`terminal_tabs` says where each one is).
+    block = block.title(format!(" {} ", t("panelbar-terminal")));
+    if crate::ui::terminal_tabs::buttons_fit(area) {
+        block = block.title(
+            Line::styled(
+                crate::ui::terminal_tabs::buttons_line(),
+                theme.role(Role::Title),
+            )
+            .right_aligned(),
+        );
+    }
     // The footer says how to GET OUT, and only when the keyboard is inside:
     // it is the only key the panel does not pass to the shell, so it is the
     // only one that has to be announced — and without announcing it, a
@@ -1227,8 +1233,14 @@ pub(crate) fn draw_terminal(frame: &mut Frame<'_>, area: Rect, app: &App, with_k
             theme.role(Role::Muted),
         ));
     }
-    let inside = block.inner(area);
+    let all = block.inner(area);
     frame.render_widget(block, area);
+    // With two or more shells, VS Code's list on the right takes its columns
+    // from the shell (`geometry.rs` resizes the pty to match).
+    let (inside, list_area) = crate::ui::terminal_tabs::split(all, app.terminals.len());
+    if let Some(r) = list_area {
+        draw_terminal_list(frame, r, app);
+    }
     let Some(front) = app.terminals.active() else {
         // With no shell the slot is still useful: it says there is none. An
         // empty panel with no explanation is what makes a panel distrusted.
@@ -1269,50 +1281,44 @@ pub(crate) fn draw_terminal(frame: &mut Frame<'_>, area: Rect, app: &App, with_k
     }
 }
 
-/// The tab strip for the top border, `width` columns wide: the active tab
-/// in the title role, the rest muted, each in its instance's colour if it
-/// has one (an ANSI index, resolved by the reader's palette like the grid).
-fn terminal_strip<'a>(app: &App, width: u16) -> Line<'a> {
-    use crate::ui::terminal_tabs::{CUT, SEP, layout_strip};
+/// VS Code's list: a separator, then one row per shell — the one in front
+/// selected, each in its colour (an ANSI index, resolved by the reader's
+/// palette like the grid), a `●` on one that wrote behind, the code of a
+/// failed one. Rows past the height are cut, not wrapped.
+fn draw_terminal_list(frame: &mut Frame<'_>, list: Rect, app: &App) {
     let theme = &app.theme;
-    let labels = crate::termpanel::strip_labels(&app.terminals);
-    let Some(active) = app.terminals.active_id() else {
-        return Line::from(format!(" {} ", t("panelbar-terminal")));
-    };
-    let strip = layout_strip(&labels, active, width);
-    let mut spans = vec![Span::raw(" ")];
-    if strip.cut_left {
-        spans.push(Span::styled(CUT, theme.role(Role::Muted)));
-    }
-    for (n, item) in strip.items.iter().enumerate() {
-        if n > 0 {
-            spans.push(Span::styled(SEP, theme.role(Role::Muted)));
-        }
-        let mut style = if item.active {
-            theme
-                .role(Role::Title)
-                .add_modifier(ratatui::style::Modifier::BOLD)
-        } else {
-            theme.role(Role::Muted)
-        };
-        if let Some(c) = app
-            .terminals
-            .iter()
-            .find(|i| i.id == item.id)
-            .and_then(|i| i.color)
-        {
-            style = style.fg(ratatui::style::Color::Indexed(c.index()));
-        }
-        spans.push(Span::styled(item.label.clone(), style));
-    }
-    if strip.cut_right {
-        spans.push(Span::styled(
-            format!(" {}", CUT.trim_end()),
-            theme.role(Role::Muted),
-        ));
-    }
-    spans.push(Span::raw(" "));
-    Line::from(spans)
+    let block = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(theme.role(Role::BorderUnfocused));
+    let rows_area = block.inner(list);
+    frame.render_widget(block, list);
+    let width = usize::from(rows_area.width);
+    let front = app
+        .terminals
+        .iter()
+        .position(|i| Some(i.id) == app.terminals.active_id())
+        .unwrap_or(0);
+    let skip = crate::ui::terminal_tabs::list_offset(front, rows_area.height);
+    let lines: Vec<Line<'_>> = crate::termpanel::strip_labels(&app.terminals)
+        .into_iter()
+        .zip(app.terminals.iter())
+        .skip(skip)
+        .map(|((id, label), i)| {
+            let label = crate::ui::text::right_ellipsis(&label, width);
+            let mut style = if Some(id) == app.terminals.active_id() {
+                theme.role(Role::Selection)
+            } else if i.exited.is_some() {
+                theme.role(Role::Muted)
+            } else {
+                ratatui::style::Style::default()
+            };
+            if let Some(c) = i.color {
+                style = style.fg(ratatui::style::Color::Indexed(c.index()));
+            }
+            Line::styled(label, style)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), rows_area);
 }
 
 pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboard: bool) {
