@@ -32,10 +32,11 @@ import type { SlotDom } from "./dom";
 export function paintTerminal(this: Screen, dom: SlotDom, slot: TerminalSlotView): void {
   dom.root.setAttribute("aria-label", this.t("panelbar-terminal"));
   dom.scroller.className = "terminal";
-  dom.title.replaceChildren(
-    document.createTextNode(this.t("panelbar-terminal")),
-    titleActions.call(this, slot),
-  );
+  if (dom.title.dataset["terminal"] !== "true") {
+    dom.title.replaceChildren(document.createTextNode(this.t("panelbar-terminal")));
+    dom.title.dataset["terminal"] = "true";
+  }
+  placeActions.call(this, dom, slot);
   if (slot.no_shell) {
     // A blank panel and a panel with no shell look the same and are not the
     // same thing.
@@ -110,7 +111,32 @@ function paintGrid(grid: HTMLElement, slot: TerminalSlotView): void {
   }
 }
 
-/** `+`, the shell-profile menu and the trash, in the panel's title bar. */
+/**
+ * Puts the buttons where they are SEEN. The terminal's usual place is a
+ * group of panels on an edge, whose title bar is hidden under the group's
+ * tabs: there they go on the tab bar's right end, as VS Code puts them.
+ * Rebuilt only when what they act on changed — a shell printing patches
+ * the panel up to 30 times a second, and a rebuild would drop a rename
+ * field halfway through.
+ */
+function placeActions(this: Screen, dom: SlotDom, slot: TerminalSlotView): void {
+  const inGroup =
+    dom.tabs.dataset["open"] === "true" && dom.tabs.dataset["panels"] === "true";
+  const host = inGroup ? dom.tabs : dom.title;
+  (inGroup ? dom.title : dom.tabs).querySelector(":scope > .terminal-actions")?.remove();
+  const front = (slot.instances ?? []).find((i) => i.id === slot.active);
+  const signature = JSON.stringify([slot.active, slot.profiles, front?.name]);
+  const old = host.querySelector<HTMLElement>(":scope > .terminal-actions");
+  if (old?.dataset["sig"] === signature) {
+    return;
+  }
+  old?.remove();
+  const actions = titleActions.call(this, slot);
+  actions.dataset["sig"] = signature;
+  host.append(actions);
+}
+
+/** `+`, the shell-profile menu, rename and close: the panel's buttons. */
 function titleActions(this: Screen, slot: TerminalSlotView): HTMLElement {
   const box = document.createElement("span");
   box.className = "terminal-actions";

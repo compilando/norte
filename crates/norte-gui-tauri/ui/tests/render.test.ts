@@ -4745,6 +4745,32 @@ describe("slots that aren't listings", () => {
     expect(sent).toContainEqual({ action: "terminal_rename", id: 1, name: "build" });
   });
 
+  // The terminal's usual place is a group of panels on the bottom edge,
+  // whose title bar is HIDDEN under the group's tabs: the buttons go on the
+  // tab bar's right end, as VS Code puts them, or nobody sees them.
+  it("in a panel group the buttons ride the tab bar", () => {
+    const { screen, sent } = mount();
+    const v = withShells([instance(1)]);
+    v.layout.tabs = [
+      {
+        slot_id: 7,
+        active: 1,
+        panels: true,
+        tabs: [
+          { slot_id: 9, title: "Log", title_hostile: false },
+          { slot_id: 7, title: "Terminal", title_hostile: false },
+        ],
+      },
+    ];
+    screen.paint(v);
+    screen.paint(v);
+    const bar = document.querySelector('.slot[data-kind="terminal"] .slot-tabs');
+    const actions = bar?.querySelectorAll(".terminal-action") ?? [];
+    expect(actions.length).toBe(4);
+    (actions[0] as HTMLElement).click();
+    expect(sent).toContainEqual({ action: "terminal_new", profile: null });
+  });
+
   it("+ starts the default shell", () => {
     const { screen, sent } = mount();
     screen.paint(withShells([instance(1)]));
