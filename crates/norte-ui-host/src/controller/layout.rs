@@ -212,16 +212,82 @@ impl State {
         for (id, fmt) in &picked.formats {
             self.columns.apply_format(id, fmt);
         }
-        for id in self.slots.keys().copied().collect::<Vec<_>>() {
-            if before.get(&id) != self.column_footprints().get(&id) {
-                self.re_list(id, backend, mailbox);
-            }
-        }
+        self.relist_changed_footprints(&before, backend, mailbox);
         let snap = self.snapshot();
         (
             self.applied(),
             vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
         )
+    }
+
+    /// Hides `column` from the ACTIVE listing's scheme, in this window only
+    /// (the context menu's `HideColumn`).
+    ///
+    /// The selector's own path, not a second one: the list is what the
+    /// selector would open with (`ColumnsPicker::finish` untouched — the
+    /// permissions column the listing supplies by itself included, which
+    /// `raw_ids_for` alone does not bring), minus that column, applied to
+    /// the SAME target the selector would save to. `norte.toml` is not
+    /// written, like the selector. The scheme's configured order is kept:
+    /// hiding a column is not choosing an order.
+    ///
+    /// A column the list does not carry is a race with an earlier menu (it
+    /// was already hidden): stale. `name` never gets here — the menu dims
+    /// it — and the picker keeps it first and immutable anyway.
+    pub(super) fn hide_column(
+        &mut self,
+        column: &str,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let slot = self.slot();
+        let scheme = slot.pane.dir().scheme().to_owned();
+        let catalog = self.catalogos.get(scheme.as_str()).cloned();
+        let picked = norte_frontend::columns_picker::ColumnsPicker::open_with_catalog(
+            &self.columns,
+            &scheme,
+            self.columns.sort_for(&scheme),
+            catalog.as_ref(),
+            &[],
+        )
+        .finish();
+        let same = |id: &String| {
+            id == column
+                || id
+                    .parse::<norte_frontend::columns::ColumnId>()
+                    .is_ok_and(|c| column_identity(&c) == column)
+        };
+        if column == "name" || !picked.ids.iter().any(same) {
+            return (Self::stale(StaleAction::Generation), Vec::new());
+        }
+        let ids: Vec<String> = picked.ids.into_iter().filter(|id| !same(id)).collect();
+        let before = self.column_footprints();
+        self.columns
+            .apply_picked(picked.scheme_target.as_deref(), &ids, picked.sort);
+        self.relist_changed_footprints(&before, backend, mailbox);
+        let snap = self.snapshot();
+        (
+            self.applied(),
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
+        )
+    }
+
+    /// Re-lists every slot whose `attr:`/`plugin:` footprint moved since
+    /// `before`: those columns' values only arrive by requesting them in
+    /// `fs.list`. Shared by the selector and the context menu's hide, so
+    /// both decide "needs a re-list" the same way.
+    fn relist_changed_footprints(
+        &mut self,
+        before: &std::collections::BTreeMap<u32, Vec<String>>,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) {
+        let after = self.column_footprints();
+        for id in self.slots.keys().copied().collect::<Vec<_>>() {
+            if before.get(&id) != after.get(&id) {
+                self.re_list(id, backend, mailbox);
+            }
+        }
     }
 
     /// Requests a slot's listing again, without moving from its place.

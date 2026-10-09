@@ -13,6 +13,8 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+use std::borrow::Cow;
+
 use norte_frontend::context_menu::{Action, Entry, Surface, Verb};
 
 /// The open right-click menu.
@@ -65,12 +67,27 @@ pub(super) enum Subject {
     Listing,
     /// A column header, by column id.
     Column(String),
-    /// A places row, by index (Task 5).
-    #[expect(dead_code, reason = "opened in Task 5")]
-    Place(usize),
-    /// A tree branch, by index (Task 5).
-    #[expect(dead_code, reason = "opened in Task 5")]
-    Branch(usize),
+    /// A places row, by index, with the generation it was opened against.
+    ///
+    /// An index alone would name another row once the volumes land IN THE
+    /// MIDDLE; the generation is what lets a verb refuse instead.
+    Place {
+        /// Its index in the bar's rows.
+        row: usize,
+        /// `gen_places` when it opened.
+        generation: u64,
+        /// A favorite whose target did not parse: its error key, frozen at
+        /// opening like every other verdict. It dims the Open verbs.
+        broken: Option<String>,
+    },
+    /// A tree branch, by index among the visible ones, with the generation
+    /// it was opened against (an expansion inserts rows in the middle).
+    Branch {
+        /// Its index among the visible branches.
+        row: usize,
+        /// `gen_branches` when it opened.
+        generation: u64,
+    },
 }
 
 impl State {
@@ -259,6 +276,128 @@ impl State {
         self.context_menu_patch(bar.into_iter().collect())
     }
 
+    /// A right click on a places row (or `pane.context-menu` with the bar
+    /// focused: `generation: None`, the current one).
+    ///
+    /// The bar's cursor goes to the row, as a click puts it there: the menu
+    /// is about the row the reader sees highlighted. The header is the
+    /// row's label as the bar paints it — masked, then elided.
+    pub(super) fn open_place_menu(
+        &mut self,
+        row: u32,
+        generation: Option<u64>,
+        anchor: Option<(i32, i32)>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        use norte_frontend::context_menu::PlaceTarget;
+        use norte_frontend::places::PlaceRow;
+        if self.something_keeps_the_keys() {
+            return (self.applied(), Vec::new());
+        }
+        // The SAME rejection as `activate_place`: the volumes land in the
+        // middle, and `set_cursor` would clamp a vanished index onto
+        // another row.
+        let generation = generation.unwrap_or(self.gen_places);
+        if generation != self.gen_places {
+            return (Self::stale(StaleAction::Generation), Vec::new());
+        }
+        let (Some(SlotId(slot)), Some(state)) = (self.places_slot(), self.places.as_mut()) else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
+        };
+        let i = row as usize;
+        let Some(place) = state.rows().get(i) else {
+            return (Self::stale(StaleAction::Generation), Vec::new());
+        };
+        let (target, label, broken) = match place {
+            PlaceRow::Header { section, .. } => (
+                PlaceTarget::SectionHeader,
+                norte_i18n::t_in(self.lang, section.label_key()),
+                None,
+            ),
+            PlaceRow::Drive { label, mount, .. } => (
+                PlaceTarget::Drive,
+                norte_frontend::places::drive_name(label, mount).0,
+                None,
+            ),
+            PlaceRow::Favorite { name, target } => (
+                PlaceTarget::Favorite,
+                norte_frontend::display_name(name.as_bytes()).0,
+                target.as_ref().err().cloned(),
+            ),
+        };
+        state.set_cursor(i);
+        let surface = Surface::Place(target);
+        let bar = self.install_context_menu(ContextMenu {
+            surface,
+            entries: norte_frontend::context_menu::entries(&surface),
+            facts: self.facts(),
+            cursor: 0,
+            slot,
+            header: clamp_display(norte_frontend::context_menu::elide(&label)),
+            fingerprint: None,
+            subject: Subject::Place {
+                row: i,
+                generation,
+                broken,
+            },
+            anchor,
+        });
+        // The bar's cursor moved: it travels WITH the menu.
+        let mut changes = vec![ViewChange::Slot {
+            slot: Box::new(crate::dto::SlotView::Places(Box::new(
+                self.places_bar(slot),
+            ))),
+        }];
+        changes.extend(bar);
+        self.context_menu_patch(changes)
+    }
+
+    /// A right click on a tree branch (or `pane.context-menu` with the tree
+    /// focused: `generation: None`, the current one). The header is the
+    /// branch's whole display path: a bare folder name does not say which.
+    pub(super) fn open_branch_menu(
+        &mut self,
+        row: u32,
+        generation: Option<u64>,
+        anchor: Option<(i32, i32)>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.something_keeps_the_keys() {
+            return (self.applied(), Vec::new());
+        }
+        // `touch_branch`'s rejection: an expansion inserts rows in the
+        // middle, so an old index names another folder.
+        let generation = generation.unwrap_or(self.gen_branches);
+        if generation != self.gen_branches {
+            return (Self::stale(StaleAction::Generation), Vec::new());
+        }
+        let (Some(SlotId(slot)), Some(tree)) = (self.branches_slot(), self.branches.as_mut())
+        else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
+        };
+        let i = row as usize;
+        let Some(path) = tree.rows().get(i).map(|r| r.path.clone()) else {
+            return (Self::stale(StaleAction::Generation), Vec::new());
+        };
+        tree.set_cursor(i);
+        let (shown, _) = norte_frontend::path_display(&path);
+        let surface = Surface::Branch;
+        let bar = self.install_context_menu(ContextMenu {
+            surface,
+            entries: norte_frontend::context_menu::entries(&surface),
+            facts: self.facts(),
+            cursor: 0,
+            slot,
+            header: clamp_display(norte_frontend::context_menu::elide(&shown)),
+            fingerprint: None,
+            subject: Subject::Branch { row: i, generation },
+            anchor,
+        });
+        let mut changes = vec![ViewChange::Slot {
+            slot: Box::new(crate::dto::SlotView::Tree(Box::new(self.branch_tree(slot)))),
+        }];
+        changes.extend(bar);
+        self.context_menu_patch(changes)
+    }
+
     /// The mouse hovering over an entry: moves the cursor and nothing else.
     /// A row outside the menu is a race with an earlier one: stale.
     pub(super) fn point_in_context_menu(
@@ -316,7 +455,7 @@ impl State {
                     chord: clamp_display(chord),
                     enabled: reason.is_none(),
                     reason: reason.map_or_else(String::new, |k| {
-                        clamp_display(norte_i18n::t_in(self.lang, k))
+                        clamp_display(norte_i18n::t_in(self.lang, &k))
                     }),
                     section: e.section.map(|k| {
                         if k.is_empty() {
@@ -347,20 +486,33 @@ impl State {
     /// itself. The criteria are the shared table's verdict on the facts
     /// frozen at opening, plus "this window does not run it"; there is no
     /// third.
-    fn reason_against(&self, m: &ContextMenu, e: &Entry) -> Option<&'static str> {
+    ///
+    /// The verbs have exactly two vetoes, both decided at opening: hiding a
+    /// column that cannot be hidden (`name`), and the Open verbs on a
+    /// favorite whose target did not parse — reason, the config's own error
+    /// key, the one the bar already paints as the row's "broken" note.
+    fn reason_against(&self, m: &ContextMenu, e: &Entry) -> Option<Cow<'static, str>> {
         match e.action {
             Action::Command(c) => {
                 if crate::commands::all_with(self.effects).contains(&c) {
                     norte_frontend::availability::verdict(c, &m.facts)
                         .reason()
-                        .map(norte_frontend::availability::reason_key)
+                        .map(|r| Cow::Borrowed(norte_frontend::availability::reason_key(r)))
                 } else {
-                    Some("reason-unavailable")
+                    Some(Cow::Borrowed("reason-unavailable"))
                 }
             }
-            Action::Verb(v) => (v == Verb::HideColumn
-                && m.surface == (Surface::Header { hideable: false }))
-            .then_some("reason-wrong-target"),
+            Action::Verb(Verb::HideColumn) => (m.surface == (Surface::Header { hideable: false }))
+                .then_some(Cow::Borrowed("reason-wrong-target")),
+            Action::Verb(Verb::OpenHere | Verb::OpenInOther | Verb::OpenInNewTab) => {
+                match &m.subject {
+                    Subject::Place {
+                        broken: Some(key), ..
+                    } => Some(Cow::Owned(key.clone())),
+                    _ => None,
+                }
+            }
+            Action::Verb(_) => None,
         }
     }
 
@@ -393,6 +545,10 @@ impl State {
     /// the pointer, running would act on something the header never named.
     /// So it closes, answers `Stale` and runs nothing; the reader opens it
     /// again and reads the new target.
+    ///
+    /// A places or tree menu has the same contract through its generation:
+    /// a bar or a tree that moved underneath (volumes landed, a branch
+    /// folded) means the index names another row.
     pub(super) fn activate_context_menu(
         &mut self,
         row: u32,
@@ -416,7 +572,12 @@ impl State {
             .fingerprint
             .as_ref()
             .is_some_and(|f| self.fingerprint_of(m.slot).as_ref() != Some(f));
-        if moved || changed {
+        let vanished = match m.subject {
+            Subject::Place { generation, .. } => generation != self.gen_places,
+            Subject::Branch { generation, .. } => generation != self.gen_branches,
+            Subject::Listing | Subject::Column(_) => false,
+        };
+        if moved || changed || vanished {
             let (_, closing) = self.close_context_menu();
             return (Self::stale(StaleAction::Generation), closing);
         }
@@ -437,20 +598,198 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let subject = self.context_menu.as_ref().map(|m| m.subject.clone());
         self.forget_context_menu();
         let closing = self.parche(vec![ViewChange::ContextMenu { context_menu: None }]);
-        let (ack, mut rest) = match entry.action {
-            Action::Command(c) => match effect_of(c, 1) {
+        let (ack, mut rest) = match (entry.action, subject) {
+            (Action::Command(c), _) => match effect_of(c, 1) {
                 Some(effect) => self.apply_effect(effect, backend, mailbox),
                 None => self.no_implemented(c),
             },
-            // Task 5: the menu-local verbs (open here / in the other pane /
-            // in a tab, copy path, favorites, fold, sort, hide column).
-            Action::Verb(_) => self.no_implemented("context-menu verb"),
+            (Action::Verb(v), Some(subject)) => self.run_verb(v, subject, backend, mailbox),
+            (Action::Verb(_), None) => (Self::stale(StaleAction::Modal), Vec::new()),
         };
         let mut outgoing = vec![closing];
         outgoing.append(&mut rest);
         (ack, outgoing)
+    }
+
+    /// Runs a menu-local verb on what the menu was opened on.
+    ///
+    /// Every verb is a door into a path the window already has — the
+    /// click on a place or a branch, the transfer's destination, the tab
+    /// button, `pane.copy-path`'s clipboard, the favorite dialog and its
+    /// removal, the twisty, the header's sort and the column selector — so
+    /// a verb cannot do something its gesture does not.
+    ///
+    /// The subject's row is resolved NOW, against the generation it was
+    /// opened with: a row that vanished is `Stale` and nothing runs (the
+    /// caller already checked; the paths that re-check do so for their own
+    /// callers).
+    pub(super) fn run_verb(
+        &mut self,
+        verb: Verb,
+        subject: Subject,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let index = |row: usize| u32::try_from(row).unwrap_or(u32::MAX);
+        match (verb, subject) {
+            (Verb::SortByColumn, Subject::Column(c)) => self.sort_by(self.active(), &c),
+            (Verb::HideColumn, Subject::Column(c)) => self.hide_column(&c, backend, mailbox),
+            // What a click on the row does: `activate_place` /
+            // `TreeActivateRow`, generation check included.
+            (
+                Verb::OpenHere,
+                Subject::Place {
+                    row, generation, ..
+                },
+            ) => self.activate_place(index(row), generation, backend, mailbox),
+            (Verb::OpenHere, Subject::Branch { row, generation }) => {
+                self.touch_branch(index(row), generation, true, backend, mailbox)
+            }
+            // The twisty: `TreeToggleRow`, and a places section's fold.
+            (Verb::ToggleFold, Subject::Branch { row, generation }) => {
+                self.touch_branch(index(row), generation, false, backend, mailbox)
+            }
+            (
+                Verb::ToggleFold,
+                Subject::Place {
+                    row, generation, ..
+                },
+            ) => match self.places.as_mut() {
+                Some(state) if generation == self.gen_places && row < state.rows().len() => {
+                    state.set_cursor(row);
+                    self.fold_place_at_cursor(backend, mailbox)
+                }
+                _ => (Self::stale(StaleAction::Generation), Vec::new()),
+            },
+            (
+                Verb::RemoveFavorite,
+                Subject::Place {
+                    row, generation, ..
+                },
+            ) => {
+                // The RAW name, never the painted label: the label is
+                // masked, and the file is keyed by what the user typed.
+                let name = self
+                    .places
+                    .as_ref()
+                    .filter(|_| generation == self.gen_places)
+                    .and_then(|s| match s.rows().get(row) {
+                        Some(norte_frontend::places::PlaceRow::Favorite { name, .. }) => {
+                            Some(name.clone())
+                        }
+                        _ => None,
+                    });
+                match name {
+                    Some(name) => self.remove_favorite_named(name, mailbox),
+                    None => (Self::stale(StaleAction::Generation), Vec::new()),
+                }
+            }
+            (
+                Verb::OpenInOther | Verb::OpenInNewTab | Verb::CopyPath | Verb::AddFavorite,
+                Subject::Place {
+                    broken: Some(key), ..
+                },
+            ) => {
+                // A favorite that leads nowhere has no path to give: said
+                // with the bar's own reason, not a silent nothing.
+                let said = self.say(&key);
+                (ActionAck::Unavailable { reason_key: key }, said)
+            }
+            (
+                v @ (Verb::OpenInOther | Verb::OpenInNewTab | Verb::CopyPath | Verb::AddFavorite),
+                subject @ (Subject::Place { .. } | Subject::Branch { .. }),
+            ) => {
+                let Some(path) = self.subject_path(&subject) else {
+                    return (Self::stale(StaleAction::Generation), Vec::new());
+                };
+                self.run_path_verb(v, &path, backend, mailbox)
+            }
+            // The shared model never offers these pairs.
+            _ => self.no_implemented("context-menu verb"),
+        }
+    }
+
+    /// The four verbs that act on a place's or a branch's PATH.
+    fn run_path_verb(
+        &mut self,
+        verb: Verb,
+        path: &VPath,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        match verb {
+            // The transfer's "other pane", same rule and same refusals: two
+            // ways of deciding which one it is would be two to drift apart.
+            Verb::OpenInOther => match self.slot_dest() {
+                Ok(dest) => (
+                    self.applied(),
+                    self.navigate_slot(dest, path, Trail::Record, backend, mailbox),
+                ),
+                Err(key) => (
+                    ActionAck::Unavailable {
+                        reason_key: key.to_owned(),
+                    },
+                    self.say(key),
+                ),
+            },
+            // The tab button's path, then the new tab — the active slot
+            // once `tab_new` returns — goes there. From the bar or the tree
+            // the keys go back to the listing first, as a layout button
+            // does: a new tab is a LISTING's, never the dock's.
+            Verb::OpenInNewTab => {
+                let refocused = !self.slots.contains_key(&self.focused());
+                if refocused {
+                    let listing = self.active();
+                    self.roles.set(RoleId::Active, SlotId(listing));
+                    self.reconciles_roles();
+                }
+                let (ack, mut outgoing) = self.tab_new(backend, mailbox);
+                if refocused {
+                    let change = ViewChange::Layout(self.layout());
+                    outgoing.insert(0, self.parche(vec![change]));
+                }
+                if matches!(ack, ActionAck::Applied { .. }) {
+                    outgoing.extend(self.navigate(path, Trail::Record, backend, mailbox));
+                }
+                (ack, outgoing)
+            }
+            // `pane.copy-path`'s bytes and message, for one path.
+            Verb::CopyPath => {
+                let bytes = norte_frontend::shell::clipboard_bytes(std::slice::from_ref(path));
+                if !self.native(crate::dto::NativeEffect::CopyBytes { bytes, count: 1 }) {
+                    return Self::without_desktop();
+                }
+                let said = self.say_with("msg-paths-copied", &[("n", "1")]);
+                (self.applied(), said)
+            }
+            Verb::AddFavorite => self.request_favorite_of(path.clone()),
+            _ => self.no_implemented("context-menu verb"),
+        }
+    }
+
+    /// Where a place or a branch subject leads NOW, or `None` when its row
+    /// vanished (the generation moved) or leads nowhere (a header).
+    fn subject_path(&self, subject: &Subject) -> Option<VPath> {
+        use norte_frontend::places::PlaceRow;
+        match subject {
+            Subject::Place {
+                row, generation, ..
+            } if *generation == self.gen_places => match self.places.as_ref()?.rows().get(*row)? {
+                PlaceRow::Drive { mount, .. } => Some(mount.clone()),
+                PlaceRow::Favorite { target, .. } => target.as_ref().ok().cloned(),
+                PlaceRow::Header { .. } => None,
+            },
+            Subject::Branch { row, generation } if *generation == self.gen_branches => self
+                .branches
+                .as_ref()?
+                .rows()
+                .get(*row)
+                .map(|r| r.path.clone()),
+            _ => None,
+        }
     }
 
     /// The keys while the menu is open.
@@ -497,13 +836,27 @@ impl State {
     /// rule included: an unmarked cursor row drops the marks. A key that
     /// opened a menu saying "acts on c.txt" over eleven marks would be the
     /// same lie the rule exists to prevent. An empty listing opens the
-    /// folder's menu.
+    /// folder's menu. With the places bar or the tree focused, it opens on
+    /// their cursor row, exactly as a right click there would.
     pub(super) fn open_context_menu_on_focus(
         &mut self,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // Task 5: the Places cursor row (`places_have_focus()`) and the
-        // tree's cursor branch open their own menus here. Until then they
-        // fall through to the active listing.
+        // The bar or the tree with the keys: their cursor row, at the
+        // generation painted now.
+        if self.places_have_focus() {
+            let row = self
+                .places
+                .as_ref()
+                .map_or(0, norte_frontend::places::PlacesState::cursor);
+            return self.open_place_menu(u32::try_from(row).unwrap_or(u32::MAX), None, None);
+        }
+        if self.branches_have_focus() {
+            let row = self
+                .branches
+                .as_ref()
+                .map_or(0, norte_frontend::tree::Tree::cursor);
+            return self.open_branch_menu(u32::try_from(row).unwrap_or(u32::MAX), None, None);
+        }
         let slot = self.active();
         let pane = &self.slot().pane;
         if pane.entries().is_empty() {
@@ -529,8 +882,11 @@ impl State {
         self.context_menu.as_ref().is_some_and(|m| {
             self.something_keeps_the_keys()
                 || self.menu.is_some()
-                || (matches!(m.subject, Subject::Listing | Subject::Column(_))
-                    && !self.slots.contains_key(&m.slot))
+                || match m.subject {
+                    Subject::Listing | Subject::Column(_) => !self.slots.contains_key(&m.slot),
+                    Subject::Place { .. } => self.places_slot().is_none(),
+                    Subject::Branch { .. } => self.branches_slot().is_none(),
+                }
         })
     }
 

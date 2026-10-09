@@ -4059,10 +4059,18 @@ impl State {
             UiAction::ContextMenuActivateRow { row } => {
                 self.activate_context_menu(*row, backend, mailbox)
             }
-            // Task 5: places and tree branches.
-            UiAction::ContextMenuPlace { .. } | UiAction::ContextMenuBranch { .. } => {
-                (Self::stale(StaleAction::Modal), Vec::new())
-            }
+            UiAction::ContextMenuPlace {
+                row,
+                generation,
+                x,
+                y,
+            } => self.open_place_menu(*row, Some(*generation), Some((*x, *y))),
+            UiAction::ContextMenuBranch {
+                row,
+                generation,
+                x,
+                y,
+            } => self.open_branch_menu(*row, Some(*generation), Some((*x, *y))),
             UiAction::WizardOpen => self.open_wizard(),
             UiAction::SplashOpen => self.open_splash(),
             UiAction::SplashClose => (self.applied(), self.close_splash()),
