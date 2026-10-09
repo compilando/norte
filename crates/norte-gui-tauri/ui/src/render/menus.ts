@@ -783,6 +783,43 @@ export function paintTabs(
  * choice, on `Escape`, or on any press outside it; only one is ever open.
  */
 export function openTabMenu(this: Screen, x: number, y: number, slotId: number): void {
+  const entries: [string, "close" | "move_left" | "move_right"][] = [
+    ["menu-item-pane-tab-close", "close"],
+    ["menu-item-pane-tab-move-left", "move_left"],
+    ["menu-item-pane-tab-move-right", "move_right"],
+  ];
+  popupMenu(
+    x,
+    y,
+    entries.map(([key, verb]) => ({
+      label: this.t(key),
+      verb,
+      run: () => {
+        this.send({ action: "tab_action", slot_id: slotId, verb });
+      },
+    })),
+  );
+}
+
+/** One entry of a [`popupMenu`]: its label (text, or a node for a swatch)
+ *  and what choosing it does. */
+export interface PopupEntry {
+  label: string | Node;
+  run: () => void;
+  /** A tag for tests and styles, as `data-verb`. */
+  verb?: string;
+}
+
+/**
+ * A small menu at the pointer — the tabs', the terminal's. Only one is ever
+ * open; it closes on a choice, `Escape`, a press outside, the window losing
+ * focus or resizing.
+ *
+ * It is KEPT INSIDE the window: near the right or bottom edge it used to
+ * open off screen, and one taller than the window scrolls instead of
+ * running off the bottom. Measured after it is in the document.
+ */
+export function popupMenu(x: number, y: number, entries: PopupEntry[]): void {
   document.querySelector(".tab-menu")?.remove();
   const box = document.createElement("ul");
   box.className = "tab-menu";
@@ -807,29 +844,29 @@ export function openTabMenu(this: Screen, x: number, y: number, slotId: number):
       dismiss();
     }
   };
-  const entries: [string, "close" | "move_left" | "move_right"][] = [
-    ["menu-item-pane-tab-close", "close"],
-    ["menu-item-pane-tab-move-left", "move_left"],
-    ["menu-item-pane-tab-move-right", "move_right"],
-  ];
-  for (const [key, verb] of entries) {
+  for (const entry of entries) {
     const item = document.createElement("li");
     item.className = "tab-menu-item";
     item.setAttribute("role", "menuitem");
-    item.dataset["verb"] = verb;
-    item.textContent = this.t(key);
+    if (entry.verb !== undefined) {
+      item.dataset["verb"] = entry.verb;
+    }
+    item.append(entry.label);
     item.addEventListener("click", () => {
       dismiss();
-      this.send({ action: "tab_action", slot_id: slotId, verb });
+      entry.run();
     });
     box.append(item);
   }
   document.body.append(box);
-  // Kept inside the window: near the right or bottom edge it opened off
-  // screen. Measured after it is in the document; jsdom measures zero.
   const r = box.getBoundingClientRect();
+  if (r.height > window.innerHeight) {
+    box.style.maxHeight = `${String(window.innerHeight)}px`;
+    box.style.overflowY = "auto";
+  }
+  const height = Math.min(r.height, window.innerHeight);
   box.style.left = `${String(Math.max(0, Math.min(x, window.innerWidth - r.width)))}px`;
-  box.style.top = `${String(Math.max(0, Math.min(y, window.innerHeight - r.height)))}px`;
+  box.style.top = `${String(Math.max(0, Math.min(y, window.innerHeight - height)))}px`;
   window.addEventListener("pointerdown", outside, true);
   window.addEventListener("keydown", escape, true);
   window.addEventListener("blur", dismiss, { once: true });
