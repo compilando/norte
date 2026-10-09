@@ -162,6 +162,27 @@ struct Grid {
     /// style—. Of the two modes, the modern one (`1049`) also saves the
     /// cursor; the old one (`47`) does not, and that difference is honored.
     toggles: Option<Box<Saved>>,
+    /// The last OSC 0/2 title not yet taken, already sanitised.
+    title: Option<String>,
+}
+
+/// How long a title may be, in characters.
+const TITLE_MAX: usize = 128;
+
+/// An OSC 0/2 payload as a title that can be SHOWN: lossy UTF-8 (it is
+/// display), no control characters, no bidi controls, capped.
+///
+/// The bidi ones go too because a title is foreign text — a `cat` of a file
+/// can set it — and `U+202E` would make the tab read backwards.
+fn sanitise_title(raw: &[u8]) -> String {
+    String::from_utf8_lossy(raw)
+        .chars()
+        .filter(|c| {
+            !c.is_control()
+                && !matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+        .take(TITLE_MAX)
+        .collect()
 }
 
 /// A screen set aside by the alternate screen.
@@ -190,6 +211,7 @@ impl Grid {
             last: None,
             drawing: false,
             toggles: None,
+            title: None,
         }
     }
 
@@ -544,6 +566,17 @@ impl vte::Perform for Grid {
         self.set(c);
     }
 
+    /// OSC 0 and 2 are the title; every other OSC still paints nothing.
+    fn osc_dispatch(&mut self, params: &[&[u8]], _bell: bool) {
+        let Some((&kind, rest)) = params.split_first() else {
+            return;
+        };
+        if kind == b"0" || kind == b"2" {
+            // vte splits on `;`, but a title may contain one.
+            self.title = Some(sanitise_title(&rest.join(&b';')));
+        }
+    }
+
     /// The C0s that move the cursor. **Everything else is dropped**, and
     /// that is the crate's guarantee: a control byte cannot end up in a
     /// cell.
@@ -841,6 +874,22 @@ impl Screen {
         self.parser.advance(&mut self.grid, bytes);
     }
 
+    /// The last title a program set (OSC 0 or 2) since the previous call,
+    /// already sanitised for display.
+    ///
+    /// TAKEN, not peeked: whoever shows it learns that it changed, and a
+    /// quiet shell does not republish a title it already had.
+    ///
+    /// ```
+    /// let mut s = norte_term::Screen::new(10, 1);
+    /// s.alimentar(b"\x1b]0;vim\x07");
+    /// assert_eq!(s.take_title().as_deref(), Some("vim"));
+    /// assert_eq!(s.take_title(), None);
+    /// ```
+    pub fn take_title(&mut self) -> Option<String> {
+        self.grid.title.take()
+    }
+
     /// Changes the size, keeping what fits.
     ///
     /// Text is not re-wrapped to the width: what overflows to the right is
@@ -865,6 +914,7 @@ impl Screen {
         self.grid.col = vieja.col.min(width);
         self.grid.drawing = vieja.drawing;
         self.grid.last = vieja.last;
+        self.grid.title = vieja.title;
         // The saved cursor and the region are CLAMPED to the new size
         // instead of dropped: a `vim` that resizes while its region is set
         // does not send it again, and losing it would undo its status line.
@@ -1375,5 +1425,60 @@ mod tests {
                 "columna {col}"
             );
         }
+    }
+
+    /// OSC 0 and OSC 2 set the title; the last one wins and is taken once.
+    #[test]
+    fn osc_0_and_2_set_the_title() {
+        let mut p = Screen::new(10, 1);
+        p.alimentar(b"\x1b]0;one\x07\x1b]2;two\x1b\\");
+        assert_eq!(p.take_title().as_deref(), Some("two"));
+        assert_eq!(p.take_title(), None, "taken, not peeked");
+    }
+
+    /// A `;` inside the title is part of it, not a parameter separator.
+    #[test]
+    fn a_title_keeps_its_semicolons() {
+        let mut p = Screen::new(10, 1);
+        p.alimentar(b"\x1b]2;a;b\x07");
+        assert_eq!(p.take_title().as_deref(), Some("a;b"));
+    }
+
+    /// The title is FOREIGN text: a `cat` of a file can set it. Control
+    /// characters and bidi overrides never survive, and it is capped.
+    #[test]
+    fn a_hostile_title_is_stripped_and_capped() {
+        let mut p = Screen::new(10, 1);
+        p.alimentar("\x1b]0;a\u{202e}b\u{2066}c\u{9b}d\x07".as_bytes());
+        assert_eq!(p.take_title().as_deref(), Some("abcd"));
+        let long = format!("\x1b]2;{}\x07", "x".repeat(10_000));
+        p.alimentar(long.as_bytes());
+        assert_eq!(p.take_title().map(|t| t.chars().count()), Some(128));
+    }
+
+    /// Other OSCs (norte's 777 marker, OSC 7) do not touch the title.
+    #[test]
+    fn other_oscs_are_not_titles() {
+        let mut p = Screen::new(10, 1);
+        p.alimentar(b"\x1b]7;file:///tmp\x07\x1b]777;norte-cwd;x\x07");
+        assert_eq!(p.take_title(), None);
+    }
+
+    /// A title in invalid UTF-8 is shown lossily, not dropped (rule 1:
+    /// it is display).
+    #[test]
+    fn a_non_utf8_title_is_lossy() {
+        let mut p = Screen::new(10, 1);
+        p.alimentar(b"\x1b]0;a\xffb\x07");
+        assert_eq!(p.take_title().as_deref(), Some("a\u{fffd}b"));
+    }
+
+    /// A resize between the title and its reader does not lose it.
+    #[test]
+    fn a_resize_keeps_the_pending_title() {
+        let mut p = Screen::new(10, 1);
+        p.alimentar(b"\x1b]0;t\x07");
+        p.resize(20, 2);
+        assert_eq!(p.take_title().as_deref(), Some("t"));
     }
 }

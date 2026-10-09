@@ -272,6 +272,22 @@ impl Shell {
         mailbox_of(&self.mailbox).closed || matches!(self.child.try_wait(), Ok(Some(_)))
     }
 
+    /// How the shell ended: `None` while it runs.
+    ///
+    /// A death by signal is non-zero — `portable_pty` folds it into the
+    /// code, and a test pins that rather than assuming it.
+    pub fn exit_code(&mut self) -> Option<i32> {
+        match self.child.try_wait() {
+            Ok(Some(st)) => Some(i32::try_from(st.exit_code()).unwrap_or(i32::MAX)),
+            _ => None,
+        }
+    }
+
+    /// The program's title since the last call; see [`Screen::take_title`].
+    pub fn take_title(&mut self) -> Option<String> {
+        self.screen.take_title()
+    }
+
     /// The grid, to paint it.
     #[must_use]
     pub fn screen(&self) -> &Screen {
@@ -420,5 +436,53 @@ mod tests {
             .expect("the shell's output woke the waker");
         assert!(sh.pump(), "and there is output to feed");
         sh.matar();
+    }
+
+    fn open_sh() -> Shell {
+        let dir = std::env::temp_dir();
+        Shell::open(
+            &Startup {
+                program: std::path::Path::new("/bin/sh"),
+                dir: &dir,
+                tam: (40, 5),
+                env: &[],
+            },
+            |_| None,
+        )
+        .expect("a shell")
+    }
+
+    /// Polls `exit_code` against a deadline; `yield_now`, never a sleep.
+    fn wait_exit(sh: &mut Shell) -> Option<i32> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            let _ = sh.pump();
+            if let Some(code) = sh.exit_code() {
+                return Some(code);
+            }
+            std::thread::yield_now();
+        }
+        None
+    }
+
+    /// The code is what decides whether an instance leaves the list
+    /// quietly (0) or stays to say how it ended.
+    #[test]
+    fn exit_code_reports_zero_and_non_zero() {
+        for (cmd, want) in [("exit 0\n", 0), ("exit 3\n", 3)] {
+            let mut sh = open_sh();
+            assert_eq!(sh.exit_code(), None, "alive");
+            sh.write(cmd.as_bytes());
+            assert_eq!(wait_exit(&mut sh), Some(want), "{cmd}");
+        }
+    }
+
+    /// Killed by a signal is NOT a clean exit: something killed it, and the
+    /// instance has to stay to say so.
+    #[test]
+    fn a_signal_death_is_non_zero() {
+        let mut sh = open_sh();
+        sh.write(b"kill -9 $$\n");
+        assert!(matches!(wait_exit(&mut sh), Some(c) if c != 0));
     }
 }
