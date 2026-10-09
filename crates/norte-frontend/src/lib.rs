@@ -84,6 +84,7 @@ pub mod secret;
 pub mod session;
 pub mod settings;
 pub mod shell;
+pub mod shell_profiles;
 pub mod shortcuts;
 mod sort;
 pub mod space;

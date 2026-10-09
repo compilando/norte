@@ -9,6 +9,7 @@ use norte_config::{CommonConfig, ConfigError, Layer, Layers, QuickSearch};
 use crate::keymap::{KeymapFile, parse_keymap_layer};
 use crate::nav;
 use crate::openers::OpenersConfig;
+use crate::shell_profiles::{ShellProfiles, ShellProfilesFile};
 
 /// Everything a frontend needs, flat (same shape the TUI historically used).
 #[derive(Debug, Clone)]
@@ -53,6 +54,9 @@ pub struct FrontendConfig {
     pub quick_search_mode: nav::Mode,
     /// Merged declarative openers (#28): System/User only, fail-closed.
     pub openers: OpenersConfig,
+    /// The terminal panel's shell profiles (`terminal.toml`): every layer
+    /// but the project one, which may not choose programs norte runs.
+    pub shell_profiles: ShellProfiles,
     /// The USER's themes, `<config>/themes/*.toml`, already parsed
     /// ([`crate::theme::load_user_themes`]).
     ///
@@ -138,6 +142,32 @@ pub fn load_openers(
     Ok(Some(parsed))
 }
 
+/// Loads `terminal.toml` for a layer; `None` if absent or the layer is
+/// PROJECT — a shell profile names a program norte runs (same rule as
+/// [`load_openers`]).
+///
+/// # Errors
+/// [`ConfigError::Toml`] naming the culprit file if it is invalid.
+pub fn load_shell_profiles(
+    dir: &Path,
+    kind: Layer,
+    sources: &mut Vec<PathBuf>,
+) -> Result<Option<ShellProfilesFile>, ConfigError> {
+    if kind == Layer::Project {
+        return Ok(None);
+    }
+    let path = dir.join("terminal.toml");
+    let Some(raw) = read_optional(&path)? else {
+        return Ok(None);
+    };
+    let parsed = ShellProfiles::parse(&raw).map_err(|e| ConfigError::Toml {
+        path: path.clone(),
+        message: e.to_string(),
+    })?;
+    sources.push(path);
+    Ok(Some(parsed))
+}
+
 /// Load and merge every layer (ADR 0007): common scalars + keymap + openers.
 ///
 /// # Errors
@@ -148,6 +178,7 @@ pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
     let mut keymap_layer_kinds = Vec::new();
     let mut keymap_layer_dirs = Vec::new();
     let mut openers = OpenersConfig::empty();
+    let mut shell_files = Vec::new();
     for (dir, kind) in &layers.dirs {
         if let Some(parsed) = load_keymap_layer(dir, *kind, &mut common.sources)? {
             keymap_layers.push(parsed);
@@ -162,7 +193,22 @@ pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
         if let Some(parsed) = load_openers(dir, *kind, &mut common.sources)? {
             openers.extend_front(parsed);
         }
+        if let Some(parsed) = load_shell_profiles(dir, *kind, &mut common.sources)? {
+            shell_files.push((dir.join("terminal.toml"), parsed));
+        }
     }
+    // The merge's only error is a `default` naming nobody: blamed on the
+    // highest file that SETS one, which is the one whose `default` won.
+    let blame = shell_files
+        .iter()
+        .rev()
+        .find(|(_, f)| f.sets_default())
+        .map(|(p, _)| p.clone());
+    let shell_profiles = ShellProfiles::merge(shell_files.into_iter().map(|(_, f)| f).collect())
+        .map_err(|e| ConfigError::Toml {
+            path: blame.unwrap_or_default(),
+            message: e.to_string(),
+        })?;
     let quick_search_mode = match common.quick_search {
         QuickSearch::Filter => nav::Mode::Filter,
         QuickSearch::Jump => nav::Mode::Jump,
@@ -180,6 +226,7 @@ pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
         keymap_layer_dirs,
         quick_search_mode,
         openers,
+        shell_profiles,
         user_themes,
     })
 }
@@ -580,6 +627,74 @@ mod tests {
             "bat",
             "the project opener is ignored fail-closed"
         );
+    }
+
+    /// Same rule for `terminal.toml`: a repository must not choose a
+    /// program norte runs when the reader presses `+` in the terminal panel.
+    #[test]
+    fn project_shell_profiles_are_ignored_user_ones_are_honored() {
+        let user = tempfile::tempdir().unwrap();
+        std::fs::write(
+            user.path().join("terminal.toml"),
+            "[[shell]]\nname = \"mine\"\nprogram = \"/bin/sh\"\n",
+        )
+        .unwrap();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join("terminal.toml"),
+            "default = \"evil\"\n[[shell]]\nname = \"evil\"\nprogram = \"/tmp/evil\"\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
+            ],
+        };
+        let cfg = load(&layers).expect("loads");
+        assert!(cfg.shell_profiles.get("evil").is_none());
+        assert_eq!(cfg.shell_profiles.default_profile().name, "mine");
+    }
+
+    /// A `default` naming nobody blames the file that SET it, not merely
+    /// the highest one.
+    #[test]
+    fn an_unknown_default_blames_the_file_that_set_it() {
+        let user = tempfile::tempdir().unwrap();
+        std::fs::write(user.path().join("terminal.toml"), "default = \"work\"\n").unwrap();
+        let profile = tempfile::tempdir().unwrap();
+        std::fs::write(
+            profile.path().join("terminal.toml"),
+            "[[shell]]\nname = \"a\"\nprogram = \"/bin/sh\"\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (user.path().to_path_buf(), Layer::User),
+                (profile.path().to_path_buf(), Layer::Profile),
+            ],
+        };
+        let e = load(&layers).unwrap_err().to_string();
+        assert!(
+            e.contains(&user.path().join("terminal.toml").display().to_string()),
+            "{e}"
+        );
+    }
+
+    /// A broken `terminal.toml` names its file, like any other config error.
+    #[test]
+    fn a_broken_terminal_toml_names_its_file() {
+        let user = tempfile::tempdir().unwrap();
+        std::fs::write(
+            user.path().join("terminal.toml"),
+            "[[shell]]\nname = \"x\"\nprogram = \"sh\"\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![(user.path().to_path_buf(), Layer::User)],
+        };
+        let e = load(&layers).unwrap_err().to_string();
+        assert!(e.contains("terminal.toml"), "{e}");
     }
 
     /// K3c c1, from the other side: what `norte_config::persist_keymap_bind`

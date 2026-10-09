@@ -181,6 +181,10 @@ fn every_frontend_config_field_is_classified_for_the_window() {
         //     falling back to the desktop handler.
         openers: _,
 
+        // ─── The host reads it: the terminal panel's `+` and its shell
+        //     profile menu start these, same as the terminal.
+        shell_profiles: _,
+
         // ─── The host reads it: `pane.quick-search` starts in whichever
         //     mode the key says, same as the terminal.
         quick_search_mode: _,
