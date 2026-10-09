@@ -696,7 +696,7 @@ pub fn parse_chord(s: &str) -> Result<Chord, KeymapError> {
 mod tests {
     use super::*;
 
-    /// The Menu key (the one between AltGr and Ctrl) is a keymap key: it opens
+    /// The Menu key (the one between `AltGr` and Ctrl) is a keymap key: it opens
     /// the context menu from the keyboard.
     #[test]
     fn the_menu_key_parses_and_prints() {
