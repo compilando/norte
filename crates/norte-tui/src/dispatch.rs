@@ -20,7 +20,7 @@ use crate::app::{
 use crate::config;
 use crate::gestures::{
     EditLaunch, EnterAction, disconnect, edit_under_cursor, enter_action, mirror_plan,
-    mirror_target_plan, pull_plan, resolve_opener, run_pane_gesture, shell_cwd,
+    mirror_target_plan, pull_plan, resolve_opener, run_pane_gesture, send_plan, shell_cwd,
 };
 use crate::keymap::Command;
 use crate::mutations::{combine_pieces, launch_size_count, test_archive, unpack};
@@ -345,6 +345,22 @@ pub async fn dispatch(
             let plan = mirror_target_plan(app);
             let origin = app.focus();
             cd_outcome = run_pane_gesture(app, backend, events, plan, origin).await;
+        }
+        // `pane.send-left`/`-right`: a SIDE of the screen, not the target
+        // role, so not `run_pane_gesture` — its refusals speak of roles.
+        Command::PaneSendLeft | Command::PaneSendRight => {
+            let side = if matches!(cmd, Command::PaneSendRight) {
+                norte_frontend::layout::Side::Right
+            } else {
+                norte_frontend::layout::Side::Left
+            };
+            match send_plan(app, side) {
+                Ok(Some(m)) => {
+                    cd_outcome = cd_in(app, backend, events, m.pane, m.dir, Trail::Record).await;
+                }
+                Ok(None) => {}
+                Err(key) => app.message = Some(t(key)),
+            }
         }
         // `pane.pull`: the same gesture backwards — the location comes from
         // the OTHER pane and the focused one travels.

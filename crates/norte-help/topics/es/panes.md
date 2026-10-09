@@ -16,6 +16,8 @@ commands = [
     "pane.refresh",
     "pane.mirror",
     "pane.mirror-target",
+    "pane.send-left",
+    "pane.send-right",
     "pane.sync-nav",
     "pane.pull",
     "pane.swap",
@@ -106,11 +108,19 @@ donde está el otro.
 {{cmd:pane.mirror-target}} manda lo que está **bajo el cursor**: si es una
 carpeta, el otro panel entra en ella; si no lo es, la ubicación de este panel,
 que es lo mismo que {{cmd:pane.mirror}}. Sirve para mirar dentro de un
-directorio sin salir de donde estás, y es el gesto que un usuario de Krusader
-espera de las flechas con Ctrl. Sobre la fila `..` manda esta ubicación, no la
-del padre: esa fila no es el operando de nada.
+directorio sin salir de donde estás. Sobre la fila `..` manda esta ubicación,
+no la del padre: esa fila no es el operando de nada.
 
-Ninguno de los dos dice nada cuando los dos paneles ya están en el mismo sitio.
+{{cmd:pane.send-right}} y {{cmd:pane.send-left}} nombran un **lado** de la
+pantalla, no el otro panel: la ubicación viaja hacia donde apunta la flecha.
+Si hay un panel a ese lado del que tiene el foco, ese va a donde está este; si
+no, es este el que va a donde está su vecino del lado contrario. Con dos
+paneles, el de la derecha acaba siempre donde está el izquierdo y al revés,
+tenga el foco quien lo tenga, y el foco no se mueve. Lo que viaja es la
+ubicación del panel, no lo que hay bajo el cursor. Paneles apilados uno encima
+de otro no tienen lado, y lo dicen.
+
+Ninguno de ellos dice nada cuando los dos paneles ya están en el mismo sitio.
 
 ## Andar los dos a la vez
 

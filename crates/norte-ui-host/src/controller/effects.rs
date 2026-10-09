@@ -152,6 +152,7 @@ impl State {
             Effect::Mirror | Effect::MirrorTarget | Effect::Bring | Effect::Swap => {
                 self.pane_gesture(effect, backend, mailbox)
             }
+            Effect::Send { right } => self.send_toward(right, backend, mailbox),
             // Apart from the group above: those NAVIGATE, and this one only
             // flips a switch.
             Effect::MirrorPermanent => self.toggle_mirror_permanent(),

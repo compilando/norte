@@ -478,8 +478,8 @@ async fn mirroring_sends_the_location_to_the_target() {
     assert_eq!(f.focus, Some(1), "mirroring does not move focus");
 }
 
-/// `pane.mirror-target` sends the FOLDER UNDER THE CURSOR, not the location:
-/// Krusader's `Ctrl+←`/`Ctrl+→`, and the same answer the TUI gives because
+/// `pane.mirror-target` sends the FOLDER UNDER THE CURSOR, not the location,
+/// and the same answer the TUI gives because
 /// what decides it is `PaneState::target_dir` (ADR 0077).
 #[tokio::test]
 async fn mirroring_the_target_sends_the_cursors_folder() {

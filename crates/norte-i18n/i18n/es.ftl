@@ -288,6 +288,9 @@ msg-nav-no-forward = no hay nada hacia delante
 # Un pane virtual de búsqueda no es una ubicación: una lista de hits no se
 # puede mandar al otro pane ni traer de él.
 msg-pane-not-a-location = los resultados de búsqueda no son una ubicación: no hay nada que mandar
+# `pane.send-left`/`-right` sin ningún listado al lado del enfocado (un solo
+# panel, o paneles apilados uno encima de otro).
+msg-pane-nothing-beside = no hay ningún panel al lado de este: nada que mandar
 # Un pegado con salto de línea jamás debe enviar un campo (#143): solo se
 # inserta la primera línea, y esto dice cuántas más se descartaron.
 msg-paste-truncated = pegada la primera línea; { $lines } descartadas
@@ -1332,6 +1335,8 @@ menu-item-app-handoff = Seguir en la otra ventana
 menu-item-layout-focus-next = Panel siguiente
 menu-item-layout-focus-prev = Panel anterior
 menu-item-pane-mirror-target = Llevar lo del cursor al otro
+menu-item-pane-send-left = Mandar la ubicación a la izquierda
+menu-item-pane-send-right = Mandar la ubicación a la derecha
 menu-item-app-toggle-panels = Ocultar o enseñar los paneles
 menu-item-pane-compare-files = Comparar dos ficheros
 menu-item-app-agents = Agentes
@@ -1501,6 +1506,8 @@ msg-sync-nav-on = navegación sincronizada: los dos paneles van juntos
 msg-sync-nav-off = navegación sincronizada apagada
 msg-columns-sort-session-only = columnas guardadas; el orden por atributo vale para esta sesión (norte.toml solo guarda los órdenes con tecla)
 help-cmd-pane-mirror-target = mandar al otro pane la carpeta bajo el cursor
+help-cmd-pane-send-left = la ubicación viaja a la izquierda: el pane izquierdo va a donde está el derecho
+help-cmd-pane-send-right = la ubicación viaja a la derecha: el pane derecho va a donde está el izquierdo
 help-cmd-pane-pull = ir a donde está el otro pane
 help-cmd-pane-swap = intercambiar los dos panes
 help-cmd-pane-copy = copiar la selección al otro pane

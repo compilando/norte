@@ -288,6 +288,9 @@ msg-nav-no-forward = nothing to go forward to
 # A virtual search pane is not a location: a list of hits cannot be sent to
 # the other pane nor brought from it.
 msg-pane-not-a-location = search results are not a location: nothing to send
+# `pane.send-left`/`-right` with no listing beside the focused one on either
+# side (a single pane, or panes stacked one above the other).
+msg-pane-nothing-beside = no panel beside this one: nothing to send
 # A pasted newline must never submit a field (#143): only the first line is
 # inserted, and this says how many more were dropped.
 msg-paste-truncated = pasted the first line; { $lines } more discarded
@@ -1398,6 +1401,8 @@ menu-item-app-handoff = Carry on in the other frontend
 menu-item-layout-focus-next = Next panel
 menu-item-layout-focus-prev = Previous panel
 menu-item-pane-mirror-target = Send what is under the cursor
+menu-item-pane-send-left = Send the location leftwards
+menu-item-pane-send-right = Send the location rightwards
 menu-item-app-toggle-panels = Hide or show the panels
 menu-item-pane-compare-files = Compare two files
 menu-item-app-agents = Agents
@@ -1565,6 +1570,8 @@ msg-sync-nav-on = synchronised browsing: both panes walk together
 msg-sync-nav-off = synchronised browsing off
 msg-columns-sort-session-only = columns saved; sorting by an attribute lasts for this session (norte.toml only keeps the sorts that have a key)
 help-cmd-pane-mirror-target = send the folder under the cursor to the other pane
+help-cmd-pane-send-left = the location travels left: the left pane goes where the right one is
+help-cmd-pane-send-right = the location travels right: the right pane goes where the left one is
 help-cmd-pane-pull = go where the other pane is
 help-cmd-pane-swap = swap the two panes
 help-cmd-pane-copy = copy selection to the other pane

@@ -41,6 +41,7 @@ mod plugin_panes;
 mod rename;
 mod reviews;
 mod search;
+mod send;
 mod settings_extensions;
 mod settings_write;
 mod splash;

@@ -190,6 +190,8 @@ commands! {
     "pane.mirror" => PaneMirror,
     "pane.sync-nav" => PaneSyncNav,
     "pane.mirror-target" => PaneMirrorTarget,
+    "pane.send-left" => PaneSendLeft,
+    "pane.send-right" => PaneSendRight,
     "pane.pull" => PanePull,
     "pane.swap" => PaneSwap,
     "cursor.up" => CursorUp,

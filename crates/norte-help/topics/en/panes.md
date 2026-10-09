@@ -16,6 +16,8 @@ commands = [
     "pane.refresh",
     "pane.mirror",
     "pane.mirror-target",
+    "pane.send-left",
+    "pane.send-right",
     "pane.sync-nav",
     "pane.pull",
     "pane.swap",
@@ -105,11 +107,19 @@ goes where the other one is.
 {{cmd:pane.mirror-target}} sends what is **under the cursor**: a folder, and
 the other pane opens it; anything else, and it sends this pane's location,
 which is what {{cmd:pane.mirror}} does. It is for looking inside a directory
-without leaving where you are, and it is what a Krusader reader expects from
-the arrows with Ctrl. On the `..` row it sends this location, not the parent's:
-that row is the operand of nothing.
+without leaving where you are. On the `..` row it sends this location, not the
+parent's: that row is the operand of nothing.
 
-Neither of them says anything when both panes are already in the same place.
+{{cmd:pane.send-right}} and {{cmd:pane.send-left}} name a **side** of the
+screen, not the other pane: the location travels the way the arrow points. If
+there is a pane on that side of the focused one, it goes where this one is;
+if not, this one goes where its neighbour on the opposite side is. With two
+panes, the right one always ends up where the left one is and vice versa,
+whichever has the focus, and the focus does not move. What travels is the
+pane's location, not what is under the cursor. Panes stacked one above the
+other have no side, and say so.
+
+None of them says anything when both panes are already in the same place.
 
 ## Walking both at once
 

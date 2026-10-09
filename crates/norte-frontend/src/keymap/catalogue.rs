@@ -318,6 +318,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("profile.save-as", false, Inert),
     live("pane.mirror", false, Inert),
     live("pane.mirror-target", false, Inert),
+    // The location travels in the arrow's direction, by SCREEN position
+    // (`layout::send_toward`): Krusader's `Ctrl+←`/`Ctrl+→`.
+    live("pane.send-left", false, Inert),
+    live("pane.send-right", false, Inert),
     // The PERMANENT mirror: while it is on, every navigation of the
     // focused pane is repeated by the other one. It is a switch, not a
     // gesture — that is why it is not called `pane.mirror-mode`: what gets

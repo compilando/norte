@@ -195,6 +195,8 @@ pub const IMPLEMENTED: &[&str] = &[
     "pane.combine-files",
     "pane.mirror",
     "pane.mirror-target",
+    "pane.send-left",
+    "pane.send-right",
     "pane.sync-nav",
     "pane.pull",
     "pane.swap",
@@ -788,10 +790,17 @@ pub enum Effect {
     /// gesture group next to it: all it does is flip a switch.
     MirrorPermanent,
     /// Like [`Effect::Mirror`], but what travels is the CURSOR'S TARGET: the
-    /// folder under it if it is one, and if not the active slot's location
-    /// (Krusader's `Ctrl+←`/`Ctrl+→`). Which directory that is is decided by
-    /// `PaneState::target_dir`, one shared by both frontends (ADR 0077).
+    /// folder under it if it is one, and if not the active slot's location.
+    /// Which directory that is is decided by `PaneState::target_dir`, one
+    /// shared by both frontends (ADR 0077).
     MirrorTarget,
+    /// The active slot's location travels towards a SIDE of the screen
+    /// (`pane.send-left`/`-right`, Krusader's `Ctrl+←`/`Ctrl+→`), by the
+    /// split's geometry: `norte_frontend::layout::send_toward`.
+    Send {
+        /// Towards the right instead of the left.
+        right: bool,
+    },
     /// The DESTINATION slot's location travels to the ACTIVE one: the
     /// mirror in reverse.
     Bring,
@@ -1020,6 +1029,8 @@ pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
         "pane.mirror" => Effect::Mirror,
         "pane.sync-nav" => Effect::MirrorPermanent,
         "pane.mirror-target" => Effect::MirrorTarget,
+        "pane.send-left" => Effect::Send { right: false },
+        "pane.send-right" => Effect::Send { right: true },
         "pane.pull" => Effect::Bring,
         "pane.swap" => Effect::Swap,
         "pane.history" => Effect::History,
