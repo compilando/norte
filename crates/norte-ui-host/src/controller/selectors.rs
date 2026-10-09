@@ -1022,6 +1022,14 @@ impl State {
         let Some(s) = self.selector.as_ref() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
+        // The terminal panel's pickers act on the panel, not on a listing.
+        if let Some(choice) = s.terminal_choice() {
+            self.selector = None;
+            let close = self.parche(vec![ViewChange::Picker { picker: None }]);
+            let (ack, mut sends) = self.apply_terminal_choice(choice, mailbox);
+            sends.insert(0, close);
+            return (ack, sends);
+        }
         // The slot was said by the selector when it OPENED:
         // `pane.select-drive-left` names a side, and reading focus here
         // would let moving it with the list up mount the volume in another

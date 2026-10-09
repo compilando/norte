@@ -24,6 +24,7 @@ mod panels;
 mod pickers;
 mod status;
 mod sync;
+pub(crate) mod terminal_tabs;
 mod text;
 
 // `tests/`, `mouse.rs` and `event_loop.rs` name all of this via `ui::..`, so
@@ -478,6 +479,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if let Some(p) = &app.profile_picker {
         draw_profile_picker(frame, p, &app.theme, &app.dialog_hints.picker);
     }
+    pickers::draw_term_overlay(frame, app);
     if let Some(p) = &app.layout_picker {
         draw_layout_picker(frame, p, &app.theme, &app.dialog_hints.picker, &app.kinds);
     }
@@ -627,6 +629,8 @@ pub fn something_above_the_viewer(app: &App) -> bool {
         || app.theme_picker.is_some()
         || app.columns_picker.is_some()
         || app.profile_picker.is_some()
+        || app.term_picker.is_some()
+        || app.term_rename.is_some()
         || app.layout_picker.is_some()
         || app.connections_picker.is_some()
         || app.extensions.is_some()

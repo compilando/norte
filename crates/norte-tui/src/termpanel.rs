@@ -66,6 +66,46 @@ pub fn key_to_bytes(k: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
 /// The pane's shell, with its grid. It is `norte-term`'s.
 pub use norte_term::pty::Shell as TermPanel;
 
+/// `norte-term`'s shell as the shared model's
+/// [`TerminalShell`](norte_frontend::terminals::TerminalShell): a newtype
+/// because neither the trait nor the type is this crate's.
+pub struct Pty(pub TermPanel);
+
+impl norte_frontend::terminals::TerminalShell for Pty {
+    fn pump(&mut self) -> bool {
+        self.0.pump()
+    }
+    fn resize(&mut self, size: (u16, u16)) {
+        self.0.resize(size);
+    }
+    fn take_title(&mut self) -> Option<String> {
+        self.0.take_title()
+    }
+    fn exit_code(&mut self) -> Option<i32> {
+        self.0.exit_code()
+    }
+}
+
+/// The panel's shells (spec 2026-10-09): the same model and rules as the
+/// window's.
+pub type Shells = norte_frontend::terminals::Terminals<Pty>;
+
+/// Kills and reaps shells off the loop when there is a runtime: each
+/// `Drop` is a kill plus a blocking wait, and a shell ignoring the hang-up
+/// would freeze the screen for it. Without a runtime (a unit test) they die
+/// here.
+pub fn bury(gone: Vec<norte_frontend::terminals::Instance<Pty>>) {
+    if gone.is_empty() {
+        return;
+    }
+    match tokio::runtime::Handle::try_current() {
+        Ok(h) => {
+            h.spawn_blocking(move || drop(gone));
+        }
+        Err(_) => drop(gone),
+    }
+}
+
 /// The kind's id, which is also its command's suffix.
 pub const KIND: &str = "terminal";
 
@@ -84,14 +124,21 @@ pub const COMMAND: &str = "layout.terminal";
 ///
 /// # Errors
 /// Whatever fails opening the pty or launching the shell.
-pub fn open(dir: &std::path::Path, size: (u16, u16)) -> std::io::Result<TermPanel> {
+pub fn open(
+    dir: &std::path::Path,
+    size: (u16, u16),
+    profile: &norte_frontend::shell_profiles::ShellProfile,
+) -> std::io::Result<TermPanel> {
+    // Absolute by construction (`terminal.toml` refuses anything else), and
+    // checked again here because the spawn is where a relative one would be
+    // looked up from the directory being browsed (#302).
+    if !profile.program.is_absolute() {
+        return Err(std::io::Error::other("the shell program is not absolute"));
+    }
     norte_term::pty::Shell::open(
         &norte_term::pty::Startup {
-            // `login_shell` refuses to return a relative `$SHELL` and falls
-            // back to `/bin/sh` (#302): without that, `portable_pty` would
-            // look it up via `cwd`, which here is the directory the reader is
-            // looking at.
-            program: &norte_frontend::shell::login_shell(),
+            program: &profile.program,
+            args: &profile.args,
             dir,
             tam: size,
             // The child knows it is INSIDE norte, just like the subshell and
@@ -106,6 +153,264 @@ pub fn open(dir: &std::path::Path, size: (u16, u16)) -> std::io::Result<TermPane
         // the same answer no matter where it comes from.
         norte_frontend::subshell::terminal_reply,
     )
+}
+
+/// Starts `profile`'s shell in the focused listing's directory and puts it
+/// in front. `Err` is the message to show; nothing is added then.
+///
+/// # Errors
+/// The focused pane is not local, or the shell did not start.
+pub fn start_instance(
+    app: &mut crate::app::App,
+    profile: &norte_frontend::shell_profiles::ShellProfile,
+) -> Result<(), String> {
+    // A local directory, with the same gate and phrase as `app.terminal`.
+    let dir = crate::gestures::shell_cwd(app)?;
+    // The real size is set by the paint as soon as it knows which rectangle
+    // it got; this one lasts as long as the first turn takes.
+    let t = open(&dir, (80, 24), profile).map_err(|e| e.to_string())?;
+    // Not journalled: a shell the reader opens is the reader acting with
+    // their own permissions (ADR 0084). Logged because starting one is the
+    // most privileged thing a frontend does — the shell profile's NAME only:
+    // its args may carry a token.
+    tracing::info!(
+        shell_profile = %profile.name,
+        "TUI opened a shell in a terminal panel (not journalled: no actor, no reversal)"
+    );
+    let wake = std::sync::Arc::clone(&app.term_wake);
+    t.set_waker(std::sync::Arc::new(move || wake.notify_one()));
+    app.terminals
+        .push(profile.name.clone(), profile.icon, profile.color, Pty(t));
+    Ok(())
+}
+
+/// What a row of the terminal picker does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TermChoice {
+    /// Start this shell profile.
+    Profile(String),
+    /// Set (or clear) the icon of the one in front.
+    Icon(Option<norte_frontend::terminals::TerminalIcon>),
+    /// Set (or clear) its colour.
+    Color(Option<norte_frontend::terminals::AnsiColor>),
+}
+
+/// The small list `terminal.new-profile` and `terminal.decorate` open.
+#[derive(Debug, Clone)]
+pub struct TermPicker {
+    /// Already translated.
+    pub title: String,
+    /// Label and what choosing it does.
+    pub rows: Vec<(String, TermChoice)>,
+    /// The highlighted row.
+    pub cursor: usize,
+}
+
+/// The text field `terminal.rename` opens.
+#[derive(Debug, Clone)]
+pub struct TermRename {
+    /// The instance it names.
+    pub id: norte_frontend::terminals::InstanceId,
+    /// What has been typed.
+    pub text: String,
+}
+
+/// The tabs' labels, in list order: position, unseen dot, title, and the
+/// code of a failed one.
+#[must_use]
+pub fn strip_labels(t: &Shells) -> Vec<(norte_frontend::terminals::InstanceId, String)> {
+    t.iter()
+        .enumerate()
+        .map(|(n, i)| {
+            let title = t.display_title(i.id).unwrap_or_default();
+            let dot = if i.unseen { "● " } else { "" };
+            let code = i.exited.map(|c| format!(" ({c})")).unwrap_or_default();
+            (i.id, format!("{} {dot}{title}{code}", n + 1))
+        })
+        .collect()
+}
+
+fn not_here(app: &mut crate::app::App) {
+    app.message = Some(norte_i18n::t("cmd-not-here"));
+}
+
+/// `terminal.new`: another shell, from `profile` (`None` = the default).
+pub fn cmd_new(
+    app: &mut crate::app::App,
+    cfg: &crate::config::LoadedConfig,
+    profile: Option<&str>,
+) {
+    if app.terminal_slot().is_none() {
+        return not_here(app);
+    }
+    let profiles = &cfg.shell_profiles;
+    let Some(p) = profile
+        .map_or(Some(profiles.default_profile()), |n| profiles.get(n))
+        .cloned()
+    else {
+        return not_here(app);
+    };
+    if let Err(msg) = start_instance(app, &p) {
+        app.message = Some(msg);
+    }
+}
+
+/// `terminal.close`: the one in front, killing its shell.
+pub fn cmd_close(app: &mut crate::app::App) {
+    let Some(id) = app.terminals.active_id() else {
+        return not_here(app);
+    };
+    if let Some(gone) = app.terminals.close(id) {
+        bury(vec![gone]);
+    }
+    if app.terminals.is_empty() && app.key_owner() == crate::app::KeyOwner::Terminal {
+        app.release_keyboard();
+    }
+}
+
+/// `terminal.next` / `terminal.prev`.
+pub fn cmd_step(app: &mut crate::app::App, forward: bool) {
+    if app.terminals.is_empty() {
+        return not_here(app);
+    }
+    if forward {
+        app.terminals.next();
+    } else {
+        app.terminals.prev();
+    }
+}
+
+/// `terminal.new-profile`: the shell profiles, default first.
+pub fn cmd_pick_profile(app: &mut crate::app::App, cfg: &crate::config::LoadedConfig) {
+    if app.terminal_slot().is_none() {
+        return not_here(app);
+    }
+    let p = &cfg.shell_profiles;
+    let default = &p.default_profile().name;
+    let rows = std::iter::once(default.clone())
+        .chain(p.iter().map(|s| s.name.clone()).filter(|n| n != default))
+        .map(|n| {
+            // A name the reader wrote: painted the shared way.
+            let label = norte_frontend::display_name(n.as_bytes()).0;
+            (label, TermChoice::Profile(n))
+        })
+        .collect();
+    app.term_picker = Some(TermPicker {
+        title: norte_i18n::t("terminal-shell-profiles"),
+        rows,
+        cursor: 0,
+    });
+}
+
+/// `terminal.decorate`: icons and colours for the one in front.
+pub fn cmd_decorate(app: &mut crate::app::App) {
+    use norte_frontend::terminals::{AnsiColor, TerminalIcon};
+    if app.terminals.active_id().is_none() {
+        return not_here(app);
+    }
+    let mut rows = vec![(norte_i18n::t("terminal-icon-none"), TermChoice::Icon(None))];
+    rows.extend(
+        TerminalIcon::ALL
+            .iter()
+            .map(|i| (i.as_str().to_owned(), TermChoice::Icon(Some(*i)))),
+    );
+    rows.push((
+        norte_i18n::t("terminal-color-none"),
+        TermChoice::Color(None),
+    ));
+    rows.extend(
+        (1..=6)
+            .filter_map(AnsiColor::new)
+            .map(|c| (format!("■ {}", c.index()), TermChoice::Color(Some(c)))),
+    );
+    app.term_picker = Some(TermPicker {
+        title: norte_i18n::t("terminal-decorate-title"),
+        rows,
+        cursor: 0,
+    });
+}
+
+/// A picker row was chosen.
+pub fn apply_choice(app: &mut crate::app::App, cfg: &crate::config::LoadedConfig, c: TermChoice) {
+    let front = app.terminals.active();
+    let (id, icon, color) = (
+        front.map(|i| i.id),
+        front.and_then(|i| i.icon),
+        front.and_then(|i| i.color),
+    );
+    match (c, id) {
+        (TermChoice::Profile(n), _) => cmd_new(app, cfg, Some(&n)),
+        // One attribute at a time: choosing a colour keeps the icon.
+        (TermChoice::Icon(i), Some(id)) => app.terminals.decorate(id, i, color),
+        (TermChoice::Color(c), Some(id)) => app.terminals.decorate(id, icon, c),
+        _ => not_here(app),
+    }
+}
+
+/// The keys while the terminal picker or rename field is open. `true` if
+/// one of them was open and took the key.
+pub fn on_overlay_key(
+    app: &mut crate::app::App,
+    cfg: &crate::config::LoadedConfig,
+    key: &crossterm::event::KeyEvent,
+) -> bool {
+    use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
+    if key.kind != KeyEventKind::Press {
+        return app.term_picker.is_some() || app.term_rename.is_some();
+    }
+    if let Some(r) = app.term_rename.as_mut() {
+        match key.code {
+            KeyCode::Esc => app.term_rename = None,
+            KeyCode::Enter => {
+                if let Some(r) = app.term_rename.take() {
+                    // The model cleans and caps it.
+                    app.terminals.rename(r.id, &r.text);
+                }
+            }
+            KeyCode::Backspace => {
+                r.text.pop();
+            }
+            // Capped while typing; the model caps again.
+            KeyCode::Char(c)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                    && r.text.chars().count() < 128 =>
+            {
+                r.text.push(c);
+            }
+            _ => {}
+        }
+        return true;
+    }
+    let Some(p) = app.term_picker.as_mut() else {
+        return false;
+    };
+    match key.code {
+        KeyCode::Esc => app.term_picker = None,
+        KeyCode::Up => p.cursor = p.cursor.saturating_sub(1),
+        KeyCode::Down => p.cursor = (p.cursor + 1).min(p.rows.len().saturating_sub(1)),
+        KeyCode::Enter => {
+            let choice = p.rows.get(p.cursor).map(|(_, c)| c.clone());
+            app.term_picker = None;
+            if let Some(c) = choice {
+                apply_choice(app, cfg, c);
+            }
+        }
+        _ => {}
+    }
+    true
+}
+
+/// `terminal.rename`: a field prefilled with the current name.
+pub fn cmd_rename(app: &mut crate::app::App) {
+    let Some(i) = app.terminals.active() else {
+        return not_here(app);
+    };
+    app.term_rename = Some(TermRename {
+        id: i.id,
+        text: i.name.clone().unwrap_or_default(),
+    });
 }
 
 /// The grid's rows as `ratatui` spans.

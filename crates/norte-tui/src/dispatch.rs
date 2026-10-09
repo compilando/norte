@@ -212,53 +212,43 @@ pub async fn dispatch(
         // empty panel that explains why is better than a key that does not
         // respond.
         Command::LayoutTerminal => {
-            if app.terminal.is_some() {
-                // There is already a shell: this is just the keyboard coming
-                // and going, and asks for no directory at all. Asking here
-                // would leave the reader unable to get back to THEIR
-                // terminal because they are looking at a remote panel.
-                app.toggle_terminal();
-            } else {
-                // Starting it does ask for a local directory, and
+            // No LIVE shell — none, or only failed ones — and coming in:
+            // start one, or the panel is a still picture forever. Going out
+            // is just the keyboard, as below.
+            let live = app.terminals.iter().any(|i| i.exited.is_none());
+            if !live && app.key_owner() != crate::app::KeyOwner::Terminal {
+                // Starting one does ask for a local directory, and
                 // `shell_cwd` already knows how to say why there is none —
-                // it is the same gate as `app.terminal`, and answers no over
-                // a remote panel.
+                // it is the same gate as `app.terminal`. The slot opens even
+                // if the shell does not start: an empty panel with the reason
+                // written reads better than a key that does nothing.
                 match shell_cwd(app) {
-                    Ok(dir) => {
+                    Ok(_) => {
                         app.toggle_terminal();
-                        // The real size is set by the paint as soon as it
-                        // knows which rectangle it got; this one is the
-                        // startup size and lasts as long as the first turn
-                        // takes.
-                        match crate::termpanel::open(&dir, (80, 24)) {
-                            Ok(t) => {
-                                // Recorded, like its two siblings and with
-                                // the same "not journalled" written: a shell
-                                // the reader opens is the reader acting with
-                                // their own permissions, not a norte mutation
-                                // —there is no actor to attribute and no
-                                // reversal to record—. But starting a shell
-                                // is the most privileged thing a frontend
-                                // does, and the log panel is now a surface
-                                // that gets looked at.
-                                tracing::info!(
-                                    "TUI opened a shell in a terminal panel \
-                                     (not journalled: no actor, no reversal)"
-                                );
-                                let wake = std::sync::Arc::clone(&app.term_wake);
-                                t.set_waker(std::sync::Arc::new(move || wake.notify_one()));
-                                app.terminal = Some(t);
-                            }
-                            // The slot stays open even if the shell does not
-                            // start: an empty panel with the reason written
-                            // reads better than a key that does nothing.
-                            Err(e) => app.message = Some(e.to_string()),
+                        let profile = cfg.shell_profiles.default_profile().clone();
+                        if let Err(msg) = crate::termpanel::start_instance(app, &profile) {
+                            app.message = Some(msg);
                         }
                     }
                     Err(msg) => app.message = Some(msg),
                 }
+            } else {
+                // There are shells already: this is just the keyboard coming
+                // and going, and asks for no directory at all. Asking here
+                // would leave the reader unable to get back to THEIR
+                // terminal because they are looking at a remote panel.
+                app.toggle_terminal();
             }
         }
+        // The panel's instances (spec 2026-10-09). Each refuses with the
+        // panel closed: there is nowhere to put a shell, or none to act on.
+        Command::TerminalNew => crate::termpanel::cmd_new(app, cfg, None),
+        Command::TerminalNewProfile => crate::termpanel::cmd_pick_profile(app, cfg),
+        Command::TerminalClose => crate::termpanel::cmd_close(app),
+        Command::TerminalNext => crate::termpanel::cmd_step(app, true),
+        Command::TerminalPrev => crate::termpanel::cmd_step(app, false),
+        Command::TerminalRename => crate::termpanel::cmd_rename(app),
+        Command::TerminalDecorate => crate::termpanel::cmd_decorate(app),
         // #136: the tree opens, focuses and closes like the sidebar. Its
         // content is requested by the run loop, one branch per turn.
         Command::PaneTree => app.toggle_tree(),

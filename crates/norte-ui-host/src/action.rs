@@ -575,6 +575,39 @@ pub enum UiAction {
         slot_id: u32,
     },
 
+    /// Brings a terminal panel instance to the front (a click on its entry).
+    TerminalSelect {
+        /// The instance (`TerminalInstanceView::id`).
+        id: u32,
+    },
+    /// Closes a terminal panel instance, killing its shell.
+    TerminalClose {
+        /// The instance.
+        id: u32,
+    },
+    /// Starts another shell in the terminal panel.
+    TerminalNew {
+        /// The shell profile by name; `None` = the default one.
+        profile: Option<String>,
+    },
+    /// Names an instance; blank clears the name.
+    TerminalRename {
+        /// The instance.
+        id: u32,
+        /// The name.
+        name: String,
+    },
+    /// Sets (or clears) an instance's icon and colour. Validated here, never
+    /// trusted from the renderer.
+    TerminalDecorate {
+        /// The instance.
+        id: u32,
+        /// An icon name from the fixed set, or `None`.
+        icon: Option<String>,
+        /// An ANSI index 1..=6, or `None`.
+        color: Option<u8>,
+    },
+
     /// Chooses an agent session by position (a click).
     AgentSelectRow {
         /// Row within the painted list.

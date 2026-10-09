@@ -1193,11 +1193,38 @@
   "terminal": {
     "change": "terminal",
     "terminal": {
+      "active": 1,
       "cursor": [
         0,
         4
       ],
+      "exited": 3,
+      "instances": [
+        {
+          "color": 2,
+          "exited": 3,
+          "icon": "server",
+          "id": 1,
+          "name": "build",
+          "title": "build",
+          "unseen": false
+        },
+        {
+          "color": null,
+          "exited": null,
+          "icon": null,
+          "id": 2,
+          "name": null,
+          "title": "fish",
+          "unseen": true
+        }
+      ],
+      "list_cols": 18,
       "no_shell": false,
+      "profiles": [
+        "fish",
+        "bash"
+      ],
       "rows": [
         [
           {

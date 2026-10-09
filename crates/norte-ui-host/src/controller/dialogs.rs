@@ -485,6 +485,10 @@ impl State {
                 refused = motivo;
                 outputs.extend(parts);
             }
+            Some(Pending::RenameTerminal { id }) => {
+                let (_, parts) = self.rename_terminal(id, dialog.typed.text());
+                outputs.extend(parts);
+            }
             // A settings text entry's value: it is validated by the shared
             // editor and, if valid, written.
             Some(Pending::EditSetting { id }) => {

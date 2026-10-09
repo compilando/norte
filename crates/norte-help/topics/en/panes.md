@@ -40,6 +40,13 @@ commands = [
     "layout.disk-map",
     "layout.timeline",
     "layout.terminal",
+    "terminal.new",
+    "terminal.new-profile",
+    "terminal.next",
+    "terminal.prev",
+    "terminal.rename",
+    "terminal.decorate",
+    "terminal.close",
     "layout.pick",
 
     "pane.tree",]
@@ -309,6 +316,40 @@ listings and, for now, does not follow them.
 It is in both places, the terminal and the window, with the same shell and the
 same grid inside. Over a remote pane it refuses to open and says so: a shell
 sits in a directory of the filesystem, and an `sftp://` has nowhere to sit it.
+
+The panel holds **several shells**. {{cmd:terminal.new}} starts another one
+and brings it to the front; {{cmd:terminal.next}} and {{cmd:terminal.prev}}
+walk between them; {{cmd:terminal.close}} closes the one in front and kills
+its shell. With two or more, the panel lists them — in the terminal, as tabs
+on its top border; in the window, as a list on its right — and a `●` marks
+one that wrote while you were looking at another. A shell that ends cleanly
+leaves the list; one that ends with an error stays, showing its last screen
+and the code, until you close it.
+
+{{cmd:terminal.rename}} names the one in front (an empty name gives back the
+automatic one: the title the program sets, or the shell's name), and
+{{cmd:terminal.decorate}} gives it an icon and a colour. Those two and
+{{cmd:terminal.new-profile}} have no key in any preset: inside the panel every
+key you bind is a key taken from the shell. They are in the menu and the
+palette.
+
+Which shells {{cmd:terminal.new-profile}} offers is written in `terminal.toml`,
+next to `norte.toml`:
+
+```toml
+default = "fish"
+
+[[shell]]
+name = "fish"
+program = "/usr/bin/fish"
+args = ["-l"]
+icon = "terminal"   # terminal, code, server, debug, package, star
+color = 4           # 1 to 6, painted by the theme
+```
+
+`program` must be an absolute path. A `terminal.toml` inside a project's
+`.norte` directory is ignored: a repository does not get to choose which
+programs norte runs.
 
 {{cmd:layout.timeline}} opens the timeline: what has been done on this machine,
 newest first, with the time, who did it — you, an agent or an extension, and the

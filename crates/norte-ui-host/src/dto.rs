@@ -2314,6 +2314,50 @@ pub struct TerminalSlotView {
     /// own would move someone's layout without them having touched it.
     #[serde(default)]
     pub no_shell: bool,
+    /// The panel's shells, in list order. The renderer shows the list only
+    /// with two or more.
+    #[serde(default)]
+    pub instances: Vec<TerminalInstanceView>,
+    /// The one in front: its grid is `rows`/`cursor`.
+    #[serde(default)]
+    pub active: Option<u32>,
+    /// `Some(code)` if the one in front ended with a non-zero code: `rows`
+    /// is then its LAST screen, and the renderer says how it ended.
+    #[serde(default)]
+    pub exited: Option<i32>,
+    /// The shell profiles `+` can start, the default first, for the menu.
+    #[serde(default)]
+    pub profiles: Vec<String>,
+    /// How many cells wide the list on the right is; 0 = no list. The host
+    /// already took them from the shell's width — the renderer cannot size
+    /// the pty, so it must paint the list exactly this wide.
+    #[serde(default)]
+    pub list_cols: u16,
+}
+
+/// One shell of the terminal panel, as its list entry.
+///
+/// `title` is FOREIGN text when it comes from the program (OSC 0/2):
+/// sanitised by `norte-term`, and painted as text, never as markup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalInstanceView {
+    /// Its identity, for the actions.
+    pub id: u32,
+    /// What its entry says: the reader's name, the program's title, or the
+    /// shell profile.
+    pub title: String,
+    /// The name the reader gave it, if any: what a rename starts from (the
+    /// program's title would be frozen as a name on a plain Enter).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Its icon name (`terminal`, `server`…), if any.
+    pub icon: Option<String>,
+    /// Its colour as an ANSI index 1..=6, resolved by the theme.
+    pub color: Option<u8>,
+    /// `Some(code)` once its shell ended with a non-zero code.
+    pub exited: Option<i32>,
+    /// It wrote while another one was in front.
+    pub unseen: bool,
 }
 
 /// A span of a terminal row: text with what the shell requested.

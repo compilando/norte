@@ -44,6 +44,7 @@ mod settings_extensions;
 mod settings_write;
 mod splash;
 mod sync;
+mod terminals;
 mod timeline;
 mod transfers;
 mod usability;

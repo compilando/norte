@@ -238,6 +238,71 @@ pub(crate) fn draw_connections_picker(
 /// which one is active, which one cannot save state (D4), and which one
 /// shares a name with something else. The note below talks about the row
 /// UNDER THE CURSOR, which is what the reader is about to choose.
+/// The terminal panel's small list (shell profiles, or icon/colour) and its
+/// rename field: a box, a cursor, Enter and Esc.
+pub(crate) fn draw_term_overlay(frame: &mut Frame<'_>, app: &crate::app::App) {
+    let theme = &app.theme;
+    let (title, lines, cursor): (String, Vec<String>, Option<usize>) =
+        if let Some(r) = &app.term_rename {
+            (
+                t("terminal-rename-prompt"),
+                vec![format!(" {}▏", r.text)],
+                None,
+            )
+        } else if let Some(p) = &app.term_picker {
+            (
+                p.title.clone(),
+                p.rows
+                    .iter()
+                    .enumerate()
+                    .map(|(n, (label, _))| {
+                        let mark = if n == p.cursor { "▸" } else { " " };
+                        format!(" {mark} {label}")
+                    })
+                    .collect(),
+                Some(p.cursor),
+            )
+        } else {
+            return;
+        };
+    let w = lines
+        .iter()
+        .chain(std::iter::once(&title))
+        .map(|l| Line::raw(l.as_str()).width())
+        .max()
+        .unwrap_or(0);
+    let width = u16::try_from(w)
+        .unwrap_or(u16::MAX)
+        .max(30)
+        .saturating_add(4)
+        .min(frame.area().width);
+    let height = u16::try_from(lines.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2)
+        .min(frame.area().height.max(3));
+    let area = centered(frame.area(), width, height);
+    clear_themed(frame, area, theme);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {title} "))
+        .title_style(theme.role(Role::Title))
+        .border_style(theme.role(Role::BorderFocus));
+    let inside = block.inner(area);
+    frame.render_widget(block, area);
+    let body: Vec<Line<'_>> = lines
+        .into_iter()
+        .enumerate()
+        .map(|(n, l)| {
+            if Some(n) == cursor {
+                Line::styled(l, theme.role(Role::Selection))
+            } else {
+                Line::raw(l)
+            }
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(body), inside);
+}
+
 pub(crate) fn draw_profile_picker(
     frame: &mut Frame<'_>,
     p: &norte_frontend::profile_picker::ProfilePicker,

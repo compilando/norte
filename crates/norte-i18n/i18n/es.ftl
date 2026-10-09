@@ -1167,6 +1167,16 @@ panelbar-terminal = Terminal
 # shell, así que es la única que hay que anunciar.
 terminal-leave = salir
 terminal-none = No hay ningún shell en este panel.
+terminal-exited = terminada con código { $code }
+# El catálogo de la ventana no lleva argumentos: pinta esto, un espacio y el código.
+terminal-exited-label = terminada con código
+terminal-new = Nueva terminal
+terminal-close = Cerrar terminal
+terminal-shell-profiles = Elegir una shell
+terminal-rename-prompt = Nombre de la terminal (vacío = automático)
+terminal-decorate-title = Icono y color
+terminal-icon-none = Sin icono
+terminal-color-none = Sin color
 # La línea de tiempo del journal (fase 7).
 timeline-title = Historial
 timeline-empty = todavía no se ha hecho nada
@@ -1227,6 +1237,13 @@ menu-item-layout-log = Registro
 menu-item-layout-disk-map = Mapa de disco
 menu-item-layout-timeline = Historial
 menu-item-layout-terminal = Terminal
+menu-item-terminal-new = Nueva terminal
+menu-item-terminal-new-profile = Nueva terminal con…
+menu-item-terminal-next = Terminal siguiente
+menu-item-terminal-prev = Terminal anterior
+menu-item-terminal-rename = Renombrar terminal…
+menu-item-terminal-decorate = Icono y color de la terminal…
+menu-item-terminal-close = Cerrar terminal
 menu-item-layout-metadata = Detalles
 menu-item-layout-pick = Disposición...
 menu-item-profile-pick = Perfil...
@@ -1271,6 +1288,7 @@ menu-section-contents = Contenido
 menu-section-split = Dividir
 menu-section-compare = Comparar
 menu-section-side-panels = Paneles laterales
+menu-section-terminal = Terminales
 menu-section-profiles = Perfiles
 # Diez grupos (2026-09-10): tres títulos nuevos y las etiquetas de lo que
 # hasta ahora solo se alcanzaba por tecla o por la paleta.
@@ -1352,6 +1370,13 @@ help-cmd-layout-timeline = muestra u oculta el historial
 # No dice «muestra u oculta» como sus vecinos, y es a propósito: el segundo
 # toque devuelve el foco y deja el shell vivo, no lo cierra.
 help-cmd-layout-terminal = abre un terminal en un panel, o le devuelve el foco
+help-cmd-terminal-new = arranca otra shell en el panel de terminal
+help-cmd-terminal-new-profile = arranca otra shell en el panel de terminal, eligiendo cuál
+help-cmd-terminal-close = cierra la terminal de delante y mata su shell
+help-cmd-terminal-next = trae al frente la terminal siguiente del panel
+help-cmd-terminal-prev = trae al frente la terminal anterior del panel
+help-cmd-terminal-rename = pone nombre a la terminal de delante
+help-cmd-terminal-decorate = da icono y color a la terminal de delante
 help-cmd-layout-metadata = muestra u oculta el panel de detalles
 help-cmd-layout-pick = elige una disposición
 help-cmd-profile-pick = elige un perfil
@@ -2558,6 +2583,7 @@ host-no-such-tab = no hay tantas pestañas
 host-task-running = esa tarea sigue en marcha: pararla es otra tecla
 host-nothing-selected = no hay nada señalado
 host-not-local = eso no está en este disco: no hay ruta nativa que darle al escritorio
+host-shell-failed = la shell no arrancó (mira el panel de registro)
 host-no-desktop = esta ventana no tiene escritorio detrás: no puede copiar al portapapeles ni lanzar nada
 # #303: el mismo texto que el msg-edit-created-changed de la TUI, y por lo
 # mismo: un solo mensaje para las tres causas (enlace, carpeta, ya no está).

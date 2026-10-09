@@ -205,6 +205,14 @@ impl State {
             // with the layout because from there the guard above is not
             // reached.
             Effect::OpenTerminal => self.open_terminal_panel(backend, mailbox),
+            // The panel's instances. Starting one goes through the same
+            // read-only gate as opening the panel (`spawn_instance`).
+            Effect::TerminalNew { pick: false } => self.new_terminal(None, mailbox),
+            Effect::TerminalNew { pick: true } => self.request_shell_profile(),
+            Effect::TerminalClose => self.close_terminal(None),
+            Effect::TerminalStep { forward } => self.step_terminal(forward),
+            Effect::TerminalRename => self.request_terminal_rename(),
+            Effect::TerminalDecorate => self.request_terminal_decorate(),
             // Copying the path touches nothing and goes in both modes:
             // putting text on the clipboard is as read-only as reading a
             // name.

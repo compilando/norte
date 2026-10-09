@@ -22,14 +22,44 @@
 
 use std::sync::Arc;
 
+use norte_frontend::shell_profiles::ShellProfile;
+use norte_frontend::terminals::{AnsiColor, InstanceId, TerminalIcon, TerminalShell, Terminals};
 use norte_term::{ColorTerm, Screen, Style};
 use tokio::sync::mpsc;
 
 use crate::backend::HostBackend;
 use crate::bridge::BridgeEnvelope;
-use crate::dto::{TerminalColorView, TerminalSlotView, TerminalSpanView, UiUpdate, ViewChange};
+use crate::dto::{
+    TerminalColorView, TerminalInstanceView, TerminalSlotView, TerminalSpanView, UiUpdate,
+    ViewChange,
+};
 
 use super::{ActionAck, Message, State};
+
+/// `norte-term`'s shell as the shared model's [`TerminalShell`]: a newtype
+/// because neither the trait nor the type is this crate's.
+pub(super) struct Pty(norte_term::pty::Shell);
+
+impl TerminalShell for Pty {
+    fn pump(&mut self) -> bool {
+        self.0.pump()
+    }
+    fn resize(&mut self, size: (u16, u16)) {
+        self.0.resize(size);
+    }
+    fn take_title(&mut self) -> Option<String> {
+        self.0.take_title()
+    }
+    fn exit_code(&mut self) -> Option<i32> {
+        self.0.exit_code()
+    }
+}
+
+/// Cells the instance list takes on the right, when it shows.
+const LIST_COLS: u16 = 18;
+
+/// The panel's instances, as `State` holds them.
+pub(super) type PanelShells = Terminals<Pty>;
 
 /// The panel's kind, which is also the suffix of its command.
 pub(super) const KIND: &str = "terminal";
@@ -39,24 +69,8 @@ pub(super) const KIND: &str = "terminal";
 pub(super) const COMMAND: &str = "layout.terminal";
 
 /// The commands whose lone chord still reaches norte from inside the panel:
-/// the ring, the close key and the other panels' toggles. Everything else is
-/// the shell's.
-///
-/// It is the list the TUI's side panels let through (panels-usability plan,
-/// T1); once `norte-frontend` exposes it, this becomes that list.
-const PASS_THROUGH: &[&str] = &[
-    "layout.focus-next",
-    "layout.focus-prev",
-    "layout.close-slot",
-    "layout.places",
-    "layout.preview",
-    "layout.processes",
-    "layout.metadata",
-    "layout.log",
-    "layout.disk-map",
-    "layout.timeline",
-    "pane.tree",
-];
+/// the shared list, the TUI's too (ADR 0077).
+use norte_frontend::terminals::PASS_THROUGH;
 
 impl State {
     /// Opens the terminal panel, or brings it to the front.
@@ -112,7 +126,7 @@ impl State {
             // shell is not — and of a startup that failed: without this the
             // panel stayed dead for the rest of the window's life, because
             // this branch returned before checking.
-            if !inside && self.terminal.is_none() {
+            if !inside && !self.terminals.iter().any(|i| i.exited.is_none()) {
                 self.start_si_missing(mailbox);
             }
             let snap = self.snapshot();
@@ -133,6 +147,10 @@ impl State {
                 outgoing,
             );
         }
+        // A new slot: any shells still listed belonged to a slot that went
+        // away without closing them (a layout switch), and are not this
+        // panel's to show.
+        bury(self.terminals.drain());
         let (ack, mut updates) = self.open_slot_of_kind(KIND, backend, mailbox);
         // Focus goes to the panel: opening it and not being able to type
         // inside without hunting for the mouse is not opening it.
@@ -163,34 +181,298 @@ impl State {
         &mut self,
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        if self.terminal.is_some() || self.slot_of_kind(KIND).is_none() {
+        // "Missing" = no LIVE shell: a panel of failed ones only would be a
+        // still picture forever.
+        if self.terminals.iter().any(|i| i.exited.is_none()) || self.slot_of_kind(KIND).is_none() {
             return Vec::new();
         }
+        let profile = self.config.shell_profiles.default_profile().clone();
+        match self.spawn_instance(&profile, mailbox) {
+            Ok(()) => self.republicar_terminal(),
+            Err(outgoing) => outgoing,
+        }
+    }
+
+    /// `terminal.new` and the `+`: another shell, from a shell profile
+    /// (`None` = the default one), in front.
+    pub(super) fn new_terminal(
+        &mut self,
+        profile: Option<&str>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.effects == crate::commands::Effects::SoloRead {
+            return Self::no_mutates();
+        }
+        if self.slot_of_kind(KIND).is_none() {
+            return not_here();
+        }
+        // Same gate and phrase as opening the panel: a shell over an
+        // `sftp://` would sit somewhere else without saying so.
+        if !norte_frontend::shell::is_local(self.slot().pane.dir()) {
+            let outgoing = self.say("host-not-local");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "host-not-local".to_owned(),
+                },
+                outgoing,
+            );
+        }
+        let profiles = &self.config.shell_profiles;
+        let Some(profile) = profile
+            .map_or(Some(profiles.default_profile()), |n| profiles.get(n))
+            .cloned()
+        else {
+            // A stale menu after `terminal.toml` changed: the name is the
+            // problem, not the panel.
+            return rejected();
+        };
+        match self.spawn_instance(&profile, mailbox) {
+            Ok(()) => (self.applied(), self.republicar_terminal()),
+            Err(outgoing) => (
+                ActionAck::Unavailable {
+                    reason_key: "host-shell-failed".to_owned(),
+                },
+                outgoing,
+            ),
+        }
+    }
+
+    /// Starts `profile`'s shell in the pane's directory and puts it in
+    /// front. On failure nothing is added, and the reader is TOLD: an empty
+    /// panel with no reason is what makes a panel distrusted.
+    fn spawn_instance(
+        &mut self,
+        profile: &ShellProfile,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> Result<(), Vec<BridgeEnvelope<UiUpdate>>> {
+        // The read-only rule for this panel, in ONE place: a read-only window
+        // never STARTS a program — whether by `+`, by key or by opening the
+        // panel. With no shell started there is nothing for close to gate.
+        if self.effects == crate::commands::Effects::SoloRead {
+            return Err(Self::no_mutates().1);
+        }
         let dir = self.slot().pane.dir().clone();
-        match start(&dir) {
+        match start(&dir, profile) {
             Ok(shell) => {
-                // A record is left, as the terminal does and with the same
-                // "does not go to the journal" note: a shell the reader opens
-                // is the reader acting with their own permissions, not a
-                // mutation by norte. But starting a shell is the most
-                // privileged thing a frontend does, and the log panel is now
-                // a surface that is also watched here.
+                // Not journalled: a shell the reader opens is the reader
+                // acting with their own permissions (ADR 0084). Logged
+                // because starting one is the most privileged thing a
+                // frontend does. The shell profile's NAME only: its args may
+                // carry a token.
                 tracing::info!(
+                    shell_profile = %profile.name,
                     "the window opened a shell in a terminal panel \
                      (does not go to the journal: no actor and no undo)"
                 );
-                self.terminal = Some(shell);
-                self.probe_terminal(mailbox);
+                self.terminals.push(
+                    profile.name.clone(),
+                    profile.icon,
+                    profile.color,
+                    Pty(shell),
+                );
+                self.restart_terminal_tick(mailbox);
+                Ok(())
             }
             Err(e) => {
-                // And it is SAID, not just to the log: the slot stays, so
-                // without a message the reader sees an empty panel with no
-                // idea why.
                 tracing::warn!(error = %e, "could not open the panel's shell");
-                return self.say("host-shell-failed");
+                Err(self.say("host-shell-failed"))
             }
         }
-        self.republicar_terminal()
+    }
+
+    /// `terminal.next` / `terminal.prev`.
+    pub(super) fn step_terminal(
+        &mut self,
+        forward: bool,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.slot_of_kind(KIND).is_none() || self.terminals.is_empty() {
+            return not_here();
+        }
+        if forward {
+            self.terminals.next();
+        } else {
+            self.terminals.prev();
+        }
+        (self.applied(), self.republicar_terminal())
+    }
+
+    /// `terminal.new-profile`: the shell profiles, in a picker.
+    pub(super) fn request_shell_profile(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(slot) = self.slot_of_kind(KIND) else {
+            return not_here();
+        };
+        let names = self.panel_de_terminal(slot.0).profiles;
+        self.open_terminal_picker(crate::pickers::Selector::shell_profiles(slot.0, &names))
+    }
+
+    /// `terminal.decorate`: icons and colours for the one in front.
+    pub(super) fn request_terminal_decorate(
+        &mut self,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(slot) = self.slot_of_kind(KIND) else {
+            return not_here();
+        };
+        if self.terminals.active_id().is_none() {
+            return not_here();
+        }
+        self.open_terminal_picker(crate::pickers::Selector::terminal_decorations(
+            slot.0, self.lang,
+        ))
+    }
+
+    fn open_terminal_picker(
+        &mut self,
+        s: crate::pickers::Selector,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.selector = Some(s);
+        self.gen_selector += 1;
+        let change = ViewChange::Picker {
+            picker: self.vista_selector(),
+        };
+        (self.applied(), vec![self.parche(vec![change])])
+    }
+
+    /// A terminal picker's row was chosen.
+    pub(super) fn apply_terminal_choice(
+        &mut self,
+        choice: crate::pickers::TerminalChoice,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        use crate::pickers::TerminalChoice;
+        let front = self.terminals.active();
+        let (icon, color) = (front.and_then(|i| i.icon), front.and_then(|i| i.color));
+        let Some(id) = self.terminals.active_id() else {
+            if let TerminalChoice::Profile(n) = choice {
+                return self.new_terminal(Some(&n), mailbox);
+            }
+            return not_here();
+        };
+        // One attribute at a time: choosing a colour keeps the icon.
+        match choice {
+            TerminalChoice::Profile(n) => self.new_terminal(Some(&n), mailbox),
+            TerminalChoice::Icon(i) => {
+                self.terminals.decorate(id, i, color);
+                (self.applied(), self.republicar_terminal())
+            }
+            TerminalChoice::Color(c) => {
+                self.terminals.decorate(id, icon, c);
+                (self.applied(), self.republicar_terminal())
+            }
+        }
+    }
+
+    /// `terminal.rename`: a text field prefilled with the current name.
+    pub(super) fn request_terminal_rename(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(front) = self.terminals.active() else {
+            return not_here();
+        };
+        let id = front.id.0;
+        let seed = front.name.clone().unwrap_or_default();
+        let modal = super::ModalId(self.next_modal);
+        self.next_modal += 1;
+        let vista = crate::dto::DialogView {
+            id: modal,
+            title_key: "terminal-rename-prompt".to_owned(),
+            destination: None,
+            subject: None,
+            asker: None,
+            deadline: None,
+            deadline_at_ms: None,
+            body: Vec::new(),
+            overflow_note: String::new(),
+            overflow_hostile: false,
+            choices: vec![
+                crate::dto::DialogChoice {
+                    id: "confirm".to_owned(),
+                    label_key: "dialog-confirm".to_owned(),
+                    destructive: false,
+                },
+                crate::dto::DialogChoice {
+                    id: "cancel".to_owned(),
+                    label_key: "dialog-cancel".to_owned(),
+                    destructive: false,
+                },
+            ],
+            input: Some(crate::bridge::clamp_display(seed.clone())),
+            input_hostile: false,
+            input_secret: false,
+            fields: Vec::new(),
+            dest_check: crate::dto::DestCheckView::NotAsked,
+        };
+        self.dialogs.push(super::Dialog {
+            id: modal,
+            vista,
+            typed: super::Typed::Text(seed),
+            recognized: true,
+            on_confirm: Some(super::Pending::RenameTerminal { id }),
+        });
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
+        };
+        (self.applied(), vec![self.parche(vec![change])])
+    }
+
+    /// A click on an instance's entry.
+    pub(super) fn select_terminal(
+        &mut self,
+        id: u32,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if !self.terminals.select(InstanceId(id)) {
+            return not_here();
+        }
+        (self.applied(), self.republicar_terminal())
+    }
+
+    /// Closes an instance, killing its shell; `None` = the one in front.
+    pub(super) fn close_terminal(
+        &mut self,
+        id: Option<u32>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(id) = id.map(InstanceId).or(self.terminals.active_id()) else {
+            return not_here();
+        };
+        let Some(gone) = self.terminals.close(id) else {
+            return not_here();
+        };
+        bury(vec![gone]);
+        (self.applied(), self.republicar_terminal())
+    }
+
+    /// Names an instance; blank clears the name.
+    pub(super) fn rename_terminal(
+        &mut self,
+        id: u32,
+        name: &str,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let id = InstanceId(id);
+        if self.terminals.display_title(id).is_none() {
+            return not_here();
+        }
+        self.terminals.rename(id, name);
+        (self.applied(), self.republicar_terminal())
+    }
+
+    /// Icon and colour, VALIDATED: the renderer's word is not trusted.
+    pub(super) fn decorate_terminal(
+        &mut self,
+        id: u32,
+        icon: Option<&str>,
+        color: Option<u8>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let id = InstanceId(id);
+        if self.terminals.display_title(id).is_none() {
+            return not_here();
+        }
+        let icon = match icon.map(TerminalIcon::parse) {
+            Some(None) => return rejected(),
+            other => other.flatten(),
+        };
+        let color = match color.map(AnsiColor::new) {
+            Some(None) => return rejected(),
+            other => other.flatten(),
+        };
+        self.terminals.decorate(id, icon, color);
+        (self.applied(), self.republicar_terminal())
     }
 
     /// Schedules the panel's next tick, if there is still a panel.
@@ -229,46 +511,40 @@ impl State {
             self.release_terminal();
             return Vec::new();
         }
-        self.probe_terminal(mailbox);
-        // The slot's size, BEFORE pumping: the pty has to know it or a
-        // full-screen program paints for a width that is not its own and
-        // line wrapping comes out wrong. It started at 80x24 and nobody ever
-        // resized it.
-        //
-        // From the LAYOUT, same as how the docked viewer gets its height:
-        // minus the frame, which the renderer paints. `resize` does
-        // nothing if it did not change, so asking on every tick is free.
+        // The slot's size goes to EVERY shell before pumping: the pty has to
+        // know it or a full-screen program paints for a width that is not its
+        // own. From the LAYOUT, minus the frame the renderer paints; `resize`
+        // does nothing if it did not change. Every shell, not only the one in
+        // front, so switching does not reflow — and every one PUMPED, or the
+        // pty's tail-only buffer corrupts the screens behind.
         let size = self.terminal_size();
-        let Some(t) = self.terminal.as_mut() else {
-            return Vec::new();
-        };
-        if let Some(size) = size {
-            t.resize(size);
+        let report = self.terminals.tick(size);
+        // Rearmed only while some shell is alive. With none — all gone, or
+        // all exited showing their last screen — a 30 Hz timer would spin at
+        // rest over a still picture; the next instance restarts it.
+        if self.terminals.iter().any(|i| i.exited.is_none()) {
+            self.probe_terminal(mailbox);
+        } else {
+            self.terminal_epoch += 1;
         }
-        let changed = t.pump();
-        // If the shell left, the slot SAYS so instead of showing the last
-        // screen of a process that no longer exists. The slot stays: closing
-        // it on its own would move someone's layout without them touching
-        // it.
-        if t.dead() {
-            // `release_terminal` and not `self.terminal = None`: it bumps the
-            // epoch, and without that the tick that already rearmed above
-            // would keep spinning at 30 Hz forever over a panel with no
-            // shell — "spins at rest" again, this time triggered by the
-            // shell leaving.
-            self.release_terminal();
-            return self.republicar_terminal();
-        }
-        if changed {
+        // A quiet tick produces no patch: a quiet shell does not wake the
+        // renderer thirty times a second.
+        if report.active_output || report.list_changed {
             return self.republicar_terminal();
         }
         Vec::new()
     }
 
-    /// Releases the shell and stops its pump. Called by the slot's closing.
+    /// Starts the tick afresh: the epoch bumps so a chain already in flight
+    /// dies instead of ticking twice as fast.
+    fn restart_terminal_tick(&mut self, mailbox: &mpsc::Sender<Message>) {
+        self.terminal_epoch += 1;
+        self.probe_terminal(mailbox);
+    }
+
+    /// Releases every shell and stops the pump. Called by the slot's closing.
     pub(super) fn release_terminal(&mut self) {
-        // `Shell`'s `Drop` kills the shell and waits for it.
-        self.terminal = None;
+        bury(self.terminals.drain());
         // And the epoch bumps: the tick in flight is left to die without
         // rearming.
         self.terminal_epoch += 1;
@@ -325,7 +601,18 @@ impl State {
     fn terminal_size(&self) -> Option<(u16, u16)> {
         let id = self.slot_of_kind(KIND)?;
         let (_, r) = self.split.placements.iter().find(|(s, _)| *s == id)?;
-        Some((r.width.saturating_sub(2), r.height.saturating_sub(2)))
+        // The list on the right is cells the shell does not get.
+        let width = r.width.saturating_sub(2).saturating_sub(self.list_cols());
+        Some((width, r.height.saturating_sub(2)))
+    }
+
+    /// The list's width: VS Code shows it only with two or more shells.
+    fn list_cols(&self) -> u16 {
+        if self.terminals.len() >= 2 {
+            LIST_COLS
+        } else {
+            0
+        }
     }
 
     /// The LONE chord that runs `layout.terminal`, if the preset gives one.
@@ -339,10 +626,13 @@ impl State {
         self.effective.lone_chord(COMMAND)
     }
 
-    /// Sends bytes to the shell, if there is one.
+    /// Sends bytes to the shell in front, if it is alive. An exited one is a
+    /// still picture: its keys go nowhere.
     pub(super) fn terminal_write(&mut self, bytes: &[u8]) {
-        if let Some(t) = self.terminal.as_mut() {
-            t.write(bytes);
+        if let Some(i) = self.terminals.active_mut()
+            && i.exited.is_none()
+        {
+            i.shell.0.write(bytes);
         }
     }
 
@@ -359,28 +649,102 @@ impl State {
 
     /// The panel's view for the snapshot, if the slot exists.
     pub(super) fn panel_de_terminal(&self, slot: u32) -> TerminalSlotView {
-        build_view(
-            slot,
-            self.terminal.as_ref().map(norte_term::pty::Shell::screen),
-        )
+        let front = self.terminals.active();
+        let mut view = build_view(slot, front.map(|i| i.shell.0.screen()));
+        if let Some(i) = front
+            && i.exited.is_some()
+        {
+            // A still picture has no cursor to blink.
+            view.cursor = None;
+            view.exited = i.exited;
+        }
+        view.instances = self
+            .terminals
+            .iter()
+            .map(|i| TerminalInstanceView {
+                id: i.id.0,
+                title: self
+                    .terminals
+                    .display_title(i.id)
+                    .unwrap_or_default()
+                    .to_owned(),
+                name: i.name.clone(),
+                icon: i.icon.map(|c| c.as_str().to_owned()),
+                color: i.color.map(AnsiColor::index),
+                exited: i.exited,
+                unseen: i.unseen,
+            })
+            .collect();
+        view.active = self.terminals.active_id().map(|id| id.0);
+        view.list_cols = self.list_cols();
+        let profiles = &self.config.shell_profiles;
+        let default = &profiles.default_profile().name;
+        view.profiles = std::iter::once(default.clone())
+            .chain(
+                profiles
+                    .iter()
+                    .filter(|p| &p.name != default)
+                    .map(|p| p.name.clone()),
+            )
+            .collect();
+        view
     }
 }
 
-/// Starts the shell with what norte decides: the program and the
-/// environment.
+/// Kills and reaps shells OFF the actor: each `Shell`'s `Drop` is a kill
+/// and a blocking wait, and a shell that ignores the hang-up makes that
+/// wait long — the whole window would freeze for it, once per shell.
 ///
-/// These live here and not in `norte-term` because resolving the reader's
-/// shell and the `NORTE_LEVEL` contract are norte's rules, not an emulator's.
-fn start(dir: &norte_proto::VPath) -> std::io::Result<norte_term::pty::Shell> {
+/// A clean exit removed by the tick does not come through here: its child
+/// was already reaped by `exit_code`, so its `Drop` does not block.
+fn bury(gone: Vec<norte_frontend::terminals::Instance<Pty>>) {
+    if gone.is_empty() {
+        return;
+    }
+    tokio::task::spawn_blocking(move || drop(gone));
+}
+
+/// The "nothing to act on" refusal the instance actions share.
+fn not_here() -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    (
+        ActionAck::Unavailable {
+            reason_key: "cmd-not-here".to_owned(),
+        },
+        Vec::new(),
+    )
+}
+
+/// A value from the renderer outside what the host accepts.
+fn rejected() -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    (
+        ActionAck::Unavailable {
+            reason_key: "host-value-rejected".to_owned(),
+        },
+        Vec::new(),
+    )
+}
+
+/// Starts a shell profile's shell with what norte decides: the directory
+/// and the environment.
+///
+/// These live here and not in `norte-term` because the `NORTE_LEVEL`
+/// contract is norte's rule, not an emulator's.
+fn start(
+    dir: &norte_proto::VPath,
+    profile: &ShellProfile,
+) -> std::io::Result<norte_term::pty::Shell> {
+    // Absolute by construction (`terminal.toml` refuses anything else), and
+    // checked again here because the spawn is where a relative one would be
+    // looked up from the directory being browsed (#302).
+    if !profile.program.is_absolute() {
+        return Err(std::io::Error::other("the shell program is not absolute"));
+    }
     let native = norte_vfs::native::vpath_to_native(dir)
         .map_err(|_| std::io::Error::other("the directory is not a native path"))?;
     norte_term::pty::Shell::open(
         &norte_term::pty::Startup {
-            // `login_shell` refuses to return a relative `$SHELL` and falls
-            // back to `/bin/sh` (#302): without that it would be looked up
-            // via `cwd`, which here is the directory the reader is looking
-            // at.
-            program: &norte_frontend::shell::login_shell(),
+            program: &profile.program,
+            args: &profile.args,
             dir: &native,
             // The real size is set by the renderer when it says which slot it
             // got; this is the startup one.
@@ -406,6 +770,11 @@ fn build_view(slot_id: u32, screen: Option<&Screen>) -> TerminalSlotView {
             rows: Vec::new(),
             cursor: None,
             no_shell: true,
+            instances: Vec::new(),
+            active: None,
+            exited: None,
+            profiles: Vec::new(),
+            list_cols: 0,
         };
     };
     let (_, height) = p.size();
@@ -421,6 +790,11 @@ fn build_view(slot_id: u32, screen: Option<&Screen>) -> TerminalSlotView {
             .collect(),
         cursor: cursor_at(p),
         no_shell: false,
+        instances: Vec::new(),
+        active: None,
+        exited: None,
+        profiles: Vec::new(),
+        list_cols: 0,
     }
 }
 

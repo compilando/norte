@@ -70,6 +70,8 @@ pub struct Startup<'a> {
     /// is not one, and a file manager's `cwd` is the directory being looked
     /// at — a `bash` left there would get executed (#302, ADR 0082).
     pub program: &'a std::path::Path,
+    /// Its arguments, as argv: no shell interpolation.
+    pub args: &'a [std::ffi::OsString],
     /// Where it sits.
     pub dir: &'a std::path::Path,
     /// Columns and rows.
@@ -145,7 +147,12 @@ pub struct Shell {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     mailbox: Arc<Mutex<Mailbox>>,
     tam: (u16, u16),
+    /// When the child was first seen reaped, for [`EXIT_GRACE`].
+    reaped_at: Option<std::time::Instant>,
 }
+
+/// How long an exit waits for an end-of-file that may never come.
+const EXIT_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
 impl Shell {
     /// Starts the shell.
@@ -164,6 +171,7 @@ impl Shell {
             })
             .map_err(std::io::Error::other)?;
         let mut cmd = portable_pty::CommandBuilder::new(a.program);
+        cmd.args(a.args);
         cmd.cwd(a.dir);
         for (k, v) in a.env {
             cmd.env(k, v);
@@ -197,6 +205,7 @@ impl Shell {
             child,
             mailbox,
             tam,
+            reaped_at: None,
         })
     }
 
@@ -270,6 +279,42 @@ impl Shell {
     /// Is the shell gone?
     pub fn dead(&mut self) -> bool {
         mailbox_of(&self.mailbox).closed || matches!(self.child.try_wait(), Ok(Some(_)))
+    }
+
+    /// How the shell ended: `None` while it runs — and ALSO while what it
+    /// wrote has not been read and pumped yet.
+    ///
+    /// The second half is what makes a kept "last screen" hold the last
+    /// thing the shell said: the reader thread runs on its own, so the child
+    /// can be reaped before its final bytes reach the mailbox. So it is over
+    /// once the reader saw end-of-file with nothing pending — or, if the
+    /// end-of-file never comes, [`EXIT_GRACE`] after the child was reaped.
+    /// On Linux the hang-up of a session leader's tty brings the end-of-file
+    /// anyway; `ConPTY`'s pipe may stay open until the console closes, and
+    /// without the grace a Windows shell that left would never be seen to.
+    ///
+    /// A death by signal is non-zero — `portable_pty` folds it into the
+    /// code, and a test pins that rather than assuming it. The code is the
+    /// raw 32 bits, so a Windows NTSTATUS reads as itself (negative).
+    pub fn exit_code(&mut self) -> Option<i32> {
+        let (closed, drained) = {
+            let b = mailbox_of(&self.mailbox);
+            (b.closed, b.pending.is_empty())
+        };
+        if !drained {
+            return None;
+        }
+        let Ok(Some(st)) = self.child.try_wait() else {
+            return None;
+        };
+        let reaped = *self.reaped_at.get_or_insert_with(std::time::Instant::now);
+        (closed || reaped.elapsed() >= EXIT_GRACE)
+            .then(|| i32::from_ne_bytes(st.exit_code().to_ne_bytes()))
+    }
+
+    /// The program's title since the last call; see [`Screen::take_title`].
+    pub fn take_title(&mut self) -> Option<String> {
+        self.screen.take_title()
     }
 
     /// The grid, to paint it.
@@ -400,6 +445,7 @@ mod tests {
         let mut sh = Shell::open(
             &Startup {
                 program: std::path::Path::new("/bin/sh"),
+                args: &[],
                 dir: &dir,
                 tam: (40, 5),
                 env: &[],
@@ -420,5 +466,127 @@ mod tests {
             .expect("the shell's output woke the waker");
         assert!(sh.pump(), "and there is output to feed");
         sh.matar();
+    }
+
+    fn open_sh() -> Shell {
+        let dir = std::env::temp_dir();
+        Shell::open(
+            &Startup {
+                program: std::path::Path::new("/bin/sh"),
+                args: &[],
+                dir: &dir,
+                tam: (40, 5),
+                env: &[],
+            },
+            |_| None,
+        )
+        .expect("a shell")
+    }
+
+    /// Polls `exit_code` against a deadline; `yield_now`, never a sleep.
+    fn wait_exit(sh: &mut Shell) -> Option<i32> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            let _ = sh.pump();
+            if let Some(code) = sh.exit_code() {
+                return Some(code);
+            }
+            std::thread::yield_now();
+        }
+        None
+    }
+
+    /// The code is what decides whether an instance leaves the list
+    /// quietly (0) or stays to say how it ended.
+    #[test]
+    fn exit_code_reports_zero_and_non_zero() {
+        for (cmd, want) in [("exit 0\n", 0), ("exit 3\n", 3)] {
+            let mut sh = open_sh();
+            assert_eq!(sh.exit_code(), None, "alive");
+            sh.write(cmd.as_bytes());
+            assert_eq!(wait_exit(&mut sh), Some(want), "{cmd}");
+        }
+    }
+
+    /// The exit is only reported once the last output is in the grid: the
+    /// kept screen of a failed shell exists to show that line.
+    #[test]
+    fn the_last_output_is_on_screen_when_the_exit_is_reported() {
+        for _ in 0..20 {
+            let dir = std::env::temp_dir();
+            let args = ["-c".into(), "printf lastword; exit 3".into()];
+            let mut sh = Shell::open(
+                &Startup {
+                    program: std::path::Path::new("/bin/sh"),
+                    args: &args,
+                    dir: &dir,
+                    tam: (40, 5),
+                    env: &[],
+                },
+                |_| None,
+            )
+            .expect("a shell");
+            assert_eq!(wait_exit(&mut sh), Some(3));
+            let row: String = sh
+                .screen()
+                .row_tramos(0)
+                .into_iter()
+                .map(|(t, _)| t)
+                .collect();
+            assert!(row.contains("lastword"), "{row:?}");
+        }
+    }
+
+    /// The shell left with a background job that ignores the hang-up: the
+    /// exit is still reported. On Linux the tty hang-up already brings the
+    /// end-of-file; the grace this pins in passing is for `ConPTY`, whose
+    /// pipe may stay open until the console closes (not reproducible here).
+    #[test]
+    fn an_exit_is_reported_even_if_the_pty_stays_open() {
+        let dir = std::env::temp_dir();
+        // The job ignores the hang-up, so it outlives the shell holding the
+        // pty — without the `trap` it dies with it and the test proves
+        // nothing.
+        let args = ["-c".into(), "(trap '' HUP; exec sleep 30) & exit 4".into()];
+        let mut sh = Shell::open(
+            &Startup {
+                program: std::path::Path::new("/bin/sh"),
+                args: &args,
+                dir: &dir,
+                tam: (40, 5),
+                env: &[],
+            },
+            |_| None,
+        )
+        .expect("a shell");
+        assert_eq!(wait_exit(&mut sh), Some(4));
+    }
+
+    /// A shell profile's arguments reach the program as argv.
+    #[test]
+    fn args_reach_the_program() {
+        let dir = std::env::temp_dir();
+        let args = ["-c".into(), "exit 7".into()];
+        let mut sh = Shell::open(
+            &Startup {
+                program: std::path::Path::new("/bin/sh"),
+                args: &args,
+                dir: &dir,
+                tam: (40, 5),
+                env: &[],
+            },
+            |_| None,
+        )
+        .expect("a shell");
+        assert_eq!(wait_exit(&mut sh), Some(7));
+    }
+
+    /// Killed by a signal is NOT a clean exit: something killed it, and the
+    /// instance has to stay to say so.
+    #[test]
+    fn a_signal_death_is_non_zero() {
+        let mut sh = open_sh();
+        sh.write(b"kill -9 $$\n");
+        assert!(matches!(wait_exit(&mut sh), Some(c) if c != 0));
     }
 }

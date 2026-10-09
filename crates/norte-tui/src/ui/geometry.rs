@@ -80,24 +80,19 @@ pub fn before_frame(app: &mut App, area: Rect) {
     // The pty learns the size or a full-screen program keeps painting for
     // the previous one, and what shows is garbage. `resize` does
     // nothing if it did not change.
-    if let Some((_, rect)) = placed_of_kind(&res, &app.layout, crate::termpanel::KIND)
-        && let Some(t) = app.terminal.as_mut()
-    {
-        // The frame is subtracted: the shell paints INSIDE.
-        t.resize((rect.width.saturating_sub(2), rect.height.saturating_sub(2)));
-        t.pump();
-    }
-    // And if the shell left, the panel stops having a shell: it is released
-    // so the slot says so instead of showing the last screen of a process
-    // that no longer exists. The slot stays — closing it on its own would
-    // move the reader's layout without them asking for it.
-    if app
-        .terminal
-        .as_mut()
-        .is_some_and(crate::termpanel::TermPanel::dead)
-    {
-        app.terminal = None;
-        if app.key_owner() == crate::app::KeyOwner::Terminal {
+    //
+    // EVERY shell, not only the one in front (the shared `tick`): the pty
+    // keeps only a tail of what nobody pumped. Unplaced — behind a tab — the
+    // last good size stays.
+    if !app.terminals.is_empty() {
+        let size = placed_of_kind(&res, &app.layout, crate::termpanel::KIND)
+            // The frame is subtracted: the shell paints INSIDE.
+            .map(|(_, r)| (r.width.saturating_sub(2), r.height.saturating_sub(2)));
+        let _ = app.terminals.tick(size);
+        // The last shell left cleanly: the slot says "no shell" and stays —
+        // closing it on its own would move the reader's layout without them
+        // asking. A failed one stays listed, so the keyboard does too.
+        if app.terminals.is_empty() && app.key_owner() == crate::app::KeyOwner::Terminal {
             app.release_keyboard();
         }
     }

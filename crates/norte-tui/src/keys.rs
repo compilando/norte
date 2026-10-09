@@ -186,6 +186,10 @@ pub async fn on_key(
         // allowlist: it is another cursor list that does not mutate data.
         // Confirming leaves the change REQUESTED and the loop does it.
         on_profile_picker_key(app, dialog_resolver, key.modifiers, key.code);
+    } else if (app.term_picker.is_some() || app.term_rename.is_some()) && !modal_wins(app) {
+        // The terminal panel's list and rename field: before the panel's
+        // own arm, which would hand these keys to the shell.
+        crate::termpanel::on_overlay_key(app, cfg, &key);
     } else if app.columns_picker.is_some() && !modal_wins(app) {
         // Columns picker (#108 7a): same spot in the
         // chain as the theme picker (overlay before the
@@ -229,9 +233,19 @@ pub async fn on_key(
                 | crate::app::KeyOwner::DiskMap
                 | crate::app::KeyOwner::Timeline
                 | crate::app::KeyOwner::Panel
+                // The terminal too, as in the window, but with its OWN short
+                // list: the ring and `terminal.*`. The panels' list would
+                // take `alt+x` — Emacs's `M-x` — and close every shell.
+                | crate::app::KeyOwner::Terminal
         )
-        && let Some(cmd) = crate::keymap::chord_from_crossterm(key.modifiers, key.code)
-            .and_then(|c| crate::keymap::shared_panel_command(resolver.effective(), c))
+        && let Some(cmd) =
+            crate::keymap::chord_from_crossterm(key.modifiers, key.code).and_then(|c| {
+                if app.key_owner() == crate::app::KeyOwner::Terminal {
+                    crate::keymap::terminal_pass_command(resolver.effective(), c)
+                } else {
+                    crate::keymap::shared_panel_command(resolver.effective(), c)
+                }
+            })
     {
         // Opening, closing and cycling panels work from INSIDE any side
         // panel, through the same dispatch as from a listing: each panel's
@@ -348,11 +362,13 @@ pub async fn on_key(
             // so the way back has to be the same code, or one day one of
             // the two learns something the other does not.
             app.toggle_terminal();
-        } else if let Some(t) = app.terminal.as_mut()
+        } else if let Some(i) = app.terminals.active_mut()
+            // An exited one is a still picture: its keys go nowhere.
+            && i.exited.is_none()
             && key.kind == crossterm::event::KeyEventKind::Press
             && let Some(bytes) = crate::termpanel::key_to_bytes(&key)
         {
-            t.write(&bytes);
+            i.shell.0.write(&bytes);
         }
     } else if app.key_owner() == crate::app::KeyOwner::Panel && !modal_wins(app) {
         // Plugin panel (phase 3), for the same reason as the two above:

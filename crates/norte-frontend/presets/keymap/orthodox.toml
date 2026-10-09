@@ -65,6 +65,19 @@ keymap = [
     # it and, above all, cannot leave it. The second press returns focus and
     # leaves the shell ALIVE; closing it is `layout.close-slot`.
     { on = ["ctrl+alt+s"], run = "layout.terminal" },
+    # The terminal panel's instances (spec 2026-10-09). These run from INSIDE
+    # the panel, where every chord is taken from the shell, so they share
+    # `layout.terminal`'s `ctrl+alt+` family: no shell or line editor uses it
+    # daily. Not VS Code's `ctrl+pageup/pagedown`: Far, Total Commander and
+    # Krusader attest those as "parent directory", and one family for all
+    # seven beats a family per preset. `terminal.new-profile`,
+    # `terminal.rename` and `terminal.decorate` have no chord in any preset:
+    # each would be one more key stolen from the shell, and they are reached
+    # by the menu, the palette and the mouse.
+    { on = ["ctrl+alt+n"], run = "terminal.new" },
+    { on = ["ctrl+alt+w"], run = "terminal.close" },
+    { on = ["ctrl+alt+pgdn"], run = "terminal.next" },
+    { on = ["ctrl+alt+pgup"], run = "terminal.prev" },
     # The live shell behind the panels (#142, ADR 0084): Midnight
     # Commander's own Ctrl+O. Unbound here until 2026-09-30, so the subshell
     # had no key in the default preset — and with no lone chord there is no
