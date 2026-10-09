@@ -744,6 +744,10 @@ pub struct App {
     /// as the layout one, and for the same reason: the model lives in
     /// norte-frontend (rule 7) and is only stored here.
     pub profile_picker: Option<norte_frontend::profile_picker::ProfilePicker>,
+    /// The terminal panel's small list: shell profiles or icon/colour.
+    pub term_picker: Option<crate::termpanel::TermPicker>,
+    /// The terminal panel's rename field.
+    pub term_rename: Option<crate::termpanel::TermRename>,
     /// Whether the menu bar is PINNED to the top row (`[ui] menu_bar`).
     ///
     /// Pinned takes a row away from the body, and that subtraction happens in
@@ -852,13 +856,13 @@ pub struct App {
     pub places_wants_drives: bool,
     /// The connections selector (#140), if open.
     pub connections_picker: Option<norte_frontend::connections_picker::ConnectionsPicker>,
-    /// The terminal panel's shell (#362), if one is alive.
+    /// The terminal panel's shells (#362, spec 2026-10-09).
     ///
     /// Lives HERE and not in the slot because the kind is `multi: false`:
-    /// there is one, and it survives the panel being hidden and reopened.
-    /// What kills it is closing the slot (`layout.close-slot`) or quitting
-    /// norte.
-    pub terminal: Option<crate::termpanel::TermPanel>,
+    /// there is one panel, and its shells survive it being hidden and
+    /// reopened. What kills them is closing the slot (`layout.close-slot`),
+    /// closing an instance by name, or quitting norte.
+    pub terminals: crate::termpanel::Shells,
     /// Rung by the terminal panel's reader thread when its shell writes
     /// (#405): the loop paints the echo at once, and a quiet terminal no
     /// longer keeps the 100 ms tick drawing.
@@ -1389,7 +1393,7 @@ impl App {
             // Lazy, like the subshell: a shell per session that nobody is
             // going to use is a process, a pty and someone's `.bashrc`
             // running just in case.
-            terminal: None,
+            terminals: crate::termpanel::Shells::new(),
             term_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
             log_panel: norte_frontend::logpanel::LogPanel::default(),
             log_filter_input: None,
@@ -1433,6 +1437,8 @@ impl App {
             theme_picker: None,
             layout_picker: None,
             profile_picker: None,
+            term_picker: None,
+            term_rename: None,
             menu_bar: true,
             panel_bar: true,
             chrome: norte_config::UiChrome {

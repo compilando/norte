@@ -1096,8 +1096,8 @@ impl App {
         // behind a tab the panel is still there and its shell has to keep
         // running, which is half the point of having a shell inside the
         // manager.
-        if self.terminal.is_some() && self.terminal_slot().is_none() {
-            self.terminal = None;
+        if !self.terminals.is_empty() && self.terminal_slot().is_none() {
+            crate::termpanel::bury(self.terminals.drain());
         }
     }
 

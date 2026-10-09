@@ -209,6 +209,13 @@ commands! {
     "app.goto" => AppGoto,
     "layout.timeline" => LayoutTimeline,
     "layout.terminal" => LayoutTerminal,
+    "terminal.new" => TerminalNew,
+    "terminal.new-profile" => TerminalNewProfile,
+    "terminal.close" => TerminalClose,
+    "terminal.next" => TerminalNext,
+    "terminal.prev" => TerminalPrev,
+    "terminal.rename" => TerminalRename,
+    "terminal.decorate" => TerminalDecorate,
     "app.menu" => AppMenu,
     "app.settings" => AppSettings,
     "app.pick-accept" => AppPickAccept,
@@ -434,6 +441,12 @@ const PANEL_SHARED: &[&str] = &[
     "layout.close-slot",
     "layout.focus-next",
     "layout.focus-prev",
+    // The terminal panel's instances: managing its shells from inside is
+    // the point. Only four are bound, with chords no shell uses daily.
+    "terminal.new",
+    "terminal.close",
+    "terminal.next",
+    "terminal.prev",
 ];
 
 /// The shared panel command `chord` runs in the LISTING's keymap, if any:

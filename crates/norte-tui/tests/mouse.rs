@@ -2205,3 +2205,89 @@ fn the_wheel_scrolls_down_through_help_and_a_click_chooses_a_page() {
         "with help in front, a click outside it does nothing"
     );
 }
+
+/// An app with the terminal panel open and `n` real `/bin/sh` shells in it,
+/// painted at 100×30 so the panel gets a row of tabs.
+#[cfg(unix)]
+fn app_with_shells(n: usize) -> (App, Vec<String>) {
+    let mut app = app_painted(3);
+    app.terminal_chord = norte_frontend::keymap::parse_chord("ctrl+alt+s").ok();
+    app.toggle_terminal();
+    let profile = norte_frontend::shell_profiles::ShellProfile {
+        name: "sh".into(),
+        program: "/bin/sh".into(),
+        args: Vec::new(),
+        icon: None,
+        color: None,
+    };
+    for _ in 0..n {
+        let t =
+            norte_tui::termpanel::open(&std::env::temp_dir(), (80, 24), &profile).expect("a shell");
+        app.terminals
+            .push("sh".into(), None, None, norte_tui::termpanel::Pty(t));
+    }
+    let lines = paint_at(&mut app, 100, 30);
+    (app, lines)
+}
+
+/// With two or more shells, the panel's top border IS the list.
+#[cfg(unix)]
+#[test]
+fn the_terminal_border_lists_its_shells() {
+    let (_, lines) = app_with_shells(3);
+    // A `●` may sit before a title: a shell behind printed its prompt.
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("┌ 1 ") && l.contains(" │ 2 ") && l.contains(" │ 3 ")),
+        "{lines:#?}"
+    );
+}
+
+/// With one, the border keeps the panel's name: no strip of one tab.
+#[cfg(unix)]
+#[test]
+fn a_single_shell_shows_no_strip() {
+    let (_, lines) = app_with_shells(1);
+    assert!(!lines.iter().any(|l| l.contains("1 sh")), "{lines:#?}");
+}
+
+/// A click on a tab brings that shell to the front (and does not start
+/// dragging the panel by its title).
+#[cfg(unix)]
+#[test]
+fn a_click_on_a_terminal_tab_selects_it() {
+    let (mut app, lines) = app_with_shells(3);
+    let first = app.terminals.iter().next().map(|i| i.id);
+    assert_ne!(app.terminals.active_id(), first);
+    // On the "1" of the first tab, right after the corner and a space.
+    let (row, col) = where_(&lines, "┌ 1 ");
+    assert_eq!(
+        mouse::handle(&mut app, ev(DOWN, col + 2, row)),
+        After::Nothing
+    );
+    assert_eq!(app.terminals.active_id(), first);
+}
+
+/// A shell that failed stays, with its code on the tab and on the screen.
+#[cfg(unix)]
+#[test]
+fn a_failed_shell_says_how_it_ended() {
+    let (mut app, _) = app_with_shells(2);
+    if let Some(i) = app.terminals.active_mut() {
+        i.shell.0.write(b"exit 3\n");
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut lines = Vec::new();
+    while std::time::Instant::now() < deadline {
+        lines = paint_at(&mut app, 100, 30);
+        if app.terminals.active().and_then(|i| i.exited) == Some(3) {
+            lines = paint_at(&mut app, 100, 30);
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert!(lines.iter().any(|l| l.contains("sh (3)")), "{lines:#?}");
+    let said = norte_i18n::ta("terminal-exited", &[("code", "3")]);
+    assert!(lines.iter().any(|l| l.contains(&said)), "{lines:#?}");
+}

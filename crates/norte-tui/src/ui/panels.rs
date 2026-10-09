@@ -1200,9 +1200,15 @@ pub(crate) fn draw_terminal(frame: &mut Frame<'_>, area: Rect, app: &App, with_k
     };
     let mut block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" {} ", t("panelbar-terminal")))
         .title_style(theme.role(Role::Title))
         .border_style(theme.role(border));
+    // With two or more shells the top border IS the list (spec 2026-10-09):
+    // no column is taken from the shell. With one, the panel's name.
+    block = if app.terminals.len() >= 2 {
+        block.title(terminal_strip(app, area.width.saturating_sub(4)))
+    } else {
+        block.title(format!(" {} ", t("panelbar-terminal")))
+    };
     // The footer says how to GET OUT, and only when the keyboard is inside:
     // it is the only key the panel does not pass to the shell, so it is the
     // only one that has to be announced — and without announcing it, a
@@ -1215,7 +1221,7 @@ pub(crate) fn draw_terminal(frame: &mut Frame<'_>, area: Rect, app: &App, with_k
     }
     let inside = block.inner(area);
     frame.render_widget(block, area);
-    let Some(term) = app.terminal.as_ref() else {
+    let Some(front) = app.terminals.active() else {
         // With no shell the slot is still useful: it says there is none. An
         // empty panel with no explanation is what makes a panel distrusted.
         frame.render_widget(
@@ -1224,11 +1230,81 @@ pub(crate) fn draw_terminal(frame: &mut Frame<'_>, area: Rect, app: &App, with_k
         );
         return;
     };
-    let p = term.screen();
+    let p = front.shell.0.screen();
+    if let Some(code) = front.exited {
+        // A failed shell's last screen, dimmed, with how it ended on its
+        // bottom row: a still picture, so no cursor.
+        frame.render_widget(
+            Paragraph::new(crate::termpanel::rows(p)).style(
+                ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM),
+            ),
+            inside,
+        );
+        let last = Rect {
+            y: inside.y + inside.height.saturating_sub(1),
+            height: inside.height.min(1),
+            ..inside
+        };
+        frame.render_widget(ratatui::widgets::Clear, last);
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                norte_i18n::ta("terminal-exited", &[("code", &code.to_string())]),
+                theme.role(Role::Muted),
+            )),
+            last,
+        );
+        return;
+    }
     frame.render_widget(Paragraph::new(crate::termpanel::rows(p)), inside);
     if let Some((x, y)) = crate::termpanel::cursor_en(p, inside, with_keyboard) {
         frame.set_cursor_position((x, y));
     }
+}
+
+/// The tab strip for the top border, `width` columns wide: the active tab
+/// in the title role, the rest muted, each in its instance's colour if it
+/// has one (an ANSI index, resolved by the reader's palette like the grid).
+fn terminal_strip<'a>(app: &App, width: u16) -> Line<'a> {
+    use crate::ui::terminal_tabs::{CUT, SEP, layout_strip};
+    let theme = &app.theme;
+    let labels = crate::termpanel::strip_labels(&app.terminals);
+    let Some(active) = app.terminals.active_id() else {
+        return Line::from(format!(" {} ", t("panelbar-terminal")));
+    };
+    let strip = layout_strip(&labels, active, width);
+    let mut spans = vec![Span::raw(" ")];
+    if strip.cut_left {
+        spans.push(Span::styled(CUT, theme.role(Role::Muted)));
+    }
+    for (n, item) in strip.items.iter().enumerate() {
+        if n > 0 {
+            spans.push(Span::styled(SEP, theme.role(Role::Muted)));
+        }
+        let mut style = if item.active {
+            theme
+                .role(Role::Title)
+                .add_modifier(ratatui::style::Modifier::BOLD)
+        } else {
+            theme.role(Role::Muted)
+        };
+        if let Some(c) = app
+            .terminals
+            .iter()
+            .find(|i| i.id == item.id)
+            .and_then(|i| i.color)
+        {
+            style = style.fg(ratatui::style::Color::Indexed(c.index()));
+        }
+        spans.push(Span::styled(item.label.clone(), style));
+    }
+    if strip.cut_right {
+        spans.push(Span::styled(
+            format!(" {}", CUT.trim_end()),
+            theme.role(Role::Muted),
+        ));
+    }
+    spans.push(Span::raw(" "));
+    Line::from(spans)
 }
 
 pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboard: bool) {

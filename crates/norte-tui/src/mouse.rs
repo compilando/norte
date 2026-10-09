@@ -826,6 +826,33 @@ fn tab_zone_at(app: &App, col: u16, row: u16) -> Option<crate::ui::TabZone> {
         .copied()
 }
 
+/// The terminal panel's tab under `(col, row)`, if any. Recomputed from the
+/// slot's painted rectangle with the SAME layout the paint used
+/// (`terminal_tabs::layout_strip`), so the two cannot disagree: the strip
+/// starts two cells in, after the corner and a space.
+fn terminal_tab_at(app: &App, col: u16, row: u16) -> Option<norte_frontend::terminals::InstanceId> {
+    if app.terminals.len() < 2 {
+        return None;
+    }
+    let slot = app.terminal_slot()?;
+    let r = app.mouse.slots.iter().find(|s| s.slot == slot)?;
+    if row != r.y {
+        return None;
+    }
+    let labels = crate::termpanel::strip_labels(&app.terminals);
+    let strip = crate::ui::terminal_tabs::layout_strip(
+        &labels,
+        app.terminals.active_id()?,
+        r.width.saturating_sub(4),
+    );
+    let x = col.checked_sub(r.x + 2)?;
+    strip
+        .items
+        .iter()
+        .find(|i| x >= i.x && x < i.x + i.width)
+        .map(|i| i.id)
+}
+
 /// The places-sidebar row under `(col, row)`, if there is one (#226).
 fn place_zone_at(app: &App, col: u16, row: u16) -> Option<crate::ui::PlaceZone> {
     app.mouse
@@ -1431,6 +1458,17 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
         app.mouse.last_click = None;
         app.pending_panel_command = Some(cmd.to_owned());
         return After::PanelBar;
+    }
+    // A terminal tab sits ON the panel's top border, which is also a border
+    // to drag and a title to move by: a press on a tab's TEXT chooses it;
+    // anywhere else on the border still resizes or moves.
+    if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left))
+        && let Some(id) = terminal_tab_at(app, ev.column, ev.row)
+    {
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        app.terminals.select(id);
+        return After::Nothing;
     }
     // Dragging a BORDER comes before everything about the listing, in all
     // three stages of the gesture: while it lasts, the pointer leaves the
