@@ -59,13 +59,29 @@ pulsar mayús sin moverte se refleja en la siguiente fila que cruces.
 
 # El menú del botón derecho
 
-El frontend gráfico abre un menú en el puntero con las operaciones que ya
-tienen tecla: abrir ({{cmd:nav.enter}}), {{cmd:pane.view}}, {{cmd:pane.copy}},
-{{cmd:pane.move}}, {{cmd:pane.rename}}, {{cmd:pane.delete}} y copiar la ruta al
-portapapeles. Cada entrada ejecuta el MISMO comando que el teclado — no hay una
-segunda forma de copiar un fichero. Las entradas que ahora mismo no pueden
-correr (un listado de solo lectura, un remoto sin la capability) se pintan
-apagadas con el motivo en vez de desaparecer.
+El frontend gráfico abre un menú en el puntero, en cinco sitios:
+
+- una **fila del listado**
+- la **parte vacía del listado**, y su fila `..`
+- la **cabecera de una columna**
+- una fila de **Lugares** (una unidad, un favorito o la cabecera de una sección)
+- una **rama del árbol**
+
+Desde el teclado, **Shift+F10** o la tecla **Menú** ({{cmd:pane.context-menu}})
+lo abren sobre el elemento con el foco: la fila del cursor del listado, el
+cursor de Lugares, el cursor del árbol. Dentro, las flechas se mueven, Intro
+ejecuta la entrada y Esc lo cierra.
+
+El menú de una fila empieza con las operaciones que ya tienen tecla: abrir
+({{cmd:nav.enter}}), {{cmd:pane.view}}, {{cmd:pane.copy}}, {{cmd:pane.move}},
+{{cmd:pane.rename}}, {{cmd:pane.delete}} y copiar la ruta al portapapeles. Son
+las mismas en todas las filas; las demás (extraer un archivo comprimido, el
+tamaño de un directorio, renombrar en lote una selección, la suma de
+verificación…) aparecen solo donde corresponden. Cada entrada ejecuta el MISMO
+comando que el teclado — no hay una segunda forma de copiar un fichero. Las
+entradas que ahora mismo no pueden correr (un listado de solo lectura, un
+remoto sin la capability) se pintan apagadas con el motivo en vez de
+desaparecer.
 
 Sobre qué actúa el menú lo decide la fila donde hiciste click derecho:
 
@@ -79,6 +95,24 @@ haría que el menú dijera «1» y la copia se llevara once. La selección
 descartada no se recupera, ni cerrando el menú con Esc. El intercambio es
 deliberado: el fallo que evita es silencioso, y este se ve en el instante en
 que el menú aparece.
+
+Los demás menús son más pequeños. El área vacía ofrece carpeta y fichero
+nuevos, refrescar, ficheros ocultos, ordenar y columnas, marcar todo e
+invertir, las operaciones de IA (renombrar, organizar) y, en un remoto,
+desconectar: actúan sobre toda la carpeta o la conexión, así que viven aquí y
+no en una fila. Nunca se ejecutan solas; cada entrada eres tú pidiéndolo. La
+cabecera de columna ofrece *ordenar por esta columna*, *ocultar esta columna*
+(no en Nombre) y *Columnas…*; ocultar desde aquí afecta solo a esta ventana,
+como el selector de columnas, y no toca `norte.toml`. Una fila de Lugares o una
+rama del árbol ofrece abrir, abrir en el otro panel, abrir en una pestaña
+nueva, copiar la ruta y añadir a favoritos (o quitar de favoritos) — *Añadir a
+favoritos…* pide el nombre, ya relleno, igual que el selector de favoritos —.
+Una cabecera de sección de Lugares o una rama del árbol también se pueden
+plegar y desplegar.
+
+El botón derecho solo abre el menú: ya no selecciona la fila ni entra en un
+directorio. El menú propio del webview (Atrás, Recargar, Inspeccionar) ya no
+sale; los campos de texto conservan su menú nativo de copiar y pegar.
 
 # Devolverle el ratón al terminal
 

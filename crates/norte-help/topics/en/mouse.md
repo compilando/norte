@@ -58,13 +58,27 @@ so pressing shift without moving updates it on the next row you cross.
 
 # The right-click menu
 
-The graphical frontend opens a menu at the pointer with the operations that
-already have keys: open ({{cmd:nav.enter}}), {{cmd:pane.view}},
-{{cmd:pane.copy}}, {{cmd:pane.move}}, {{cmd:pane.rename}},
-{{cmd:pane.delete}}, and copying the path to the clipboard. Every entry runs
-the same command the keyboard runs — there is no second way to copy a file.
-Entries that cannot run right now (a read-only listing, a remote without the
-capability) are shown dimmed with the reason instead of disappearing.
+The graphical frontend opens a menu at the pointer, in five places:
+
+- a **listing row**
+- the **empty part of a listing**, and its `..` row
+- a **column header**
+- a **Places** row (a drive, a favorite, or a section header)
+- a **branch of the tree**
+
+From the keyboard, **Shift+F10** or the **Menu** key ({{cmd:pane.context-menu}})
+opens it on the focused item: the listing's cursor row, the Places cursor, the
+tree cursor. Inside it the arrows move, Enter runs the entry and Esc closes it.
+
+A row's menu starts with the operations that already have keys: open
+({{cmd:nav.enter}}), {{cmd:pane.view}}, {{cmd:pane.copy}}, {{cmd:pane.move}},
+{{cmd:pane.rename}}, {{cmd:pane.delete}}, and copying the path to the
+clipboard. These are the same on every row; further entries (unpack an
+archive, the size of a directory, batch rename for a selection, checksum…)
+appear only where they apply. Every entry runs the same command the keyboard
+runs — there is no second way to copy a file. Entries that cannot run right
+now (a read-only listing, a remote without the capability) are shown dimmed
+with the reason instead of disappearing.
 
 What the menu acts on is decided by the row you right-clicked:
 
@@ -78,6 +92,23 @@ would make the menu say "1" and the copy take eleven. The discarded selection
 cannot be brought back, not even by closing the menu with Esc. The trade is
 deliberate: the failure it prevents is silent, and this one is visible the
 instant the menu opens.
+
+The other menus are smaller. The empty area offers new folder and file,
+refresh, hidden files, sort and columns, mark all and invert, the AI
+operations (rename, organize) and, on a remote, disconnect: those act on the
+whole folder or connection, so they live here and not on a row. They never run
+by themselves; each entry is you asking. The column header offers *sort by
+this column*, *hide this column* (not for Name) and *Columns…*; hiding from
+here affects this window only, like the column selector, and does not touch
+`norte.toml`. A Places row or a tree branch offers open, open in the other
+pane, open in a new tab, copy path, and add to (or remove from) favorites —
+*Add to favorites…* asks for the name, prefilled, just as the favorites
+picker does. A Places section header or a tree branch can also fold and
+unfold.
+
+The right button only opens the menu: it no longer selects the row or enters a
+directory. The webview's own menu (Back, Reload, Inspect) is gone; text fields
+keep their native copy and paste menu.
 
 # Giving the terminal its mouse back
 
