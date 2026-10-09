@@ -92,6 +92,40 @@ impl State {
         }
     }
 
+    /// `pane.send-left`/`-right`: the location travels towards a side, by
+    /// the split's geometry — not by the `Target` role `pane_gesture` uses.
+    pub(super) fn send_toward(
+        &mut self,
+        right: bool,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        use norte_frontend::layout::Side;
+        let listings: Vec<(u32, norte_frontend::layout::Rect)> = self
+            .split
+            .placements
+            .iter()
+            .filter(|(s, _)| self.slots.contains_key(&s.0))
+            .map(|(s, r)| (s.0, *r))
+            .collect();
+        let side = if right { Side::Right } else { Side::Left };
+        let Some(travel) = norte_frontend::layout::send_toward(&listings, self.active(), side)
+        else {
+            return (self.applied(), self.say("msg-pane-nothing-beside"));
+        };
+        let Some(target) = self.current_dir(travel.from) else {
+            return (Self::stale(StaleAction::Generation), Vec::new());
+        };
+        if self.current_dir(travel.to).as_ref() == Some(&target) {
+            // Already there: silent, for `pane_gesture`'s reason.
+            return (self.applied(), Vec::new());
+        }
+        (
+            self.applied(),
+            self.navigate_slot(travel.to, &target, Trail::Record, backend, mailbox),
+        )
+    }
+
     /// The location that TRAVELS in a panel gesture, read from slot `source`.
     ///
     /// For mirror and pull it is [`Self::current_dir`]. For

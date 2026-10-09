@@ -262,18 +262,15 @@ keymap = [
     # ("Synchronize Folders"). Mapping both to pane.sync-dirs would say
     # the Equals Button opens a folder-tree diff, which it does not.
     { on = ["alt+O"], run = "pane.mirror" },
-    # Ctrl+Left/Right: "on a folder: refreshes the [other] panel with the
-    # contents of the folder; on a file: the [other] panel gets the same path".
-    # BOTH arrows run the same verb because norte's gesture names the OTHER
-    # pane, never a side — the source's own row covers the two together, and
-    # from the left panel the only pane that can receive is the right one.
-    #
-    # This was omitted at transcription time ("adopting the other panel's
-    # cursor target") because norte had no command for it: `pane.mirror` sends
-    # this LOCATION and knows nothing about the cursor. Now it has one, and
-    # `pane.mirror` keeps its meaning for the four presets that bind it.
-    { on = ["ctrl+left"], run = "pane.mirror-target" },
-    { on = ["ctrl+right"], run = "pane.mirror-target" },
+    # Ctrl+Left/Right: the handbook names a SIDE — Ctrl+Left refreshes the
+    # LEFT panel, Ctrl+Right the RIGHT one — so each arrow runs its own verb
+    # and the location travels the way the arrow points, whichever panel has
+    # the focus. Divergence (2026-10-09): what travels is the panel's
+    # LOCATION, not the folder under the cursor the handbook describes; that
+    # gesture is still `pane.mirror-target`, in the Panels menu and the
+    # palette.
+    { on = ["ctrl+left"], run = "pane.send-left" },
+    { on = ["ctrl+right"], run = "pane.send-right" },
     # Ctrl+Shift+Left/Right: "Open left/right media list". Omitted at
     # transcription time as part of MountMan, reasoning that Linux has no drive
     # letters — but the media list is not MountMan, it is the per-side volume

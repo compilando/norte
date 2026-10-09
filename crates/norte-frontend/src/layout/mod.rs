@@ -23,6 +23,7 @@
 //! The decision and its discarded alternatives are in ADR 0058; the design
 //! is in `docs/superpowers/specs/2026-08-17-layout-slots-tabs-design.md`.
 
+mod beside;
 mod by_slot;
 pub mod config;
 mod docks;
@@ -34,6 +35,7 @@ mod roles;
 mod store;
 mod tree;
 
+pub use beside::{Side, Travel, beside, send_toward};
 pub use by_slot::BySlot;
 pub use docks::{Dock, default_dock, dock_for, dock_of, docks_in};
 pub use focus::{focus_next, focus_prev};

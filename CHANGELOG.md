@@ -82,6 +82,17 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **In the Krusader keymap, Ctrl+← and Ctrl+→ follow the arrow.** Ctrl+→
+  sends the location rightwards: the pane on the right goes where the
+  left one is, whichever has the focus; Ctrl+← does the opposite. Both
+  used to send the folder under the cursor to "the other" pane, so from
+  the left pane Ctrl+← changed the right one. What travels is now the
+  pane's location (remote and archive ones included), not the cursor's
+  folder; that gesture stays in the Panels menu and the palette as "Send
+  what is under the cursor". The new `pane.send-left` and
+  `pane.send-right` go by what is on screen: with three panes the middle
+  one reaches its neighbour on each side, and panes stacked one above the
+  other say there is nothing beside them. Both frontends.
 - **Panels open at their normal place, or where you left them.** Left
   for places and the tree, right for the viewer and details, bottom for
   processes, log, terminal, timeline and disk map — in both frontends.

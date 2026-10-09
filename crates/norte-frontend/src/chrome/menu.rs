@@ -262,6 +262,8 @@ pub const MENUS: &[Menu] = &[
                 &[
                     "pane.mirror",
                     "pane.mirror-target",
+                    "pane.send-left",
+                    "pane.send-right",
                     "pane.pull",
                     "pane.swap",
                 ],

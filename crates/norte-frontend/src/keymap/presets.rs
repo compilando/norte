@@ -387,6 +387,22 @@ mod k2b_gate_tests {
         }
     }
 
+    /// Krusader's `Ctrl+←`/`Ctrl+→` name a SIDE, so each arrow runs its own
+    /// verb. Both used to run `pane.mirror-target`, which names "the other
+    /// pane": from the left pane `Ctrl+←` updated the right one.
+    #[test]
+    fn krusaders_ctrl_arrows_send_towards_their_side() {
+        let known = live_commands();
+        let eff = build("krusader", Screen::Browse, &known);
+        for (chord, cmd) in [
+            ("ctrl+left", "pane.send-left"),
+            ("ctrl+right", "pane.send-right"),
+        ] {
+            let c = parse_chord(chord).expect("parses");
+            assert!(eff.single_chord_runs(c, cmd), "{chord} does not run {cmd}");
+        }
+    }
+
     /// Check 5: every `run` name a preset binds is in the shared catalogue
     /// (Live or Planned) — the same rule [`Effective::build_for`]'s
     /// `UnknownCommand` already enforces, asserted directly against the raw

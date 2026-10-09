@@ -93,6 +93,10 @@
 # `layout.flip` (ADR 0138) is unbound in all seven presets on purpose: Far
 # has no such action to transcribe, and it lives on the `[/]` layout button,
 # the Panels menu and the palette.
+#
+# `pane.send-left`/`-right` (Krusader's Ctrl+Left/Right) are unbound: Far
+# has no such action, and its own Ctrl+Left/Right resize panels (omitted
+# above). Panels menu, palette.
 
 # `pane.compare-files` (#312) is left UNBOUND here, by the same rule that
 # leaves out `pane.compare-dirs`: this preset's source does not attribute a

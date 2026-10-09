@@ -705,7 +705,8 @@ pub fn enter_action(app: &App) -> EnterAction {
 /// CURSOR's target — the folder under the cursor when it is one, and this
 /// pane's own location otherwise.
 ///
-/// It is Krusader's `Ctrl+←`/`Ctrl+→`, and the reason it is a separate verb
+/// The handbook's reading of Krusader's `Ctrl+←`/`Ctrl+→` (the preset now
+/// binds those to [`send_plan`]'s sided verbs). The reason it is a separate verb
 /// rather than a smarter `pane.mirror` is that `pane.mirror` is bound in four
 /// presets as "send this location": teaching it to prefer the cursor would
 /// change, in silence, what a key those readers already use does.
@@ -725,6 +726,46 @@ pub fn mirror_target_plan(app: &App) -> Option<PaneMove> {
     let dir = app.panes[from].target_dir().clone();
     (app.panes[to].dir() != &dir || app.panes[to].virtual_search)
         .then_some(PaneMove { pane: to, dir })
+}
+
+/// `pane.send-left`/`-right`: the LOCATION travels towards `side`, by what
+/// the last frame laid out ([`norte_frontend::layout::send_toward`], the
+/// rule the window applies too). `Ok(None)` is [`mirror_plan`]'s silent
+/// "already there".
+///
+/// # Errors
+///
+/// The message key for a refusal the reader should hear: no listing beside
+/// the focused one, or a results pane as the origin.
+pub fn send_plan(
+    app: &App,
+    side: norte_frontend::layout::Side,
+) -> Result<Option<PaneMove>, &'static str> {
+    const NOTHING: &str = "msg-pane-nothing-beside";
+    let area = app.last_frame.ok_or(NOTHING)?;
+    let res = crate::ui::resolved_frame(app, area);
+    let browser = norte_frontend::layout::KindId::browser();
+    let listings: Vec<_> = res
+        .placements
+        .into_iter()
+        .filter(|(id, _)| app.layout.kind_of(*id) == Some(&browser))
+        .collect();
+    let travel =
+        norte_frontend::layout::send_toward(&listings, app.focused_slot(), side).ok_or(NOTHING)?;
+    // By SLOT and not by position: between a layout change and the next
+    // frame the positions are the tree's order, not the screen's.
+    let index = |slot| (0..app.panes.len()).find(|i| app.panes.slot_of(*i) == slot);
+    let (Some(from), Some(to)) = (index(travel.from), index(travel.to)) else {
+        return Err(NOTHING);
+    };
+    if app.panes[from].virtual_search {
+        return Err("msg-pane-not-a-location");
+    }
+    let dir = app.panes[from].dir().clone();
+    Ok(
+        (app.panes[to].dir() != &dir || app.panes[to].virtual_search)
+            .then_some(PaneMove { pane: to, dir }),
+    )
 }
 
 /// `pane.pull`: the FOCUSED pane goes where the other one is — the same
@@ -2274,5 +2315,139 @@ mod compare_files_tests {
             Pane::new(local.clone(), vec![entry(&local, "c.txt", EntryKind::File)]),
         );
         assert!(compare_files(&app).is_err());
+    }
+}
+
+#[cfg(test)]
+mod send_tests {
+    use super::{App, PaneMove, send_plan};
+    use crate::app::Pane;
+    use crate::keymap::{Command, Effective, Resolution, Resolver, Screen, parse_chord};
+    use norte_frontend::layout::{Dir, Side};
+    use norte_proto::VPath;
+
+    fn vp(wire: &str) -> VPath {
+        VPath::parse(wire).expect("test wire")
+    }
+
+    /// Lays the frame out the way the run loop does before every key.
+    fn laid_out(mut app: App) -> App {
+        crate::ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 120, 40));
+        app
+    }
+
+    /// Two listings side by side: `a` on the left, `b` on the right.
+    fn two() -> App {
+        laid_out(App::new(
+            Pane::new(vp("mem:///a"), Vec::new()),
+            Pane::new(vp("mem:///b"), Vec::new()),
+        ))
+    }
+
+    /// What the KRUSADER preset runs for `chord` on the listing, as a side.
+    fn krusader_side(chord: &str) -> Side {
+        let preset = crate::keymap::presets()
+            .into_iter()
+            .find(|(n, _)| *n == "krusader")
+            .expect("krusader ships")
+            .1;
+        let eff = Effective::build_for(&preset, &[], crate::keymap::COMMANDS, Screen::Browse)
+            .expect("krusader builds");
+        let Resolution::Run { command, .. } =
+            Resolver::new(eff).push(parse_chord(chord).expect("chord"))
+        else {
+            panic!("{chord} runs nothing");
+        };
+        match Command::parse(&command) {
+            Some(Command::PaneSendLeft) => Side::Left,
+            Some(Command::PaneSendRight) => Side::Right,
+            other => panic!("{chord} runs {other:?}, not a send"),
+        }
+    }
+
+    #[expect(clippy::unnecessary_wraps, reason = "compared against `send_plan`")]
+    fn moved(pane: usize, dir: &str) -> Result<Option<PaneMove>, &'static str> {
+        Ok(Some(PaneMove { pane, dir: vp(dir) }))
+    }
+
+    /// With two panes Ctrl+→ always lands in the RIGHT one and Ctrl+← in the
+    /// LEFT one, whichever has the focus — and the focus never moves.
+    #[test]
+    fn krusaders_ctrl_arrows_follow_the_arrow_from_either_pane() {
+        let right = krusader_side("ctrl+right");
+        let left = krusader_side("ctrl+left");
+        let mut app = two();
+        for focus in [0, 1] {
+            app.set_focus(focus);
+            assert_eq!(
+                send_plan(&app, right),
+                moved(1, "mem:///a"),
+                "focus {focus}, →"
+            );
+            assert_eq!(
+                send_plan(&app, left),
+                moved(0, "mem:///b"),
+                "focus {focus}, ←"
+            );
+            assert_eq!(app.focus(), focus);
+        }
+    }
+
+    /// After `pane.swap` the contents changed sides, and the arrow follows
+    /// what is on screen: the right pane now holds `a`.
+    #[test]
+    fn after_a_swap_the_arrow_still_follows_the_screen() {
+        let mut app = two();
+        app.swap_panes();
+        let mut app = laid_out(app);
+        app.set_focus(0);
+        assert_eq!(send_plan(&app, Side::Right), moved(1, "mem:///b"));
+        assert_eq!(send_plan(&app, Side::Left), moved(0, "mem:///a"));
+    }
+
+    /// `layout.flip` stacks the two panes: neither has a side, and it says
+    /// so. Flipped back, the arrows work again.
+    #[test]
+    fn stacked_panes_have_no_side() {
+        let mut app = two();
+        app.layout_flip();
+        let mut app = laid_out(app);
+        assert_eq!(send_plan(&app, Side::Right), Err("msg-pane-nothing-beside"));
+        assert_eq!(send_plan(&app, Side::Left), Err("msg-pane-nothing-beside"));
+        app.layout_flip();
+        let app = laid_out(app);
+        assert_eq!(send_plan(&app, Side::Right), moved(1, "mem:///a"));
+    }
+
+    /// Three side by side: from the MIDDLE, each arrow reaches its immediate
+    /// neighbour; from an edge, the arrow that has nowhere to go pulls.
+    #[test]
+    fn with_three_the_middle_one_sends_both_ways() {
+        let mut app = two();
+        app.set_focus(1);
+        app.layout_split(Dir::Horizontal);
+        let mut app = laid_out(app);
+        assert_eq!(app.panes.len(), 3);
+        app.panes[0] = Pane::new(vp("mem:///l"), Vec::new());
+        app.panes[1] = Pane::new(vp("mem:///m"), Vec::new());
+        app.panes[2] = Pane::new(vp("mem:///r"), Vec::new());
+        app.set_focus(1);
+        assert_eq!(send_plan(&app, Side::Right), moved(2, "mem:///m"));
+        assert_eq!(send_plan(&app, Side::Left), moved(0, "mem:///m"));
+        app.set_focus(0);
+        assert_eq!(send_plan(&app, Side::Left), moved(0, "mem:///m"));
+    }
+
+    /// Both already there: a silent no-op, like `pane.mirror`. A results
+    /// pane is no location to send.
+    #[test]
+    fn same_place_is_silent_and_results_are_not_a_location() {
+        let mut app = laid_out(App::new(
+            Pane::new(vp("mem:///a"), Vec::new()),
+            Pane::new(vp("mem:///a"), Vec::new()),
+        ));
+        assert_eq!(send_plan(&app, Side::Right), Ok(None));
+        app.panes[0].virtual_search = true;
+        assert_eq!(send_plan(&app, Side::Right), Err("msg-pane-not-a-location"));
     }
 }

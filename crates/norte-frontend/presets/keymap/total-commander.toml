@@ -57,6 +57,10 @@
 # `layout.flip` (ADR 0138) is unbound in all seven presets on purpose: the
 # transcribed KEYBOARD.TXT itemises no such action, and it lives on the
 # `[/]` layout button, the Panels menu and the palette.
+#
+# `pane.send-left`/`-right` (Krusader's Ctrl+Left/Right) are unbound: TC's
+# own Ctrl+Left/Right is target-window navigation, omitted above, and not
+# this verb. Panels menu, palette.
 
 # `pane.compare-files` (#312) is left UNBOUND here. Total Commander has the
 # feature ("Compare files by content"), but `tc-11.58-KEYBOARD.TXT` —this
