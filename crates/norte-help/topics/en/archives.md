@@ -61,6 +61,10 @@ under the cursor. It asks for the name, and the name decides the format —
 write before you press Enter. `.rar` is not on that list: norte reads rar by
 handing it to an external program, and that program is not asked to write.
 
+The name starts filled in: one entry gives its own name plus `.zip`, several
+give the folder's, and if that archive is already there it becomes
+`name (2).zip`, `name (3).zip`, and so on.
+
 The names stored inside are the ones you see on screen, relative to the panel
 you packed from. Cancelling leaves nothing behind — no half-written file that
 looks like an archive.

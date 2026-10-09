@@ -62,6 +62,10 @@ entrada bajo el cursor. Pregunta el nombre, y el nombre decide el formato —
 que pulses Enter. `.rar` no está en esa lista: norte lee rar delegando en un
 programa externo, y a ese programa no se le pide que escriba.
 
+El nombre ya viene puesto: una entrada da su propio nombre más `.zip`, varias
+dan el de la carpeta, y si ese archivo ya existe pasa a `nombre (2).zip`,
+`nombre (3).zip`, y así.
+
 Los nombres que se guardan dentro son los que ves en pantalla, relativos al
 panel desde el que empaquetas. Cancelar no deja nada — ni un fichero a medias
 con pinta de archivo.
