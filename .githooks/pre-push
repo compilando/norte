@@ -170,11 +170,18 @@ progreso() {
             estado="$(grep -E '^\s*(Compiling|Checking|Building|Doc-tests|Running) ' <<<"$tramo" | tail -n 1 | sed -E 's/^\s+//')"
             [[ -n "$estado" ]] || estado="$(grep -v '^\s*$' <<<"$tramo" | tail -n 1)"
         fi
+        # La ruta de cargo `(/home/…/crates/x)` no dice nada que el nombre no
+        # diga, y los colores y tabuladores de pnpm/vitest miden distinto de lo
+        # que pintan: fuera.
+        estado="$(sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g; s/ \(\/[^)]*\)$//' <<<"$estado" | tr -d '\000-\037')"
         seg=$((SECONDS - t0))
         local linea
         linea="$(printf '  %-10s %s · %s' "$nombre" "$(mmss "$seg")" "$estado")"
         [[ $n_fail -gt 0 ]] && linea+=" · $n_fail FAIL"
-        printf '\r\033[K%s' "${linea:0:$((cols - 1))}"
+        # Sin autowrap (`?7l`) mientras se pinta: una línea que aun así midiera
+        # más que la terminal saltaría a una segunda fila, y `\r\033[K` solo
+        # limpia la última — en `gui-ci` quedó una copia en pantalla.
+        printf '\r\033[?7l\033[K%s\033[?7h' "${linea:0:$((cols - 1))}"
     done
 }
 
@@ -191,7 +198,7 @@ corta() {
     [[ -n "$mon_pid" ]] && kill "$mon_pid" 2>/dev/null
     # Sin `setsid` (macOS) no hay grupo propio: se mata el proceso.
     [[ -n "$paso_pid" ]] && { kill -TERM -- "-$paso_pid" 2>/dev/null || kill -TERM "$paso_pid" 2>/dev/null; }
-    printf '\r\033[K\npre-push: cortado; log en %s\n' "$LOG"
+    printf '\033[?7h\r\033[K\npre-push: cortado; log en %s\n' "$LOG"
     exit 130
 }
 trap corta INT TERM
