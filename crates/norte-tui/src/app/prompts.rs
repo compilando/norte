@@ -293,10 +293,9 @@ impl App {
 
     /// Opens the pack dialog (#132), or leaves the reason if it can't.
     ///
-    /// The default name comes from what's about to be packed: with a single
-    /// mark or the cursor over one, that entry's; with several, the
-    /// directory's. It's what the managers these keys come from do, and it
-    /// saves typing the normal case.
+    /// The default name is [`norte_frontend::nav::pack_default_name`], the
+    /// window's too. [`Self::pack_confirm`] refuses the `U+FFFD` it leaves
+    /// for what the pane's encoding cannot read.
     ///
     /// It doesn't open over a read-only panel: the archive gets written
     /// THERE, and asking for the name only to fail afterward is making
@@ -311,27 +310,13 @@ impl App {
             self.message = Some(t("msg-pack-nothing"));
             return;
         }
-        let base = if marked.len() == 1 {
-            marked[0].file_name().map(|s| s.as_bytes().to_vec())
-        } else {
-            self.focused()
-                .dir()
-                .file_name()
-                .map(|s| s.as_bytes().to_vec())
-        };
-        let base = base.unwrap_or_else(|| b"archive".to_vec());
-        // The suggestion comes from the source's bytes, with the active
-        // REINTERPRETATION if there is one (#57): with "view names as
-        // cp866" set, the pane paints `Папка` and the dialog used to suggest
-        // `?????.zip` — the dialog contradicting the panel it was opened
-        // from. What can't be read stays as `U+FFFD` and
-        // [`Self::pack_confirm`] REFUSES to confirm it, same as the rename
-        // prompt: a name with the replacement character inside is nobody's
-        // name.
-        let suggested = match self.focused().name_encoding() {
-            Some(enc) => format!("{}.zip", norte_encoding::decode_name(&base, enc)),
-            None => format!("{}.zip", String::from_utf8_lossy(&base)),
-        };
+        let pane = self.focused();
+        let suggested = norte_frontend::nav::pack_default_name(
+            &marked,
+            pane.dir(),
+            pane.real_entries(),
+            pane.name_encoding(),
+        );
         self.modal = Some(Modal::Pack {
             name: suggested,
             error: None,
@@ -1207,6 +1192,18 @@ mod tests {
             panic!("the dialog stays open to fix it");
         };
         assert_eq!(error.as_deref(), Some(t("msg-transfer-name-fffd").as_str()));
+    }
+
+    /// The dialog opens with the shared proposal, made unique against the
+    /// pane's listing: `a.zip` is already there.
+    #[test]
+    fn pack_opens_with_a_name_the_listing_does_not_have() {
+        let mut app = App::new(pane_con(&["a", "a.zip"]), pane_con(&["b"]));
+        app.open_pack();
+        let Some(Modal::Pack { name, .. }) = &app.modal else {
+            panic!("the dialog opens");
+        };
+        assert_eq!(name, "a (2).zip");
     }
 
     /// And an extension norte doesn't know how to WRITE gets stated in the
