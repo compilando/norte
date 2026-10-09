@@ -112,6 +112,10 @@ async fn new_adds_a_second_instance_and_activates_it() {
     let t = terminal_until(&mut sub, |t| t.instances.len() == 2).await;
     assert_ne!(t.active, first.active);
     assert_eq!(t.active, t.instances.last().map(|i| i.id));
+    // The list on the right takes its cells from the shell, and says how
+    // many: one shell shows no list and takes none.
+    assert_eq!(first.list_cols, 0);
+    assert!(t.list_cols > 0);
 }
 
 /// From INSIDE the panel, `terminal.prev`'s chord (orthodox

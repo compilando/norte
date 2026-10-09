@@ -1217,6 +1217,7 @@
           "unseen": true
         }
       ],
+      "list_cols": 18,
       "no_shell": false,
       "profiles": [
         "fish",

@@ -2802,6 +2802,7 @@ fn rest_changes() -> Vec<(&'static str, ViewChange)> {
                     active: Some(1),
                     exited: Some(3),
                     profiles: vec!["fish".to_owned(), "bash".to_owned()],
+                    list_cols: 18,
                 }),
             },
         ),
@@ -3083,7 +3084,7 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // 99: `LayoutPickerView.legend`, what each preview letter is, and
     // `PlacesSlotView.favorites_hint`.
     // 101: `PanelBarView.footer`, the activity column's foot.
-    const SHAPE: u64 = 3_517_097_438_094_189_866;
+    const SHAPE: u64 = 2_326_513_338_022_704_203;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

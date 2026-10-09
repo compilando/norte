@@ -595,8 +595,9 @@ use serde::{Deserialize, Serialize};
 ///   click on a timeline row opens its details.
 /// - **105**: `DiskTileView.shade`: the tone of the class colour, so
 ///   touching rectangles of one class (a home of folders) are told apart.
-/// - **106**: `TerminalSlotView.instances`, `active`, `exited`, `profiles`
-///   and the `terminal_*` actions: several shells in the terminal panel.
+/// - **106**: `TerminalSlotView.instances`, `active`, `exited`, `profiles`,
+///   `list_cols` and the `terminal_*` actions: several shells in the
+///   terminal panel.
 pub const BRIDGE_VERSION: u32 = 106;
 
 /// Cap on a string that crosses to the renderer, in bytes.

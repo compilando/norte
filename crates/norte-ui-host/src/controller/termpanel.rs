@@ -55,6 +55,9 @@ impl TerminalShell for Pty {
     }
 }
 
+/// Cells the instance list takes on the right, when it shows.
+const LIST_COLS: u16 = 18;
+
 /// The panel's instances, as `State` holds them.
 pub(super) type PanelShells = Terminals<Pty>;
 
@@ -616,7 +619,18 @@ impl State {
     fn terminal_size(&self) -> Option<(u16, u16)> {
         let id = self.slot_of_kind(KIND)?;
         let (_, r) = self.split.placements.iter().find(|(s, _)| *s == id)?;
-        Some((r.width.saturating_sub(2), r.height.saturating_sub(2)))
+        // The list on the right is cells the shell does not get.
+        let width = r.width.saturating_sub(2).saturating_sub(self.list_cols());
+        Some((width, r.height.saturating_sub(2)))
+    }
+
+    /// The list's width: VS Code shows it only with two or more shells.
+    fn list_cols(&self) -> u16 {
+        if self.terminals.len() >= 2 {
+            LIST_COLS
+        } else {
+            0
+        }
     }
 
     /// The LONE chord that runs `layout.terminal`, if the preset gives one.
@@ -679,6 +693,7 @@ impl State {
             })
             .collect();
         view.active = self.terminals.active_id().map(|id| id.0);
+        view.list_cols = self.list_cols();
         let profiles = &self.config.shell_profiles;
         let default = &profiles.default_profile().name;
         view.profiles = std::iter::once(default.clone())
@@ -776,6 +791,7 @@ fn build_view(slot_id: u32, screen: Option<&Screen>) -> TerminalSlotView {
             active: None,
             exited: None,
             profiles: Vec::new(),
+            list_cols: 0,
         };
     };
     let (_, height) = p.size();
@@ -795,6 +811,7 @@ fn build_view(slot_id: u32, screen: Option<&Screen>) -> TerminalSlotView {
         active: None,
         exited: None,
         profiles: Vec::new(),
+        list_cols: 0,
     }
 }
 

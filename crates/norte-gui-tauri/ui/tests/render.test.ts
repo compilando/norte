@@ -20,6 +20,7 @@ import type {
   LogSlotView,
   PanelSlotView,
   RowView,
+  TerminalInstanceView,
   UiAction,
   ViewSnapshot,
   WindowVerb,
@@ -4637,6 +4638,80 @@ describe("slots that aren't listings", () => {
     expect(after[0]).toBe(first);
     expect(after[1]).not.toBe(second);
     expect(after[1]?.textContent).toBe("b");
+  });
+
+  // Several shells (bridge 106): VS Code's list shows only with two or more.
+  const instance = (id: number, extra: Partial<TerminalInstanceView> = {}) => ({
+    id,
+    title: `sh ${String(id)}`,
+    icon: null,
+    color: null,
+    exited: null,
+    unseen: false,
+    ...extra,
+  });
+  const withShells = (instances: TerminalInstanceView[], extra = {}) => {
+    const v = view({});
+    v.slots = [
+      ...v.slots,
+      {
+        kind: "terminal" as const,
+        slot_id: 7,
+        rows: [[{ text: "$" }]],
+        cursor: null,
+        no_shell: false,
+        instances,
+        active: instances[0]?.id ?? null,
+        exited: null,
+        profiles: ["sh", "fish"],
+        list_cols: instances.length >= 2 ? 18 : 0,
+        ...extra,
+      },
+    ];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 7, x: 0, y: 0, width: 40, height: 10, role: null, focus_index: 2 },
+    ];
+    return v;
+  };
+
+  it("one shell shows no list; two show it", () => {
+    const { screen } = mount();
+    screen.paint(withShells([instance(1)]));
+    expect(document.querySelector(".terminal-list")).toBeNull();
+    screen.paint(withShells([instance(1), instance(2, { unseen: true })]));
+    const entries = document.querySelectorAll(".terminal-entry");
+    expect(entries.length).toBe(2);
+    expect(entries[1]?.querySelector(".terminal-entry-unseen")).not.toBeNull();
+  });
+
+  it("a click on an entry asks for that shell", () => {
+    const { screen, sent } = mount();
+    screen.paint(withShells([instance(1), instance(2)]));
+    (document.querySelectorAll(".terminal-entry")[1] as HTMLElement).click();
+    expect(sent).toContainEqual({ action: "terminal_select", id: 2 });
+  });
+
+  it("a program's title is painted as text, never as markup", () => {
+    const { screen } = mount();
+    screen.paint(withShells([instance(1, { title: "<b>x</b>" }), instance(2)]));
+    const title = document.querySelector(".terminal-entry-title");
+    expect(title?.textContent).toBe("<b>x</b>");
+    expect(title?.querySelector("b")).toBeNull();
+  });
+
+  it("a failed shell says how it ended", () => {
+    const { screen } = mount();
+    screen.paint(withShells([instance(1, { exited: 3 }), instance(2)], { exited: 3 }));
+    expect(document.querySelector(".terminal-status")?.textContent).toContain("3");
+    expect(document.querySelector(".terminal-entry-exited")).not.toBeNull();
+  });
+
+  it("+ starts the default shell", () => {
+    const { screen, sent } = mount();
+    screen.paint(withShells([instance(1)]));
+    (document.querySelector(".terminal-action") as HTMLElement).click();
+    expect(sent).toContainEqual({ action: "terminal_new", profile: null });
   });
 
   // Moving a border moves the slots: rebuilding them dropped every

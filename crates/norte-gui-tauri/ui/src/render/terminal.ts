@@ -3,7 +3,12 @@
 // class.
 
 import type { Screen } from "../render";
-import type { TerminalColorView, TerminalSlotView, TerminalSpanView } from "../types";
+import type {
+  TerminalColorView,
+  TerminalInstanceView,
+  TerminalSlotView,
+  TerminalSpanView,
+} from "../types";
 import { note } from "./dom";
 import type { SlotDom } from "./dom";
 
@@ -27,23 +32,54 @@ import type { SlotDom } from "./dom";
 export function paintTerminal(this: Screen, dom: SlotDom, slot: TerminalSlotView): void {
   dom.root.setAttribute("aria-label", this.t("panelbar-terminal"));
   dom.scroller.className = "terminal";
-  dom.title.replaceChildren(document.createTextNode(this.t("panelbar-terminal")));
+  dom.title.replaceChildren(
+    document.createTextNode(this.t("panelbar-terminal")),
+    titleActions.call(this, slot),
+  );
   if (slot.no_shell) {
     // A blank panel and a panel with no shell look the same and are not the
     // same thing.
     dom.scroller.replaceChildren(note(this.t("terminal-none")));
     return;
   }
+  // The grid and, with two or more shells, VS Code's list on the right.
+  // The grid keeps its node across patches: its rows are diffed below.
+  let grid = dom.scroller.querySelector<HTMLElement>(":scope > .terminal-grid");
+  if (grid === null) {
+    grid = document.createElement("div");
+    grid.className = "terminal-grid";
+    dom.scroller.replaceChildren(grid);
+  }
+  grid.classList.toggle("terminal-exited", slot.exited != null);
+  paintGrid(grid, slot);
+  const instances = slot.instances ?? [];
+  const old = dom.scroller.querySelector(":scope > .terminal-list");
+  const status = dom.scroller.querySelector(":scope > .terminal-status");
+  status?.remove();
+  if (slot.exited != null) {
+    const line = document.createElement("div");
+    line.className = "terminal-status";
+    line.textContent = `${this.t("terminal-exited-label")} ${String(slot.exited)}`;
+    dom.scroller.append(line);
+  }
+  if (instances.length >= 2) {
+    const list = paintList.call(this, instances, slot);
+    if (old === null) {
+      dom.scroller.append(list);
+    } else {
+      old.replaceWith(list);
+    }
+  } else {
+    old?.remove();
+  }
+}
+
+/** The grid's rows, only the ones that changed. */
+function paintGrid(grid: HTMLElement, slot: TerminalSlotView): void {
   // Row by row, and only the rows that changed: the whole grid used to be
   // rebuilt on every patch, up to thirty times a second while a shell
   // printed — a `top` or a build output redrew every span of every line.
-  const old = dom.scroller.children;
-  if (
-    old.length > 0 &&
-    !(old[0] instanceof HTMLElement && old[0].classList.contains("terminal-row"))
-  ) {
-    dom.scroller.replaceChildren();
-  }
+  const old = grid.children;
   for (const [y, row] of slot.rows.entries()) {
     const col = slot.cursor !== null && slot.cursor[0] === y ? slot.cursor[1] : null;
     const signature = JSON.stringify([row, col]);
@@ -54,14 +90,219 @@ export function paintTerminal(this: Screen, dom: SlotDom, slot: TerminalSlotView
     const line = paintRow(row, y, slot.cursor);
     line.dataset["sig"] = signature;
     if (current === undefined) {
-      dom.scroller.append(line);
+      grid.append(line);
     } else {
       current.replaceWith(line);
     }
   }
-  while (dom.scroller.children.length > slot.rows.length) {
-    dom.scroller.lastElementChild?.remove();
+  while (grid.children.length > slot.rows.length) {
+    grid.lastElementChild?.remove();
   }
+}
+
+/** `+`, the shell-profile menu and the trash, in the panel's title bar. */
+function titleActions(this: Screen, slot: TerminalSlotView): HTMLElement {
+  const box = document.createElement("span");
+  box.className = "terminal-actions";
+  const button = (text: string, key: string, run: (e: MouseEvent) => void): void => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "terminal-action";
+    b.textContent = text;
+    b.title = this.t(key);
+    b.setAttribute("aria-label", this.t(key));
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      run(e);
+    });
+    box.append(b);
+  };
+  button("+", "terminal-new", () => {
+    this.send({ action: "terminal_new", profile: null });
+  });
+  const profiles = slot.profiles ?? [];
+  if (profiles.length > 1) {
+    button("▾", "terminal-shell-profiles", (e) => {
+      popup.call(
+        this,
+        e.clientX,
+        e.clientY,
+        profiles.map((p) => [p, () => this.send({ action: "terminal_new", profile: p })]),
+      );
+    });
+  }
+  const active = slot.active;
+  if (active != null) {
+    button("🗑", "terminal-close", () => {
+      this.send({ action: "terminal_close", id: active });
+    });
+  }
+  return box;
+}
+
+/** VS Code's list: one entry per shell, a click brings it forward. */
+function paintList(
+  this: Screen,
+  instances: TerminalInstanceView[],
+  slot: TerminalSlotView,
+): HTMLElement {
+  const list = document.createElement("ul");
+  list.className = "terminal-list";
+  list.setAttribute("role", "listbox");
+  if (slot.list_cols != null && slot.list_cols > 0) {
+    list.style.width = `calc(var(--cell-w) * ${String(slot.list_cols)})`;
+  }
+  for (const i of instances) {
+    const li = document.createElement("li");
+    li.className = "terminal-entry";
+    li.setAttribute("role", "option");
+    li.setAttribute("aria-selected", String(i.id === slot.active));
+    li.dataset["id"] = String(i.id);
+    if (i.color !== null) {
+      li.style.borderLeftColor = `var(--term-${String(i.color)})`;
+    }
+    if (i.icon !== null) {
+      const icon = document.createElement("span");
+      icon.className = "terminal-entry-icon";
+      icon.textContent = ICONS[i.icon] ?? "";
+      li.append(icon);
+    }
+    const title = document.createElement("span");
+    title.className = "terminal-entry-title";
+    // `textContent`: a title can come from the program (OSC 0/2).
+    title.textContent = i.title;
+    li.append(title);
+    if (i.unseen) {
+      const dot = document.createElement("span");
+      dot.className = "terminal-entry-unseen";
+      dot.textContent = "●";
+      li.append(dot);
+    }
+    if (i.exited !== null) {
+      li.classList.add("terminal-entry-exited");
+      li.title = `${this.t("terminal-exited-label")} ${String(i.exited)}`;
+    }
+    li.addEventListener("click", () => {
+      this.send({ action: "terminal_select", id: i.id });
+    });
+    li.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      entryMenu.call(this, e.clientX, e.clientY, i, li);
+    });
+    list.append(li);
+  }
+  return list;
+}
+
+/** The glyph for each icon name the host may send. */
+const ICONS: Record<string, string> = {
+  terminal: "❯",
+  code: "‹›",
+  server: "▤",
+  debug: "✱",
+  package: "▣",
+  star: "★",
+};
+
+/** Right button on an entry: rename, colour, icon, close. */
+function entryMenu(
+  this: Screen,
+  x: number,
+  y: number,
+  i: TerminalInstanceView,
+  li: HTMLElement,
+): void {
+  const decorate = (icon: string | null, color: number | null): void => {
+    this.send({ action: "terminal_decorate", id: i.id, icon, color });
+  };
+  const entries: [string, () => void][] = [
+    [this.t("menu-item-terminal-rename"), () => renameInline.call(this, i, li)],
+    [this.t("terminal-color-none"), () => decorate(i.icon, null)],
+    ...[1, 2, 3, 4, 5, 6].map((c): [string, () => void] => [
+      `■ ${String(c)}`,
+      () => decorate(i.icon, c),
+    ]),
+    [this.t("terminal-icon-none"), () => decorate(null, i.color)],
+    ...Object.entries(ICONS).map(([name, glyph]): [string, () => void] => [
+      `${glyph} ${name}`,
+      () => decorate(name, i.color),
+    ]),
+    [
+      this.t("menu-item-terminal-close"),
+      () => this.send({ action: "terminal_close", id: i.id }),
+    ],
+  ];
+  popup.call(this, x, y, entries);
+}
+
+/** The entry's title becomes a field: Enter names, Escape cancels. */
+function renameInline(this: Screen, i: TerminalInstanceView, li: HTMLElement): void {
+  const input = document.createElement("input");
+  input.className = "terminal-rename";
+  input.value = i.title;
+  input.setAttribute("aria-label", this.t("terminal-rename-prompt"));
+  input.addEventListener("keydown", (e) => {
+    // Ours: the host would take these keys for the shell.
+    e.stopPropagation();
+    if (e.key === "Enter") {
+      this.send({ action: "terminal_rename", id: i.id, name: input.value });
+      input.blur();
+    } else if (e.key === "Escape") {
+      input.blur();
+    }
+  });
+  input.addEventListener("blur", () => {
+    input.remove();
+  });
+  li.querySelector(".terminal-entry-title")?.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
+/** A small menu at the pointer, styled like the tab menu. */
+function popup(
+  this: Screen,
+  x: number,
+  y: number,
+  entries: [string, () => void][],
+): void {
+  document.querySelector(".tab-menu")?.remove();
+  const box = document.createElement("ul");
+  box.className = "tab-menu";
+  box.setAttribute("role", "menu");
+  box.style.left = `${String(x)}px`;
+  box.style.top = `${String(y)}px`;
+  const dismiss = (): void => {
+    box.remove();
+    window.removeEventListener("pointerdown", outside, true);
+    window.removeEventListener("keydown", escape, true);
+  };
+  const outside = (e: Event): void => {
+    if (!(e.target instanceof Node) || !box.contains(e.target)) {
+      dismiss();
+    }
+  };
+  const escape = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      e.preventDefault();
+      dismiss();
+    }
+  };
+  for (const [label, run] of entries) {
+    const item = document.createElement("li");
+    item.className = "tab-menu-item";
+    item.setAttribute("role", "menuitem");
+    item.textContent = label;
+    item.addEventListener("click", () => {
+      dismiss();
+      run();
+    });
+    box.append(item);
+  }
+  document.body.append(box);
+  window.addEventListener("pointerdown", outside, true);
+  window.addEventListener("keydown", escape, true);
 }
 
 /** A row: its fragments, plus the cursor if it falls on it. */

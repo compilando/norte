@@ -2328,6 +2328,11 @@ pub struct TerminalSlotView {
     /// The shell profiles `+` can start, the default first, for the menu.
     #[serde(default)]
     pub profiles: Vec<String>,
+    /// How many cells wide the list on the right is; 0 = no list. The host
+    /// already took them from the shell's width — the renderer cannot size
+    /// the pty, so it must paint the list exactly this wide.
+    #[serde(default)]
+    pub list_cols: u16,
 }
 
 /// One shell of the terminal panel, as its list entry.

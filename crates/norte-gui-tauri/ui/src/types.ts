@@ -631,6 +631,9 @@ export interface TerminalSlotView {
   exited?: number | null;
   /** Shell profiles for the `+` menu, default first. */
   profiles?: string[];
+  /** How many cells wide the list on the right is (0 = hidden): the host
+   *  already took them from the shell's width. */
+  list_cols?: number;
 }
 
 /** One shell of the terminal panel (bridge 106). `title` may come from the

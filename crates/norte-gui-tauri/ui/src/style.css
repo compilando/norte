@@ -4597,6 +4597,100 @@ button.status-item:hover {
   height: var(--cell-h);
 }
 
+/* Several shells (bridge 106): the grid, and VS Code's list on the right.
+   The list's width is set inline from `list_cols`: the host already took
+   those cells from the shell's width, so the two must agree. */
+.terminal {
+  display: flex;
+  position: relative;
+}
+
+.terminal-grid {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* A failed shell's last screen: a still picture. */
+.terminal-grid.terminal-exited {
+  opacity: 0.55;
+}
+
+.terminal-status {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  padding: 0 1ch;
+  font-family: var(--font-ui);
+  color: var(--warning-fg);
+  background: var(--panel-bg);
+}
+
+.terminal-list {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 2px 0;
+  list-style: none;
+  overflow-y: auto;
+  font-family: var(--font-ui);
+  white-space: nowrap;
+  border-left: 1px solid var(--border);
+  background: var(--panel-bg);
+}
+
+.terminal-entry {
+  display: flex;
+  gap: 0.5ch;
+  align-items: center;
+  padding: 0 1ch;
+  line-height: var(--cell-h);
+  border-left: 3px solid transparent;
+  cursor: pointer;
+}
+
+.terminal-entry[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.terminal-entry-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 auto;
+}
+
+.terminal-entry-unseen {
+  color: var(--info-fg);
+}
+
+.terminal-entry-exited .terminal-entry-title {
+  color: var(--muted);
+}
+
+.terminal-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 2px;
+}
+
+.terminal-action {
+  border: 0;
+  padding: 0 0.6ch;
+  background: transparent;
+  color: var(--title-fg);
+  cursor: pointer;
+}
+
+.terminal-action:hover {
+  background: var(--panel-focus-bg);
+}
+
+.terminal-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+}
+
 /* The cursor is an inverted cell, not a border: a border spills out of the
    cell and misaligns the row. */
 .terminal-cursor {

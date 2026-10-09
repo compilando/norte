@@ -1168,6 +1168,8 @@ panelbar-terminal = Terminal
 terminal-leave = salir
 terminal-none = No hay ningún shell en este panel.
 terminal-exited = terminada con código { $code }
+# El catálogo de la ventana no lleva argumentos: pinta esto, un espacio y el código.
+terminal-exited-label = terminada con código
 terminal-new = Nueva terminal
 terminal-close = Cerrar terminal
 terminal-shell-profiles = Elegir una shell
