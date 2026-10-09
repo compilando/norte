@@ -176,3 +176,4 @@ edits.
 | [0173](0173-panels-normal-place-and-timeline-details.md) | Panels open at their normal place; a timeline row shows its details | accepted |
 | [0174](0174-places-hides-system-mounts.md) | Places leaves out mounts on the system's own directories | accepted |
 | [0175](0175-disk-map-tones-per-class.md) | The disk map tells touching rectangles of one class apart by tone | accepted |
+| [0176](0176-the-terminal-panel-holds-several-shells.md) | The terminal panel holds several shells | accepted |

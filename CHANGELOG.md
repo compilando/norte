@@ -7,6 +7,23 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **The terminal panel holds several shells**, like VS Code's (ADR 0176).
+  `Ctrl+Alt+n` starts another, `Ctrl+Alt+PgDn`/`PgUp` walk between them
+  and `Ctrl+Alt+w` closes the one in front (in Krusader, start one from
+  the menu or the panel's `+`: `Ctrl+Alt+n` is its new tab). With two or
+  more, the terminal lists them as tabs on the panel's border and the
+  window as a list on its right, with a `●` on one that wrote while you
+  looked at another. A shell that ends cleanly leaves the list; one that
+  fails stays with its last screen and code. Rename, icon and colour are
+  in the menu and the palette.
+- **`terminal.toml` chooses which shells the panel offers** (`[[shell]]`
+  with `name`, an absolute `program`, `args`, `icon`, `color`, and a
+  `default`). A project's `.norte/terminal.toml` is ignored.
+- Inside the terminal panel, the panel keys (`Alt+o`, `Alt+x`…) now work
+  in the terminal frontend too, as they did in the window.
+
 ### Fixed
 
 - **A plain copy, move, delete or quit question no longer offers
