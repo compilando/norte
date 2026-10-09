@@ -3,6 +3,9 @@
 #
 # `layout.flip` (ADR 0138) deliberately ships with no key, as in all seven: it
 # lives on the `[/]` button of the layout bar, the Panes menu and the palette.
+#
+# `pane.send-left`/`-right` are bound only in krusader.toml, whose source
+# attests them (Ctrl+Left/Right); mc has no such chord. Panels menu, palette.
 
 [global]
 keymap = [

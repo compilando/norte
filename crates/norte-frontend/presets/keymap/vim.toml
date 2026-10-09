@@ -3,6 +3,10 @@
 #
 # `layout.flip` (ADR 0138) deliberately ships with no key, as in all seven: it
 # lives on the `[/]` button of the layout bar, the Panes menu and the palette.
+#
+# `pane.send-left`/`-right` are bound only in krusader.toml, whose source
+# attests them (Ctrl+Left/Right); vim has no such gesture. Panels menu,
+# palette.
 
 # Numeric prefix (`5j`): vim has it, so this preset has it. It is opt-in PER
 # PRESET and not a matter of taste: turning it on here takes away `1`..`9`'s

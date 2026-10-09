@@ -9,6 +9,10 @@
 #
 # `layout.flip` (ADR 0138) deliberately ships with no key, as in all seven: it
 # lives on the `[/]` button of the layout bar, the Panes menu and the palette.
+#
+# `pane.send-left`/`-right` are bound only in krusader.toml, whose source
+# attests them (Ctrl+Left/Right); CUA's Ctrl+arrows move by word, not by
+# pane. Panels menu, palette.
 
 [global]
 keymap = [
