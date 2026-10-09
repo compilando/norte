@@ -85,9 +85,18 @@ pub fn before_frame(app: &mut App, area: Rect) {
     // keeps only a tail of what nobody pumped. Unplaced — behind a tab — the
     // last good size stays.
     if !app.terminals.is_empty() {
-        let size = placed_of_kind(&res, &app.layout, crate::termpanel::KIND)
-            // The frame is subtracted: the shell paints INSIDE.
-            .map(|(_, r)| (r.width.saturating_sub(2), r.height.saturating_sub(2)));
+        let size = placed_of_kind(&res, &app.layout, crate::termpanel::KIND).map(|(_, r)| {
+            // The frame is subtracted, and the list's columns: the shell
+            // paints in the GRID part only — the same split the paint uses.
+            let inside = Rect::new(
+                r.x + 1,
+                r.y + 1,
+                r.width.saturating_sub(2),
+                r.height.saturating_sub(2),
+            );
+            let (grid, _) = crate::ui::terminal_tabs::split(inside, app.terminals.len());
+            (grid.width, grid.height)
+        });
         let _ = app.terminals.tick(size);
         // The last shell left cleanly: the slot says "no shell" and stays —
         // closing it on its own would move the reader's layout without them

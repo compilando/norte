@@ -2230,43 +2230,71 @@ fn app_with_shells(n: usize) -> (App, Vec<String>) {
     (app, lines)
 }
 
-/// With two or more shells, the panel's top border IS the list.
+/// With two or more shells, VS Code's list on the right, one row each.
 #[cfg(unix)]
 #[test]
-fn the_terminal_border_lists_its_shells() {
-    let (_, lines) = app_with_shells(3);
+fn the_terminal_lists_its_shells_on_the_right() {
+    let (_, lines) = app_with_shells(2);
     // A `●` may sit before a title: a shell behind printed its prompt.
+    for n in ["│1 ", "│2 "] {
+        assert!(lines.iter().any(|l| l.contains(n)), "{n}: {lines:#?}");
+    }
+}
+
+/// More shells than the panel has rows: the one in front stays in view.
+#[cfg(unix)]
+#[test]
+fn the_list_keeps_the_front_shell_in_view() {
+    let (_, lines) = app_with_shells(5);
+    assert!(lines.iter().any(|l| l.contains("│5 ")), "{lines:#?}");
+}
+
+/// With one shell there is no list: the shell keeps the whole width.
+#[cfg(unix)]
+#[test]
+fn a_single_shell_shows_no_list() {
+    let (_, lines) = app_with_shells(1);
+    assert!(!lines.iter().any(|l| l.contains("│1 sh")), "{lines:#?}");
+}
+
+/// The buttons are painted on the top border, whatever the preset.
+#[cfg(unix)]
+#[test]
+fn the_terminal_border_carries_its_buttons() {
+    let (_, lines) = app_with_shells(1);
     assert!(
-        lines
-            .iter()
-            .any(|l| l.contains("┌ 1 ") && l.contains(" │ 2 ") && l.contains(" │ 3 ")),
+        lines.iter().any(|l| l.contains("[+] [▾] [✎] [✕]")),
         "{lines:#?}"
     );
 }
 
-/// With one, the border keeps the panel's name: no strip of one tab.
+/// A click on a list row brings that shell to the front.
 #[cfg(unix)]
 #[test]
-fn a_single_shell_shows_no_strip() {
-    let (_, lines) = app_with_shells(1);
-    assert!(!lines.iter().any(|l| l.contains("1 sh")), "{lines:#?}");
-}
-
-/// A click on a tab brings that shell to the front (and does not start
-/// dragging the panel by its title).
-#[cfg(unix)]
-#[test]
-fn a_click_on_a_terminal_tab_selects_it() {
-    let (mut app, lines) = app_with_shells(3);
+fn a_click_on_a_list_row_selects_it() {
+    let (mut app, lines) = app_with_shells(2);
     let first = app.terminals.iter().next().map(|i| i.id);
     assert_ne!(app.terminals.active_id(), first);
-    // On the "1" of the first tab, right after the corner and a space.
-    let (row, col) = where_(&lines, "┌ 1 ");
+    let (row, col) = where_(&lines, "│1 ");
     assert_eq!(
         mouse::handle(&mut app, ev(DOWN, col + 2, row)),
         After::Nothing
     );
     assert_eq!(app.terminals.active_id(), first);
+}
+
+/// `[+]` runs `terminal.new` through the same path as its command — the
+/// way to a second shell in krusader, which binds no chord for it.
+#[cfg(unix)]
+#[test]
+fn the_plus_button_runs_terminal_new() {
+    let (mut app, lines) = app_with_shells(1);
+    let (row, col) = where_(&lines, "[+]");
+    assert_eq!(
+        mouse::handle(&mut app, ev(DOWN, col + 1, row)),
+        After::PanelBar
+    );
+    assert_eq!(app.pending_panel_command.as_deref(), Some("terminal.new"));
 }
 
 /// A panel restored with no shell (the session saves the slot, not the
@@ -2298,14 +2326,14 @@ fn the_door_key_on_an_empty_panel_starts_a_shell() {
 #[cfg(unix)]
 #[test]
 fn the_terminal_picker_blocks_the_mouse() {
-    let (mut app, lines) = app_with_shells(3);
+    let (mut app, lines) = app_with_shells(2);
     let before = app.terminals.active_id();
     app.term_picker = Some(norte_tui::termpanel::TermPicker {
         title: "x".into(),
         rows: Vec::new(),
         cursor: 0,
     });
-    let (row, col) = where_(&lines, "┌ 1 ");
+    let (row, col) = where_(&lines, "│1 ");
     let _ = mouse::handle(&mut app, ev(DOWN, col + 2, row));
     assert_eq!(app.terminals.active_id(), before);
 }

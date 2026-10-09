@@ -320,9 +320,11 @@ sits in a directory of the filesystem, and an `sftp://` has nowhere to sit it.
 The panel holds **several shells**. {{cmd:terminal.new}} starts another one
 and brings it to the front; {{cmd:terminal.next}} and {{cmd:terminal.prev}}
 walk between them; {{cmd:terminal.close}} closes the one in front and kills
-its shell. With two or more, the panel lists them — in the terminal, as tabs
-on its top border; in the window, as a list on its right — and a `●` marks
-one that wrote while you were looking at another. A shell that ends cleanly
+its shell. The panel's top border carries four buttons, `[+]` new, `[▾]`
+choose a shell, `[✎]` rename and `[✕]` close, for the mouse and every preset.
+With two or more shells, the panel lists them on its right, as VS Code does;
+click one to bring it forward, and a `●` marks one that wrote while you were
+looking at another. A shell that ends cleanly
 leaves the list; one that ends with an error stays, showing its last screen
 and the code, until you close it.
 

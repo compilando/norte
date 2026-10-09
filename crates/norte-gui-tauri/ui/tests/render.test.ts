@@ -4727,6 +4727,24 @@ describe("slots that aren't listings", () => {
     expect(sent).toContainEqual({ action: "terminal_rename", id: 1, name: "build" });
   });
 
+  // The same four buttons as the terminal's border: + ▾ ✎ ✕.
+  it("the title bar carries + ▾ ✎ ✕, and ✎ names the shell in front", () => {
+    const { screen, sent } = mount();
+    screen.paint(withShells([instance(1, { name: "old" })]));
+    const labels = [...document.querySelectorAll(".terminal-action")].map(
+      (b) => b.textContent,
+    );
+    expect(labels).toEqual(["+", "▾", "✎", "✕"]);
+    (document.querySelectorAll(".terminal-action")[2] as HTMLElement).click();
+    const field = document.querySelector<HTMLInputElement>(".terminal-rename");
+    expect(field?.value).toBe("old");
+    if (field !== null) {
+      field.value = "build";
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    }
+    expect(sent).toContainEqual({ action: "terminal_rename", id: 1, name: "build" });
+  });
+
   it("+ starts the default shell", () => {
     const { screen, sent } = mount();
     screen.paint(withShells([instance(1)]));

@@ -829,31 +829,42 @@ fn tab_zone_at(app: &App, col: u16, row: u16) -> Option<crate::ui::TabZone> {
         .copied()
 }
 
-/// The terminal panel's tab under `(col, row)`, if any. Recomputed from the
-/// slot's painted rectangle with the SAME layout the paint used
-/// (`terminal_tabs::layout_strip`), so the two cannot disagree: the strip
-/// starts two cells in, after the corner and a space.
-fn terminal_tab_at(app: &App, col: u16, row: u16) -> Option<norte_frontend::terminals::InstanceId> {
-    if app.terminals.len() < 2 {
-        return None;
-    }
+/// What a press on the terminal panel's chrome hits.
+enum TermHit {
+    /// A border button: the command it runs.
+    Button(&'static str),
+    /// A row of the list: that instance.
+    Row(norte_frontend::terminals::InstanceId),
+}
+
+/// The terminal panel's button or list row under `(col, row)`, if any.
+/// Recomputed from the slot's painted rectangle with the SAME functions the
+/// paint used (`ui::terminal_tabs`), so the two cannot disagree.
+fn terminal_hit(app: &App, col: u16, row: u16) -> Option<TermHit> {
+    use crate::ui::terminal_tabs::{button_at, list_row_at, split};
     let slot = app.terminal_slot()?;
-    let r = app.mouse.slots.iter().find(|s| s.slot == slot)?;
-    if row != r.y {
-        return None;
+    let s = app.mouse.slots.iter().find(|s| s.slot == slot)?;
+    let r = ratatui::layout::Rect::new(s.x, s.y, s.width, s.height);
+    if row == r.y {
+        return button_at(r, col).map(TermHit::Button);
     }
-    let labels = crate::termpanel::strip_labels(&app.terminals);
-    let strip = crate::ui::terminal_tabs::layout_strip(
-        &labels,
-        app.terminals.active_id()?,
-        r.width.saturating_sub(4),
+    let inside = ratatui::layout::Rect::new(
+        r.x + 1,
+        r.y + 1,
+        r.width.saturating_sub(2),
+        r.height.saturating_sub(2),
     );
-    let x = col.checked_sub(r.x + 2)?;
-    strip
-        .items
+    let (_, list) = split(inside, app.terminals.len());
+    // The list's first column is its separator; the rows start after it.
+    let list = list?;
+    let front = app
+        .terminals
         .iter()
-        .find(|i| x >= i.x && x < i.x + i.width)
-        .map(|i| i.id)
+        .position(|i| Some(i.id) == app.terminals.active_id())
+        .unwrap_or(0);
+    let skip = crate::ui::terminal_tabs::list_offset(front, list.height);
+    let n = list_row_at(list, col, row)? + skip;
+    app.terminals.iter().nth(n).map(|i| TermHit::Row(i.id))
 }
 
 /// The places-sidebar row under `(col, row)`, if there is one (#226).
@@ -1462,16 +1473,25 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
         app.pending_panel_command = Some(cmd.to_owned());
         return After::PanelBar;
     }
-    // A terminal tab sits ON the panel's top border, which is also a border
-    // to drag and a title to move by: a press on a tab's TEXT chooses it;
-    // anywhere else on the border still resizes or moves.
+    // The terminal's buttons sit ON its top border, which is also a border
+    // to drag and a title to move by: a press on a button runs it; anywhere
+    // else on the border still resizes or moves. A list row chooses.
     if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left))
-        && let Some(id) = terminal_tab_at(app, ev.column, ev.row)
+        && let Some(hit) = terminal_hit(app, ev.column, ev.row)
     {
         app.mouse.drag.cancel();
         app.mouse.last_click = None;
-        app.terminals.select(id);
-        return After::Nothing;
+        return match hit {
+            TermHit::Row(id) => {
+                app.terminals.select(id);
+                After::Nothing
+            }
+            // Through the SAME path as its command, like the panel bar.
+            TermHit::Button(cmd) => {
+                app.pending_panel_command = Some(cmd.to_owned());
+                After::PanelBar
+            }
+        };
     }
     // Dragging a BORDER comes before everything about the listing, in all
     // three stages of the gesture: while it lasts, the pointer leaves the

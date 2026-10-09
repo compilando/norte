@@ -1,178 +1,165 @@
-//! The terminal panel's tab strip, in its top border: which instances fit,
-//! where each one starts (for the mouse), and where the list was cut.
-//! Pure: the painting is `panels.rs`'s.
+//! The terminal panel's chrome in the TUI: the buttons on its top border
+//! and, with two or more shells, VS Code's list on its right. Pure: where
+//! things are, so the paint (`panels.rs`) and the mouse (`mouse.rs`) agree
+//! by construction.
 
-use norte_frontend::terminals::InstanceId;
+use ratatui::layout::Rect;
 
-/// Between two tabs.
-pub(crate) const SEP: &str = " │ ";
-/// Where the strip was cut, on that side.
-pub(crate) const CUT: &str = "… ";
+/// Columns the list takes on the right, when it shows (the window's too).
+pub(crate) const LIST_COLS: u16 = 18;
 
-/// What fits of the strip.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Strip {
-    /// The tabs that fit, in list order.
-    pub items: Vec<StripItem>,
-    /// Some were left out on the left.
-    pub cut_left: bool,
-    /// Some were left out on the right.
-    pub cut_right: bool,
+/// Narrowest inside that still gets a list: below it the shell keeps all.
+const LIST_MIN_INSIDE: u16 = LIST_COLS * 2 + 4;
+
+/// The border buttons and the command each one runs, left to right.
+pub(crate) const BUTTONS: [(&str, &str); 4] = [
+    ("[+]", "terminal.new"),
+    ("[▾]", "terminal.new-profile"),
+    ("[✎]", "terminal.rename"),
+    ("[✕]", "terminal.close"),
+];
+
+/// Display columns, as ratatui paints them.
+pub(crate) fn width_of(s: &str) -> u16 {
+    u16::try_from(unicode_width::UnicodeWidthStr::width(s)).unwrap_or(u16::MAX)
 }
 
-/// One tab: its text, and where it is (relative to the strip's start).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StripItem {
-    pub id: InstanceId,
-    pub label: String,
-    pub active: bool,
-    pub x: u16,
-    pub width: u16,
-}
-
-/// Display COLUMNS, as ratatui paints them: a CJK character is two.
-fn chars(s: &str) -> usize {
-    unicode_width::UnicodeWidthStr::width(s)
-}
-
-/// Lays `labels` out in `width` columns, growing outwards from `active` —
-/// the one tab that must always be seen.
-pub(crate) fn layout_strip(
-    labels: &[(InstanceId, String)],
-    active: InstanceId,
-    width: u16,
-) -> Strip {
-    let width = usize::from(width);
-    let sep = chars(SEP);
-    let cut = chars(CUT);
-    let Some(at) = labels.iter().position(|(id, _)| *id == active) else {
-        return Strip {
-            items: Vec::new(),
-            cut_left: false,
-            cut_right: false,
-        };
-    };
-    let cost = |lo: usize, hi: usize| -> usize {
-        let body: usize =
-            labels[lo..=hi].iter().map(|(_, l)| chars(l)).sum::<usize>() + sep * (hi - lo);
-        body + if lo > 0 { cut } else { 0 } + if hi + 1 < labels.len() { cut } else { 0 }
-    };
-    let (mut lo, mut hi) = (at, at);
-    loop {
-        let grown_right = hi + 1 < labels.len() && cost(lo, hi + 1) <= width;
-        if grown_right {
-            hi += 1;
-        }
-        let grown_left = lo > 0 && cost(lo - 1, hi) <= width;
-        if grown_left {
-            lo -= 1;
-        }
-        if !grown_right && !grown_left {
-            break;
-        }
+/// The buttons as the border paints them: ` [+] [▾] [✎] [✕] `, right-aligned
+/// so it ends just before the top-right corner.
+pub(crate) fn buttons_line() -> String {
+    let mut s = String::from(" ");
+    for (label, _) in BUTTONS {
+        s.push_str(label);
+        s.push(' ');
     }
-    let (cut_left, cut_right) = (lo > 0, hi + 1 < labels.len());
-    let room =
-        width.saturating_sub(if cut_left { cut } else { 0 } + if cut_right { cut } else { 0 });
-    let mut x = if cut_left { cut } else { 0 };
-    let items = labels[lo..=hi]
-        .iter()
-        .map(|(id, label)| {
-            // Only the active one can be alone and too wide: shortened.
-            let label = if chars(label) > room {
-                // Column by column, leaving one for the `…`.
-                let mut s = String::new();
-                let mut used = 0;
-                for c in label.chars() {
-                    let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-                    if used + w > room.saturating_sub(1) {
-                        break;
-                    }
-                    used += w;
-                    s.push(c);
-                }
-                s.push('…');
-                s
-            } else {
-                label.clone()
-            };
-            let w = chars(&label);
-            let item = StripItem {
-                id: *id,
-                label,
-                active: *id == active,
-                x: u16::try_from(x).unwrap_or(u16::MAX),
-                width: u16::try_from(w).unwrap_or(u16::MAX),
-            };
-            x += w + sep;
-            item
-        })
-        .collect();
-    Strip {
-        items,
-        cut_left,
-        cut_right,
+    s
+}
+
+/// Is the panel wide enough for the buttons AND its name on the left?
+pub(crate) fn buttons_fit(r: Rect) -> bool {
+    r.width >= width_of(&buttons_line()) + 14
+}
+
+/// The command of the border button under `(col, row == r.y)`, if any.
+pub(crate) fn button_at(r: Rect, col: u16) -> Option<&'static str> {
+    if !buttons_fit(r) {
+        return None;
     }
+    let line = buttons_line();
+    let start = (r.x + r.width).checked_sub(1 + width_of(&line))?;
+    let mut x = start + 1;
+    for (label, cmd) in BUTTONS {
+        let w = width_of(label);
+        if col >= x && col < x + w {
+            return Some(cmd);
+        }
+        x += w + 1;
+    }
+    None
+}
+
+/// The grid's rectangle and, with two or more shells and room, the list's.
+pub(crate) fn split(inside: Rect, shells: usize) -> (Rect, Option<Rect>) {
+    if shells < 2 || inside.width < LIST_MIN_INSIDE {
+        return (inside, None);
+    }
+    let grid = Rect {
+        width: inside.width - LIST_COLS,
+        ..inside
+    };
+    let list = Rect {
+        x: inside.x + grid.width,
+        width: LIST_COLS,
+        ..inside
+    };
+    (grid, Some(list))
+}
+
+/// The first instance the list shows, so the one in front (`active`, its
+/// position) is always among the `height` rows.
+pub(crate) fn list_offset(active: usize, height: u16) -> usize {
+    let h = usize::from(height);
+    if h == 0 {
+        0
+    } else {
+        active.saturating_sub(h - 1)
+    }
+}
+
+/// The list row under `(col, row)`, if any: a painted row, from the top —
+/// add [`list_offset`] for the instance's position.
+pub(crate) fn list_row_at(list: Rect, col: u16, row: u16) -> Option<usize> {
+    let inside = col >= list.x && col < list.x + list.width && row >= list.y;
+    (inside && row < list.y + list.height).then(|| usize::from(row - list.y))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use norte_frontend::terminals::InstanceId;
+    use ratatui::layout::Rect;
 
-    fn labels(n: u32) -> Vec<(InstanceId, String)> {
-        (1..=n)
-            .map(|i| (InstanceId(i), format!("{i} sh")))
-            .collect()
+    /// The buttons sit at the right end of the top border, before the
+    /// corner, and each answers on its own three cells.
+    #[test]
+    fn each_button_answers_on_its_cells() {
+        let r = Rect::new(10, 5, 60, 12);
+        let line = buttons_line();
+        let start = r.x + r.width - 1 - width_of(&line);
+        assert_eq!(button_at(r, start + 1), Some("terminal.new"));
+        assert_eq!(button_at(r, start + 3), Some("terminal.new"));
+        assert_eq!(button_at(r, start + 4), None, "the gap is not a button");
+        assert_eq!(button_at(r, start + 5), Some("terminal.new-profile"));
+        assert_eq!(button_at(r, start + 9), Some("terminal.rename"));
+        assert_eq!(button_at(r, start + 13), Some("terminal.close"));
+        assert_eq!(button_at(r, r.x + r.width - 1), None, "the corner is not");
+        assert_eq!(button_at(r, r.x + 2), None);
     }
 
+    /// Too narrow for the buttons: none, rather than buttons over the title.
     #[test]
-    fn everything_fits() {
-        let s = layout_strip(&labels(3), InstanceId(2), 40);
-        assert_eq!(s.items.len(), 3);
-        assert!(!s.cut_left && !s.cut_right);
-        assert!(s.items.windows(2).all(|w| w[0].x + w[0].width < w[1].x));
-        assert!(s.items[1].active);
+    fn a_narrow_panel_has_no_buttons() {
+        let r = Rect::new(0, 0, 20, 5);
+        assert_eq!(button_at(r, 10), None);
+        assert!(!buttons_fit(r));
     }
 
-    /// Too many: the strip keeps the active one and cuts around it.
+    /// One shell: the grid takes the whole inside. Two: the list takes its
+    /// columns on the right, and the grid the rest.
     #[test]
-    fn cut_around_the_active() {
-        let s = layout_strip(&labels(10), InstanceId(7), 20);
-        assert!(s.items.iter().any(|i| i.id == InstanceId(7)));
-        assert!(s.cut_left && s.cut_right);
-        let last = s.items.last().expect("one");
-        assert!(last.x + last.width <= 20);
+    fn the_list_takes_its_columns_only_with_two() {
+        let inside = Rect::new(1, 1, 80, 10);
+        assert_eq!(split(inside, 1), (inside, None));
+        let (grid, list) = split(inside, 2);
+        let list = list.expect("a list");
+        assert_eq!(grid.width + list.width, 80);
+        assert_eq!(list.width, LIST_COLS);
+        assert_eq!(list.x, grid.x + grid.width);
     }
 
-    /// One label wider than the strip: still there, shortened with `…`.
+    /// A panel too narrow for a list keeps the whole width for the shell.
     #[test]
-    fn the_active_is_kept_even_if_alone_too_wide() {
-        let wide = vec![(InstanceId(1), "x".repeat(50))];
-        let s = layout_strip(&wide, InstanceId(1), 10);
-        assert_eq!(s.items.len(), 1);
-        assert!(s.items[0].label.ends_with('…'));
-        assert!(s.items[0].width <= 10);
+    fn a_narrow_panel_keeps_the_shell_whole() {
+        let inside = Rect::new(1, 1, 30, 10);
+        assert_eq!(split(inside, 3), (inside, None));
     }
 
-    /// A wide character takes TWO columns, as ratatui paints it: counted as
-    /// one, every later tab drifts and a click picks the wrong shell.
+    /// More shells than rows: the list scrolls so the one in front shows.
     #[test]
-    fn a_wide_title_counts_its_columns() {
-        let l = vec![
-            (InstanceId(1), "1 文档".to_owned()),
-            (InstanceId(2), "2 sh".to_owned()),
-        ];
-        let s = layout_strip(&l, InstanceId(1), 40);
-        assert_eq!(s.items[0].width, 6);
-        assert_eq!(s.items[1].x, 6 + 3);
+    fn the_list_scrolls_to_the_active_one() {
+        assert_eq!(list_offset(0, 2), 0);
+        assert_eq!(list_offset(1, 2), 0);
+        assert_eq!(list_offset(2, 2), 1);
+        assert_eq!(list_offset(9, 3), 7);
+        assert_eq!(list_offset(5, 0), 0, "no rows, no scroll");
     }
 
-    /// Widths are counted in characters, not bytes.
+    /// A row of the list names its instance by position.
     #[test]
-    fn widths_count_chars_not_bytes() {
-        let l = vec![(InstanceId(1), "ñandú".to_owned())];
-        let s = layout_strip(&l, InstanceId(1), 40);
-        assert_eq!(s.items[0].width, 5);
+    fn a_list_row_is_an_index() {
+        let inside = Rect::new(1, 1, 80, 10);
+        let (_, list) = split(inside, 3);
+        let list = list.expect("a list");
+        assert_eq!(list_row_at(list, list.x, list.y + 2), Some(2));
+        assert_eq!(list_row_at(list, list.x - 1, list.y), None, "the grid");
     }
 }

@@ -318,10 +318,11 @@ dónde sentarlo.
 
 El panel tiene **varios shells**. {{cmd:terminal.new}} arranca otro y lo trae
 delante; {{cmd:terminal.next}} y {{cmd:terminal.prev}} pasan de uno a otro;
-{{cmd:terminal.close}} cierra el de delante y mata su shell. Con dos o más, el
-panel los lista —en la terminal, como pestañas en su borde de arriba; en la
-ventana, como una lista a su derecha— y un `●` marca el que escribió mientras
-mirabas otro. Un shell que termina bien sale de la lista; uno que termina con
+{{cmd:terminal.close}} cierra el de delante y mata su shell. El borde de arriba
+del panel lleva cuatro botones, `[+]` nueva, `[▾]` elegir shell, `[✎]`
+renombrar y `[✕]` cerrar, para el ratón y para cualquier preset. Con dos o más
+shells, el panel las lista a su derecha, como VS Code; un clic trae una
+delante, y un `●` marca la que escribió mientras mirabas otra. Un shell que termina bien sale de la lista; uno que termina con
 error se queda, enseñando su última pantalla y el código, hasta que lo cierras.
 
 {{cmd:terminal.rename}} le pone nombre al de delante (un nombre vacío devuelve

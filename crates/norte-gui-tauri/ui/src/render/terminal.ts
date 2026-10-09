@@ -130,24 +130,62 @@ function titleActions(this: Screen, slot: TerminalSlotView): HTMLElement {
   button("+", "terminal-new", () => {
     this.send({ action: "terminal_new", profile: null });
   });
+  // The same four as the terminal's border (`+ ▾ ✎ ✕`), always there: a
+  // button that comes and goes is a button nobody finds.
   const profiles = slot.profiles ?? [];
-  if (profiles.length > 1) {
-    button("▾", "terminal-shell-profiles", (e) => {
-      popup.call(
-        this,
-        e.clientX,
-        e.clientY,
-        profiles.map((p) => [p, () => this.send({ action: "terminal_new", profile: p })]),
-      );
-    });
-  }
-  const active = slot.active;
-  if (active != null) {
-    button("🗑", "terminal-close", () => {
-      this.send({ action: "terminal_close", id: active });
-    });
-  }
+  button("▾", "terminal-shell-profiles", (e) => {
+    popup.call(
+      this,
+      e.clientX,
+      e.clientY,
+      profiles.map((p) => [p, () => this.send({ action: "terminal_new", profile: p })]),
+    );
+  });
+  const front = (slot.instances ?? []).find((i) => i.id === slot.active);
+  button("✎", "menu-item-terminal-rename", () => {
+    if (front !== undefined) {
+      renameInTitle.call(this, front, box);
+    }
+  });
+  button("✕", "terminal-close", () => {
+    if (slot.active != null) {
+      this.send({ action: "terminal_close", id: slot.active });
+    }
+  });
   return box;
+}
+
+/** ✎: the panel's name becomes a field for the shell in front's name. */
+function renameInTitle(
+  this: Screen,
+  front: TerminalInstanceView,
+  box: HTMLElement,
+): void {
+  const title = box.parentElement;
+  if (title === null || title.querySelector(".terminal-rename") !== null) {
+    return;
+  }
+  const input = document.createElement("input");
+  input.className = "terminal-rename";
+  // From the NAME, as everywhere else (see `renameInline`).
+  input.value = front.name ?? "";
+  input.setAttribute("aria-label", this.t("terminal-rename-prompt"));
+  input.addEventListener("keydown", (e) => {
+    // Ours: the host would take these keys for the shell.
+    e.stopPropagation();
+    if (e.key === "Enter") {
+      this.send({ action: "terminal_rename", id: front.id, name: input.value });
+      input.blur();
+    } else if (e.key === "Escape") {
+      input.blur();
+    }
+  });
+  input.addEventListener("blur", () => {
+    input.remove();
+  });
+  box.before(input);
+  input.focus();
+  input.select();
 }
 
 /** VS Code's list: one entry per shell, a click brings it forward. */

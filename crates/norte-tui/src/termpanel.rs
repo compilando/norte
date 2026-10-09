@@ -215,7 +215,7 @@ pub struct TermRename {
     pub text: String,
 }
 
-/// The tabs' labels, in list order: position, unseen dot, title, and the
+/// The list's labels, in list order: position, unseen dot, title, and the
 /// code of a failed one.
 #[must_use]
 pub fn strip_labels(t: &Shells) -> Vec<(norte_frontend::terminals::InstanceId, String)> {
