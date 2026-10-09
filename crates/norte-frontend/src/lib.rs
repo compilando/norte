@@ -59,6 +59,7 @@ pub mod busy;
 pub mod cli;
 pub mod config;
 pub mod confine;
+pub mod context_menu;
 mod decoration;
 pub mod error;
 pub mod handoff;
