@@ -26,6 +26,7 @@ mod attributes_processes;
 mod base;
 mod columns;
 mod compare;
+mod context_menu;
 mod corpus;
 mod gestures;
 mod go_to;

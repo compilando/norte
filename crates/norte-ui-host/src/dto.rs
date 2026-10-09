@@ -52,6 +52,10 @@ pub struct ViewSnapshot {
     pub tasks: Vec<TaskView>,
     /// The menu bar: the titles, and the open one if any.
     pub menu: MenuView,
+    /// The right-click menu, if one is open (spec 2026-10-09, bridge 107).
+    /// Absent in an older host = none.
+    #[serde(default)]
+    pub context_menu: Option<ContextMenuView>,
     /// The panel bar (#324): which panels exist, their state, and whether
     /// any has something to report. Bridge 51.
     pub panel_bar: PanelBarView,
@@ -240,6 +244,51 @@ pub struct MenuItemView {
     /// `normal`, `destructive` (painted in the danger color) or `ai`
     /// (carries the AI mark). Decided by `norte_frontend::menu::role`, the
     /// same one the terminal reads.
+    pub role: String,
+}
+
+/// The right-click menu (spec 2026-10-09, bridge 107).
+///
+/// Owned by the HOST, like the menu bar: which entries a surface offers is
+/// `norte_frontend::context_menu`, whether each can run is the shared
+/// availability table, and the renderer only paints this and says where the
+/// pointer went. A menu decided in the webview would be a second dispatcher.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextMenuView {
+    /// What the menu acts on, already worded: "acts on notas.txt", "3
+    /// marked items", "in /home", "column Size". The name is the masked
+    /// display name, elided at 40 chars.
+    pub header: String,
+    /// The entries, in display order. The core of a row menu is the same
+    /// on every row: an entry that cannot run is shown disabled with its
+    /// reason, never dropped.
+    pub items: Vec<ContextItemView>,
+    /// Which entry is highlighted.
+    pub cursor: u64,
+    /// Where the pointer was, in the renderer's own pixels, when it was
+    /// asked for with the mouse. `None` = by key (the Menu key): the
+    /// renderer anchors it to the cursor row.
+    pub x: Option<i32>,
+    /// See [`Self::x`].
+    pub y: Option<i32>,
+}
+
+/// An entry of the right-click menu.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextItemView {
+    /// The SHORT label, already translated.
+    pub label: String,
+    /// The shortcut that runs it in this preset, or empty if it has none
+    /// (or it is a menu-local verb).
+    pub chord: String,
+    /// It can run right now.
+    pub enabled: bool,
+    /// Why it cannot, already translated. Empty when `enabled`.
+    pub reason: String,
+    /// Whether a section STARTS with this entry, same contract as
+    /// [`MenuItemView::section`].
+    pub section: Option<String>,
+    /// `normal`, `destructive` or `ai`, same as [`MenuItemView::role`].
     pub role: String,
 }
 
@@ -4020,6 +4069,12 @@ pub enum ViewChange {
         /// The bar, always: the row of titles stays there with the
         /// dropdown closed.
         menu: MenuView,
+    },
+    /// The right-click menu opened, its cursor moved, or it closed (bridge
+    /// 107). Whole, like [`Self::Menu`], and for the same reason.
+    ContextMenu {
+        /// The menu, or `None` if it closed.
+        context_menu: Option<ContextMenuView>,
     },
     /// The panel bar changed: a panel opened or closed, the keyboard moved,
     /// or something started having something to report.

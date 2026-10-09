@@ -803,6 +803,97 @@ pub enum UiAction {
     },
     /// Closes the open menu without running anything (a click outside).
     MenuClose,
+    /// A right click on a listing row (bridge 107): opens the context menu
+    /// on it.
+    ///
+    /// The marks rule is the host's: a MARKED row acts on the marks, an
+    /// unmarked one drops them and puts the cursor on itself.
+    ContextMenuRow {
+        /// The listing. It must be the active one: the renderer focuses it
+        /// first (`FocusSlot`).
+        slot_id: u32,
+        /// The row, as it traveled.
+        key: RowKey,
+        /// The generation with which that row was painted.
+        ///
+        /// Mandatory because the listing CHANGES on its own: a filler batch
+        /// that lands between painting and the click reorders it, and a key
+        /// with no generation could name a row that is no longer the one
+        /// clicked — and the menu would then act on another file. One that
+        /// does not match is rejected.
+        generation: u64,
+        /// Where the pointer was, in the renderer's pixels.
+        x: i32,
+        /// See `x`.
+        y: i32,
+    },
+    /// A right click on the empty area of a listing (bridge 107): the
+    /// folder's menu. Touches no marks.
+    ContextMenuEmpty {
+        /// The listing; must be the active one.
+        slot_id: u32,
+        /// Where the pointer was, in the renderer's pixels.
+        x: i32,
+        /// See `x`.
+        y: i32,
+    },
+    /// A right click on a column header (bridge 107).
+    ContextMenuHeader {
+        /// The listing; must be the active one.
+        slot_id: u32,
+        /// The column id, as it traveled in `ColumnHeader::id`.
+        column: String,
+        /// Where the pointer was, in the renderer's pixels.
+        x: i32,
+        /// See `x`.
+        y: i32,
+    },
+    /// A right click on a row of the places sidebar (bridge 107).
+    ContextMenuPlace {
+        /// Row, in the order they traveled.
+        row: u32,
+        /// The generation with which that row was painted.
+        ///
+        /// Mandatory because this list CHANGES on its own: volumes arrive
+        /// from a background task and get inserted before the favorites, so
+        /// an index with no generation could name a row that is no longer
+        /// the one clicked. One that does not match is rejected.
+        generation: u64,
+        /// Where the pointer was, in the renderer's pixels.
+        x: i32,
+        /// See `x`.
+        y: i32,
+    },
+    /// A right click on a branch of the folder tree (bridge 107).
+    ContextMenuBranch {
+        /// Row, among ALL visible branches.
+        row: u32,
+        /// The generation with which it was painted. Mandatory for the same
+        /// reason as the places bar: an expansion inserts rows IN THE
+        /// MIDDLE when its listing arrives.
+        generation: u64,
+        /// Where the pointer was, in the renderer's pixels.
+        x: i32,
+        /// See `x`.
+        y: i32,
+    },
+    /// Moves the cursor within the open context menu (the mouse hovering).
+    ContextMenuPointRow {
+        /// Which entry, in the order they traveled.
+        row: u32,
+    },
+    /// Runs an entry of the open context menu (a click).
+    ///
+    /// Carries the row and not the command, for the same reason as
+    /// [`Self::MenuActivateRow`]: the host resolves it against the menu IT
+    /// has open.
+    ContextMenuActivateRow {
+        /// Which entry, in the order they traveled.
+        row: u32,
+    },
+    /// Closes the context menu without running anything (a click outside,
+    /// `Escape`). The marks it dropped on opening stay dropped.
+    ContextMenuClose,
     /// Alt pressed and released ALONE, with no other key in between
     /// (bridge 68).
     ///

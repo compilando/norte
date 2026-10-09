@@ -150,6 +150,7 @@ impl State {
             dialogs: self.dialog_views(),
             tasks: self.vistas_de_tasks(),
             menu: self.vista_menu(),
+            context_menu: self.vista_context_menu(),
             panel_bar: self.view_pane_bar(),
             status_items: self.status_items_view(),
             layout_buttons: self.view_layout_buttons(),

@@ -231,6 +231,14 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::MenuActivateRow { .. } => "menu_activate_row",
         UiAction::MenuClose => "menu_close",
         UiAction::MenuToggle => "menu_toggle",
+        UiAction::ContextMenuRow { .. } => "context_menu_row",
+        UiAction::ContextMenuEmpty { .. } => "context_menu_empty",
+        UiAction::ContextMenuHeader { .. } => "context_menu_header",
+        UiAction::ContextMenuPlace { .. } => "context_menu_place",
+        UiAction::ContextMenuBranch { .. } => "context_menu_branch",
+        UiAction::ContextMenuPointRow { .. } => "context_menu_point_row",
+        UiAction::ContextMenuActivateRow { .. } => "context_menu_activate_row",
+        UiAction::ContextMenuClose => "context_menu_close",
         UiAction::WizardOpen => "wizard_open",
         UiAction::SplashOpen => "splash_open",
         UiAction::SplashClose => "splash_close",
@@ -558,6 +566,7 @@ fn overlay_actions() -> Vec<(&'static str, UiAction)> {
     .into_iter()
     .chain(settings_actions())
     .chain(chrome_actions())
+    .chain(context_menu_actions())
     .collect()
 }
 
@@ -668,6 +677,68 @@ fn chrome_actions() -> Vec<(&'static str, UiAction)> {
                 zone: norte_frontend::layout::DropZone::Right,
             },
         ),
+    ]
+}
+
+/// The RIGHT-CLICK menu's (bridge 107), apart from the chrome's for the
+/// lint's line cap. Every wire name nailed down on the bump, including the
+/// three wired in later tasks.
+fn context_menu_actions() -> Vec<(&'static str, UiAction)> {
+    vec![
+        (
+            "context_menu_row",
+            UiAction::ContextMenuRow {
+                slot_id: 1,
+                key: RowKey(4),
+                generation: 7,
+                x: 120,
+                y: 48,
+            },
+        ),
+        (
+            "context_menu_empty",
+            UiAction::ContextMenuEmpty {
+                slot_id: 1,
+                x: 300,
+                y: 400,
+            },
+        ),
+        (
+            "context_menu_header",
+            UiAction::ContextMenuHeader {
+                slot_id: 1,
+                column: "size".to_owned(),
+                x: 200,
+                y: 30,
+            },
+        ),
+        (
+            "context_menu_place",
+            UiAction::ContextMenuPlace {
+                row: 2,
+                generation: 5,
+                x: 20,
+                y: 90,
+            },
+        ),
+        (
+            "context_menu_branch",
+            UiAction::ContextMenuBranch {
+                row: 3,
+                generation: 6,
+                x: 20,
+                y: 110,
+            },
+        ),
+        (
+            "context_menu_point_row",
+            UiAction::ContextMenuPointRow { row: 3 },
+        ),
+        (
+            "context_menu_activate_row",
+            UiAction::ContextMenuActivateRow { row: 3 },
+        ),
+        ("context_menu_close", UiAction::ContextMenuClose),
     ]
 }
 
@@ -1689,6 +1760,44 @@ fn reference_menu() -> norte_ui_host::dto::MenuView {
     }
 }
 
+/// The right-click menu (bridge 107): a titled section, a bare rule, a
+/// disabled entry with its reason and a destructive one, so every field
+/// crosses with a value that is not its default.
+fn reference_context_menu() -> norte_ui_host::dto::ContextMenuView {
+    norte_ui_host::dto::ContextMenuView {
+        header: "actúa sobre notas.txt".to_owned(),
+        items: vec![
+            norte_ui_host::dto::ContextItemView {
+                label: "Abrir".to_owned(),
+                chord: "Enter".to_owned(),
+                enabled: true,
+                reason: String::new(),
+                section: None,
+                role: "normal".to_owned(),
+            },
+            norte_ui_host::dto::ContextItemView {
+                label: "Renombrar".to_owned(),
+                chord: "shift+F6".to_owned(),
+                enabled: false,
+                reason: "solo lectura".to_owned(),
+                section: Some("Archivo".to_owned()),
+                role: "normal".to_owned(),
+            },
+            norte_ui_host::dto::ContextItemView {
+                label: "Borrar".to_owned(),
+                chord: "F8".to_owned(),
+                enabled: true,
+                reason: String::new(),
+                section: Some(String::new()),
+                role: "destructive".to_owned(),
+            },
+        ],
+        cursor: 1,
+        x: Some(120),
+        y: Some(48),
+    }
+}
+
 fn reference_snapshot() -> ViewSnapshot {
     ViewSnapshot {
         compare: None,
@@ -1711,6 +1820,7 @@ fn reference_snapshot() -> ViewSnapshot {
         dialogs: vec![reference_dialog()],
         tasks: vec![reference_task()],
         menu: reference_menu(),
+        context_menu: Some(reference_context_menu()),
         panel_bar: reference_pane_bar(),
         status_items: reference_status_items(),
         layout_buttons: vec![norte_ui_host::dto::ChromeButtonView {
@@ -2845,6 +2955,12 @@ fn rest_changes() -> Vec<(&'static str, ViewChange)> {
             },
         ),
         (
+            "context_menu",
+            ViewChange::ContextMenu {
+                context_menu: Some(reference_context_menu()),
+            },
+        ),
+        (
             "wizard",
             ViewChange::Wizard {
                 wizard: Some(reference_wizard()),
@@ -3086,7 +3202,9 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // 99: `LayoutPickerView.legend`, what each preview letter is, and
     // `PlacesSlotView.favorites_hint`.
     // 101: `PanelBarView.footer`, the activity column's foot.
-    const SHAPE: u64 = 10_678_519_679_102_427_153;
+    // 107 (spec 2026-10-09): `ViewSnapshot.context_menu` and the
+    // `context_menu` change, the right-click menu.
+    const SHAPE: u64 = 17_027_469_966_710_062_053;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

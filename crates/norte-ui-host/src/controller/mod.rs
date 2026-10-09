@@ -40,6 +40,7 @@ use crate::dto::{
 mod agents;
 mod ai;
 mod approvals;
+mod context_menu;
 mod dialogs;
 mod diskmap;
 mod effects;
@@ -2703,6 +2704,11 @@ struct State {
     /// palette, and for the same reason: an arrow key that escaped would move
     /// the listing underneath.
     menu: Option<norte_frontend::menu::MenuState>,
+    /// The open right-click menu, if any (spec 2026-10-09, bridge 107).
+    ///
+    /// Its target, facts and entries are decided ONCE at opening, here,
+    /// and the renderer only paints its projection.
+    context_menu: Option<context_menu::ContextMenu>,
     /// The configuration this window started with, to show it.
     config: norte_frontend::config::FrontendConfig,
     /// Where each thing lives.
@@ -3394,6 +3400,7 @@ impl State {
             volumes_pie: Vec::new(),
             footer_in_flight: false,
             menu: None,
+            context_menu: None,
             help: None,
             settings: None,
             extensions: None,
@@ -4031,6 +4038,30 @@ impl State {
             UiAction::MenuActivateRow { row } => self.activate_from_menu(*row, backend, mailbox),
             UiAction::MenuClose => self.close_menu(),
             UiAction::MenuToggle => self.toggle_menu(),
+            UiAction::ContextMenuRow {
+                slot_id,
+                key,
+                generation,
+                x,
+                y,
+            } => self.open_row_menu(*slot_id, *key, *generation, Some((*x, *y))),
+            UiAction::ContextMenuEmpty { slot_id, x, y } => {
+                self.open_empty_menu(*slot_id, Some((*x, *y)))
+            }
+            UiAction::ContextMenuHeader {
+                slot_id,
+                column,
+                x,
+                y,
+            } => self.open_header_menu(*slot_id, column, Some((*x, *y))),
+            UiAction::ContextMenuPointRow { row } => self.point_in_context_menu(*row),
+            UiAction::ContextMenuClose => self.close_context_menu(),
+            // Task 5: places and tree branches. Task 4: running an entry.
+            UiAction::ContextMenuPlace { .. }
+            | UiAction::ContextMenuBranch { .. }
+            | UiAction::ContextMenuActivateRow { .. } => {
+                (Self::stale(StaleAction::Modal), Vec::new())
+            }
             UiAction::WizardOpen => self.open_wizard(),
             UiAction::SplashOpen => self.open_splash(),
             UiAction::SplashClose => (self.applied(), self.close_splash()),
