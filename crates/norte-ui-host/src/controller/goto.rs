@@ -113,7 +113,8 @@ impl State {
         // The commands, the SAME ones this window's palette offers: the
         // palette already resolves which ones this host implements and with
         // what effects.
-        let commands = norte_frontend::goto::command_rows(self.palette_rows());
+        let commands =
+            norte_frontend::goto::command_rows(self.palette_rows(), Some(&self.facts()), self.lang);
         out.push(Box::new(FixedSource::new(SECTION_COMMANDS, commands)));
         out
     }
@@ -252,8 +253,8 @@ impl State {
         match k.key.as_str() {
             "Escape" | "esc" => self.close_go_to(),
             "Enter" | "enter" => {
-                let key = g.selected().map(|r| r.key.clone());
-                return self.confirm_go_to(key, backend, mailbox);
+                let act = g.confirm();
+                return self.confirm_go_to(act, backend, mailbox);
             }
             "ArrowDown" | "down" => g.down(),
             "ArrowUp" | "up" => g.up(),
@@ -283,19 +284,19 @@ impl State {
     /// Confirms the chosen row: closes the screen BEFORE acting — the close
     /// in its own patch, like the palette, so that whatever the effect opens
     /// does not end up underneath it — and does what
-    /// `norte_frontend::goto::action` decides.
+    /// `norte_frontend::goto::Goto::confirm` decided.
     fn confirm_go_to(
         &mut self,
-        key: Option<String>,
+        act: Option<Action>,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.close_go_to();
         let closing = self.parche(vec![ViewChange::Goto { goto: None }]);
-        let Some(key) = key else {
+        let Some(act) = act else {
             return (self.applied(), vec![closing]);
         };
-        let (ack, mut rest) = match norte_frontend::goto::action(&key) {
+        let (ack, mut rest) = match act {
             Action::Ir(dir) => (
                 self.applied(),
                 self.navigate(&dir, Trail::Record, backend, mailbox),
@@ -307,6 +308,13 @@ impl State {
                 None => self.no_implemented(&cmd),
             },
             Action::Nothing(reason) => (self.applied(), self.say(reason)),
+            Action::Unavailable(why) => {
+                self.status.message = Some(clamp_display(why));
+                (
+                    self.applied(),
+                    vec![self.parche(vec![ViewChange::Status(self.status.clone())])],
+                )
+            }
         };
         let mut outgoing = vec![closing];
         outgoing.append(&mut rest);

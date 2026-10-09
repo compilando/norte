@@ -85,10 +85,11 @@ pub fn sources(app: &App, connections: &[(String, String)]) -> Vec<Box<dyn GotoS
 
     // The commands, the SAME ones the palette offers in this context: the
     // palette already resolves what can run with the viewer open.
-    let commands = command_rows(crate::palette::rows_for_context(
-        &app.palette_rows,
-        app.viewer.is_some(),
-    ));
+    let commands = command_rows(
+        crate::palette::rows_for_context(&app.palette_rows, app.viewer.is_some()),
+        Some(&app.help_facts()),
+        norte_i18n::active(),
+    );
     out.push(Box::new(FixedSource::new(SECTION_COMMANDS, commands)));
 
     out
@@ -103,13 +104,6 @@ pub fn set_index(app: &mut App, hits: &[norte_proto::methods::SemanticHit]) {
         // makes it useful.
         goto.replace_section(SECTION_INDEX, rows, true);
     }
-}
-
-/// What to do with the row the reader just confirmed — the decision belongs
-/// to the shared model ([`norte_frontend::goto::action`]).
-#[must_use]
-pub fn action(_app: &App, key: &str) -> Action {
-    norte_frontend::goto::action(key)
 }
 
 /// Opens the screen with the given sources.

@@ -682,6 +682,18 @@ impl Goto {
         }
     }
 
+    /// What confirming the selected row means: [`Action::Unavailable`] when
+    /// the row is dimmed, otherwise what [`action`] reads from its `key`.
+    #[must_use]
+    pub fn confirm(&self) -> Option<Action> {
+        let row = self.selected()?;
+        Some(
+            row.unavailable
+                .clone()
+                .map_or_else(|| action(&row.key), Action::Unavailable),
+        )
+    }
+
     /// How many rows are visible right now (headers not counted).
     #[must_use]
     pub fn len(&self) -> usize {
@@ -858,14 +870,53 @@ pub fn row_connection(name: &str, url: &str) -> GotoRow {
     }
 }
 
-/// The COMMAND rows, built from the palette's: the SAME ones the palette
-/// offers in that context, because two command lists computed separately
-/// diverge.
+/// The category a command is filed under: its namespace (`pane` in
+/// `pane.copy`), translated. `None` for an id without one.
 #[must_use]
-pub fn command_rows(rows: Vec<crate::palette::Row>) -> Vec<GotoRow> {
+pub fn category(cmd: &str, lang: norte_i18n::Lang) -> Option<String> {
+    let (ns, _) = cmd.split_once('.')?;
+    Some(norte_i18n::t_in(lang, &format!("cmd-ns-{ns}")))
+}
+
+/// The COMMAND rows: the SAME rows the frontend's palette builds, as go-to
+/// rows, because two command lists computed separately diverge. `facts` dims
+/// what cannot run here, `None` dims nothing.
+#[must_use]
+pub fn command_rows(
+    rows: Vec<crate::palette::Row>,
+    facts: Option<&crate::availability::Facts>,
+    lang: norte_i18n::Lang,
+) -> Vec<GotoRow> {
+    rows.into_iter()
+        .map(|r| {
+            let unavailable = facts
+                .and_then(|f| crate::availability::verdict(&r.key, f).reason())
+                .map(|why| norte_i18n::t_in(lang, crate::availability::reason_key(why)));
+            GotoRow {
+                section: SECTION_COMMANDS.id,
+                category: category(&r.key, lang),
+                chord: (r.chord != "—").then_some(r.chord),
+                unavailable,
+                key: format!("{K_CMD}{}", r.key),
+                // The human label is the name, the id goes dim behind it
+                // (spec 2026-09-10's reading order).
+                text: r.desc,
+                desc: r.text,
+                hostile: r.hostile,
+                ..GotoRow::default()
+            }
+        })
+        .collect()
+}
+
+/// The PLUGIN command rows (extensions, renamers, organizers): no category
+/// and never dimmed — the daemon decides whether they run. Same `key` shape
+/// as [`command_rows`], so confirming one is the same [`Action::Command`].
+#[must_use]
+pub fn plugin_command_rows(rows: Vec<crate::palette::Row>) -> Vec<GotoRow> {
     rows.into_iter()
         .map(|r| GotoRow {
-            section: SECTION_COMMANDS.id,
+            section: SECTION_PLUGINS.id,
             key: format!("{K_CMD}{}", r.key),
             text: r.text,
             desc: r.desc,
@@ -898,6 +949,9 @@ pub enum Action {
     /// The row leads nowhere resolvable — a typed path that does not
     /// parse, above all. Carries the message's key.
     Nothing(&'static str),
+    /// A command that cannot run here: the reason, already translated (the
+    /// row's `unavailable`).
+    Unavailable(String),
 }
 
 /// What to do with the row the reader just confirmed.
@@ -1486,5 +1540,136 @@ mod tests {
         assert_eq!(looks_path("~notas"), None, "nobody's home");
         assert_eq!(looks_path("://x"), None, "no scheme, no backend");
         assert_eq!(looks_path("sftp://"), None, "no destination, nowhere to go");
+    }
+}
+
+#[cfg(test)]
+mod command_row_tests {
+    use super::{
+        Action, Goto, SECTION_COMMANDS, SECTION_PLUGINS, category, command_rows,
+        plugin_command_rows,
+    };
+    use crate::availability::Facts;
+    use norte_i18n::Lang;
+
+    fn prow(key: &str, text: &str, desc: &str, chord: &str) -> crate::palette::Row {
+        crate::palette::Row {
+            key: key.to_owned(),
+            text: text.to_owned(),
+            desc: desc.to_owned(),
+            chord: chord.to_owned(),
+            hostile: false,
+        }
+    }
+
+    fn in_a_zip() -> Facts {
+        Facts {
+            enterable: false,
+            viewable: true,
+            rename_single: true,
+            source_read_only: true,
+            dest_read_only: false,
+            degraded: false,
+            journalled: true,
+            daemon: true,
+            windowed: true,
+        }
+    }
+
+    #[test]
+    fn a_command_row_carries_its_category_chord_and_label() {
+        let rows = command_rows(
+            vec![
+                prow(
+                    "pane.copy",
+                    "pane.copy",
+                    "copy selection to the other pane",
+                    "F5",
+                ),
+                prow("app.agents", "app.agents", "agents", "—"),
+            ],
+            None,
+            Lang::En,
+        );
+        assert_eq!(rows[0].section, SECTION_COMMANDS.id);
+        assert_eq!(rows[0].key, "cmd:pane.copy");
+        assert_eq!(
+            rows[0].text, "copy selection to the other pane",
+            "the human label is the name"
+        );
+        assert_eq!(
+            rows[0].desc, "pane.copy",
+            "the id goes dim, still searchable"
+        );
+        assert_eq!(rows[0].category.as_deref(), Some("Panel"));
+        assert_eq!(rows[0].chord.as_deref(), Some("F5"));
+        assert_eq!(rows[1].chord, None, "no key in this preset: no chord");
+        assert_eq!(rows[0].unavailable, None, "no facts: nothing is dimmed");
+    }
+
+    /// Inside a zip, deleting cannot run: the row says why, translated, and
+    /// confirming it refuses with that reason instead of running.
+    #[test]
+    fn an_unavailable_command_is_dimmed_and_refuses() {
+        let rows = command_rows(
+            vec![
+                prow("pane.delete", "pane.delete", "delete", "F8"),
+                prow("pane.copy", "pane.copy", "copy", "F5"),
+            ],
+            Some(&in_a_zip()),
+            Lang::En,
+        );
+        let why = norte_i18n::t_in(Lang::En, "reason-read-only");
+        assert_eq!(rows[0].unavailable.as_deref(), Some(why.as_str()));
+        assert_eq!(rows[1].unavailable, None, "reading from the zip is fine");
+        let mut goto = Goto::new(vec![Box::new(super::FixedSource::new(
+            SECTION_COMMANDS,
+            rows,
+        ))]);
+        goto.set_query(">");
+        assert_eq!(goto.confirm(), Some(Action::Unavailable(why)));
+        goto.down();
+        assert_eq!(
+            goto.confirm(),
+            Some(Action::Command("pane.copy".to_owned()))
+        );
+    }
+
+    /// A plugin row has no category and is never dimmed: the daemon is the
+    /// one that decides whether it runs.
+    #[test]
+    fn plugin_rows_have_no_category_and_are_never_dimmed() {
+        let rows = plugin_command_rows(vec![prow(
+            "plugin:org.x:greet",
+            "[extension] Greet",
+            "says hi",
+            "—",
+        )]);
+        assert_eq!(rows[0].section, SECTION_PLUGINS.id);
+        assert_eq!(rows[0].key, "cmd:plugin:org.x:greet");
+        assert_eq!(rows[0].text, "[extension] Greet");
+        assert_eq!(
+            (rows[0].category.as_deref(), rows[0].unavailable.as_deref()),
+            (None, None)
+        );
+    }
+
+    /// Every namespace in the catalogue has its category, in both languages:
+    /// a new namespace without one would paint `cmd-ns-…` literally.
+    #[test]
+    fn every_catalogue_namespace_has_a_category_in_both_languages() {
+        for lang in [Lang::En, Lang::Es] {
+            let ids = norte_i18n::message_ids(lang);
+            for def in crate::keymap::catalogue::CATALOGUE {
+                let ns = def.name.split_once('.').map_or(def.name, |(ns, _)| ns);
+                let key = format!("cmd-ns-{ns}");
+                assert!(ids.contains(&key), "{key} missing in {lang:?}");
+            }
+        }
+        assert_eq!(
+            category("nothing", Lang::En),
+            None,
+            "no namespace, no category"
+        );
     }
 }

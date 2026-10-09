@@ -487,18 +487,18 @@ pub async fn on_key(
                 }
             }
             KeyCode::Enter if plain => {
-                let key = app
+                let act = app
                     .goto
                     .as_ref()
-                    .and_then(|g| g.selected().map(|r| r.key.clone()));
+                    .and_then(norte_frontend::goto::Goto::confirm);
                 // The screen closes BEFORE acting, and the request to the
                 // index is abandoned: whatever comes next —a cd, a command,
                 // a modal— rules the screen, and a late response no longer
                 // has anywhere to land.
                 app.goto = None;
                 crate::jobs::goto::forget(work);
-                let Some(key) = key else { return };
-                match crate::goto::action(app, &key) {
+                let Some(act) = act else { return };
+                match act {
                     crate::goto::Action::Ir(dir) => {
                         let outcome = crate::navigate::cd(app, backend, events, dir).await;
                         settle_cd(
@@ -546,6 +546,7 @@ pub async fn on_key(
                     crate::goto::Action::Nothing(msg_id) => {
                         app.message = Some(norte_i18n::t(msg_id));
                     }
+                    crate::goto::Action::Unavailable(why) => app.message = Some(why),
                 }
             }
             _ => {}
