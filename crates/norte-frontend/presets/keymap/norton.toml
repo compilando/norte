@@ -156,6 +156,8 @@ keymap = [
     { on = ["ctrl+pgdn"], run = "nav.enter" },
     { on = ["ctrl+pgup"], run = "nav.parent" },
     { on = ["f3"], run = "pane.view" },
+    { on = ["shift+f10"], run = "pane.context-menu" },
+    { on = ["menu"], run = "pane.context-menu" },
     { on = ["f4"], run = "pane.edit" },
     { on = ["f5"], run = "pane.copy" },
     { on = ["f6"], run = "pane.move" },

@@ -15,6 +15,7 @@ import type {
   WhichKeyView,
   WindowVerb,
 } from "../types";
+import { closeHostMenu } from "./contextmenu";
 import { badge, colVar, cutStart, revealInView, unchanged } from "./dom";
 import type { SlotDom } from "./dom";
 import { badgeCount, icon as panelIcon } from "./icons";
@@ -798,7 +799,28 @@ export function openTabMenu(this: Screen, x: number, y: number, slotId: number):
         this.send({ action: "tab_action", slot_id: slotId, verb });
       },
     })),
+    () => {
+      closeHostMenu.call(this);
+    },
   );
+}
+
+/**
+ * Puts an already-attached floating box at `(x, y)`, kept INSIDE the window:
+ * near the right or bottom edge it would open off screen, and one taller than
+ * the window scrolls instead of running off the bottom. Measured, so the box
+ * must be in the document. Shared by the tabs' popup and the host's context
+ * menu.
+ */
+export function placeInsideWindow(box: HTMLElement, x: number, y: number): void {
+  const r = box.getBoundingClientRect();
+  if (r.height > window.innerHeight) {
+    box.style.maxHeight = `${String(window.innerHeight)}px`;
+    box.style.overflowY = "auto";
+  }
+  const height = Math.min(r.height, window.innerHeight);
+  box.style.left = `${String(Math.max(0, Math.min(x, window.innerWidth - r.width)))}px`;
+  box.style.top = `${String(Math.max(0, Math.min(y, window.innerHeight - height)))}px`;
 }
 
 /** One entry of a [`popupMenu`]: its label (text, or a node for a swatch)
@@ -810,6 +832,22 @@ export interface PopupEntry {
   verb?: string;
 }
 
+/** Takes down the open [`popupMenu`] with its window listeners; `null` with
+ *  none open. */
+let dismissOpen: (() => void) | null = null;
+
+/**
+ * Closes the open [`popupMenu`], if any, WITH its window listeners — just
+ * removing the node would leave its capture-phase `Escape` swallowing the
+ * key the host needs. Used when the host's own context menu is painted:
+ * two menus at once is never right.
+ */
+export function dismissPopupMenu(): void {
+  dismissOpen?.();
+  // A node some other path left behind (none today) goes too.
+  document.querySelector(".tab-menu")?.remove();
+}
+
 /**
  * A small menu at the pointer — the tabs', the terminal's. Only one is ever
  * open; it closes on a choice, `Escape`, a press outside, the window losing
@@ -819,8 +857,14 @@ export interface PopupEntry {
  * open off screen, and one taller than the window scrolls instead of
  * running off the bottom. Measured after it is in the document.
  */
-export function popupMenu(x: number, y: number, entries: PopupEntry[]): void {
-  document.querySelector(".tab-menu")?.remove();
+export function popupMenu(
+  x: number,
+  y: number,
+  entries: PopupEntry[],
+  onOpen?: () => void,
+): void {
+  onOpen?.();
+  dismissPopupMenu();
   const box = document.createElement("ul");
   box.className = "tab-menu";
   box.setAttribute("role", "menu");
@@ -830,7 +874,13 @@ export function popupMenu(x: number, y: number, entries: PopupEntry[]): void {
     box.remove();
     window.removeEventListener("pointerdown", outside, true);
     window.removeEventListener("keydown", escape, true);
+    window.removeEventListener("blur", dismiss);
+    window.removeEventListener("resize", dismiss);
+    if (dismissOpen === dismiss) {
+      dismissOpen = null;
+    }
   };
+  dismissOpen = dismiss;
   const outside = (e: Event): void => {
     if (!(e.target instanceof Node) || !box.contains(e.target)) {
       dismiss();
@@ -859,14 +909,7 @@ export function popupMenu(x: number, y: number, entries: PopupEntry[]): void {
     box.append(item);
   }
   document.body.append(box);
-  const r = box.getBoundingClientRect();
-  if (r.height > window.innerHeight) {
-    box.style.maxHeight = `${String(window.innerHeight)}px`;
-    box.style.overflowY = "auto";
-  }
-  const height = Math.min(r.height, window.innerHeight);
-  box.style.left = `${String(Math.max(0, Math.min(x, window.innerWidth - r.width)))}px`;
-  box.style.top = `${String(Math.max(0, Math.min(y, window.innerHeight - height)))}px`;
+  placeInsideWindow(box, x, y);
   window.addEventListener("pointerdown", outside, true);
   window.addEventListener("keydown", escape, true);
   window.addEventListener("blur", dismiss, { once: true });

@@ -191,6 +191,19 @@ impl State {
                 self.navigate(&target, Trail::Record, backend, mailbox),
             );
         }
+        self.fold_place_at_cursor(backend, mailbox)
+    }
+
+    /// Folds or unfolds the section of the side bar's cursor row: what
+    /// activating a header does, and the context menu's Fold / Unfold.
+    pub(super) fn fold_place_at_cursor(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(state) = self.places.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
+        };
         // A header: it collapses. And expanding the drives IS the moment to
         // request them again — a disk mounted or unmounted since the window
         // opened shows up here, with no clock involved.

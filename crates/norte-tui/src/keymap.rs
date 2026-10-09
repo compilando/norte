@@ -47,6 +47,7 @@ pub fn chord_from_crossterm(mods: CtMods, code: CtCode) -> Option<Chord> {
         CtCode::PageDown => KeyCode::PageDown,
         CtCode::Insert => KeyCode::Insert,
         CtCode::Delete => KeyCode::Delete,
+        CtCode::Menu => KeyCode::Menu,
         _ => return None, // keys the keymap does not model
     };
     // Only ctrl/alt/shift: crossterm does not report super/meta without
@@ -95,6 +96,7 @@ pub fn crossterm_from_chord(chord: Chord) -> Option<(CtMods, CtCode)> {
         KeyCode::PageDown => CtCode::PageDown,
         KeyCode::Insert => CtCode::Insert,
         KeyCode::Delete => CtCode::Delete,
+        KeyCode::Menu => CtCode::Menu,
     };
     let mut mods = CtMods::NONE;
     mods.set(CtMods::CONTROL, m.ctrl);

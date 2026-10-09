@@ -57,6 +57,7 @@ import * as timeline from "./render/timeline";
 import * as panelPlugin from "./render/panel";
 import * as search from "./render/search";
 import * as menus from "./render/menus";
+import * as contextmenu from "./render/contextmenu";
 import * as places from "./render/places";
 
 /**
@@ -359,6 +360,7 @@ export class Screen {
     this.paintViewer(view.viewer);
     layer("ai_rename", view.ai_rename, this.paintAiRename);
     layer("organize", view.organize, this.paintOrganize);
+    layer("context_menu", view.context_menu ?? null, this.paintContextMenu);
     layer("dialogs", view.dialogs, this.paintDialogs);
     // THE LAST ONE: the splash screen goes in front of everything else, and
     // on this sheet stacking is document order.
@@ -370,6 +372,9 @@ export class Screen {
 
   /** In `render/menus.ts`. */
   readonly paintMenu = menus.paintMenu;
+
+  /** In `render/contextmenu.ts`. */
+  readonly paintContextMenu = contextmenu.paintContextMenu;
 
   /** In `render/menus.ts`. */
   readonly paintPalette = menus.paintPalette;
@@ -735,7 +740,11 @@ export class Screen {
       e.preventDefault();
       this.send({ action: "history", slot_id: slotId, back: e.button === 3 });
     });
+    // A right click is a menu (below), never a sort or a column drag.
     dom.header.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) {
+        return;
+      }
       const target = e.target;
       if (!(target instanceof Element)) {
         return;
@@ -764,7 +773,56 @@ export class Screen {
     dom.scroller.addEventListener("scroll", () => {
       this.scheduleRange(slotId, dom);
     });
+    // The right click (the context menu, below) must not select or count as
+    // half a double click; the side buttons are handled on `mouseup`.
+    dom.header.addEventListener("contextmenu", (e) => {
+      // A keyboard-triggered `contextmenu` reports button 0: the host opens
+      // the keyboard menu from its own key, so ignore it here.
+      if (e.button !== 2 || !(e.target instanceof Element)) {
+        return;
+      }
+      const column = e.target.closest<HTMLElement>("[data-column]")?.dataset["column"];
+      if (column === undefined) {
+        return;
+      }
+      this.send({
+        action: "context_menu_header",
+        slot_id: slotId,
+        column,
+        x: Math.round(e.clientX),
+        y: Math.round(e.clientY),
+      });
+    });
+    dom.scroller.addEventListener("contextmenu", (e) => {
+      // Only a LISTING's scroller: the places bar and the tree live in this
+      // same element and ask for their own menus.
+      if (dom.root.dataset["kind"] !== "browser") {
+        return;
+      }
+      if (e.button !== 2 || !(e.target instanceof Element)) {
+        return;
+      }
+      const x = Math.round(e.clientX);
+      const y = Math.round(e.clientY);
+      const rowEl = e.target.closest<HTMLElement>(".row");
+      const key = Number(rowEl?.dataset["key"]);
+      if (rowEl === null || Number.isNaN(key)) {
+        this.send({ action: "context_menu_empty", slot_id: slotId, x, y });
+        return;
+      }
+      this.send({
+        action: "context_menu_row",
+        slot_id: slotId,
+        key,
+        generation: dom.generation,
+        x,
+        y,
+      });
+    });
     dom.scroller.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) {
+        return;
+      }
       const target = e.target;
       if (!(target instanceof Element)) {
         return;

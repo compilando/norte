@@ -45,6 +45,52 @@
     "action": "compare_toggle_filter",
     "category": "different"
   },
+  "context_menu_activate_row": {
+    "action": "context_menu_activate_row",
+    "row": 3
+  },
+  "context_menu_branch": {
+    "action": "context_menu_branch",
+    "generation": 6,
+    "row": 3,
+    "x": 20,
+    "y": 110
+  },
+  "context_menu_close": {
+    "action": "context_menu_close"
+  },
+  "context_menu_empty": {
+    "action": "context_menu_empty",
+    "slot_id": 1,
+    "x": 300,
+    "y": 400
+  },
+  "context_menu_header": {
+    "action": "context_menu_header",
+    "column": "size",
+    "slot_id": 1,
+    "x": 200,
+    "y": 30
+  },
+  "context_menu_place": {
+    "action": "context_menu_place",
+    "generation": 5,
+    "row": 2,
+    "x": 20,
+    "y": 90
+  },
+  "context_menu_point_row": {
+    "action": "context_menu_point_row",
+    "row": 3
+  },
+  "context_menu_row": {
+    "action": "context_menu_row",
+    "generation": 7,
+    "key": 4,
+    "slot_id": 1,
+    "x": 120,
+    "y": 48
+  },
   "dialog": {
     "action": "dialog",
     "choice": "confirm",

@@ -9,6 +9,24 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Context menu in the window** (bridge 107). Right-click opens a menu on a
+  listing row, the empty part of a listing and its `..` row, a column
+  header, a Places row and a tree branch; Shift+F10 or the Menu key
+  (`pane.context-menu`) opens it on the focused item, and arrows, Enter and
+  Esc work inside. The menu is drawn and decided by the host: every entry
+  runs the same command as its key, and one that cannot run is dimmed with
+  the reason. A row's menu has the same core entries everywhere (open, view,
+  edit, copy, move, rename, delete, copy path, properties) plus extras only
+  where they apply; AI rename, organize and disconnect are in the
+  empty-area menu because they act on the whole folder or connection. The
+  header offers sort by this column, hide this column (this window only, as
+  in the column selector; `norte.toml` is not written) and Columns…;
+  Places and the tree open in the other pane or a new tab, copy the path and
+  add to favorites (asking for the name, as the favorites picker does). The
+  marks rule is unchanged: right-clicking an unmarked row drops that pane's
+  marks. The right button no longer selects a row or enters a directory, and
+  the webview's own menu (Back, Reload, Inspect) is gone; text fields keep
+  their copy and paste menu.
 - **The terminal panel holds several shells**, like VS Code's (ADR 0176).
   `Ctrl+Alt+n` starts another, `Ctrl+Alt+PgDn`/`PgUp` walk between them
   and `Ctrl+Alt+w` closes the one in front (in Krusader, start one from

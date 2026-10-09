@@ -598,7 +598,12 @@ use serde::{Deserialize, Serialize};
 /// - **106**: `TerminalSlotView.instances`, `active`, `exited`, `profiles`,
 ///   `list_cols` and the `terminal_*` actions: several shells in the
 ///   terminal panel.
-pub const BRIDGE_VERSION: u32 = 106;
+/// - **107**: the right-click menu (spec 2026-10-09): the actions
+///   `context_menu_row`, `context_menu_empty`, `context_menu_header`,
+///   `context_menu_place`, `context_menu_branch`, `context_menu_point_row`,
+///   `context_menu_activate_row` and `context_menu_close`;
+///   `ViewChange::ContextMenu` and `ViewSnapshot.context_menu`.
+pub const BRIDGE_VERSION: u32 = 107;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

@@ -140,6 +140,7 @@ describe("the contract with the host", () => {
       "columns_picker",
       "compare",
       "connection",
+      "context_menu",
       "cursor",
       "dialogs",
       "extensions",

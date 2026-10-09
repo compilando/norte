@@ -125,6 +125,8 @@ keymap = [
     { on = ["ctrl+alt+up"], run = "task.up" },
     { on = ["ctrl+alt+down"], run = "task.down" },
     { on = ["f3"], run = "pane.view" },
+    { on = ["shift+f10"], run = "pane.context-menu" },
+    { on = ["menu"], run = "pane.context-menu" },
     { on = ["/"], run = "pane.quick-search" },
     { on = ["alt+down"], run = "pane.history" },
     { on = ["alt+f7"], run = "pane.search" },

@@ -50,6 +50,13 @@ impl State {
         (self.applied(), vec![self.parche(vec![change])])
     }
 
+    /// Focus is on the branch tree (a click on it gives it the active
+    /// role), the way [`State::places_have_focus`] asks it of the bar.
+    pub(super) fn branches_have_focus(&self) -> bool {
+        self.branches_slot()
+            .is_some_and(|s| self.roles.get(RoleId::Active) == Some(s))
+    }
+
     /// The tree's slot, if the layout places one.
     pub(super) fn branches_slot(&self) -> Option<SlotId> {
         self.tree

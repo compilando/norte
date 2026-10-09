@@ -109,6 +109,23 @@ export function paintTree(this: Screen, dom: SlotDom, slot: TreeSlotView): void 
       generation: slot.generation,
     });
   });
+  list.addEventListener("contextmenu", (ev) => {
+    const row =
+      ev.button === 2 && ev.target instanceof Element
+        ? ev.target.closest<HTMLElement>("li.tree-row")
+        : null;
+    const index = Number(row?.dataset["row"]);
+    if (row === null || !Number.isInteger(index)) {
+      return;
+    }
+    this.send({
+      action: "context_menu_branch",
+      row: index,
+      generation: slot.generation,
+      x: Math.round(ev.clientX),
+      y: Math.round(ev.clientY),
+    });
+  });
   list.setAttribute("aria-activedescendant", `tree-row-${String(slot.cursor)}`);
   const scrollTop = dom.scroller.scrollTop;
   dom.scroller.replaceChildren(list);
@@ -162,6 +179,20 @@ export function paintPlaces(this: Screen, dom: SlotDom, slot: PlacesSlotView): v
     row.dataset["row"] = r.row;
     row.setAttribute("role", "option");
     row.setAttribute("aria-selected", String(slot.cursor === i));
+    row.addEventListener("contextmenu", (e) => {
+      // A keyboard-triggered one reports button 0; the host opens that menu
+      // from its own key.
+      if (e.button !== 2) {
+        return;
+      }
+      this.send({
+        action: "context_menu_place",
+        row: i,
+        generation: slot.generation,
+        x: Math.round(e.clientX),
+        y: Math.round(e.clientY),
+      });
+    });
     row.addEventListener("click", () => {
       // THIS paint's generation. Volumes arrive on their own and get
       // inserted before the favorites, so without it a click could navigate

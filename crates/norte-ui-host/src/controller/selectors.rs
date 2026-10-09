@@ -830,6 +830,21 @@ impl State {
                 Vec::new(),
             );
         };
+        self.remove_favorite_named(name, mailbox)
+    }
+
+    /// Removes the favorite called `name` from the user layer, off the
+    /// actor; the answer comes back as `FavoriteRemoved`, which reseeds the
+    /// places bar and the selector.
+    ///
+    /// `name` is the RAW one — the selector's, or a places row's
+    /// `PlaceRow::Favorite` — never a painted label: the label is masked,
+    /// and the file is keyed by what the user typed.
+    pub(super) fn remove_favorite_named(
+        &mut self,
+        name: String,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(dir) = self.write_dir() else {
             let outside = self.say("host-no-config-dir");
             return (

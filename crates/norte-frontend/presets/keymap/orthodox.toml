@@ -172,6 +172,10 @@ keymap = [
     { on = ["ctrl+f6"], run = "pane.sort-size" },
     # #139: properties and dir-size, with TC/Krusader's chords.
     { on = ["alt+enter"], run = "pane.properties" },
+    # Two bindings, not one `on` with two chords: `on` is a SEQUENCE, and
+    # `["shift+f10", "menu"]` asked for both keys one after the other.
+    { on = ["shift+f10"], run = "pane.context-menu" },
+    { on = ["menu"], run = "pane.context-menu" },
     { on = ["ctrl+l"], run = "pane.dir-size" },
     # #136: the directory tree. Far uses Ctrl+T; here `alt+t`, because
     # Ctrl+T in this preset is already a new tab.

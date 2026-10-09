@@ -655,6 +655,8 @@ pub fn chord_a_bytes(chord: crate::keymap::Chord) -> Option<Vec<u8>> {
         KeyCode::PageDown => b"\x1b[6~".to_vec(),
         KeyCode::Delete => b"\x1b[3~".to_vec(),
         KeyCode::Insert => b"\x1b[2~".to_vec(),
+        // xterm's Menu key.
+        KeyCode::Menu => b"\x1b[29~".to_vec(),
     };
     // Alt is ESC in front, which is what makes `alt+f` move a word.
     if mods.alt {

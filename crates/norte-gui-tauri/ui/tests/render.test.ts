@@ -6,9 +6,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Screen } from "../src/render";
+import { installContextMenuGuard } from "../src/render/contextmenu";
 import { MARK_RULER_COLOR, OVERSCAN, markRulerImage } from "../src/render/dom";
 import { zoneOf } from "../src/render/move";
 import { revealTarget } from "../src/render/settings";
@@ -16,6 +17,7 @@ import { realCatalog } from "./fixtures";
 import { BRIDGE_VERSION } from "../src/types";
 import type {
   BrowserSlotView,
+  ContextMenuView,
   HostCatalog,
   LogSlotView,
   PanelSlotView,
@@ -2979,6 +2981,57 @@ describe("the menu bar", () => {
     expect(sent).toEqual([{ action: "tab_action", slot_id: 7, verb: "close" }]);
   });
 
+  // Two menus at once is never right: opening a popup closes the host's.
+  it("opening the tab menu closes a painted host context menu", () => {
+    const { screen, sent } = mount();
+    screen.paint({
+      ...panelGroup(),
+      context_menu: { header: "h", items: [], cursor: 0, x: 1, y: 2 },
+    });
+    expect(document.querySelector(".context-menu")).not.toBeNull();
+    const tab = document.querySelectorAll(".tab")[1] as HTMLElement;
+    tab.dispatchEvent(
+      new MouseEvent("contextmenu", { button: 2, bubbles: true, cancelable: true }),
+    );
+    expect(sent.filter((a) => a.action === "context_menu_close")).toEqual([
+      { action: "context_menu_close" },
+    ]);
+  });
+
+  it("opening the tab menu with no host menu sends no context_menu_close", () => {
+    const { screen, sent } = mount();
+    screen.paint(panelGroup());
+    const tab = document.querySelectorAll(".tab")[1] as HTMLElement;
+    tab.dispatchEvent(
+      new MouseEvent("contextmenu", { button: 2, bubbles: true, cancelable: true }),
+    );
+    expect(document.querySelector(".tab-menu")).not.toBeNull();
+    expect(sent.filter((a) => a.action === "context_menu_close")).toEqual([]);
+  });
+
+  // Final review 6 (spec §5): the other way round — the host's menu, opened
+  // by key, takes an open tab popup down WITH its listeners: a leftover
+  // capture-phase Escape would swallow the key the host's menu needs.
+  it("painting a host context menu dismisses an open tab menu", () => {
+    const { screen } = mount();
+    screen.paint(panelGroup());
+    const tab = document.querySelectorAll(".tab")[1] as HTMLElement;
+    tab.dispatchEvent(
+      new MouseEvent("contextmenu", { button: 2, bubbles: true, cancelable: true }),
+    );
+    expect(document.querySelector(".tab-menu")).not.toBeNull();
+    const removed = vi.spyOn(window, "removeEventListener");
+    screen.paint({
+      ...panelGroup(),
+      context_menu: { header: "h", items: [], cursor: 0, x: 1, y: 2 },
+    });
+    expect(document.querySelector(".tab-menu")).toBeNull();
+    expect(document.querySelector(".context-menu")).not.toBeNull();
+    const types = removed.mock.calls.map(([type]) => type);
+    expect(types).toContain("keydown");
+    removed.mockRestore();
+  });
+
   it("a right click opens OUR menu: close, move left, move right", () => {
     const { screen, sent } = mount();
     screen.paint(panelGroup());
@@ -5553,52 +5606,52 @@ describe("the log panel", () => {
   });
 });
 
-describe("the places sidebar", () => {
-  function withPlaces(cursor: number): ViewSnapshot {
-    const v = view({});
-    v.slots = [
-      ...v.slots,
-      {
-        kind: "places",
-        slot_id: 7,
-        rows: [
-          { row: "header", label: "Unidades", folded: false },
-          {
-            row: "drive",
-            label: "raíz",
-            hostile: false,
-            detail: "12 GiB libres de 100 GiB",
-            free: "12G",
-            mount: "/",
-            kind: "network",
-          },
-          { row: "header", label: "Favoritos", folded: true },
-          {
-            row: "favorite",
-            name: "casa",
-            target: "⟨file⟩/home",
-            hostile: false,
-            broken: "",
-          },
-          {
-            row: "favorite",
-            name: "roto",
-            target: "",
-            hostile: false,
-            broken: "la ruta no vale",
-          },
-        ],
-        cursor,
-        generation: 3,
-      },
-    ];
-    v.layout.placements = [
-      ...v.layout.placements,
-      { slot_id: 7, x: 0, y: 0, width: 20, height: 20, role: null, focus_index: 2 },
-    ];
-    return v;
-  }
+function withPlaces(cursor: number): ViewSnapshot {
+  const v = view({});
+  v.slots = [
+    ...v.slots,
+    {
+      kind: "places",
+      slot_id: 7,
+      rows: [
+        { row: "header", label: "Unidades", folded: false },
+        {
+          row: "drive",
+          label: "raíz",
+          hostile: false,
+          detail: "12 GiB libres de 100 GiB",
+          free: "12G",
+          mount: "/",
+          kind: "network",
+        },
+        { row: "header", label: "Favoritos", folded: true },
+        {
+          row: "favorite",
+          name: "casa",
+          target: "⟨file⟩/home",
+          hostile: false,
+          broken: "",
+        },
+        {
+          row: "favorite",
+          name: "roto",
+          target: "",
+          hostile: false,
+          broken: "la ruta no vale",
+        },
+      ],
+      cursor,
+      generation: 3,
+    },
+  ];
+  v.layout.placements = [
+    ...v.layout.placements,
+    { slot_id: 7, x: 0, y: 0, width: 20, height: 20, role: null, focus_index: 2 },
+  ];
+  return v;
+}
 
+describe("the places sidebar", () => {
   // W1 (2026-10-07): the bar's cursor looked the same with the keys
   // elsewhere. The slot says whether it has them (`aria-current`), and the
   // sheet dims the cursor of a bar or tree that does not.
@@ -5672,6 +5725,275 @@ describe("the places sidebar", () => {
     // decides.
     (rows[2] as HTMLElement).click();
     expect(sent).toHaveLength(2);
+  });
+});
+
+describe("context menu", () => {
+  const menuView = (over: Partial<ContextMenuView> = {}): ContextMenuView => ({
+    header: "acts on a.txt",
+    items: [
+      {
+        label: "Open",
+        chord: "Enter",
+        enabled: true,
+        reason: "",
+        section: null,
+        role: "normal",
+      },
+      {
+        label: "Move",
+        chord: "F6",
+        enabled: false,
+        reason: "read-only backend",
+        section: "",
+        role: "normal",
+      },
+      {
+        label: "Delete",
+        chord: "F8",
+        enabled: true,
+        reason: "",
+        section: null,
+        role: "destructive",
+      },
+    ],
+    cursor: 0,
+    x: 30,
+    y: 40,
+    ...over,
+  });
+  const right = { button: 2, bubbles: true, cancelable: true };
+
+  beforeAll(() => {
+    installContextMenuGuard(document);
+  });
+
+  it("suppresses the webview's menu everywhere but in a text field", () => {
+    mount();
+    const div = document.createElement("div");
+    const input = document.createElement("input");
+    document.body.append(div, input);
+    const a = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    div.dispatchEvent(a);
+    expect(a.defaultPrevented).toBe(true);
+    const b = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    input.dispatchEvent(b);
+    expect(b.defaultPrevented).toBe(false);
+  });
+
+  it("a right press on a row neither selects nor double-clicks", () => {
+    const { screen, sent } = mount();
+    screen.paint(view({}));
+    const row = document.querySelector(".row") as HTMLElement;
+    for (let i = 0; i < 2; i++) {
+      row.dispatchEvent(new MouseEvent("mousedown", right));
+    }
+    expect(
+      sent.filter((a) => a.action === "select_row" || a.action === "activate"),
+    ).toEqual([]);
+  });
+
+  it("a right click on a row asks the host, with the row's key and generation", () => {
+    const { screen, sent } = mount();
+    screen.paint(view({}));
+    const row = document.querySelector(".row") as HTMLElement;
+    row.dispatchEvent(
+      new MouseEvent("contextmenu", { ...right, clientX: 12.6, clientY: 30.2 }),
+    );
+    expect(sent.at(-1)).toEqual({
+      action: "context_menu_row",
+      slot_id: 1,
+      key: 0,
+      generation: 1,
+      x: 13,
+      y: 30,
+    });
+  });
+
+  it("below the last row it is the empty area; on a header, that column", () => {
+    const { screen, sent } = mount();
+    screen.paint(view({}));
+    (document.querySelector(".scroller") as HTMLElement).dispatchEvent(
+      new MouseEvent("contextmenu", right),
+    );
+    expect(sent.at(-1)).toMatchObject({ action: "context_menu_empty" });
+    (document.querySelector('[data-column="size"]') as HTMLElement).dispatchEvent(
+      new MouseEvent("contextmenu", right),
+    );
+    expect(sent.at(-1)).toMatchObject({ action: "context_menu_header", column: "size" });
+  });
+
+  it("places and tree rows ask for their own menus", () => {
+    const { screen, sent } = mount();
+    const v = withPlaces(0);
+    v.slots = [
+      ...v.slots,
+      {
+        kind: "tree" as const,
+        slot_id: 8,
+        rows: [
+          { label: "home", hostile: false, depth: 0, expanded: true, children: true },
+          { label: "docs", hostile: false, depth: 1, expanded: false, children: null },
+        ],
+        first: 40,
+        total: 120,
+        cursor: 40,
+        generation: 3,
+      },
+    ];
+    v.layout.placements = [
+      ...v.layout.placements,
+      { slot_id: 8, x: 30, y: 0, width: 30, height: 10, role: null, focus_index: 3 },
+    ];
+    screen.paint(v);
+    const at = { ...right, clientX: 5, clientY: 6 };
+    document
+      .querySelectorAll<HTMLElement>(".places-row")[1]
+      ?.dispatchEvent(new MouseEvent("contextmenu", at));
+    expect(sent.at(-1)).toEqual({
+      action: "context_menu_place",
+      row: 1,
+      generation: 3,
+      x: 5,
+      y: 6,
+    });
+    document
+      .querySelectorAll<HTMLElement>(".tree-row")[1]
+      ?.dispatchEvent(new MouseEvent("contextmenu", at));
+    expect(sent.at(-1)).toEqual({
+      action: "context_menu_branch",
+      row: 41,
+      generation: 3,
+      x: 5,
+      y: 6,
+    });
+  });
+
+  it("paints the host's menu: header, sections, disabled with its reason, the cursor", () => {
+    const { screen } = mount();
+    screen.paint({ ...view({}), context_menu: menuView() });
+    const box = document.querySelector(".context-menu") as HTMLElement;
+    expect(box.querySelector(".context-menu-header")?.textContent).toBe("acts on a.txt");
+    const items = [...box.querySelectorAll(".context-menu-item")] as HTMLElement[];
+    expect(items).toHaveLength(3);
+    expect(items[0]?.getAttribute("aria-selected")).toBe("true");
+    expect(items[1]?.getAttribute("aria-disabled")).toBe("true");
+    expect(items[1]?.textContent).toContain("read-only backend");
+    expect(items[2]?.dataset["role"]).toBe("destructive");
+    expect(box.querySelectorAll(".context-menu-rule")).toHaveLength(1);
+  });
+
+  it("hover points, click activates, outside closes, blur closes", () => {
+    const { screen, sent } = mount();
+    screen.paint({ ...view({}), context_menu: menuView() });
+    const items = [...document.querySelectorAll(".context-menu-item")] as HTMLElement[];
+    items[2]?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    expect(sent.at(-1)).toEqual({ action: "context_menu_point_row", row: 2 });
+    items[2]?.click();
+    expect(sent.at(-1)).toEqual({ action: "context_menu_activate_row", row: 2 });
+    document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    expect(sent.at(-1)).toEqual({ action: "context_menu_close" });
+    window.dispatchEvent(new Event("blur"));
+    expect(sent.at(-1)).toEqual({ action: "context_menu_close" });
+  });
+
+  // Final review 5 (spec §5): a scroll of the slot closes it.
+  it("a wheel over the listing closes it; a wheel inside the menu does not", () => {
+    const { screen, sent } = mount();
+    screen.paint({ ...view({}), context_menu: menuView() });
+    const item = document.querySelector(".context-menu-item") as HTMLElement;
+    item.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 40 }));
+    expect(sent.filter((a) => a.action === "context_menu_close")).toEqual([]);
+    (document.querySelector(".scroller") as HTMLElement).dispatchEvent(
+      new WheelEvent("wheel", { bubbles: true, deltaY: 40 }),
+    );
+    expect(sent.at(-1)).toEqual({ action: "context_menu_close" });
+  });
+
+  it("taken down, its wheel listener goes with it", () => {
+    const { screen, sent } = mount();
+    screen.paint({ ...view({}), context_menu: menuView() });
+    screen.paint({ ...view({}), context_menu: null });
+    (document.querySelector(".scroller") as HTMLElement).dispatchEvent(
+      new WheelEvent("wheel", { bubbles: true, deltaY: 40 }),
+    );
+    expect(sent.filter((a) => a.action === "context_menu_close")).toEqual([]);
+  });
+
+  it("stays inside the window near the bottom-right corner", () => {
+    const { screen } = mount();
+    screen.paint({
+      ...view({}),
+      context_menu: menuView({ x: window.innerWidth - 1, y: window.innerHeight - 1 }),
+    });
+    const box = document.querySelector(".context-menu") as HTMLElement;
+    expect(parseFloat(box.style.left)).toBeLessThan(window.innerWidth);
+    expect(parseFloat(box.style.top)).toBeLessThan(window.innerHeight);
+  });
+
+  it("with no anchor it sits under the focused row", () => {
+    const { screen } = mount();
+    screen.paint({ ...view({}), context_menu: menuView({ x: null, y: null }) });
+    expect(document.querySelector(".context-menu")).not.toBeNull();
+  });
+
+  it("null closes it and removes it", () => {
+    const { screen } = mount();
+    screen.paint({ ...view({}), context_menu: menuView() });
+    screen.paint({ ...view({}), context_menu: null });
+    expect(document.querySelector(".context-menu")).toBeNull();
+  });
+
+  // Review Focus 1.
+  it("the keyboard Menu key does not open a second menu at the origin", () => {
+    const { screen, sent } = mount();
+    screen.paint(view({}));
+    const row = document.querySelector(".row") as HTMLElement;
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ContextMenu",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    row.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        button: 0,
+        bubbles: true,
+        cancelable: true,
+        clientX: 0,
+        clientY: 0,
+      }),
+    );
+    expect(sent.filter((a) => a.action === "context_menu_row")).toEqual([]);
+  });
+
+  // Review Focus 4 (renderer half): a modal on top does not let the webview's
+  // own menu through.
+  it("with a dialog up, a row's contextmenu is still suppressed", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.dialogs = [
+      {
+        id: 3,
+        title_key: "modal-delete-title",
+        subject: null,
+        asker: null,
+        deadline: null,
+        destination: null,
+        body: [{ text: "a.txt", hostile: false }],
+        overflow_note: "",
+        choices: [{ id: "cancel", label_key: "dialog-cancel", destructive: false }],
+        input: null,
+        input_hostile: false,
+        input_secret: false,
+      },
+    ];
+    screen.paint(v);
+    const row = document.querySelector(".row") as HTMLElement;
+    const e = new MouseEvent("contextmenu", right);
+    row.dispatchEvent(e);
+    expect(e.defaultPrevented).toBe(true);
   });
 });
 

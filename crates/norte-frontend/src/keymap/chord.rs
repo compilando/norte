@@ -40,6 +40,8 @@ pub enum KeyCode {
     Insert,
     /// Delete.
     Delete,
+    /// The Menu (context menu) key.
+    Menu,
 }
 
 /// NEUTRAL modifiers of a key.
@@ -259,6 +261,7 @@ impl std::fmt::Display for Chord {
             KeyCode::PageDown => f.write_str("pgdn"),
             KeyCode::Insert => f.write_str("insert"),
             KeyCode::Delete => f.write_str("delete"),
+            KeyCode::Menu => f.write_str("menu"),
         }
     }
 }
@@ -563,6 +566,7 @@ fn pretty_token_en(token: &str) -> String {
         "pgdn" => "PgDn",
         "insert" => "Insert",
         "delete" => "Delete",
+        "menu" => "Menu",
         other => {
             // `f` plus digits is a function key, and ONLY that: a lone
             // `Char` token is exactly one character, so `f5` can never be a
@@ -660,6 +664,7 @@ pub fn parse_chord(s: &str) -> Result<Chord, KeymapError> {
         "pgdn" => KeyCode::PageDown,
         "insert" => KeyCode::Insert,
         "delete" => KeyCode::Delete,
+        "menu" => KeyCode::Menu,
         f if f.len() >= 2 && f.starts_with('f') => {
             let n: u8 = f[1..].parse().map_err(|_| bad())?;
             if (1..=12).contains(&n) {
@@ -685,4 +690,20 @@ pub fn parse_chord(s: &str) -> Result<Chord, KeymapError> {
     // check above); the check already rejected shift+Char, and for the
     // rest shift is kept. Build the Chord directly:
     Ok(Chord { mods, code })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Menu key (the one between `AltGr` and Ctrl) is a keymap key: it opens
+    /// the context menu from the keyboard.
+    #[test]
+    fn the_menu_key_parses_and_prints() {
+        let c = parse_chord("menu").expect("parses");
+        assert_eq!(c.code, KeyCode::Menu);
+        assert_eq!(c.to_string(), "menu");
+        let s = parse_chord("shift+f10").expect("parses");
+        assert_eq!((s.code, s.mods.shift), (KeyCode::F(10), true));
+    }
 }

@@ -161,8 +161,12 @@ impl State {
     }
 
     /// Is there a screen in front that would keep a key before the listing?
-    /// The SAME ones [`Self::key_of_an_overlay`] handles, except the menu,
-    /// which belongs to whoever asks.
+    /// The SAME ones [`Self::key_of_an_overlay`] handles, except the two
+    /// menus — the bar's and the right-click one — which belong to whoever
+    /// asks: opening either REPLACES the other, and a right click over an
+    /// open context menu replaces it, so neither may refuse because one is
+    /// up. The context menu still gets the keys first while it is open;
+    /// that routing lives in `key_of_an_overlay`, not here.
     ///
     /// It is a second list on purpose and not a detour through that function:
     /// that one HANDLES the key (cancels a viewer read in flight, abandons a
@@ -308,6 +312,13 @@ impl State {
         // theirs. (A second F3 requests its own read and keeps the new
         // token.)
         self.viewer_in_flight = None;
+        // The right-click menu keeps the keys while it is up, for the menu
+        // bar's reason. It goes BEFORE the bar: opening it closes the bar's
+        // dropdown, so the two are never up at once, and the newer one is
+        // the one the reader is looking at.
+        if self.context_menu.is_some() {
+            return Some(self.key_in_context_menu(k, backend, mailbox));
+        }
         // The open menu keeps the keys, same as the palette: an arrow that
         // slipped through it would move the listing underneath.
         if self.menu.is_some() {

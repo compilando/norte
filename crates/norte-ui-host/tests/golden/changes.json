@@ -217,6 +217,41 @@
     "reason_key": "conn-lost",
     "state": "lost"
   },
+  "context_menu": {
+    "change": "context_menu",
+    "context_menu": {
+      "cursor": 1,
+      "header": "actúa sobre notas.txt",
+      "items": [
+        {
+          "chord": "Enter",
+          "enabled": true,
+          "label": "Abrir",
+          "reason": "",
+          "role": "normal",
+          "section": null
+        },
+        {
+          "chord": "shift+F6",
+          "enabled": false,
+          "label": "Renombrar",
+          "reason": "solo lectura",
+          "role": "normal",
+          "section": "Archivo"
+        },
+        {
+          "chord": "F8",
+          "enabled": true,
+          "label": "Borrar",
+          "reason": "",
+          "role": "destructive",
+          "section": ""
+        }
+      ],
+      "x": 120,
+      "y": 48
+    }
+  },
   "cursor": {
     "change": "cursor",
     "cursor": 2,

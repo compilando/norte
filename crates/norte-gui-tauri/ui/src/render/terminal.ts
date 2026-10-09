@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import { note } from "./dom";
 import type { SlotDom } from "./dom";
+import { closeHostMenu } from "./contextmenu";
 import { popupMenu } from "./menus";
 
 /**
@@ -358,6 +359,9 @@ function popup(
     x,
     y,
     entries.map(([label, run]) => ({ label, run })),
+    () => {
+      closeHostMenu.call(this);
+    },
   );
 }
 
