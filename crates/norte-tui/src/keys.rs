@@ -358,10 +358,9 @@ pub async fn on_key(
         // is never entered: `puede_tomar_teclas` prevents it.
         let the_chord = crate::keymap::chord_from_crossterm(key.modifiers, key.code);
         if the_chord.is_some() && the_chord == app.terminal_chord {
-            // The SAME `toggle_terminal` that opened it: there is one key,
-            // so the way back has to be the same code, or one day one of
-            // the two learns something the other does not.
-            app.toggle_terminal();
+            // The way back, through the SAME `toggle_terminal` that opened
+            // it — or, with no live shell in the panel, a new shell.
+            crate::termpanel::on_door(app, cfg);
         } else if let Some(i) = app.terminals.active_mut()
             // An exited one is a still picture: its keys go nowhere.
             && i.exited.is_none()

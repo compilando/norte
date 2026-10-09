@@ -2269,6 +2269,31 @@ fn a_click_on_a_terminal_tab_selects_it() {
     assert_eq!(app.terminals.active_id(), first);
 }
 
+/// A panel restored with no shell (the session saves the slot, not the
+/// shell) holding the keyboard: its key STARTS a shell instead of taking
+/// the reader out of a panel that says "no shell" (2026-10-09).
+#[cfg(unix)]
+#[test]
+fn the_door_key_on_an_empty_panel_starts_a_shell() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let dir = vp(&format!("file://{}", tmp.path().display()));
+    let mut app = App::new(
+        Pane::new(dir.clone(), Vec::new()),
+        Pane::new(dir.clone(), Vec::new()),
+    );
+    app.terminal_chord = norte_frontend::keymap::parse_chord("ctrl+alt+s").ok();
+    app.toggle_terminal();
+    assert_eq!(app.key_owner(), KeyOwner::Terminal, "inside, no shell");
+    let cfg = norte_frontend::config::load(&norte_config::Layers { dirs: Vec::new() })
+        .expect("factory config");
+    norte_tui::termpanel::on_door(&mut app, &cfg);
+    assert_eq!(app.terminals.len(), 1, "{:?}", app.message);
+    assert_eq!(app.key_owner(), KeyOwner::Terminal, "and it stays inside");
+    // With a live shell, the same key is the way out, as always.
+    norte_tui::termpanel::on_door(&mut app, &cfg);
+    assert_eq!(app.key_owner(), KeyOwner::Panes);
+}
+
 /// With the terminal's list open on top, a click behind it does nothing.
 #[cfg(unix)]
 #[test]

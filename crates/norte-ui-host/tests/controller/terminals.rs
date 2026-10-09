@@ -220,6 +220,25 @@ async fn coming_back_with_only_failed_shells_starts_a_new_one() {
     assert_eq!(t.exited, None, "the new one is in front, alive");
 }
 
+/// Inside a panel with no shell, its key starts one instead of leaving.
+#[tokio::test]
+async fn the_door_key_inside_an_empty_panel_starts_a_shell() {
+    let (h, mut sub, _tmp) = local_host(None).await;
+    open_panel(&h, &mut sub).await;
+    type_line(&h, "exit").await;
+    terminal_until(&mut sub, |t| t.no_shell).await;
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "s".to_owned(),
+        ctrl: true,
+        alt: true,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host alive");
+    terminal_until(&mut sub, |t| t.instances.len() == 1 && !t.no_shell).await;
+}
+
 /// The last shell leaving leaves the panel saying "no shell".
 #[tokio::test]
 async fn the_last_exit_leaves_no_shell() {

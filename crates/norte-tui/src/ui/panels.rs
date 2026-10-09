@@ -1214,8 +1214,16 @@ pub(crate) fn draw_terminal(frame: &mut Frame<'_>, area: Rect, app: &App, with_k
     // only one that has to be announced — and without announcing it, a
     // reader who comes in with every key taken has no way to deduce it.
     if with_keyboard && let Some(c) = app.terminal_chord {
+        // With no live shell the same key starts one (`termpanel::on_door`),
+        // so the footer says THAT, not "leave".
+        let live = app.terminals.iter().any(|i| i.exited.is_none());
+        let what = if live {
+            t("terminal-leave")
+        } else {
+            t("terminal-new").to_lowercase()
+        };
         block = block.title_bottom(Line::styled(
-            format!(" {c} · {} ", t("terminal-leave")),
+            format!(" {c} · {what} "),
             theme.role(Role::Muted),
         ));
     }
