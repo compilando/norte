@@ -204,7 +204,7 @@ dropdown) and when the slot it was opened on goes away.
 | `OpenInOther` | navigates the DESTINATION slot (`slot_dest()`) to the target, `Trail::Record`; none designated → the existing `host-no-target-designated` refusal |
 | `OpenInNewTab` | `tab_new` on the focused listing, then navigate the new slot |
 | `CopyPath` | `NativeEffect::CopyBytes` with `clipboard_bytes(&[path])`, same message as `copy_paths` |
-| `AddFavorite` | `persist_hotlist_add` in `spawn_blocking`, name = last path component, same message flow as the picker |
+| `AddFavorite` | opens the existing name dialog (`request_favorite_of`, prefilled with `suggested_hotlist_name`) like the picker, rather than saving directly: a direct save would silently replace a same-named favorite |
 | `RemoveFavorite` | the body of `remove_favorite`, taking the name from the Places row instead of the selector |
 | `ToggleFold` | `toggle_fold` (Places header) / `TreeToggleRow` (branch) |
 | `SortByColumn` | `sort_by_column` |
