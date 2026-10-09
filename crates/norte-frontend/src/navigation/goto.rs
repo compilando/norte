@@ -22,7 +22,7 @@
 //! There is nowhere else to touch: filtering, headers, order and the cursor
 //! all live here.
 
-use crate::palette_state::is_subsequence;
+use crate::fuzzy::is_subsequence;
 
 /// A "go to" section: a stable id and its title's Fluent key.
 ///

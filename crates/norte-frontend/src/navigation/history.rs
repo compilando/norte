@@ -307,7 +307,7 @@ fn matcher(filter: &str, enc: Option<norte_encoding::NameEncoding>) -> impl Fn(&
                 .segments()
                 .map(|s| crate::nav::fold_with(s, enc))
                 .collect();
-            crate::palette_state::is_subsequence(&needle, &haystack.join("/"))
+            crate::fuzzy::is_subsequence(&needle, &haystack.join("/"))
         }
     }
 }

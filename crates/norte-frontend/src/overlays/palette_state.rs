@@ -44,16 +44,7 @@ pub struct Palette {
     recent: Vec<String>,
 }
 
-/// Is `needle` a subsequence of `hay`? (`cpf` matches `copy path` because
-/// `c`, `p`, `f`... — no wait, `f` does not: it matches `cop` and `pat`; what
-/// matters is that each byte appears in order). Empty matches everything.
-/// Folded bytes only.
-pub(crate) fn is_subsequence(needle: &str, hay: &str) -> bool {
-    // By CHARS, not by bytes: a query must not be able to match a
-    // continuation byte in the middle of a character (review m12).
-    let mut it = hay.chars();
-    needle.chars().all(|c| it.any(|h| h == c))
-}
+pub(crate) use crate::fuzzy::is_subsequence;
 
 impl Palette {
     /// [`Self::new`] with the recent commands: with an empty query, rows
