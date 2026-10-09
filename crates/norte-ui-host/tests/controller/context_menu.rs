@@ -382,6 +382,175 @@ async fn a_target_that_changed_runs_nothing() {
     assert!(s.context_menu.is_none() && s.dialogs.is_empty());
 }
 
+/// Enters the folder named `name` of the first listing (a double click) and
+/// waits until the listing shows a path ending in `ends_with`.
+async fn enter_folder(
+    h: &UiHost,
+    sub: &mut norte_ui_host::UiSubscription,
+    name: &str,
+    ends_with: &str,
+) -> norte_ui_host::ViewSnapshot {
+    let s = snapshot(h, sub).await;
+    let b = browser(&s);
+    let row = b
+        .rows
+        .iter()
+        .find(|r| r.display_name == name)
+        .unwrap_or_else(|| panic!("{name} is not listed"));
+    h.dispatch(UiAction::Activate {
+        slot_id: b.slot_id,
+        key: row.key,
+        generation: b.generation,
+    })
+    .await
+    .expect("host alive");
+    snapshot_until(h, sub, "the listing landed", |s| {
+        browser(s)
+            .path_display
+            .ends_with(ends_with)
+            .then(|| s.clone())
+    })
+    .await
+}
+
+/// Final review 1(a): the empty-area menu said "in /casa"; a listing that
+/// landed elsewhere under it (`navigate_slot` keeps the old `dir()` until
+/// the new one arrives, so this is the slow-load race) makes New folder
+/// act on a folder the header never named. It closes, `Stale`, nothing
+/// runs.
+#[tokio::test]
+async fn an_empty_area_menu_whose_folder_moved_runs_nothing() {
+    let (h, _) = host_tree(fake_tree()).await;
+    let mut sub = h.subscribe();
+    let slot_id = browser(&snapshot(&h, &mut sub).await).slot_id;
+    h.dispatch(UiAction::ContextMenuEmpty {
+        slot_id,
+        x: 5,
+        y: 5,
+    })
+    .await
+    .expect("host alive");
+    let m = snapshot_until(&h, &mut sub, "menu", |s| s.context_menu.clone()).await;
+    let _ = enter_folder(&h, &mut sub, "docs", "/casa/docs").await;
+    let ack = h
+        .dispatch(UiAction::ContextMenuActivateRow {
+            row: row_of_command(&m, "pane.mkdir"),
+        })
+        .await
+        .expect("host alive");
+    assert!(matches!(ack, ActionAck::Stale { .. }), "{ack:?}");
+    let s = snapshot_until(&h, &mut sub, "the menu closed", |s| {
+        s.context_menu.is_none().then(|| s.clone())
+    })
+    .await;
+    assert!(s.dialogs.is_empty(), "nothing ran: {:?}", s.dialogs);
+}
+
+/// Final review 1(b): a row menu remembers the WHOLE path. Under it the
+/// listing went to a folder holding a file with the same name, with the
+/// cursor on it and the same (zero) marks: a last-component fingerprint
+/// would let Rename open on `/casa/docs/a.txt`, a file the header never
+/// named.
+#[tokio::test]
+async fn a_row_menu_does_not_accept_a_same_named_file_elsewhere() {
+    let mut fake = Fake::default();
+    fake.put(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"a.txt".to_vec(), false)],
+    );
+    fake.put("mem:///casa/docs", vec![(b"a.txt".to_vec(), false)]);
+    let (h, _) = host_tree(Arc::new(fake)).await;
+    let mut sub = h.subscribe();
+    let m = open_on_named(&h, &mut sub, "a.txt").await;
+    let s = enter_folder(&h, &mut sub, "docs", "/casa/docs").await;
+    let b = browser(&s);
+    let same = b
+        .rows
+        .iter()
+        .find(|r| r.display_name == "a.txt")
+        .expect("a.txt in docs");
+    h.dispatch(UiAction::SelectRow {
+        slot_id: b.slot_id,
+        key: same.key,
+        generation: b.generation,
+    })
+    .await
+    .expect("host alive");
+    let s = snapshot(&h, &mut sub).await;
+    assert_eq!(browser(&s).cursor, Some(same.key), "the cursor is on it");
+    assert_eq!(browser(&s).marks, 0);
+    let ack = h
+        .dispatch(UiAction::ContextMenuActivateRow {
+            row: row_of_command(&m, "pane.rename"),
+        })
+        .await
+        .expect("host alive");
+    assert!(matches!(ack, ActionAck::Stale { .. }), "{ack:?}");
+    let s = snapshot_until(&h, &mut sub, "the menu closed", |s| {
+        s.context_menu.is_none().then(|| s.clone())
+    })
+    .await;
+    assert!(s.dialogs.is_empty(), "nothing ran: {:?}", s.dialogs);
+}
+
+/// Final review 2: Shift+F10 with a panel that is not a listing, the bar or
+/// the tree (here the processes board) is "not here": no menu, and the
+/// listing's marks — which a row menu on its cursor would drop — survive.
+#[tokio::test]
+async fn shift_f10_on_another_panel_opens_nothing_and_keeps_the_marks() {
+    let (h, _) = host_con_layout(fake_tree(), "full", (200, 60)).await;
+    let mut sub = h.subscribe();
+    let s = snapshot(&h, &mut sub).await;
+    let listing = s.focus.expect("a focused listing");
+    let b = listing_of(&s, listing);
+    let notas = b
+        .rows
+        .iter()
+        .find(|r| r.display_name == "notas.txt")
+        .expect("notas.txt");
+    let ack = h
+        .dispatch(UiAction::ToggleMark {
+            slot_id: listing,
+            key: notas.key,
+            generation: b.generation,
+        })
+        .await
+        .expect("host alive");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    // `full` sends snapshots while it settles: wait for the mark instead of
+    // reading whichever one is queued first.
+    snapshot_until(&h, &mut sub, "marked", |s| {
+        (listing_of(s, listing).marks == 1).then_some(())
+    })
+    .await;
+    let processes = s
+        .slots
+        .iter()
+        .find_map(|v| match v {
+            SlotView::Processes { slot_id, .. } => Some(*slot_id),
+            _ => None,
+        })
+        .expect("full places the processes board");
+    h.dispatch(UiAction::FocusSlot { slot_id: processes })
+        .await
+        .expect("host alive");
+    let ack = h
+        .dispatch(key_mod("F10", false, true))
+        .await
+        .expect("host alive");
+    assert!(
+        matches!(ack, ActionAck::Unavailable { ref reason_key } if reason_key == "cmd-not-here"),
+        "{ack:?}"
+    );
+    // A subscription taken AFTER the key: its first snapshot is the one
+    // this `Resync` asks for, never an older one still queued.
+    drop(sub);
+    let mut fresh = h.subscribe();
+    let s = snapshot(&h, &mut fresh).await;
+    assert!(s.context_menu.is_none(), "no menu");
+    assert_eq!(listing_of(&s, listing).marks, 1, "the marks survive");
+}
+
 #[tokio::test]
 async fn keys_walk_and_run_the_menu_and_escape_closes() {
     let (h, _) = host(vec!["a.txt", "b.txt"]).await;
@@ -1138,8 +1307,34 @@ async fn removing_a_favorite_from_places() {
     );
 }
 
-/// A favorite whose target does not parse: the three Open verbs dim with
-/// the broken reason; Copy path and Remove stay.
+/// Final review 3: a broken favorite has no path to copy. Copy path was
+/// painted enabled and then refused on the click — a menu lying about
+/// itself. It dims with the favorite's own reason, and a click on it
+/// answers applied, runs nothing and leaves the menu up.
+#[tokio::test]
+async fn a_broken_favorites_copy_path_is_dimmed() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let (h, mut sub, row, generation) = with_a_favorite(tmp.path(), true).await;
+    let mut native = h.native_effects();
+    let m = open_on_place(&h, &mut sub, row, generation).await;
+    let copy = row_labelled(&m, "ctx-copy-path");
+    let item = &m.items[copy as usize];
+    assert!(!item.enabled, "{item:?}");
+    assert_eq!(item.reason, t("err-invalid-path"));
+    let ack = h
+        .dispatch(UiAction::ContextMenuActivateRow { row: copy })
+        .await
+        .expect("host alive");
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    assert!(
+        snapshot(&h, &mut sub).await.context_menu.is_some(),
+        "still up"
+    );
+    assert!(native.try_recv().is_err(), "nothing reached the clipboard");
+}
+
+/// A favorite whose target does not parse: the three Open verbs (and Copy
+/// path, above) dim with the broken reason; Remove stays.
 #[tokio::test]
 async fn a_broken_favorite_dims_its_open_verbs() {
     let tmp = tempfile::tempdir().expect("tmp");

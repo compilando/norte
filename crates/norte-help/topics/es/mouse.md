@@ -5,10 +5,11 @@ tags = ["basics"]
 see_also = ["selection", "panes", "copying"]
 commands = ["nav.enter", "mark.toggle", "pane.copy", "pane.move"]
 +++
-norte escucha el ratón en los dos frontends, y los dos se comportan igual
-porque las reglas viven en un solo sitio. En el terminal eso tiene un precio, y
-el precio está al final de esta página: léelo antes de preguntarte por qué ya
-no puedes seleccionar texto.
+norte escucha el ratón en los dos frontends, y en los gestos de abajo los dos
+se comportan igual porque las reglas viven en un solo sitio — todos menos el
+click derecho, cuyo menú solo tiene la ventana. En el terminal escuchar el
+ratón tiene un precio, y el precio está al final de esta página: léelo antes de
+preguntarte por qué ya no puedes seleccionar texto.
 
 - un click izquierdo le da el foco a ese panel y pone el cursor en la fila pulsada
 - un doble click sobre una fila hace exactamente lo que {{cmd:nav.enter}}: entra en un directorio, en un archivo comprimido o en un remoto, y deja en paz a los ficheros
@@ -16,7 +17,7 @@ no puedes seleccionar texto.
 - ctrl y un click cambian la marca de una fila, la misma marca que pone {{cmd:mark.toggle}} desde el teclado
 - mayús y un click marcan el rango entre el cursor y la fila pulsada, y suman a lo que ya estuviera marcado
 - arrastrar por encima de varias filas marca lo que barre, y volver sobre tus pasos las suelta otra vez
-- un click derecho abre un menú con las operaciones para las que ya tienes teclas
+- en la ventana, un click derecho abre un menú con las operaciones para las que ya tienes teclas (**Shift+F10** o la tecla **Menú** lo abren desde el teclado); el terminal no tiene ese menú
 - arrastrar el borde de la cabecera de una columna cambia su ancho, y el ancho se guarda solo. En la ventana el borde está a la derecha de cada cabecera; en el terminal es el separador que abre cada columna detrás del nombre, porque el nombre es el que crece. Un click en el borde sin moverte no cambia nada
 
 Un click a secas nunca marca. Marcar es siempre un modificador o un arrastre,
@@ -67,10 +68,11 @@ El frontend gráfico abre un menú en el puntero, en cinco sitios:
 - una fila de **Lugares** (una unidad, un favorito o la cabecera de una sección)
 - una **rama del árbol**
 
-Desde el teclado, **Shift+F10** o la tecla **Menú** ({{cmd:pane.context-menu}})
-lo abren sobre el elemento con el foco: la fila del cursor del listado, el
-cursor de Lugares, el cursor del árbol. Dentro, las flechas se mueven, Intro
-ejecuta la entrada y Esc lo cierra.
+Desde el teclado, {{cmd:pane.context-menu}} o la tecla **Menú** lo abren sobre
+el elemento con el foco: la fila del cursor del listado, el cursor de Lugares,
+el cursor del árbol. Con cualquier otro panel con el foco no hay sobre qué
+abrirlo, y la tecla lo dice. Dentro, las flechas se mueven, Intro ejecuta la
+entrada y Esc lo cierra.
 
 El menú de una fila empieza con las operaciones que ya tienen tecla: abrir
 ({{cmd:nav.enter}}), {{cmd:pane.view}}, {{cmd:pane.copy}}, {{cmd:pane.move}},
@@ -103,12 +105,13 @@ desconectar: actúan sobre toda la carpeta o la conexión, así que viven aquí 
 no en una fila. Nunca se ejecutan solas; cada entrada eres tú pidiéndolo. La
 cabecera de columna ofrece *ordenar por esta columna*, *ocultar esta columna*
 (no en Nombre) y *Columnas…*; ocultar desde aquí afecta solo a esta ventana,
-como el selector de columnas, y no toca `norte.toml`. Una fila de Lugares o una
-rama del árbol ofrece abrir, abrir en el otro panel, abrir en una pestaña
-nueva, copiar la ruta y añadir a favoritos (o quitar de favoritos) — *Añadir a
-favoritos…* pide el nombre, ya relleno, igual que el selector de favoritos —.
-Una cabecera de sección de Lugares o una rama del árbol también se pueden
-plegar y desplegar.
+como el selector de columnas, y no toca `norte.toml`. Una unidad o un favorito
+de Lugares, y una rama del árbol, ofrecen abrir, abrir en el otro panel, abrir
+en una pestaña nueva y copiar la ruta. Una unidad o una rama se pueden añadir a
+favoritos — *Añadir a favoritos…* pide el nombre, ya relleno, igual que el
+selector de favoritos — y un favorito se puede quitar de ellos. Una rama del
+árbol además se pliega y se despliega. Una cabecera de sección de Lugares solo
+ofrece eso: plegar y desplegar.
 
 El botón derecho solo abre el menú: ya no selecciona la fila ni entra en un
 directorio. El menú propio del webview (Atrás, Recargar, Inspeccionar) ya no

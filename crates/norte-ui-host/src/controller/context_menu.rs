@@ -37,8 +37,9 @@ pub(super) struct ContextMenu {
     pub(super) slot: u32,
     /// What it says it acts on, already worded and clamped.
     pub(super) header: String,
-    /// Row surfaces only: what the pane pointed at and how many marks it
-    /// had, to refuse running against a pane that changed underneath.
+    /// Listing surfaces (a row and the empty area): the folder, what the
+    /// pane pointed at and how many marks it had, to refuse running
+    /// against a pane that changed underneath.
     pub(super) fingerprint: Option<Fingerprint>,
     /// The row or column it was opened on, for the verbs.
     pub(super) subject: Subject,
@@ -46,16 +47,25 @@ pub(super) struct ContextMenu {
     pub(super) anchor: Option<(i32, i32)>,
 }
 
-/// What a row menu saw at opening.
+/// What a listing menu (a row or the empty area) saw at opening.
 ///
-/// A name and a count, not the generation: the generation moves with any
+/// Paths and a count, not the generation: the generation moves with any
 /// filler batch, a refresh that changed nothing included, and a menu that
 /// went stale on every refresh would refuse a copy that targets exactly
 /// what it said.
+///
+/// The FOLDER is in it, and the entry is its WHOLE path, because
+/// `navigate_slot` keeps `dir()` and the old body until the new listing
+/// lands: a menu opened during a slow load said "in /old", and once /new
+/// lands New folder or Mark all would act there. A last component alone
+/// would let a same-named file in the new folder pass for the one the
+/// header named.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Fingerprint {
-    /// The pointed entry's last path component, as bytes.
-    pub(super) entry: Option<Vec<u8>>,
+    /// The folder the listing showed.
+    pub(super) dir: VPath,
+    /// The pointed entry's full path.
+    pub(super) entry: Option<VPath>,
     /// How many marks the pane had.
     pub(super) marks: usize,
 }
@@ -214,6 +224,9 @@ impl State {
             &[("dir", &norte_frontend::context_menu::elide(&dir))],
         );
         let surface = Surface::Empty { remote };
+        // The SAME fingerprint as a row's: the folder is what this menu
+        // names, and the marks are what Mark all / Invert act on.
+        let fingerprint = self.fingerprint_of(slot_id);
         let bar = self.install_context_menu(ContextMenu {
             surface,
             entries: norte_frontend::context_menu::entries(&surface),
@@ -221,7 +234,7 @@ impl State {
             cursor: 0,
             slot: slot_id,
             header: clamp_display(header),
-            fingerprint: None,
+            fingerprint,
             subject: Subject::Listing,
             anchor,
         });
@@ -488,9 +501,10 @@ impl State {
     /// third.
     ///
     /// The verbs have exactly two vetoes, both decided at opening: hiding a
-    /// column that cannot be hidden (`name`), and the Open verbs on a
-    /// favorite whose target did not parse — reason, the config's own error
-    /// key, the one the bar already paints as the row's "broken" note.
+    /// column that cannot be hidden (`name`), and the verbs that need the
+    /// path (the Open ones and Copy path) on a favorite whose target did
+    /// not parse — reason, the config's own error key, the one the bar
+    /// already paints as the row's "broken" note.
     fn reason_against(&self, m: &ContextMenu, e: &Entry) -> Option<Cow<'static, str>> {
         match e.action {
             Action::Command(c) => {
@@ -504,28 +518,26 @@ impl State {
             }
             Action::Verb(Verb::HideColumn) => (m.surface == (Surface::Header { hideable: false }))
                 .then_some(Cow::Borrowed("reason-wrong-target")),
-            Action::Verb(Verb::OpenHere | Verb::OpenInOther | Verb::OpenInNewTab) => {
-                match &m.subject {
-                    Subject::Place {
-                        broken: Some(key), ..
-                    } => Some(Cow::Owned(key.clone())),
-                    _ => None,
-                }
-            }
+            Action::Verb(
+                Verb::OpenHere | Verb::OpenInOther | Verb::OpenInNewTab | Verb::CopyPath,
+            ) => match &m.subject {
+                Subject::Place {
+                    broken: Some(key), ..
+                } => Some(Cow::Owned(key.clone())),
+                _ => None,
+            },
             Action::Verb(_) => None,
         }
     }
 
-    /// What a row menu on `slot` would remember if it opened NOW: the
-    /// cursor entry's last component and the marks count. `None` for a slot
-    /// that is not a listing.
+    /// What a listing menu on `slot` would remember if it opened NOW: the
+    /// folder, the cursor entry's full path and the marks count. `None`
+    /// for a slot that is not a listing.
     fn fingerprint_of(&self, slot: u32) -> Option<Fingerprint> {
         let pane = &self.slots.get(&slot)?.pane;
         Some(Fingerprint {
-            entry: pane
-                .cursor_entry()
-                .and_then(|e| e.path.file_name())
-                .map(|s| s.as_bytes().to_vec()),
+            dir: pane.dir().clone(),
+            entry: pane.cursor_entry().map(|e| e.path.clone()),
             marks: pane.marks_len(),
         })
     }
@@ -539,10 +551,11 @@ impl State {
     /// pointed at a reason, and taking the menu away would take the reason
     /// with it.
     ///
-    /// A row menu checks its fingerprint first. Every command acts on what
-    /// the pane points at NOW, and the menu SAID what it acts on when it
-    /// opened: if a copy finished and re-listed, or a mark went on under
-    /// the pointer, running would act on something the header never named.
+    /// A listing menu (row or empty area) checks its fingerprint first.
+    /// Every command acts on what the pane points at NOW, and the menu SAID
+    /// what it acts on when it opened: if a copy finished and re-listed, a
+    /// mark went on under the pointer, or a navigation landed in another
+    /// folder, running would act on something the header never named.
     /// So it closes, answers `Stale` and runs nothing; the reader opens it
     /// again and reads the new target.
     ///
@@ -838,6 +851,12 @@ impl State {
     /// same lie the rule exists to prevent. An empty listing opens the
     /// folder's menu. With the places bar or the tree focused, it opens on
     /// their cursor row, exactly as a right click there would.
+    ///
+    /// With any OTHER panel focused (timeline, processes, log, search, disk
+    /// map…) it is "not here", and nothing opens. Falling through to the
+    /// listing would run the marks rule on a panel the reader is not
+    /// looking at — an irrecoverable, silent loss of the marks — and the
+    /// renderer would anchor the menu under the focused panel's row.
     pub(super) fn open_context_menu_on_focus(
         &mut self,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
@@ -856,6 +875,9 @@ impl State {
                 .as_ref()
                 .map_or(0, norte_frontend::tree::Tree::cursor);
             return self.open_branch_menu(u32::try_from(row).unwrap_or(u32::MAX), None, None);
+        }
+        if !self.slots.contains_key(&self.focused()) {
+            return self.no_implemented("pane.context-menu");
         }
         let slot = self.active();
         let pane = &self.slot().pane;
