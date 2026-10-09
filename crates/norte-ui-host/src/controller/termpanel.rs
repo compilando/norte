@@ -113,7 +113,13 @@ impl State {
                 .roles
                 .get(norte_frontend::layout::RoleId::Active)
                 .is_some_and(|a| a == id);
-            let target = if inside {
+            //
+            // Inside a panel with no LIVE shell, though, the key starts one
+            // and stays: leaving a panel that says "no shell" left the reader
+            // to guess that the same key, pressed again, was the way to get
+            // one (2026-10-09).
+            let live = self.terminals.iter().any(|i| i.exited.is_none());
+            let target = if inside && live {
                 norte_frontend::layout::SlotId(self.active())
             } else {
                 id
@@ -126,7 +132,7 @@ impl State {
             // shell is not — and of a startup that failed: without this the
             // panel stayed dead for the rest of the window's life, because
             // this branch returned before checking.
-            if !inside && !self.terminals.iter().any(|i| i.exited.is_none()) {
+            if !live {
                 self.start_si_missing(mailbox);
             }
             let snap = self.snapshot();

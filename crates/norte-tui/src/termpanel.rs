@@ -234,6 +234,20 @@ fn not_here(app: &mut crate::app::App) {
     app.message = Some(norte_i18n::t("cmd-not-here"));
 }
 
+/// The panel's own key pressed INSIDE it. With a live shell it is the way
+/// out, as always. With none — a panel the session restored (it saves the
+/// slot, not the shell), or one whose shells all ended — it starts one:
+/// leaving a panel that says "no shell" left the reader to guess that the
+/// same key, pressed again from outside, was the way to get one.
+pub fn on_door(app: &mut crate::app::App, cfg: &crate::config::LoadedConfig) {
+    let live = app.terminals.iter().any(|i| i.exited.is_none());
+    if live || app.key_owner() != crate::app::KeyOwner::Terminal {
+        app.toggle_terminal();
+    } else {
+        cmd_new(app, cfg, None);
+    }
+}
+
 /// `terminal.new`: another shell, from `profile` (`None` = the default).
 pub fn cmd_new(
     app: &mut crate::app::App,
