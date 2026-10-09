@@ -128,16 +128,106 @@ LOG="$(mktemp -t norte-prepush-XXXXXX.log)"
 # la cola del log entero es la del ÚLTIMO paso, y con `ci-fast` rojo y
 # `gui-ci` verde enseñaba tests de la ventana pasando.
 rojos=()
+
+# Mientras un paso corre, UNA línea que se reescribe en el sitio: el
+# contador de nextest, o lo que esté compilando, y el tiempo. Callado sigue
+# siendo la regla (ver la cabecera), pero «  ci-fast» quieto veinte minutos no
+# decía si iba por la mitad o estaba colgado — y estaba colgado.
+#
+# Encima de esa línea, y en el momento, lo que no puede esperar al final: cada
+# test que falla, y cada uno que pasa de cinco minutos.
+#
+# Solo con una terminal delante; si no, el hook es el de siempre.
+mmss() { printf '%dm%02ds' $(($1 / 60)) $(($1 % 60)); }
+
+progreso() {
+    local nombre="$1" desde="$2" t0="$3"
+    local cols
+    cols="$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)"
+    [[ "$cols" =~ ^[0-9]+$ ]] || cols=100
+    local -A visto=()
+    local n_fail=0
+    while sleep 2; do
+        local tramo t seg estado
+        tramo="$(tail -n +"$desde" "$LOG" 2>/dev/null)"
+        while IFS= read -r t; do
+            [[ -z "$t" || -n "${visto[f:$t]:-}" ]] && continue
+            visto[f:$t]=1
+            n_fail=$((n_fail + 1))
+            printf '\r\033[K    \033[31mFAIL\033[0m %s\n' "$t"
+        done < <(sed -nE 's/^ +FAIL \[[^]]*\] (\([0-9]+\/[0-9]+\) )?//p' <<<"$tramo")
+        # nextest repite `SLOW [>Ns]` cada minuto; se avisa una vez, al pasar
+        # de 300 s.
+        while IFS= read -r t; do
+            [[ -z "$t" || -n "${visto[s:$t]:-}" ]] && continue
+            visto[s:$t]=1
+            printf '\r\033[K    \033[33mLENTO\033[0m >5m %s\n' "$t"
+        done < <(sed -nE 's/^ +SLOW \[>([3-9][0-9]{2}|[0-9]{4,})\.[0-9]+s\] (\([^)]*\) )?//p' <<<"$tramo")
+        estado="$(tail -n 60 <<<"$tramo" | grep -oE '\([0-9]+/[0-9]+\)' | tail -n 1 | tr -d '()')"
+        if [[ -n "$estado" ]]; then
+            estado="tests $estado"
+        else
+            estado="$(grep -E '^\s*(Compiling|Checking|Building|Doc-tests|Running) ' <<<"$tramo" | tail -n 1 | sed -E 's/^\s+//')"
+            [[ -n "$estado" ]] || estado="$(grep -v '^\s*$' <<<"$tramo" | tail -n 1)"
+        fi
+        seg=$((SECONDS - t0))
+        local linea
+        linea="$(printf '  %-10s %s · %s' "$nombre" "$(mmss "$seg")" "$estado")"
+        [[ $n_fail -gt 0 ]] && linea+=" · $n_fail FAIL"
+        printf '\r\033[K%s' "${linea:0:$((cols - 1))}"
+    done
+}
+
+# El gate corre en su propia sesión, SIN terminal, como en CI. Con la del push
+# heredada, un test que abría `/dev/tty` (zsh, `ntc --pick`) desde el grupo de
+# procesos de nextest, que no es el de primer plano, se llevaba un SIGTTOU y
+# se quedaba parado (estado `T`) para siempre: un `ci-fast` de 2026-10-09
+# llevaba veinte minutos con dos tests así. Y como Ctrl+C ya no le llega por
+# la terminal, el trap se lo lleva entero.
+paso_pid=""
+mon_pid=""
+# shellcheck disable=SC2329  # la invoca el trap
+corta() {
+    [[ -n "$mon_pid" ]] && kill "$mon_pid" 2>/dev/null
+    # Sin `setsid` (macOS) no hay grupo propio: se mata el proceso.
+    [[ -n "$paso_pid" ]] && { kill -TERM -- "-$paso_pid" 2>/dev/null || kill -TERM "$paso_pid" 2>/dev/null; }
+    printf '\r\033[K\npre-push: cortado; log en %s\n' "$LOG"
+    exit 130
+}
+trap corta INT TERM
+
 corre() {
     local nombre="$1"; shift
-    local desde
+    local desde t0=$SECONDS rc
     desde=$(($(wc -l <"$LOG") + 1))
-    printf '  %-10s ' "$nombre"
-    if "$@" >>"$LOG" 2>&1; then
-        printf '\033[32mok\033[0m\n'
+    if command -v setsid >/dev/null; then
+        setsid "$@" >>"$LOG" 2>&1 </dev/null &
+    else
+        "$@" >>"$LOG" 2>&1 </dev/null &
+    fi
+    paso_pid=$!
+    if [[ -t 1 ]]; then
+        progreso "$nombre" "$desde" "$t0" &
+        mon_pid=$!
+    else
+        printf '  %-10s ' "$nombre"
+    fi
+    wait "$paso_pid"
+    rc=$?
+    paso_pid=""
+    if [[ -n "$mon_pid" ]]; then
+        kill "$mon_pid" 2>/dev/null
+        wait "$mon_pid" 2>/dev/null
+        mon_pid=""
+        printf '\r\033[K  %-10s ' "$nombre"
+    fi
+    local dura
+    dura="$(mmss $((SECONDS - t0)))"
+    if [[ $rc -eq 0 ]]; then
+        printf '\033[32mok\033[0m (%s)\n' "$dura"
         return 0
     fi
-    printf '\033[31mROJO\033[0m\n'
+    printf '\033[31mROJO\033[0m (%s)\n' "$dura"
     rojos+=("$nombre $desde $(wc -l <"$LOG")")
     return 1
 }
