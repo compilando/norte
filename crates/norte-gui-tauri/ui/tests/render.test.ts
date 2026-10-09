@@ -1354,7 +1354,9 @@ describe("the header", () => {
     const grip = root.querySelector(".col-grip") as HTMLElement;
     grip.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 100 }));
     expect(sent.some((a) => a.action === "sort_by")).toBe(false);
-    document.dispatchEvent(new MouseEvent("mousemove", { clientX: 140 }));
+    // The grip is the edge that OPENS the column, as in the TUI: the name
+    // takes the remainder, so moving it LEFT widens the column.
+    document.dispatchEvent(new MouseEvent("mousemove", { clientX: 60 }));
     // While dragging, only the variable changes: no dispatch.
     const slot = root.querySelector(".slot") as HTMLElement;
     expect(slot.style.getPropertyValue("--colw-size")).toBe("40px");
@@ -1366,6 +1368,53 @@ describe("the header", () => {
       column: "size",
       cells: 5,
     });
+  });
+
+  it("a grip pressed and released in place writes no width and does not sort", () => {
+    const { screen, sent, root } = mount();
+    document.documentElement.style.setProperty("--cell-w", "8px");
+    screen.paint(view({}));
+    const grip = root.querySelector(".col-grip") as HTMLElement;
+    grip.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 100 }));
+    document.dispatchEvent(new MouseEvent("mouseup", { clientX: 100 }));
+    expect(sent.some((a) => a.action === "resize_column")).toBe(false);
+    expect(sent.some((a) => a.action === "sort_by")).toBe(false);
+  });
+
+  /**
+   * Pins that the grip is reachable: on the Name|Size boundary (the edge
+   * that OPENS Size), wide, and not clipped by the header box — it once was
+   * six pixels on the right edge with half of them under `overflow: hidden`.
+   */
+  it("the grip straddles the edge that opens its column, and the box does not clip it", () => {
+    const { screen, root } = mount();
+    screen.paint(view({}));
+    const size = root.querySelectorAll(".slot-columns .col")[1] as HTMLElement;
+    expect(size.firstElementChild?.classList.contains("col-grip")).toBe(true);
+    expect(size.querySelector(".col-label")?.textContent).toBe("Tamaño");
+    const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+    const rule = (sel: string): string =>
+      new RegExp(`\\n${sel.replace(".", "\\.")}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+    expect(rule(".col")).not.toMatch(/overflow:\s*hidden/);
+    expect(rule(".col-label")).toMatch(/overflow:\s*hidden/);
+    expect(rule(".col-label")).toMatch(/text-overflow:\s*ellipsis/);
+    expect(rule(".col-grip")).toMatch(/left:/);
+    expect(rule(".col-grip")).not.toMatch(/right:/);
+    const width = /width:\s*(\d+)px/.exec(rule(".col-grip"))?.[1];
+    expect(Number(width)).toBeGreaterThanOrEqual(8);
+  });
+
+  it("the first column has no grip even when it is not the name", () => {
+    const { screen, root } = mount();
+    const v = view({});
+    const slot = v.slots[0];
+    if (slot?.kind === "browser") {
+      slot.columns = [...slot.columns].reverse();
+    }
+    screen.paint(v);
+    const cols = root.querySelectorAll(".slot-columns .col");
+    expect(cols[0]?.querySelector(".col-grip")).toBeNull();
+    expect(cols[1]?.querySelector(".col-grip")).toBeNull();
   });
 });
 

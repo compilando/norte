@@ -63,6 +63,11 @@ independently through `PROTOCOL_VERSION`.
   side painted differently — one with the window's own outline icons, the
   other with the icon plugin's. The plugin's icon wins where it has one,
   and a folder with an icon no longer carries a `/` before its name.
+- **The window's columns resize from the edge you reach for**: the
+  border between Name and the next column now drags, ten pixels wide, as
+  in the terminal — each column is resized from the edge that opens it.
+  It used to be a three-pixel strip on the column's far side. A click on
+  the edge without moving no longer saves a width.
 
 ### Added
 

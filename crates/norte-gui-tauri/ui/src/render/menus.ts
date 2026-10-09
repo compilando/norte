@@ -939,20 +939,24 @@ export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): 
     dropOverflowingColumns(dom, slot, this.cell().w);
     return;
   }
-  const nodes = slot.columns.map((c) => {
+  const nodes = slot.columns.map((c, k) => {
     const el = document.createElement("span");
     el.className = c.id === "name" ? "col col-name" : "col";
     el.setAttribute("role", "columnheader");
     el.dataset["column"] = c.id;
     // `aria-sort` goes on the column that sorts and no other.
     el.setAttribute("aria-sort", c.sort === null ? "none" : `${c.sort}ending`);
-    el.textContent = c.label;
+    // The LABEL clips, not the box: the grip has to stick out of it.
+    const label = document.createElement("span");
+    label.className = "col-label";
+    label.textContent = c.label;
     if (c.sort !== null) {
       const mark = document.createElement("span");
       mark.className = "sort-mark";
       mark.textContent = c.sort === "asc" ? "▲" : "▼";
-      el.append(mark);
+      label.append(mark);
     }
+    el.append(label);
     if (c.sortable) {
       el.dataset["sortable"] = "true";
       el.setAttribute("tabindex", "-1");
@@ -975,10 +979,15 @@ export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): 
     // Decided again on every paint: a slot that widened gets back the column
     // it dropped when it was narrow.
     dom.root.style.removeProperty(`${v}-show`);
-    const grip = document.createElement("span");
-    grip.className = "col-grip";
-    grip.dataset["grip"] = c.id;
-    el.append(grip);
+    // The edge that OPENS the column, as the TUI grabs it (`mouse.rs`,
+    // `column_border_at`): the name takes the remainder, so this column's
+    // far end stays put and the first column has no opening edge to drag.
+    if (k > 0) {
+      const grip = document.createElement("span");
+      grip.className = "col-grip";
+      grip.dataset["grip"] = c.id;
+      el.prepend(grip);
+    }
     return el;
   });
   dom.header.replaceChildren(...nodes);

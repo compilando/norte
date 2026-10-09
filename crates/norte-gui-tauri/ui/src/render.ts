@@ -913,14 +913,15 @@ export class Screen {
   }
 
   /**
-   * Drags a header's border (bridge 64).
+   * Drags the edge that opens a column (bridge 64).
    *
    * While it lasts, only the width variable on the slot's root moves: the
    * header and the cells read it and nothing gets repainted. On release,
    * the width in CELLS — rounded over `--cell-w` — goes to the host, which
    * bounds it, saves it in `[ui.columns] spec.width` and returns every
    * slot's header. The mouse is captured on the document: a fast drag
-   * leaves the six-pixel grip on the very first move.
+   * leaves the grip on the very first move. A release without movement
+   * writes nothing, as in the TUI: rounding alone would save a new width.
    */
   dragColumn(slotId: number, dom: SlotDom, grip: HTMLElement, start: MouseEvent): void {
     const id = grip.dataset["grip"];
@@ -933,16 +934,23 @@ export class Screen {
     const start_ = col.getBoundingClientRect().width;
     const x0 = start.clientX;
     let width = start_;
+    let moved = false;
     col.dataset["resizing"] = "true";
     const doc = dom.root.ownerDocument;
     const move = (e: MouseEvent): void => {
-      width = Math.max(cellW, start_ + (e.clientX - x0));
+      moved ||= e.clientX !== x0;
+      // The grip is the LEFT edge and the name absorbs the difference, so
+      // the column's right end stays put: moving left widens it.
+      width = Math.max(cellW, start_ - (e.clientX - x0));
       dom.root.style.setProperty(v, `${String(width)}px`);
     };
     const release = (): void => {
       doc.removeEventListener("mousemove", move);
       doc.removeEventListener("mouseup", release);
       delete col.dataset["resizing"];
+      if (!moved) {
+        return;
+      }
       const cells = Math.max(1, Math.round(width / cellW));
       this.send({ action: "resize_column", slot_id: slotId, column: id, cells });
     };
