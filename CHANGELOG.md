@@ -98,6 +98,12 @@ independently through `PROTOCOL_VERSION`.
 - **The disk map tells neighbouring folders apart**: rectangles of one
   class that touch take different tones of its colour, in the terminal
   and in the window. A home, all folders, was one blue block (ADR 0175).
+- **The pack dialog proposes a name in the window too, and one that is
+  free**: the window opened it empty, and the terminal could propose an
+  archive that was already there, which packing then refused. Both now
+  propose the same name — one entry's own plus `.zip`, several the
+  folder's — and `name (2).zip`, `name (3).zip`… when the folder already
+  has it.
 
 ## [0.3.0-alpha.10] - 2026-10-08
 

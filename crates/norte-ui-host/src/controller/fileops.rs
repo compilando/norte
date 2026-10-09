@@ -341,9 +341,10 @@ impl State {
 
     /// `pane.pack` (#132, #290): asks for the container's NAME.
     ///
-    /// The name is typed because it is where the format comes from. Nothing
-    /// else is validated here besides there being something to pack: the
-    /// extension is resolved on confirm, which is when there is a name.
+    /// The name is typed because it is where the format comes from, and it
+    /// starts as [`norte_frontend::nav::pack_default_name`], the TUI's
+    /// proposal. Nothing else is validated here besides there being
+    /// something to pack: the extension is resolved on confirm.
     pub(super) fn request_packed(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // `marked_paths` falls back to the cursor with no marks, same as in
         // a transfer: a single source for "what this operates on".
@@ -358,6 +359,21 @@ impl State {
         }
         let dir = self.slot().pane.dir().clone();
         let location_line = Self::path_line(&dir);
+        let pane = &self.slot().pane;
+        let proposal = norte_frontend::nav::pack_default_name(
+            &sources,
+            &dir,
+            pane.real_entries(),
+            pane.name_encoding(),
+        );
+        // Proposed only if it paints as it is: editing a masked or clamped
+        // field would confirm the mask or the `…` as part of the name.
+        let (paintable, _) = norte_frontend::display_name(proposal.as_bytes());
+        let proposal = if clamp_display(paintable) == proposal {
+            proposal
+        } else {
+            String::new()
+        };
         let id = ModalId(self.next_modal);
         self.next_modal += 1;
         let vista = DialogView {
@@ -383,7 +399,7 @@ impl State {
                     destructive: false,
                 },
             ],
-            input: Some(String::new()),
+            input: Some(proposal.clone()),
             input_hostile: false,
             input_secret: false,
             fields: Vec::new(),
@@ -392,7 +408,7 @@ impl State {
         self.dialogs.push(Dialog {
             id,
             vista: vista.clone(),
-            typed: Typed::Text(String::new()),
+            typed: Typed::Text(proposal),
             recognized: true,
             on_confirm: Some(Pending::Pack { dir, sources }),
         });

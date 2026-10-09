@@ -1182,6 +1182,76 @@ pub fn format_by_name(name: &[u8]) -> Option<norte_proto::methods::ArchiveFormat
     None
 }
 
+/// The name the pack dialog proposes (#132), the same in the TUI and the
+/// window.
+///
+/// One source gives its own name, extension and all (`notes.txt` →
+/// `notes.txt.zip`: the archive says what it holds, and a sibling
+/// `notes.pdf` would otherwise collide with it); several give the
+/// directory's; the root, which has no name, gives `archive`. A proposal
+/// already in `listed` gets ` (2)`, ` (3)`… before its extension. That is
+/// a courtesy over what the pane last listed: the core still refuses to
+/// overwrite.
+///
+/// Decoded with the pane's name reinterpretation (#57), so the dialog
+/// proposes the name the pane paints; what cannot be read stays `U+FFFD`,
+/// which the dialogs refuse to confirm.
+///
+/// ```
+/// use norte_proto::VPath;
+/// use norte_frontend::nav::pack_default_name;
+/// let dir = VPath::parse("mem:///fotos").unwrap();
+/// let one = [VPath::parse("mem:///fotos/a.jpg").unwrap()];
+/// assert_eq!(pack_default_name(&one, &dir, &[], None), "a.jpg.zip");
+/// let two = [one[0].clone(), VPath::parse("mem:///fotos/b.jpg").unwrap()];
+/// assert_eq!(pack_default_name(&two, &dir, &[], None), "fotos.zip");
+/// ```
+#[must_use]
+pub fn pack_default_name(
+    sources: &[VPath],
+    dir: &VPath,
+    listed: &[Entry],
+    encoding: Option<norte_encoding::NameEncoding>,
+) -> String {
+    let base = match sources {
+        [one] => one.file_name(),
+        _ => dir.file_name(),
+    }
+    .map_or(&b"archive"[..], norte_proto::Segment::as_bytes);
+    let mut proposal = base.to_vec();
+    proposal.extend_from_slice(b".zip");
+    let name = free_archive_name(&proposal, |n| {
+        listed
+            .iter()
+            .any(|e| e.path.file_name().is_some_and(|s| s.as_bytes() == n))
+    });
+    match encoding {
+        Some(enc) => norte_encoding::decode_name(&name, enc),
+        None => String::from_utf8_lossy(&name).into_owned(),
+    }
+}
+
+/// `name`, or the first `stem (n).ext` with `n ≥ 2` that `taken` does not
+/// claim, cutting at the archive extension [`format_by_name`] knows so a
+/// `.tar.gz` stays whole.
+fn free_archive_name(name: &[u8], taken: impl Fn(&[u8]) -> bool) -> Vec<u8> {
+    if !taken(name) {
+        return name.to_vec();
+    }
+    let ext_len = [&b".tar.gz"[..], b".tgz", b".tar", b".zip"]
+        .iter()
+        .find(|suf| {
+            name.len() > suf.len() && name[name.len() - suf.len()..].eq_ignore_ascii_case(suf)
+        })
+        .map_or(0, |suf| suf.len());
+    let (stem, ext) = name.split_at(name.len() - ext_len);
+    (2..=u32::MAX)
+        .map(|n| [stem, format!(" ({n})").as_bytes(), ext].concat())
+        .find(|candidate| !taken(candidate))
+        // The listing is finite, so some counter is always free.
+        .unwrap_or_else(|| name.to_vec())
+}
+
 /// A size with a suffix (`4096`, `10M`, `1G`) in bytes, or `None` if it
 /// cannot be understood (#132).
 ///
@@ -1472,5 +1542,93 @@ mod history_tests {
             return_after_disconnect(&vp("sftp://srv/b"), &all_its_own),
             None,
         );
+    }
+}
+
+#[cfg(test)]
+mod pack_name_tests {
+    use super::*;
+    use norte_proto::{EntryKind, Segment};
+
+    fn vp(wire: &str) -> VPath {
+        VPath::parse(wire).expect("wire")
+    }
+
+    fn file(path: VPath) -> Entry {
+        Entry {
+            attrs: std::collections::BTreeMap::new(),
+            path,
+            kind: EntryKind::File,
+            size: None,
+            mtime_ms: None,
+        }
+    }
+
+    fn listed(dir: &str, names: &[&str]) -> Vec<Entry> {
+        names
+            .iter()
+            .map(|n| file(vp(&format!("{dir}/{n}"))))
+            .collect()
+    }
+
+    #[test]
+    fn one_source_names_the_archive_after_it_extension_kept() {
+        let name = pack_default_name(&[vp("mem:///d/notes.txt")], &vp("mem:///d"), &[], None);
+        assert_eq!(name, "notes.txt.zip");
+    }
+
+    #[test]
+    fn several_sources_name_it_after_the_directory() {
+        let sources = [vp("mem:///fotos/a"), vp("mem:///fotos/b")];
+        let name = pack_default_name(&sources, &vp("mem:///fotos"), &[], None);
+        assert_eq!(name, "fotos.zip");
+    }
+
+    #[test]
+    fn several_sources_at_the_root_fall_back_to_archive() {
+        let sources = [vp("mem:///a"), vp("mem:///b")];
+        let name = pack_default_name(&sources, &vp("mem:///"), &[], None);
+        assert_eq!(name, "archive.zip");
+    }
+
+    #[test]
+    fn a_taken_name_gets_the_first_free_counter() {
+        let dir = "mem:///d";
+        let taken = listed(dir, &["notes.txt", "notes.txt.zip", "notes.txt (2).zip"]);
+        let name = pack_default_name(&[vp("mem:///d/notes.txt")], &vp(dir), &taken, None);
+        assert_eq!(name, "notes.txt (3).zip");
+    }
+
+    /// The counter goes before the WHOLE archive extension: `x.tar (2).gz`
+    /// would no longer be read as a tar.gz by [`format_by_name`].
+    #[test]
+    fn the_counter_goes_before_a_multi_part_extension() {
+        let free = |name: &[u8], taken: &[&[u8]]| {
+            String::from_utf8(free_archive_name(name, |n| taken.contains(&n))).expect("utf8")
+        };
+        assert_eq!(free(b"x.tar.gz", &[b"x.tar.gz"]), "x (2).tar.gz");
+        assert_eq!(free(b"x.TGZ", &[b"x.TGZ"]), "x (2).TGZ");
+        assert_eq!(free(b"x.tar", &[b"x.tar"]), "x (2).tar");
+        assert_eq!(free(b"x.zip", &[b"x.zip", b"x (2).zip"]), "x (3).zip");
+        assert_eq!(free(b"x.zip", &[]), "x.zip", "a free name is left alone");
+    }
+
+    /// The proposal is decoded the way the pane paints its names (#57),
+    /// while the collision is decided on the listing's BYTES.
+    #[test]
+    fn the_proposal_follows_the_panes_name_encoding() {
+        // 0x8F is `Å` in cp437, and not UTF-8.
+        let seg = Segment::new(vec![0x8F, b'x']).expect("seg");
+        let dir = vp("mem:///d");
+        let taken = vec![file(dir.join(
+            Segment::new(vec![0x8F, b'x', b'.', b'z', b'i', b'p']).expect("seg"),
+        ))];
+        let name = pack_default_name(
+            &[dir.join(seg)],
+            &dir,
+            &taken,
+            Some(norte_encoding::NameEncoding::Cp437),
+        );
+        assert_eq!(name, "Åx (2).zip");
     }
 }
