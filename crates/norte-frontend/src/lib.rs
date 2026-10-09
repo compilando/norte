@@ -91,6 +91,7 @@ pub mod subshell;
 pub mod sync;
 pub mod task_strip;
 pub mod tasks;
+pub mod terminals;
 pub mod theme;
 pub mod timeline;
 pub mod version;
