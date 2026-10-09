@@ -6,10 +6,10 @@
 
 <br>
 
-[![Release](https://img.shields.io/badge/release-v0.3.0--alpha.4-B7FF52?style=flat-square&labelColor=0b0f0c)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-v0.3.0--alpha.10-B7FF52?style=flat-square&labelColor=0b0f0c)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0%20%2B%20AGPL--3.0-B7FF52?style=flat-square&labelColor=0b0f0c)](#license)
 [![Rust](https://img.shields.io/badge/rust-1.95%2B-B7FF52?style=flat-square&logo=rust&logoColor=white&labelColor=0b0f0c)](rust-toolchain.toml)
-[![Platform](https://img.shields.io/badge/platform-Linux%20x86__64-B7FF52?style=flat-square&logo=linux&logoColor=white&labelColor=0b0f0c)](#install)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%C2%B7%20Windows%20preview-B7FF52?style=flat-square&logo=linux&logoColor=white&labelColor=0b0f0c)](#install)
 [![MCP](https://img.shields.io/badge/MCP-governed-B7FF52?style=flat-square&labelColor=0b0f0c)](#agents-governed-not-trusted)
 [![Telemetry](https://img.shields.io/badge/telemetry-none,%20ever-B7FF52?style=flat-square&labelColor=0b0f0c)](#telemetry)
 
@@ -19,6 +19,7 @@
 **[Plugins](#plugins)** ·
 **[Architecture](ARCHITECTURE.md)** ·
 **[Changelog](CHANGELOG.md)** ·
+**[Discussions](https://github.com/compilando/norte/discussions)** ·
 **[Contributing](CONTRIBUTING.md)**
 
 </div>
@@ -29,7 +30,7 @@
 a person at the keyboard, and an AI agent that also needs to touch files.
 One headless Rust core does the work. The terminal UI, the window, the CLI and
 the agent all talk to it through the same protocol, and **everything an agent
-does passes through policy, is journaled, and can be undone.**
+does passes through policy and is journaled with its author.**
 
 <div align="center">
   <img src="docs/assets/readme/tour.webp" alt="A tour of norte-gui: browsing, the markdown viewer, image preview, go-to, the command palette, the embedded shell and settings" width="100%">
@@ -57,7 +58,7 @@ Your muscle memory already works.
 ### 🧭 One core, every surface
 A headless core with a stable, versioned protocol. `ntc` in any terminal,
 `norte-gui` as a native window, `norte` on the command line — all
-interchangeable clients of the same engine, same journal, same undo.
+interchangeable clients of the same engine and the same journal.
 
 </td>
 </tr>
@@ -67,7 +68,7 @@ interchangeable clients of the same engine, same journal, same undo.
 ### 🤖 Agents, governed
 `norte mcp serve` lets Claude Code, Codex or any MCP client work on your
 files — inside a scope **you** grant, under rules **you** write, with
-every change journaled and `norte undo` one command away.
+every change journaled under the agent's session.
 
 </td>
 <td width="50%" valign="top">
@@ -101,8 +102,8 @@ Deletes go to the trash.</p>
 <tr>
 <td width="50%" valign="top">
 <img src="docs/assets/readme/tui-timeline.webp" alt="The timeline of changes">
-<p><b>Everything that changed, and a way back.</b> Every operation — yours,
-an agent's, a plugin's — lands in a journal you can browse and undo.</p>
+<p><b>Everything that changed, and who did it.</b> Every operation — yours,
+an agent's, a plugin's — lands in one journal you can browse.</p>
 </td>
 <td width="50%" valign="top">
 <img src="docs/assets/readme/tui-viewer.webp" alt="An image in the terminal viewer">
@@ -188,7 +189,7 @@ clean install has a daemon to talk to.
 > configuration may still change.
 
 Two binaries, each with its own installer — `ntc`, the file manager, and
-`norte`, the command line (daemon, connections, policy, undo, index, doctor):
+`norte`, the command line (daemon, connections, policy, index, doctor):
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
@@ -272,7 +273,7 @@ sequenceDiagram
     P-->>Y: ask (your rule said so)
     Y-->>P: approve
     P->>J: applied, hash-chained
-    Y->>J: norte undo mcp  (whole session, LIFO)
+    Y->>J: norte audit  (verify the chain, export it)
 ```
 
 Hook it up in your agent's MCP config:
@@ -348,7 +349,7 @@ flowchart LR
     end
     subgraph core [norte core]
         PROTO(["protocol<br/>versioned"])
-        ENG["engine<br/>tasks · trash · undo"]
+        ENG["engine<br/>tasks · trash"]
         POL["policy"]
         JRN[("journal<br/>hash-chained")]
         PLG["plugin host<br/>WASM sandbox"]
@@ -368,13 +369,13 @@ flowchart LR
 The core runs embedded in any client or as a daemon over a Unix socket.
 Deep dives: [ARCHITECTURE.md](ARCHITECTURE.md), the
 [specification](docs/spec/norte-spec.md) and
-[155 architecture decisions](docs/adr/README.md).
+[176 architecture decisions](docs/adr/README.md).
 
 ## Roadmap
 
 - [x] Two-pane TUI with seven keymap presets
 - [x] SFTP, FTP, S3 and archives through one VFS
-- [x] MCP bridge with scopes, policy, journal and undo
+- [x] MCP bridge with scopes, policy and journal
 - [x] WASM plugin system with per-capability consent
 - [x] `norte-gui`, a native window over the same core
 - [ ] Releases built in CI for macOS and Windows
@@ -382,6 +383,14 @@ Deep dives: [ARCHITECTURE.md](ARCHITECTURE.md), the
 - [ ] Plugin signing and a registry
 
 See the [changelog](CHANGELOG.md) for what landed in each alpha.
+
+## How norte is built
+
+Most of norte's code is written with AI coding agents, mostly Claude Code:
+about four in five commits carry a `Co-Authored-By: Claude` line. The
+reasoning behind the code is recorded in the
+[architecture decisions](docs/adr/README.md), and `just ci` (format, lint,
+tests, docs) is the gate before anything merges.
 
 ## Contributing
 
