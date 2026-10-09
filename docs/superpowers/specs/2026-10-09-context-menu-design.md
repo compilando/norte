@@ -75,17 +75,16 @@ whether they run, never labels.
 ```rust
 pub enum Surface {
     /// A listing row. `target` is what the menu acts on, already decided.
-    Row { target: RowTarget },
+    Row(RowTarget),
     /// The listing below its last row, or the `..` row.
-    Empty { remote: bool, ai: bool },
-    /// A column header.
-    /// `column` is the header's id as the renderer sent it (`[ui.columns]`
-    /// ids are config-defined, so owned); `hideable` is false for `name`.
-    Header { column: String, hideable: bool },
+    Empty { remote: bool },
+    /// A column header. `hideable` is false for `name`. The column id
+    /// itself lives in the host's `Subject::Column`, not in the model.
+    Header { hideable: bool },
     /// A Places row.
-    Place(PlaceTarget),   // Drive | Favorite | SectionHeader { folded }
-    /// A tree branch.
-    Branch { folded: bool },
+    Place(PlaceTarget),   // Drive | Favorite | SectionHeader
+    /// A tree branch. Fold/unfold is one toggle entry, so no state here.
+    Branch,
 }
 
 pub struct RowTarget {
@@ -93,8 +92,9 @@ pub struct RowTarget {
     pub count: usize,
     /// The kind of the single entry; `None` when count > 1.
     pub kind: Option<EntryKind>,
-    /// The single entry is an archive this frontend can compose (a
-    /// `scheme_archive_format` hit on its name).
+    /// The single entry is an archive this frontend can compose
+    /// (`norte_frontend::nav::archive_root_for(e).is_some()`, the table
+    /// both frontends already share for Enter and `pane.unpack`).
     pub archive: bool,
     /// All marked entries are regular files (for "compare files").
     pub all_files: bool,
@@ -120,9 +120,10 @@ pub struct Entry {
     /// Fluent key of the section this entry STARTS, `Some("")` for a bare
     /// rule, `None` to stay in the previous one (same shape as the menu bar).
     pub section: Option<&'static str>,
-    /// `normal` | `destructive` | `ai` (the menu bar's vocabulary).
-    pub role: Role,
 }
+// The role (`normal` | `destructive` | `ai`) is NOT in the model: the host
+// derives it per command with `norte_frontend::menu::role(id)`, the menu
+// bar's own source (ADR 0126); verbs are `normal`.
 
 pub fn entries(surface: &Surface) -> Vec<Entry>;
 ```
@@ -153,7 +154,8 @@ pub(super) struct ContextMenu {
 }
 ```
 
-**Open** (`context_menu_open`):
+**Open** (one action per surface: `context_menu_row`, `_empty`, `_header`,
+`_place`, `_branch` — "an open action" below):
 
 1. Validate the row/column against the generation the renderer painted
    (`row_of`, `gen_places`, the tree's generation). Stale → no menu.
@@ -206,7 +208,7 @@ dropdown) and when the slot it was opened on goes away.
 | `RemoveFavorite` | the body of `remove_favorite`, taking the name from the Places row instead of the selector |
 | `ToggleFold` | `toggle_fold` (Places header) / `TreeToggleRow` (branch) |
 | `SortByColumn` | `sort_by_column` |
-| `HideColumn` | the column selector's toggle + `persist_columns` path |
+| `HideColumn` | the column selector's apply path (`columns.apply_picked` with the slot scheme's ids minus that one, then `re_list` where the footprint changed) — window-only, like the selector: `norte.toml` is not written |
 
 ### 3. Catalogue — `pane.context-menu`
 
@@ -224,11 +226,11 @@ key must reach the host as a chord the keymap can parse.
 `UiAction` (renderer → host):
 
 ```ts
-| { action: "context_menu_open"; surface: "row"; slot_id: number; key: number; generation: number; x: number; y: number }
-| { action: "context_menu_open"; surface: "empty"; slot_id: number; x: number; y: number }
-| { action: "context_menu_open"; surface: "header"; slot_id: number; column: string; x: number; y: number }
-| { action: "context_menu_open"; surface: "place"; row: number; generation: number; x: number; y: number }
-| { action: "context_menu_open"; surface: "branch"; row: number; generation: number; x: number; y: number }
+| { action: "context_menu_row"; slot_id: number; key: number; generation: number; x: number; y: number }
+| { action: "context_menu_empty"; slot_id: number; x: number; y: number }
+| { action: "context_menu_header"; slot_id: number; column: string; x: number; y: number }
+| { action: "context_menu_place"; row: number; generation: number; x: number; y: number }
+| { action: "context_menu_branch"; row: number; generation: number; x: number; y: number }
 | { action: "context_menu_point_row"; row: number }
 | { action: "context_menu_activate_row"; row: number }
 | { action: "context_menu_close" }
@@ -274,7 +276,7 @@ The `bridge.rs` version note for 107 lists all of the above.
 - **One** document-level `contextmenu` listener calls `preventDefault`
   unless the target is an `<input>` or `<textarea>` (those keep the native
   cut/copy/paste). The specific listeners (row, empty area, header, Places,
-  tree) send `context_menu_open`. The tab and terminal menus stay as they
+  tree) send their open action. The tab and terminal menus stay as they
   are (renderer-local, out of scope).
 - Listing `mousedown`: `e.button !== 0` returns before select/mark/
   double-click counting. Side buttons keep their `mouseup` history handler.
@@ -312,13 +314,17 @@ folder or connection, and a row menu would claim a scope they do not have.
 | Folder | New folder `pane.mkdir`, New file `pane.edit-new` |
 | View | Refresh `pane.refresh`, Show hidden `pane.toggle-hidden`, Sort… `pane.sort-menu`, Columns… `pane.columns` |
 | Marks | Mark all `mark.all`, Invert `mark.invert` |
-| AI (only if AI is configured) | AI rename `pane.ai-rename`, Organize `pane.organize` |
+| AI | AI rename `pane.ai-rename`, Organize `pane.organize` |
 | Connection (only if the pane is remote) | Disconnect `pane.disconnect` |
 
-"AI is configured" is the same check the AI commands make before asking a
-model; the plan names the accessor. The section never runs anything by
-itself: each entry is the reader asking, as from the key (AI stays opt-in,
-user-triggered).
+The AI section is always present: the host has no local "AI is configured"
+fact (the daemon decides when asked), so a missing provider is refused by the
+dispatch exactly as from the key. The section never runs anything by itself:
+each entry is the reader asking (AI stays opt-in, user-triggered).
+
+"Remote" = the pane's BASE scheme (the part after the last `+`) is not
+`file`: `sftp`, `s3`, `zip+sftp` are remote; `file`, `zip+file` are not —
+the same test `disconnect` makes before refusing with `msg-disconnect-local`.
 
 ### Column header
 
@@ -342,7 +348,7 @@ Fold / Unfold
 ## Edge cases
 
 - **Right click on a non-active slot**: the capturing `mousedown` already
-  focuses it, so `context_menu_open` arrives for the active slot. If the
+  focuses it, so `context_menu_row` arrives for the active slot. If the
   generation is old by then → stale, no menu.
 - **Right click while a dialog / help is open**: the host refuses (keys
   belong to the modal); the native menu is still suppressed.
@@ -368,8 +374,8 @@ Fold / Unfold
 
 - `norte-frontend` (`context_menu.rs`): entries per surface as a table;
   the core is identical, in identical order, for every `RowTarget`; each
-  contextual section appears exactly under its condition; AI/Connection
-  sections only when flagged; `Open` resolves to `nav.enter` vs `pane.open`.
+  contextual section appears exactly under its condition; the Connection
+  section only when remote; `Open` resolves to `nav.enter` vs `pane.open`.
 - `norte-ui-host` (`tests/`):
   - open on a marked row keeps the marks; on an unmarked row drops them and
     moves the cursor;
@@ -390,7 +396,7 @@ Fold / Unfold
   - the document `contextmenu` is prevented, except on an `<input>`;
   - a right `mousedown` on a row sends no `select_row` and two of them no
     `activate`;
-  - each surface sends its `context_menu_open` with its fields;
+  - each surface sends its open action with its fields;
   - paints a `ContextMenuView` (sections, disabled + reason, cursor);
   - hover / click / outside / blur send point / activate / close;
   - kept inside the window near the right and bottom edges;
