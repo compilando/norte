@@ -195,6 +195,7 @@ keymap = [
     { on = ["alt+shift+f9"], run = "pane.test-archive" },
     { on = ["ctrl+f8"], run = "pane.tree" },
     { on = ["alt+enter"], run = "pane.properties" },
+    { on = ["shift+f10", "menu"], run = "pane.context-menu" },
     { on = ["ctrl+u"], run = "pane.swap" },
     { on = ["ctrl+l"], run = "pane.dir-size" },
     { on = ["ctrl+d"], run = "pane.hotlist" },

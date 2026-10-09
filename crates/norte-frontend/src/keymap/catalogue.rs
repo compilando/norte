@@ -563,6 +563,9 @@ pub const CATALOGUE: &[CommandDef] = &[
     // COUNTED, and that is why it is a cancelable Task and not a field of
     // the dialog.
     live("pane.properties", false, Inert),
+    // Opens the context menu on the focused thing (the window). The TUI has
+    // no context menu: it answers "not here".
+    live("pane.context-menu", false, Inert),
     // #314: the one category where the three reference managers TOUCH and
     // norte only looked. It is a whole mutation — journal with a reversal,
     // policy — and that is why it lives here and not inside the properties

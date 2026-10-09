@@ -633,6 +633,7 @@ mod tests {
             KeyCode::PageDown,
             KeyCode::Insert,
             KeyCode::Delete,
+            KeyCode::Menu,
         ];
         // encoding-auditor MINOR 1+2: this is the CROSS PRODUCT, not two
         // sweeps that never meet. The previous shape ran all 16 modifier
@@ -1503,6 +1504,7 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
             ("pgdn", "PgDn"),
             ("insert", "Insert"),
             ("delete", "Delete"),
+            ("menu", "Menu"),
         ] {
             assert_eq!(
                 parse_chord(raw)

@@ -252,6 +252,7 @@ keymap = [
     { on = ["shift+right"], run = "pane.tab-next" },
     { on = ["alt+."], run = "pane.toggle-hidden" },
     { on = ["alt+enter"], run = "pane.properties" },
+    { on = ["shift+f10", "menu"], run = "pane.context-menu" },
     { on = ["alt+C"], run = "pane.compare-dirs" },
     { on = ["alt+E"], run = "pane.test-archive" },
     # Alt+Shift+O is "Sync panels aka “Equals Button (=)”" — the toolbar

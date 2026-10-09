@@ -37,6 +37,12 @@ const DOES_NOT_APPLY: &[&str] = &[
     // bar, with the same menus and the same entries as the TUI, because the
     // model is `norte_frontend::menu` and not a copy.
     "app.toggle-panels",
+    // TEMPORARY, only while the catalogue entry exists before its effect
+    // does (the context-menu work, task 1 to task 4): the window WILL open
+    // its context menu with this command, and the TUI never has one. Once
+    // it enters `IMPLEMENTED`, `nothing_classified_is_built` fails until
+    // this line is removed — that is the reminder.
+    "pane.context-menu",
 ];
 
 /// Live commands DEFERRED, with the issue that closes them.

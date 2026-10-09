@@ -136,6 +136,7 @@ fn canonical_name(key: &str) -> Option<String> {
         // nothing.
         "pageup" | "pgup" => "pgup",
         "pagedown" | "pgdn" => "pgdn",
+        "contextmenu" | "menu" => "menu",
         " " | "space" | "spacebar" => "space",
         other => {
             // Function keys and lone characters. A long name that is not in
@@ -373,6 +374,14 @@ mod tests {
                 Chord::new(Mods::default(), expected),
                 "{dom}"
             );
+        }
+    }
+
+    /// The browser calls it `ContextMenu`; the keymap calls it `menu`.
+    #[test]
+    fn the_browsers_context_menu_key_is_menu() {
+        for dom in ["ContextMenu", "contextmenu", "menu"] {
+            assert_eq!(canonical_name(dom).as_deref(), Some("menu"), "{dom}");
         }
     }
 
