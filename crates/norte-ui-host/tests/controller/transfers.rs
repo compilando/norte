@@ -572,6 +572,24 @@ async fn joining_requires_starting_with_the_first_chunk() {
     );
 }
 
+/// The pack dialog opens with the TUI's proposal, made unique against the
+/// listing: `docs.zip` is already there.
+#[tokio::test]
+async fn packing_proposes_a_name_the_listing_does_not_have() {
+    let mut f = Fake::default();
+    f.put(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"docs.zip".to_vec(), false)],
+    );
+    let (h, _snap) = host_tree(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+
+    run_by_palette(&h, &mut sub, "pane.pack").await;
+    let dialogs = next_dialogs(&mut sub).await;
+    let dialog = dialogs.last().expect("there is one");
+    assert_eq!(dialog.input.as_deref(), Some("docs (2).zip"));
+}
+
 /// **Packing takes the FORMAT from the typed name** (#132, #290), and the
 /// base is the pane's directory: whoever unpacks expects to see what was on
 /// screen, not absolute paths.
