@@ -3860,6 +3860,89 @@ button.status-item:hover {
   background: var(--hover, var(--panel-focus-bg));
 }
 
+/* The right-click menu the HOST owns (bridge 107): the tab menu's look. The
+   cursor is `aria-selected` and not `:hover`, because the host moves it from
+   the keys too. */
+.context-menu {
+  position: fixed;
+  padding: 4px 0;
+  min-width: 24ch;
+  background: var(--widget-bg, var(--panel-bg));
+  color: var(--fg);
+  border: 1px solid var(--separator, var(--border));
+  border-radius: 6px;
+  box-shadow: 0 10px 28px var(--widget-shadow, rgb(0 0 0 / 45%));
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.context-menu-header {
+  padding: 2px 16px 4px;
+  font-size: 0.85em;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+.context-menu-item {
+  padding: 0 12px;
+  margin: 0 4px;
+  border-radius: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.context-menu-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 24px;
+}
+
+.context-menu-item:hover:not([aria-selected="true"]) {
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+.context-menu-item[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.context-menu-item[aria-disabled="true"] {
+  opacity: 0.55;
+}
+
+.context-menu-chord {
+  opacity: 0.7;
+}
+
+.context-menu-item[data-role="destructive"]:not([aria-selected="true"]) {
+  color: var(--error-fg);
+}
+
+.context-menu-item[data-role="ai"] .context-menu-label::after {
+  content: " ✦";
+  opacity: 0.8;
+}
+
+/* Why an entry cannot run: smaller and dimmed, under its label. */
+.context-menu-reason {
+  padding-bottom: 3px;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
+.context-menu-rule {
+  margin: 3px 0;
+  border-top: 1px solid var(--separator, var(--border));
+}
+
+.context-menu-section {
+  padding: 4px 16px 0;
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+
 .agents-note,
 .agents-empty {
   opacity: 0.8;

@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 106;
+export const BRIDGE_VERSION = 107;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -1041,6 +1041,34 @@ export interface MenuView {
   cursor: number;
 }
 
+/** An entry of the right-click menu (bridge 107). */
+export interface ContextItemView {
+  label: string;
+  /** The shortcut that runs it in this preset; empty if it has none. */
+  chord: string;
+  /** It can run right now. A disabled one STILL shows, with its reason. */
+  enabled: boolean;
+  /** Why it cannot, already translated. Empty when `enabled`. */
+  reason: string;
+  /** Whether a section STARTS here, same contract as `MenuItemView`. */
+  section: string | null;
+  /** `normal`, `destructive` or `ai`. */
+  role: string;
+}
+
+/** The right-click menu (bridge 107), owned by the host: the renderer paints
+ *  it and reports where the pointer went. */
+export interface ContextMenuView {
+  /** What the menu acts on, already worded and masked. */
+  header: string;
+  items: ContextItemView[];
+  /** Which entry is highlighted. */
+  cursor: number;
+  /** Where the pointer was; `null` = asked by key, anchor to the cursor row. */
+  x: number | null;
+  y: number | null;
+}
+
 /** How a panel bar button's panel stands (bridge 51). */
 export type PanelButtonState = "closed" | "open" | "behind" | "focused";
 
@@ -1665,6 +1693,9 @@ export interface ViewSnapshot {
   dialogs: DialogView[];
   tasks: TaskView[];
   menu: MenuView;
+  /** The right-click menu (bridge 107), if one is open. Optional: an earlier
+   *  host does not send it. */
+  context_menu?: ContextMenuView | null;
   panel_bar: PanelBarView;
   /** The status bar's right half (ADR 0132, bridge 85). Optional: an
    *  earlier host does not send it. */
@@ -1762,6 +1793,7 @@ export type ViewChange =
   | { change: "organize"; organize: OrganizeView | null }
   | { change: "which_key"; whichkey: WhichKeyView | null }
   | { change: "menu"; menu: MenuView }
+  | { change: "context_menu"; context_menu: ContextMenuView | null }
   | { change: "panel_bar"; panel_bar: PanelBarView }
   | { change: "status_items"; status_items: StatusItemView[] }
   | { change: "profiles"; profiles: ProfilePickerView | null }
@@ -1936,6 +1968,40 @@ export type UiAction =
   | { action: "menu_point_row"; row: number }
   | { action: "menu_activate_row"; row: number }
   | { action: "menu_close" }
+  /** A right click on a listing row (bridge 107). */
+  | {
+      action: "context_menu_row";
+      slot_id: number;
+      key: RowKey;
+      generation: number;
+      x: number;
+      y: number;
+    }
+  | { action: "context_menu_empty"; slot_id: number; x: number; y: number }
+  | {
+      action: "context_menu_header";
+      slot_id: number;
+      column: string;
+      x: number;
+      y: number;
+    }
+  | {
+      action: "context_menu_place";
+      row: number;
+      generation: number;
+      x: number;
+      y: number;
+    }
+  | {
+      action: "context_menu_branch";
+      row: number;
+      generation: number;
+      x: number;
+      y: number;
+    }
+  | { action: "context_menu_point_row"; row: number }
+  | { action: "context_menu_activate_row"; row: number }
+  | { action: "context_menu_close" }
   /** Alt pressed and released alone: folds or opens the menu (bridge 68). */
   | { action: "menu_toggle" }
   | { action: "wizard_open" }

@@ -56,6 +56,32 @@ describe("Session", () => {
     expect(after?.kind === "browser" ? after.total_rows : null).toBe(5000);
   });
 
+  // Bridge 107: the right-click menu travels whole, and `null` closes it.
+  it("a context_menu patch with null clears the menu", () => {
+    const open = s.receive(
+      env(1, {
+        update: "patch",
+        base_sequence: 0,
+        changes: [
+          {
+            change: "context_menu",
+            context_menu: { header: "h", items: [], cursor: 0, x: 1, y: 2 },
+          },
+        ],
+      }),
+    );
+    expect(open.kind).toBe("applied");
+    expect(s.view()?.context_menu?.header).toBe("h");
+    s.receive(
+      env(2, {
+        update: "patch",
+        base_sequence: 1,
+        changes: [{ change: "context_menu", context_menu: null }],
+      }),
+    );
+    expect(s.view()?.context_menu).toBeNull();
+  });
+
   // A task expires after ten seconds and its row disappears: that shifts the
   // rest. The processes panel's cursor used to travel only in the full
   // snapshot, so the renderer kept highlighting row N — by then another task,

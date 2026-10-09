@@ -17,6 +17,7 @@ import { invokeMetrics, tauriPort } from "./bridge";
 import type { HostPort } from "./bridge";
 import { AltSolo, isForTheField, keyAction, keyInputOf } from "./keys";
 import { Screen } from "./render";
+import { installContextMenuGuard } from "./render/contextmenu";
 import { mountTitleBar } from "./render/menus";
 import { Session } from "./session";
 import { BRIDGE_VERSION } from "./types";
@@ -31,6 +32,9 @@ export interface Metrics {
 }
 
 export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
+  // The webview's own right-click menu (Back, Reload, Inspect) never opens;
+  // the context menu is the host's.
+  installContextMenuGuard(doc);
   const screenEl = doc.getElementById("screen");
   const menuEl = doc.getElementById("menu");
   const panelBarEl = doc.getElementById("panelbar");

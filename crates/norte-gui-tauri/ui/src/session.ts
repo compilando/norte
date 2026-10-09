@@ -250,6 +250,9 @@ export class Session {
       case "menu":
         s.menu = c.menu;
         return true;
+      case "context_menu":
+        s.context_menu = c.context_menu;
+        return true;
       case "panel_bar":
         s.panel_bar = c.panel_bar;
         return true;
