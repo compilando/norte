@@ -131,7 +131,9 @@ impl State {
             archive: single && norte_frontend::nav::archive_root_for(entry).is_some(),
             all_files,
         };
-        let header = if single {
+        // ONE frame, "acts on …", for both targets: the name or the count
+        // goes inside it, so the header always says it is the operand.
+        let target_text = if single {
             // The SAME masking as the row's `display_name`, so the header
             // never says a name the row does not.
             let bytes = entry
@@ -139,11 +141,7 @@ impl State {
                 .file_name()
                 .map_or(&[][..], norte_proto::Segment::as_bytes);
             let (text, _) = norte_frontend::display_name_with(bytes, pane.name_encoding());
-            norte_i18n::ta_in(
-                self.lang,
-                "gui-menu-acts-on",
-                &[("target", &norte_frontend::context_menu::elide(&text))],
-            )
+            norte_frontend::context_menu::elide(&text)
         } else {
             norte_i18n::ta_in(
                 self.lang,
@@ -151,6 +149,7 @@ impl State {
                 &[("n", &count.to_string())],
             )
         };
+        let header = norte_i18n::ta_in(self.lang, "gui-menu-acts-on", &[("target", &target_text)]);
         let fingerprint = Fingerprint {
             entry: pane
                 .cursor_entry()

@@ -64,7 +64,12 @@ async fn a_marked_row_keeps_the_marks_and_says_how_many() {
     let mut sub = h.subscribe();
     mark(&h, &mut sub, &[0, 1]).await;
     let m = open_on(&h, &mut sub, 1).await;
-    assert!(m.header.contains('2'), "{}", m.header);
+    // The whole string, from the same two keys in the host's locale (`es`):
+    // the count goes INSIDE the "acts on" frame, not instead of it.
+    let lang = norte_i18n::Lang::Es;
+    let marks = norte_i18n::ta_in(lang, "gui-menu-target-marks", &[("n", "2")]);
+    let expected = norte_i18n::ta_in(lang, "gui-menu-acts-on", &[("target", &marks)]);
+    assert_eq!(m.header, expected);
     assert_eq!(browser(&snapshot(&h, &mut sub).await).marks, 2);
 }
 
