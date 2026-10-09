@@ -705,6 +705,9 @@ pub(crate) fn overlay_open(app: &App) -> bool {
         || app.shortcuts.is_some()
         || app.theme_picker.is_some()
         || app.columns_picker.is_some()
+        // The terminal panel's list and rename field.
+        || app.term_picker.is_some()
+        || app.term_rename.is_some()
         || app.extensions.is_some()
         || app.nav_popup.is_some()
         || app.search_dialog.is_some()

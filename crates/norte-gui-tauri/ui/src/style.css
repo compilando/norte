@@ -4664,7 +4664,8 @@ button.status-item:hover {
 }
 
 .terminal-entry-exited .terminal-entry-title {
-  color: var(--muted);
+  color: var(--muted, var(--title-fg));
+  opacity: 0.7;
 }
 
 .terminal-actions {

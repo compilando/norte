@@ -179,7 +179,16 @@ fn sanitise_title(raw: &[u8]) -> String {
         .chars()
         .filter(|c| {
             !c.is_control()
-                && !matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+                && !matches!(
+                    c,
+                    '\u{61c}'
+                        | '\u{200e}'
+                        | '\u{200f}'
+                        | '\u{2028}'
+                        | '\u{2029}'
+                        | '\u{202a}'..='\u{202e}'
+                        | '\u{2066}'..='\u{2069}'
+                )
         })
         .take(TITLE_MAX)
         .collect()
@@ -1450,6 +1459,10 @@ mod tests {
     fn a_hostile_title_is_stripped_and_capped() {
         let mut p = Screen::new(10, 1);
         p.alimentar("\x1b]0;a\u{202e}b\u{2066}c\u{9b}d\x07".as_bytes());
+        assert_eq!(p.take_title().as_deref(), Some("abcd"));
+        // The Arabic letter mark is a bidi control too, and the line and
+        // paragraph separators break a one-line tab without being "control".
+        p.alimentar("\x1b]0;a\u{61c}b\u{2028}c\u{2029}d\x07".as_bytes());
         assert_eq!(p.take_title().as_deref(), Some("abcd"));
         let long = format!("\x1b]2;{}\x07", "x".repeat(10_000));
         p.alimentar(long.as_bytes());

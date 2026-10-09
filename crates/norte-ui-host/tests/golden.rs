@@ -2785,6 +2785,7 @@ fn rest_changes() -> Vec<(&'static str, ViewChange)> {
                         norte_ui_host::dto::TerminalInstanceView {
                             id: 1,
                             title: "build".to_owned(),
+                            name: Some("build".to_owned()),
                             icon: Some("server".to_owned()),
                             color: Some(2),
                             exited: Some(3),
@@ -2793,6 +2794,7 @@ fn rest_changes() -> Vec<(&'static str, ViewChange)> {
                         norte_ui_host::dto::TerminalInstanceView {
                             id: 2,
                             title: "fish".to_owned(),
+                            name: None,
                             icon: None,
                             color: None,
                             exited: None,
@@ -3084,7 +3086,7 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // 99: `LayoutPickerView.legend`, what each preview letter is, and
     // `PlacesSlotView.favorites_hint`.
     // 101: `PanelBarView.footer`, the activity column's foot.
-    const SHAPE: u64 = 2_326_513_338_022_704_203;
+    const SHAPE: u64 = 10_678_519_679_102_427_153;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

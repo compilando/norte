@@ -2269,6 +2269,22 @@ fn a_click_on_a_terminal_tab_selects_it() {
     assert_eq!(app.terminals.active_id(), first);
 }
 
+/// With the terminal's list open on top, a click behind it does nothing.
+#[cfg(unix)]
+#[test]
+fn the_terminal_picker_blocks_the_mouse() {
+    let (mut app, lines) = app_with_shells(3);
+    let before = app.terminals.active_id();
+    app.term_picker = Some(norte_tui::termpanel::TermPicker {
+        title: "x".into(),
+        rows: Vec::new(),
+        cursor: 0,
+    });
+    let (row, col) = where_(&lines, "┌ 1 ");
+    let _ = mouse::handle(&mut app, ev(DOWN, col + 2, row));
+    assert_eq!(app.terminals.active_id(), before);
+}
+
 /// A shell that failed stays, with its code on the tab and on the screen.
 #[cfg(unix)]
 #[test]

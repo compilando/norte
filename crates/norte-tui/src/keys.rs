@@ -233,13 +233,19 @@ pub async fn on_key(
                 | crate::app::KeyOwner::DiskMap
                 | crate::app::KeyOwner::Timeline
                 | crate::app::KeyOwner::Panel
-                // The terminal too, as in the window: without it `alt+o`
-                // reached the shell as `ESC o` and the ring could not leave
-                // the panel — and its own `terminal.*` chords could not run.
+                // The terminal too, as in the window, but with its OWN short
+                // list: the ring and `terminal.*`. The panels' list would
+                // take `alt+x` — Emacs's `M-x` — and close every shell.
                 | crate::app::KeyOwner::Terminal
         )
-        && let Some(cmd) = crate::keymap::chord_from_crossterm(key.modifiers, key.code)
-            .and_then(|c| crate::keymap::shared_panel_command(resolver.effective(), c))
+        && let Some(cmd) =
+            crate::keymap::chord_from_crossterm(key.modifiers, key.code).and_then(|c| {
+                if app.key_owner() == crate::app::KeyOwner::Terminal {
+                    crate::keymap::terminal_pass_command(resolver.effective(), c)
+                } else {
+                    crate::keymap::shared_panel_command(resolver.effective(), c)
+                }
+            })
     {
         // Opening, closing and cycling panels work from INSIDE any side
         // panel, through the same dispatch as from a listing: each panel's

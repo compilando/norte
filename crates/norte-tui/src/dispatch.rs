@@ -212,7 +212,11 @@ pub async fn dispatch(
         // empty panel that explains why is better than a key that does not
         // respond.
         Command::LayoutTerminal => {
-            if app.terminals.is_empty() {
+            // No LIVE shell — none, or only failed ones — and coming in:
+            // start one, or the panel is a still picture forever. Going out
+            // is just the keyboard, as below.
+            let live = app.terminals.iter().any(|i| i.exited.is_none());
+            if !live && app.key_owner() != crate::app::KeyOwner::Terminal {
                 // Starting one does ask for a local directory, and
                 // `shell_cwd` already knows how to say why there is none —
                 // it is the same gate as `app.terminal`. The slot opens even

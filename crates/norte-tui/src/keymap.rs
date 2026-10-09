@@ -441,12 +441,6 @@ const PANEL_SHARED: &[&str] = &[
     "layout.close-slot",
     "layout.focus-next",
     "layout.focus-prev",
-    // The terminal panel's instances: managing its shells from inside is
-    // the point. Only four are bound, with chords no shell uses daily.
-    "terminal.new",
-    "terminal.close",
-    "terminal.next",
-    "terminal.prev",
 ];
 
 /// The shared panel command `chord` runs in the LISTING's keymap, if any:
@@ -458,6 +452,21 @@ pub fn shared_panel_command(
     chord: norte_frontend::keymap::Chord,
 ) -> Option<Command> {
     PANEL_SHARED
+        .iter()
+        .find(|cmd| browse.single_chord_runs(chord, cmd))
+        .and_then(|cmd| Command::parse(cmd))
+}
+
+/// The command `chord` runs from INSIDE the terminal panel, if any: only
+/// the short list both frontends share
+/// ([`norte_frontend::terminals::PASS_THROUGH`]); everything else is the
+/// shell's.
+#[must_use]
+pub fn terminal_pass_command(
+    browse: &norte_frontend::keymap::Effective,
+    chord: norte_frontend::keymap::Chord,
+) -> Option<Command> {
+    norte_frontend::terminals::PASS_THROUGH
         .iter()
         .find(|cmd| browse.single_chord_runs(chord, cmd))
         .and_then(|cmd| Command::parse(cmd))
@@ -485,6 +494,25 @@ mod tests {
     /// work: from Places `alt+l` opened nothing, from Processes `alt+t`
     /// opened nothing, and `alt+x` closed nothing (review of 2026-10-07).
     /// What the panel uses for itself (an arrow, a letter) is not taken.
+    /// Inside the TERMINAL only the short shared list passes: `alt+x` is
+    /// Emacs's `M-x` and closing the slot would kill every shell; `alt+l`
+    /// is readline's downcase-word.
+    #[test]
+    fn the_terminal_keeps_the_shells_chords() {
+        let eff = orthodox_browse();
+        let chord = |s| norte_frontend::keymap::parse_chord(s).expect("chord");
+        assert_eq!(terminal_pass_command(&eff, chord("alt+x")), None);
+        assert_eq!(terminal_pass_command(&eff, chord("alt+l")), None);
+        assert_eq!(
+            terminal_pass_command(&eff, chord("ctrl+alt+pgdn")),
+            Some(Command::TerminalNext)
+        );
+        assert_eq!(
+            terminal_pass_command(&eff, chord("alt+o")),
+            Some(Command::LayoutFocusNext)
+        );
+    }
+
     #[test]
     fn panel_keys_pass_through_any_side_panel() {
         let eff = orthodox_browse();

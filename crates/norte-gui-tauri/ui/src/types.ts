@@ -641,6 +641,8 @@ export interface TerminalSlotView {
 export interface TerminalInstanceView {
   id: number;
   title: string;
+  /** The name the reader gave it, if any: what a rename starts from. */
+  name: string | null;
   icon: string | null;
   /** ANSI index 1..6, painted as `var(--term-N)`. */
   color: number | null;

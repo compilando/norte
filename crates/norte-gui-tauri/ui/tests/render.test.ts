@@ -4644,6 +4644,7 @@ describe("slots that aren't listings", () => {
   const instance = (id: number, extra: Partial<TerminalInstanceView> = {}) => ({
     id,
     title: `sh ${String(id)}`,
+    name: null,
     icon: null,
     color: null,
     exited: null,
@@ -4705,6 +4706,25 @@ describe("slots that aren't listings", () => {
     screen.paint(withShells([instance(1, { exited: 3 }), instance(2)], { exited: 3 }));
     expect(document.querySelector(".terminal-status")?.textContent).toContain("3");
     expect(document.querySelector(".terminal-entry-exited")).not.toBeNull();
+  });
+
+  // A shell printing patches the panel up to 30 times a second: the field
+  // must survive them, or the rest of the name is typed into the shell.
+  it("renaming survives the shell's patches and starts from the name", () => {
+    const { screen, sent } = mount();
+    const v = withShells([instance(1, { title: "vim", name: null }), instance(2)]);
+    screen.paint(v);
+    const entry = document.querySelector(".terminal-entry") as HTMLElement;
+    entry.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    (document.querySelector(".tab-menu-item") as HTMLElement).click();
+    const field = document.querySelector(".terminal-rename") as HTMLInputElement;
+    expect(field.value).toBe("");
+    field.value = "build";
+    screen.paint(v);
+    const still = document.querySelector<HTMLInputElement>(".terminal-rename");
+    expect(still).toBe(field);
+    still?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(sent).toContainEqual({ action: "terminal_rename", id: 1, name: "build" });
   });
 
   it("+ starts the default shell", () => {

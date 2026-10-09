@@ -30,8 +30,9 @@ pub(crate) struct StripItem {
     pub width: u16,
 }
 
+/// Display COLUMNS, as ratatui paints them: a CJK character is two.
 fn chars(s: &str) -> usize {
-    s.chars().count()
+    unicode_width::UnicodeWidthStr::width(s)
 }
 
 /// Lays `labels` out in `width` columns, growing outwards from `active` —
@@ -79,7 +80,17 @@ pub(crate) fn layout_strip(
         .map(|(id, label)| {
             // Only the active one can be alone and too wide: shortened.
             let label = if chars(label) > room {
-                let mut s: String = label.chars().take(room.saturating_sub(1)).collect();
+                // Column by column, leaving one for the `…`.
+                let mut s = String::new();
+                let mut used = 0;
+                for c in label.chars() {
+                    let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+                    if used + w > room.saturating_sub(1) {
+                        break;
+                    }
+                    used += w;
+                    s.push(c);
+                }
                 s.push('…');
                 s
             } else {
@@ -142,6 +153,19 @@ mod tests {
         assert_eq!(s.items.len(), 1);
         assert!(s.items[0].label.ends_with('…'));
         assert!(s.items[0].width <= 10);
+    }
+
+    /// A wide character takes TWO columns, as ratatui paints it: counted as
+    /// one, every later tab drifts and a click picks the wrong shell.
+    #[test]
+    fn a_wide_title_counts_its_columns() {
+        let l = vec![
+            (InstanceId(1), "1 文档".to_owned()),
+            (InstanceId(2), "2 sh".to_owned()),
+        ];
+        let s = layout_strip(&l, InstanceId(1), 40);
+        assert_eq!(s.items[0].width, 6);
+        assert_eq!(s.items[1].x, 6 + 3);
     }
 
     /// Widths are counted in characters, not bytes.

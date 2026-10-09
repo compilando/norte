@@ -64,6 +64,14 @@ family for seven presets beats one per preset. Krusader has no
 rename and decorate have no chord anywhere — inside the panel every chord is
 one taken from the shell.
 
+From inside the panel only a short list reaches norte
+(`norte_frontend::terminals::PASS_THROUGH`, both frontends): the ring and
+`terminal.*`, plus the exit chord. NOT `layout.close-slot` — its `alt+x` is
+Emacs's `M-x`, and closing the slot kills every shell in it — nor the other
+panels' toggles (`alt+l`, `alt+t` are readline words). The window let those
+through before; with several shells per slot one keypress would lose them
+all.
+
 Shell profiles are read from the system, user and configuration-profile
 layers, never `./.norte`: a shell profile names a program norte runs, the
 same rule as `openers.toml`. `program` must be absolute. They are called

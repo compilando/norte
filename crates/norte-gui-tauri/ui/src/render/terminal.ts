@@ -63,7 +63,17 @@ export function paintTerminal(this: Screen, dom: SlotDom, slot: TerminalSlotView
     dom.scroller.append(line);
   }
   if (instances.length >= 2) {
+    // Rebuilt only when the LIST changed — a shell printing patches the
+    // panel up to 30 times a second and says nothing new about the list —
+    // and never under a rename field: rebuilding dropped the field, focus
+    // fell to the document, and the rest of the name went to the shell.
+    const signature = JSON.stringify([instances, slot.active, slot.list_cols]);
+    const renaming = old?.querySelector(".terminal-rename") != null;
+    if (old instanceof HTMLElement && (renaming || old.dataset["sig"] === signature)) {
+      return;
+    }
     const list = paintList.call(this, instances, slot);
+    list.dataset["sig"] = signature;
     if (old === null) {
       dom.scroller.append(list);
     } else {
@@ -236,10 +246,18 @@ function entryMenu(
 }
 
 /** The entry's title becomes a field: Enter names, Escape cancels. */
-function renameInline(this: Screen, i: TerminalInstanceView, li: HTMLElement): void {
+function renameInline(this: Screen, i: TerminalInstanceView, stale: HTMLElement): void {
+  // Found again by id: a patch between the right click and this choice may
+  // have rebuilt the list, and the node the menu kept is then detached.
+  const li =
+    document.querySelector<HTMLElement>(`.terminal-entry[data-id="${String(i.id)}"]`) ??
+    stale;
+  const title = li.querySelector(".terminal-entry-title");
   const input = document.createElement("input");
   input.className = "terminal-rename";
-  input.value = i.title;
+  // From the NAME, as the keyboard dialog does: starting from the program's
+  // title would freeze it as a name on a plain Enter.
+  input.value = i.name ?? "";
   input.setAttribute("aria-label", this.t("terminal-rename-prompt"));
   input.addEventListener("keydown", (e) => {
     // Ours: the host would take these keys for the shell.
@@ -252,9 +270,14 @@ function renameInline(this: Screen, i: TerminalInstanceView, li: HTMLElement): v
     }
   });
   input.addEventListener("blur", () => {
-    input.remove();
+    // The title comes back until the host's answer repaints the list.
+    if (title !== null) {
+      input.replaceWith(title);
+    } else {
+      input.remove();
+    }
   });
-  li.querySelector(".terminal-entry-title")?.replaceWith(input);
+  title?.replaceWith(input);
   input.focus();
   input.select();
 }

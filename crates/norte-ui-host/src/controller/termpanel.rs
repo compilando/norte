@@ -69,32 +69,8 @@ pub(super) const KIND: &str = "terminal";
 pub(super) const COMMAND: &str = "layout.terminal";
 
 /// The commands whose lone chord still reaches norte from inside the panel:
-/// the ring, the close key and the other panels' toggles. Everything else is
-/// the shell's.
-///
-/// It is the list the TUI's side panels let through (panels-usability plan,
-/// T1); once `norte-frontend` exposes it, this becomes that list.
-const PASS_THROUGH: &[&str] = &[
-    "layout.focus-next",
-    "layout.focus-prev",
-    "layout.close-slot",
-    "layout.places",
-    "layout.preview",
-    "layout.processes",
-    "layout.metadata",
-    "layout.log",
-    "layout.disk-map",
-    "layout.timeline",
-    "pane.tree",
-    // The instances' own: managing the shells from inside is the point.
-    "terminal.new",
-    "terminal.new-profile",
-    "terminal.close",
-    "terminal.next",
-    "terminal.prev",
-    "terminal.rename",
-    "terminal.decorate",
-];
+/// the shared list, the TUI's too (ADR 0077).
+use norte_frontend::terminals::PASS_THROUGH;
 
 impl State {
     /// Opens the terminal panel, or brings it to the front.
@@ -150,7 +126,7 @@ impl State {
             // shell is not — and of a startup that failed: without this the
             // panel stayed dead for the rest of the window's life, because
             // this branch returned before checking.
-            if !inside && self.terminals.is_empty() {
+            if !inside && !self.terminals.iter().any(|i| i.exited.is_none()) {
                 self.start_si_missing(mailbox);
             }
             let snap = self.snapshot();
@@ -171,6 +147,10 @@ impl State {
                 outgoing,
             );
         }
+        // A new slot: any shells still listed belonged to a slot that went
+        // away without closing them (a layout switch), and are not this
+        // panel's to show.
+        bury(self.terminals.drain());
         let (ack, mut updates) = self.open_slot_of_kind(KIND, backend, mailbox);
         // Focus goes to the panel: opening it and not being able to type
         // inside without hunting for the mouse is not opening it.
@@ -201,7 +181,9 @@ impl State {
         &mut self,
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        if !self.terminals.is_empty() || self.slot_of_kind(KIND).is_none() {
+        // "Missing" = no LIVE shell: a panel of failed ones only would be a
+        // still picture forever.
+        if self.terminals.iter().any(|i| i.exited.is_none()) || self.slot_of_kind(KIND).is_none() {
             return Vec::new();
         }
         let profile = self.config.shell_profiles.default_profile().clone();
@@ -686,6 +668,7 @@ impl State {
                     .display_title(i.id)
                     .unwrap_or_default()
                     .to_owned(),
+                name: i.name.clone(),
                 icon: i.icon.map(|c| c.as_str().to_owned()),
                 color: i.color.map(AnsiColor::index),
                 exited: i.exited,

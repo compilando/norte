@@ -4,6 +4,26 @@
 //! Pure: generic over the shell, so the rules are tested without a pty and
 //! both frontends obey the same ones (ADR 0077).
 
+/// The commands whose lone chord still reaches norte while the terminal
+/// panel holds the keyboard; every other chord is the shell's. Shared by
+/// both frontends (ADR 0077), and the exit chord (`layout.terminal`) is
+/// checked on its own.
+///
+/// SHORT on purpose. `layout.close-slot` is NOT here: its `alt+x` is Emacs's
+/// `M-x`, and closing the slot kills every shell in it. Nor are the other
+/// panels' toggles: `alt+l` and `alt+t` are readline words.
+pub const PASS_THROUGH: &[&str] = &[
+    "layout.focus-next",
+    "layout.focus-prev",
+    "terminal.new",
+    "terminal.new-profile",
+    "terminal.close",
+    "terminal.next",
+    "terminal.prev",
+    "terminal.rename",
+    "terminal.decorate",
+];
+
 /// An instance's identity: monotonic, never reused within a session, so a
 /// click aimed at a closed instance cannot land on its successor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -283,7 +303,13 @@ impl<S> Terminals<S> {
                     !c.is_control()
                         && !matches!(
                             c,
-                            '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+                            '\u{61c}'
+                                | '\u{200e}'
+                                | '\u{200f}'
+                                | '\u{2028}'
+                                | '\u{2029}'
+                                | '\u{202a}'..='\u{202e}'
+                                | '\u{2066}'..='\u{2069}'
                         )
                 })
                 .take(128)
@@ -483,6 +509,8 @@ mod tests {
         let (mut t, [a, ..]) = three();
         t.rename(a, "a\u{202e}b\u{1b}c");
         assert_eq!(t.display_title(a), Some("abc"));
+        t.rename(a, "a\u{61c}b\u{2028}c\u{2029}d");
+        assert_eq!(t.display_title(a), Some("abcd"));
         t.rename(a, &"x".repeat(1000));
         assert_eq!(t.display_title(a).map(|s| s.chars().count()), Some(128));
     }

@@ -1205,6 +1205,7 @@
           "exited": 3,
           "icon": "server",
           "id": 1,
+          "name": "build",
           "title": "build",
           "unseen": false
         },
@@ -1213,6 +1214,7 @@
           "exited": null,
           "icon": null,
           "id": 2,
+          "name": null,
           "title": "fish",
           "unseen": true
         }

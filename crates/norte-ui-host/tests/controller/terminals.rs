@@ -140,6 +140,35 @@ async fn a_pass_through_chord_switches_instead_of_typing() {
     terminal_until(&mut sub, |t| t.active == first).await;
 }
 
+/// `alt+x` inside the panel is the shell's (Emacs's `M-x`), NOT
+/// `layout.close-slot`: closing the slot would kill every shell in it.
+#[tokio::test]
+async fn alt_x_inside_reaches_the_shell_and_closes_nothing() {
+    let (h, mut sub, _tmp) = local_host(None).await;
+    open_panel(&h, &mut sub).await;
+    h.dispatch(UiAction::TerminalNew { profile: None })
+        .await
+        .expect("host alive");
+    terminal_until(&mut sub, |t| t.instances.len() == 2).await;
+    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
+        key: "x".to_owned(),
+        ctrl: false,
+        alt: true,
+        shift: false,
+        meta: false,
+    }))
+    .await
+    .expect("host alive");
+    let ack = h
+        .dispatch(UiAction::TerminalNew { profile: None })
+        .await
+        .expect("host alive");
+    assert!(
+        matches!(ack, ActionAck::Applied { .. }),
+        "the panel is still there: {ack:?}"
+    );
+}
+
 /// Exit 0 removes the instance; exit 3 keeps it, saying so.
 #[tokio::test]
 async fn exit_zero_removes_exit_three_stays() {
@@ -165,6 +194,30 @@ async fn exit_zero_removes_exit_three_stays() {
     type_line(&h, "exit").await;
     let t = terminal_until(&mut sub, |t| t.instances.len() == 1).await;
     assert_eq!(t.instances[0].exited, Some(3), "the clean one left");
+}
+
+/// With every shell exited (kept, failed), coming back into the panel
+/// starts a live one: otherwise the panel is a still picture forever.
+#[tokio::test]
+async fn coming_back_with_only_failed_shells_starts_a_new_one() {
+    let (h, mut sub, _tmp) = local_host(None).await;
+    open_panel(&h, &mut sub).await;
+    type_line(&h, "exit 3").await;
+    terminal_until(&mut sub, |t| t.exited == Some(3)).await;
+    let door = || {
+        UiAction::Key(norte_ui_host::keys::KeyInput {
+            key: "s".to_owned(),
+            ctrl: true,
+            alt: true,
+            shift: false,
+            meta: false,
+        })
+    };
+    // Out, and back in.
+    h.dispatch(door()).await.expect("host alive");
+    h.dispatch(door()).await.expect("host alive");
+    let t = terminal_until(&mut sub, |t| t.instances.len() == 2).await;
+    assert_eq!(t.exited, None, "the new one is in front, alive");
 }
 
 /// The last shell leaving leaves the panel saying "no shell".
@@ -279,15 +332,26 @@ async fn rename_then_closing_the_slot_kills_them_all() {
         .await
         .expect("host alive");
     terminal_until(&mut sub, |t| t.instances.len() == 2).await;
-    // `layout.close-slot` from inside the panel: orthodox `alt+x`, one of
-    // the chords the panel lets through.
-    h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
-        key: "x".to_owned(),
-        ctrl: false,
-        alt: true,
-        shift: false,
-        meta: false,
-    }))
+    // `layout.close-slot` with the panel focused, by NAME from the menu:
+    // its chord no longer reaches norte from inside (that `alt+x` is
+    // Emacs's `M-x`).
+    let (menu, row) = norte_frontend::menu::MENUS
+        .iter()
+        .enumerate()
+        .find_map(|(m, menu)| {
+            menu.items()
+                .position(|c| c == "layout.close-slot")
+                .map(|r| (m, r))
+        })
+        .expect("close-slot is in a menu");
+    h.dispatch(UiAction::MenuOpen {
+        menu: u32::try_from(menu).expect("fits"),
+    })
+    .await
+    .expect("host alive");
+    h.dispatch(UiAction::MenuActivateRow {
+        row: u32::try_from(row).expect("fits"),
+    })
     .await
     .expect("host alive");
     let ack = h

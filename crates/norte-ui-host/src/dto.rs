@@ -2346,6 +2346,10 @@ pub struct TerminalInstanceView {
     /// What its entry says: the reader's name, the program's title, or the
     /// shell profile.
     pub title: String,
+    /// The name the reader gave it, if any: what a rename starts from (the
+    /// program's title would be frozen as a name on a plain Enter).
+    #[serde(default)]
+    pub name: Option<String>,
     /// Its icon name (`terminal`, `server`…), if any.
     pub icon: Option<String>,
     /// Its colour as an ANSI index 1..=6, resolved by the theme.

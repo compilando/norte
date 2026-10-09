@@ -147,7 +147,12 @@ pub struct Shell {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     mailbox: Arc<Mutex<Mailbox>>,
     tam: (u16, u16),
+    /// When the child was first seen reaped, for [`EXIT_GRACE`].
+    reaped_at: Option<std::time::Instant>,
 }
+
+/// How long an exit waits for an end-of-file that may never come.
+const EXIT_GRACE: std::time::Duration = std::time::Duration::from_millis(500);
 
 impl Shell {
     /// Starts the shell.
@@ -200,6 +205,7 @@ impl Shell {
             child,
             mailbox,
             tam,
+            reaped_at: None,
         })
     }
 
@@ -280,24 +286,30 @@ impl Shell {
     ///
     /// The second half is what makes a kept "last screen" hold the last
     /// thing the shell said: the reader thread runs on its own, so the child
-    /// can be reaped before its final bytes reach the mailbox. Only once the
-    /// reader saw end-of-file and nothing is pending is it over. (A
-    /// background job still holding the pty keeps it "running", as in any
-    /// terminal.)
+    /// can be reaped before its final bytes reach the mailbox. So it is over
+    /// once the reader saw end-of-file with nothing pending — or, if the
+    /// end-of-file never comes, [`EXIT_GRACE`] after the child was reaped.
+    /// On Linux the hang-up of a session leader's tty brings the end-of-file
+    /// anyway; `ConPTY`'s pipe may stay open until the console closes, and
+    /// without the grace a Windows shell that left would never be seen to.
     ///
     /// A death by signal is non-zero — `portable_pty` folds it into the
-    /// code, and a test pins that rather than assuming it.
+    /// code, and a test pins that rather than assuming it. The code is the
+    /// raw 32 bits, so a Windows NTSTATUS reads as itself (negative).
     pub fn exit_code(&mut self) -> Option<i32> {
-        {
+        let (closed, drained) = {
             let b = mailbox_of(&self.mailbox);
-            if !b.closed || !b.pending.is_empty() {
-                return None;
-            }
+            (b.closed, b.pending.is_empty())
+        };
+        if !drained {
+            return None;
         }
-        match self.child.try_wait() {
-            Ok(Some(st)) => Some(i32::try_from(st.exit_code()).unwrap_or(i32::MAX)),
-            _ => None,
-        }
+        let Ok(Some(st)) = self.child.try_wait() else {
+            return None;
+        };
+        let reaped = *self.reaped_at.get_or_insert_with(std::time::Instant::now);
+        (closed || reaped.elapsed() >= EXIT_GRACE)
+            .then(|| i32::from_ne_bytes(st.exit_code().to_ne_bytes()))
     }
 
     /// The program's title since the last call; see [`Screen::take_title`].
@@ -523,6 +535,31 @@ mod tests {
                 .collect();
             assert!(row.contains("lastword"), "{row:?}");
         }
+    }
+
+    /// The shell left with a background job that ignores the hang-up: the
+    /// exit is still reported. On Linux the tty hang-up already brings the
+    /// end-of-file; the grace this pins in passing is for `ConPTY`, whose
+    /// pipe may stay open until the console closes (not reproducible here).
+    #[test]
+    fn an_exit_is_reported_even_if_the_pty_stays_open() {
+        let dir = std::env::temp_dir();
+        // The job ignores the hang-up, so it outlives the shell holding the
+        // pty — without the `trap` it dies with it and the test proves
+        // nothing.
+        let args = ["-c".into(), "(trap '' HUP; exec sleep 30) & exit 4".into()];
+        let mut sh = Shell::open(
+            &Startup {
+                program: std::path::Path::new("/bin/sh"),
+                args: &args,
+                dir: &dir,
+                tam: (40, 5),
+                env: &[],
+            },
+            |_| None,
+        )
+        .expect("a shell");
+        assert_eq!(wait_exit(&mut sh), Some(4));
     }
 
     /// A shell profile's arguments reach the program as argv.
