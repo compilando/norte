@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import { note } from "./dom";
 import type { SlotDom } from "./dom";
+import { popupMenu } from "./menus";
 
 /**
  * The terminal panel: the grid the host already emulated.
@@ -289,11 +290,11 @@ function entryMenu(
   const decorate = (icon: string | null, color: number | null): void => {
     this.send({ action: "terminal_decorate", id: i.id, icon, color });
   };
-  const entries: [string, () => void][] = [
+  const entries: [string | Node, () => void][] = [
     [this.t("menu-item-terminal-rename"), () => renameInline.call(this, i, li)],
     [this.t("terminal-color-none"), () => decorate(i.icon, null)],
-    ...[1, 2, 3, 4, 5, 6].map((c): [string, () => void] => [
-      `■ ${String(c)}`,
+    ...[1, 2, 3, 4, 5, 6].map((c): [Node, () => void] => [
+      swatch(c),
       () => decorate(i.icon, c),
     ]),
     [this.t("terminal-icon-none"), () => decorate(null, i.color)],
@@ -346,50 +347,30 @@ function renameInline(this: Screen, i: TerminalInstanceView, stale: HTMLElement)
   input.select();
 }
 
-/** A small menu at the pointer, styled like the tab menu. */
+/** A small menu at the pointer: the tabs' one, kept inside the window. */
 function popup(
   this: Screen,
   x: number,
   y: number,
-  entries: [string, () => void][],
+  entries: [string | Node, () => void][],
 ): void {
-  document.querySelector(".tab-menu")?.remove();
-  const box = document.createElement("ul");
-  box.className = "tab-menu";
-  box.setAttribute("role", "menu");
-  box.style.left = `${String(x)}px`;
-  box.style.top = `${String(y)}px`;
-  const dismiss = (): void => {
-    box.remove();
-    window.removeEventListener("pointerdown", outside, true);
-    window.removeEventListener("keydown", escape, true);
-  };
-  const outside = (e: Event): void => {
-    if (!(e.target instanceof Node) || !box.contains(e.target)) {
-      dismiss();
-    }
-  };
-  const escape = (e: KeyboardEvent): void => {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      e.preventDefault();
-      dismiss();
-    }
-  };
-  for (const [label, run] of entries) {
-    const item = document.createElement("li");
-    item.className = "tab-menu-item";
-    item.setAttribute("role", "menuitem");
-    item.textContent = label;
-    item.addEventListener("click", () => {
-      dismiss();
-      run();
-    });
-    box.append(item);
-  }
-  document.body.append(box);
-  window.addEventListener("pointerdown", outside, true);
-  window.addEventListener("keydown", escape, true);
+  popupMenu(
+    x,
+    y,
+    entries.map(([label, run]) => ({ label, run })),
+  );
+}
+
+/** A colour row: a swatch IN that colour (the theme's `--term-N`) and its
+ *  number, so the reader sees what they choose. */
+function swatch(c: number): Node {
+  const row = document.createElement("span");
+  const box = document.createElement("span");
+  box.className = "terminal-swatch";
+  box.textContent = "■";
+  box.style.color = `var(--term-${String(c)})`;
+  row.append(box, ` ${String(c)}`);
+  return row;
 }
 
 /** A row: its fragments, plus the cursor if it falls on it. */

@@ -4771,6 +4771,28 @@ describe("slots that aren't listings", () => {
     expect(sent).toContainEqual({ action: "terminal_new", profile: null });
   });
 
+  // Opened near the window's edge, the entry's menu stays inside it, and
+  // one taller than the window scrolls instead of running off the bottom.
+  it("the entry menu is kept inside the window", () => {
+    const { screen } = mount();
+    screen.paint(withShells([instance(1), instance(2)]));
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({ width: 200, height: 500 } as DOMRect);
+    vi.stubGlobal("innerWidth", 300);
+    vi.stubGlobal("innerHeight", 400);
+    const entry = document.querySelector(".terminal-entry") as HTMLElement;
+    entry.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, clientX: 280, clientY: 390 }),
+    );
+    const box = document.querySelector<HTMLElement>(".tab-menu");
+    expect(box?.style.left).toBe("100px");
+    expect(box?.style.top).toBe("0px");
+    expect(box?.style.maxHeight).toBe("400px");
+    rect.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
   it("+ starts the default shell", () => {
     const { screen, sent } = mount();
     screen.paint(withShells([instance(1)]));
