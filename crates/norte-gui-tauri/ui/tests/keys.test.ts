@@ -47,7 +47,7 @@ describe("a TEXT key", () => {
   });
 
   it("an é in NFD is TWO code points: it's not a text key", () => {
-    const nfd = keyInputOf(ev({ key: "é" }));
+    const nfd = keyInputOf(ev({ key: "e\u{301}" }));
     expect(nfd).not.toBeNull();
     expect([...(nfd?.key ?? "")].length).toBe(2);
   });

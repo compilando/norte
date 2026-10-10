@@ -195,8 +195,8 @@ describe("go to anywhere (#357)", () => {
 
   it("a row's place takes the room, and is cut only when it does not fit", () => {
     // Landing shots, 2026-10-08: "…tos/2026-01 Tromsø" in a box with room
-    // for "/home/ada/Photos/2026-01 Tromsø". The palette's id column is a
-    // fixed 22ch; here the place IS the row, so it grows.
+    // for "/home/ada/Photos/2026-01 Tromsø". No fixed-width text column:
+    // the row's text grows and the desc is the dimmed aside.
     const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
     const text = /\.goto \.palette-text\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
     expect(text).toMatch(/flex:\s*1 1 auto/);
@@ -347,6 +347,23 @@ describe("go to anywhere (#357)", () => {
     const before = sent.length;
     paste("x");
     expect(sent.length).toBe(before);
+  });
+
+  it("cancels `beforepaste` only while the box is open, so WebKit enables Paste", () => {
+    const { screen } = mount();
+    const v = view({});
+    const beforepaste = (): Event => {
+      const e = new Event("beforepaste", { bubbles: true, cancelable: true });
+      document.body.dispatchEvent(e);
+      return e;
+    };
+    expect(beforepaste().defaultPrevented).toBe(false);
+    v.goto = commandsBox();
+    screen.paint(v);
+    expect(beforepaste().defaultPrevented).toBe(true);
+    v.goto = null;
+    screen.paint(v);
+    expect(beforepaste().defaultPrevented).toBe(false);
   });
 
   it("an empty places box shows the hint", () => {

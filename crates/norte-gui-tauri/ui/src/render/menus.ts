@@ -532,6 +532,15 @@ interface PaintedGoto {
 
 const paintedGotos = new WeakMap<HTMLElement, PaintedGoto>();
 
+/**
+ * Cancelling `beforepaste` is WebKit's hook to ENABLE Paste: with nothing
+ * editable focused (the box has no `<input>`) its Paste command is disabled
+ * and Ctrl+V would never fire the `paste` the box listens for.
+ */
+function enablePaste(e: Event): void {
+  e.preventDefault();
+}
+
 function markGotoCursor(painted: PaintedGoto, cursor: number | null): void {
   painted.pointed = cursor;
   for (const [i, row] of painted.rows.entries()) {
@@ -610,6 +619,7 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
   if (goto === null) {
     if (before !== undefined) {
       before.doc.removeEventListener("paste", before.onPaste, true);
+      before.doc.removeEventListener("beforepaste", enablePaste, true);
       paintedGotos.delete(this.gotoRoot);
     }
     // Recorded as closed, so that reopening with the same shape paints.
@@ -649,6 +659,7 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
     });
   if (before === undefined) {
     doc.addEventListener("paste", onPaste, true);
+    doc.addEventListener("beforepaste", enablePaste, true);
   }
   const painted: PaintedGoto = { list: null, rows: [], pointed: cursor, doc, onPaste };
   paintedGotos.set(this.gotoRoot, painted);
