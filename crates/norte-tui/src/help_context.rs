@@ -75,7 +75,8 @@ fn modal_context(modal: &Modal) -> &'static str {
         | Modal::ConfirmPluginUninstall { .. }
         | Modal::ConfirmUndoAfter { .. }
         | Modal::ConfirmTransfer { .. } => "dialog.confirm",
-        Modal::ConfirmQuit => "dialog.quit",
+        // TODO(user-commands Task 10): its own `user-commands` topic.
+        Modal::ConfirmQuit | Modal::ConfirmUserCommand { .. } => "dialog.quit",
         Modal::Collision { .. } => "dialog.collision",
         Modal::ApproveAgentOp { .. } => "dialog.approval",
         // Granting capabilities does NOT share a page with approving an
@@ -199,6 +200,7 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         | Modal::OrganizePlan { .. }
         | Modal::ConfirmTransfer { .. }
         | Modal::ConfirmQuit
+        | Modal::ConfirmUserCommand { .. }
         | Modal::Collision { .. }
         | Modal::ApproveAgentOp { .. }
         | Modal::ConfirmPluginApproval { .. }

@@ -166,9 +166,49 @@ pub fn start_instance(
 ) -> Result<(), String> {
     // A local directory, with the same gate and phrase as `app.terminal`.
     let dir = crate::gestures::shell_cwd(app)?;
+    start_instance_in(app, profile, &dir)
+}
+
+/// Runs a user command (ADR 0177) in a new terminal-panel entry, opening the
+/// panel first if there is none. `program` is already resolved on `PATH`
+/// (absolute, as [`open`] requires). An entry whose program exits 0 goes
+/// away by itself and a failing one stays to be read (`Terminals::on_exit`).
+///
+/// # Errors
+/// This layout cannot hold a terminal panel, or the program did not start.
+pub fn start_user_command(
+    app: &mut crate::app::App,
+    launch: &norte_frontend::user_commands::Launch,
+    program: std::path::PathBuf,
+) -> Result<(), String> {
+    if app.terminal_slot().is_none() {
+        app.toggle_terminal();
+    }
+    if app.terminal_slot().is_none() {
+        return Err(norte_i18n::t("cmd-not-here"));
+    }
+    let profile = norte_frontend::shell_profiles::ShellProfile {
+        name: launch.label.clone(),
+        program,
+        args: launch.args.clone(),
+        icon: None,
+        color: None,
+    };
+    start_instance_in(app, &profile, &launch.cwd)
+}
+
+/// [`start_instance`] in `dir` rather than the focused listing's.
+///
+/// # Errors
+/// The program did not start.
+pub fn start_instance_in(
+    app: &mut crate::app::App,
+    profile: &norte_frontend::shell_profiles::ShellProfile,
+    dir: &std::path::Path,
+) -> Result<(), String> {
     // The real size is set by the paint as soon as it knows which rectangle
     // it got; this one lasts as long as the first turn takes.
-    let t = open(&dir, (80, 24), profile).map_err(|e| e.to_string())?;
+    let t = open(dir, (80, 24), profile).map_err(|e| e.to_string())?;
     // Not journalled: a shell the reader opens is the reader acting with
     // their own permissions (ADR 0084). Logged because starting one is the
     // most privileged thing a frontend does — the shell profile's NAME only:

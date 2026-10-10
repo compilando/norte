@@ -650,6 +650,15 @@ fn modal_title_text(
             t("modal-confirm-quit-title"),
             format!("{}\n{}", t("modal-confirm-quit-body"), hints.confirm),
         ),
+        // ADR 0177: `confirm_text` masks the label, the one untrusted part.
+        Modal::ConfirmUserCommand { launch } => (
+            t("user-cmd-confirm-title"),
+            format!(
+                "{}\n{}",
+                norte_frontend::user_commands::confirm_text(launch, norte_i18n::active()),
+                hints.confirm
+            ),
+        ),
         // #311: one line per file, with its checksum and — when verifying —
         // its verdict. The name goes through the usual sanitizing: a
         // checksums file names files, and a name can carry bidi inside.

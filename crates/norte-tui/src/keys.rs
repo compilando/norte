@@ -555,6 +555,11 @@ pub async fn on_key(
                         // 2026-09-10); the session saves it with the next
                         // push.
                         norte_frontend::session::note_palette_recent(&mut app.palette_recent, &cmd);
+                        // A user command row (ADR 0177): `user:<id>`.
+                        if let Some(id) = cmd.strip_prefix("user:") {
+                            crate::user_cmd::request(app, id);
+                            return;
+                        }
                         // (P1) Enter over a PLUGIN row: the `key` is
                         // `plugin:{id}:{command}` (`palette::plugin_rows`,
                         // never painted) — it does not live in `COMMANDS`,
@@ -1327,6 +1332,14 @@ pub async fn on_key(
                     // that rules.
                     if let Count::Ignored(n) = count {
                         app.message = Some(count_ignored_message(&cmd, n));
+                    }
+                    // `user:<id>` (ADR 0177): a commands.toml
+                    // entry. Not in the catalogue either, so it
+                    // runs once; an undefined id says so on the
+                    // bar.
+                    if let Some(id) = cmd.strip_prefix("user:") {
+                        crate::user_cmd::request(app, id);
+                        return;
                     }
                     // `lua:<name>` (M4): to the Lua dispatcher —
                     // never to `dispatch` (it is not a fixed

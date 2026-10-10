@@ -338,6 +338,8 @@ async fn main() -> Result<()> {
     app.terminal_chord = browse_eff.lone_chord(norte_tui::termpanel::COMMAND);
     // Declarative openers (#28): `pane.open`'s source (F4).
     app.openers = cfg.openers.clone();
+    // User commands (ADR 0177): what `user:<id>` and the box run.
+    app.user_commands = cfg.user_commands.clone();
     // `[ui] editor` (#133): norte's editor, if the config names one.
     // Without it, `$VISUAL`/`$EDITOR` rule, as usual.
     app.editor = cfg

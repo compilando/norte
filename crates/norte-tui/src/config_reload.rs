@@ -27,6 +27,32 @@ use crate::screens::pickers::apply_theme;
 use crate::screens::settings::plugin_config_summaries;
 use crate::shortcuts_editor::{Maps, build_keymaps, shortcut_rows};
 
+/// What the reloaded config says about the programs norte launches: whoever
+/// changes them in the file need not restart norte.
+fn apply_external_programs(app: &mut App, cfg: &config::LoadedConfig) {
+    // Openers (#28) and user commands (ADR 0177).
+    app.openers = cfg.openers.clone();
+    app.user_commands = cfg.user_commands.clone();
+    // The `[ui] editor` editor.
+    app.editor = cfg
+        .common
+        .ui_editor
+        .clone()
+        .map(|command| crate::app::EditorSpec {
+            command,
+            detached: cfg.common.ui_editor_detached.unwrap_or(false),
+        });
+    // The `[ui] diff` comparator (#312).
+    app.diff = cfg
+        .common
+        .ui_diff
+        .clone()
+        .map(|command| crate::app::EditorSpec {
+            command,
+            detached: cfg.common.ui_diff_detached.unwrap_or(false),
+        });
+}
+
 /// Hot-reload (ADR 0007): rereads ALL layers; on ANY error the current config
 /// is kept and a warning goes on the bar — never break a running session over
 /// a half-saved TOML.
@@ -103,27 +129,7 @@ pub async fn reload_config(
                 // The `..` row, also hot: it is presentation, and the pane
                 // adds or removes it without touching the listing.
                 app.set_parent_row(cfg.common.ui_parent_entry.unwrap_or(true));
-                // Openers (#28): reloaded with the rest of the config.
-                app.openers = cfg.openers.clone();
-                // And the `[ui] editor` editor, for the same reason: whoever
-                // changes it in the file need not restart norte.
-                app.editor = cfg
-                    .common
-                    .ui_editor
-                    .clone()
-                    .map(|command| crate::app::EditorSpec {
-                        command,
-                        detached: cfg.common.ui_editor_detached.unwrap_or(false),
-                    });
-                // And the `[ui] diff` comparator (#312), for the same reason.
-                app.diff = cfg
-                    .common
-                    .ui_diff
-                    .clone()
-                    .map(|command| crate::app::EditorSpec {
-                        command,
-                        detached: cfg.common.ui_diff_detached.unwrap_or(false),
-                    });
+                apply_external_programs(app, &cfg);
                 // #108 7a: `[ui.columns]` edited externally also refreshes
                 // the session (it used to only apply at startup); the re-sort
                 // keeps the panes consistent with the file — the picker's

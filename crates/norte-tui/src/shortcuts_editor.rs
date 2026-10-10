@@ -60,20 +60,25 @@ impl Maps<'_> {
 /// dry run runs the real loader, so it needs the real set — the narrower "what
 /// may be bound here" question is `bindable_commands` (privada)'s.
 ///
-/// Carries [`norte_frontend::keymap::LUA_HOST`] on every screen: this frontend
-/// runs `lua:` bindings, and without the marker they would resolve as not
-/// available here (ADR 0110).
+/// Carries [`norte_frontend::keymap::LUA_HOST`] and
+/// [`norte_frontend::keymap::USER_HOST`] on every screen: this frontend runs
+/// `lua:` bindings (ADR 0110) and `user:` ones (ADR 0177), and without the
+/// markers they would resolve as not available here.
 #[must_use]
 pub fn known_commands(screen: Screen) -> Vec<&'static str> {
-    let lua = std::iter::once(norte_frontend::keymap::LUA_HOST);
+    let hosts = [
+        norte_frontend::keymap::LUA_HOST,
+        norte_frontend::keymap::USER_HOST,
+    ]
+    .into_iter();
     match screen {
         Screen::Dialog => COMMANDS
             .iter()
             .copied()
             .chain(DIALOG_COMMANDS.iter().copied())
-            .chain(lua)
+            .chain(hosts)
             .collect(),
-        Screen::Browse | Screen::Viewer => COMMANDS.iter().copied().chain(lua).collect(),
+        Screen::Browse | Screen::Viewer => COMMANDS.iter().copied().chain(hosts).collect(),
     }
 }
 
