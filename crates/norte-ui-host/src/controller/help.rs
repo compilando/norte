@@ -218,6 +218,9 @@ impl State {
                     // Undoing up to a point is an accepted consequence: the
                     // same page as in the TUI.
                     | Pending::UndoUntil { .. }
+                    // A user command's `confirm = true` (ADR 0177): the
+                    // same yes/no before something runs.
+                    | Pending::UserCommand { .. }
                     | Pending::Exit,
                 ) => "dialog.confirm",
                 Some(

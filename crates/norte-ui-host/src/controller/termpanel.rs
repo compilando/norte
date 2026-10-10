@@ -193,7 +193,8 @@ impl State {
             return Vec::new();
         }
         let profile = self.config.shell_profiles.default_profile().clone();
-        match self.spawn_instance(&profile, mailbox) {
+        let dir = self.slot().pane.dir().clone();
+        match self.spawn_instance(&profile, &dir, mailbox) {
             Ok(()) => self.republicar_terminal(),
             Err(outgoing) => outgoing,
         }
@@ -232,7 +233,8 @@ impl State {
             // problem, not the panel.
             return rejected();
         };
-        match self.spawn_instance(&profile, mailbox) {
+        let dir = self.slot().pane.dir().clone();
+        match self.spawn_instance(&profile, &dir, mailbox) {
             Ok(()) => (self.applied(), self.republicar_terminal()),
             Err(outgoing) => (
                 ActionAck::Unavailable {
@@ -243,12 +245,59 @@ impl State {
         }
     }
 
-    /// Starts `profile`'s shell in the pane's directory and puts it in
-    /// front. On failure nothing is added, and the reader is TOLD: an empty
-    /// panel with no reason is what makes a panel distrusted.
+    /// Runs a user command (ADR 0177) as a new terminal-panel entry in its
+    /// cwd, opening the panel first if there is none. `program` is already
+    /// resolved on `PATH`. An entry whose program exits 0 goes away by itself
+    /// and a failing one stays to be read, like the TUI's.
+    pub(super) fn start_user_terminal(
+        &mut self,
+        launch: &norte_frontend::user_commands::Launch,
+        program: std::path::PathBuf,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (Result<(), &'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Ok(cwd) = norte_vfs::native::vpath_from_native(&launch.cwd) else {
+            return (Err("user-cmd-remote"), self.say("user-cmd-remote"));
+        };
+        let mut out = Vec::new();
+        if self.slot_of_kind(KIND).is_none() {
+            let (_, opened) = self.open_terminal_panel(backend, mailbox);
+            out.extend(opened);
+        }
+        if self.slot_of_kind(KIND).is_none() {
+            // This layout cannot hold the panel (or the pane is remote and
+            // opening it already said so).
+            if out.is_empty() {
+                out.extend(self.say("cmd-not-here"));
+            }
+            return (Err("cmd-not-here"), out);
+        }
+        let profile = ShellProfile {
+            name: launch.label.clone(),
+            program,
+            args: launch.args.clone(),
+            icon: None,
+            color: None,
+        };
+        match self.spawn_instance(&profile, &cwd, mailbox) {
+            Ok(()) => {
+                out.extend(self.republicar_terminal());
+                (Ok(()), out)
+            }
+            Err(said) => {
+                out.extend(said);
+                (Err("host-shell-failed"), out)
+            }
+        }
+    }
+
+    /// Starts `profile`'s program in `dir` and puts it in front. On failure
+    /// nothing is added, and the reader is TOLD: an empty panel with no
+    /// reason is what makes a panel distrusted.
     fn spawn_instance(
         &mut self,
         profile: &ShellProfile,
+        dir: &norte_proto::VPath,
         mailbox: &mpsc::Sender<Message>,
     ) -> Result<(), Vec<BridgeEnvelope<UiUpdate>>> {
         // The read-only rule for this panel, in ONE place: a read-only window
@@ -257,8 +306,7 @@ impl State {
         if self.effects == crate::commands::Effects::SoloRead {
             return Err(Self::no_mutates().1);
         }
-        let dir = self.slot().pane.dir().clone();
-        match start(&dir, profile) {
+        match start(dir, profile) {
             Ok(shell) => {
                 // Not journalled: a shell the reader opens is the reader
                 // acting with their own permissions (ADR 0084). Logged

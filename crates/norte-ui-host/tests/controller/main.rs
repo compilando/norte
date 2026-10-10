@@ -50,6 +50,7 @@ mod terminals;
 mod timeline;
 mod transfers;
 mod usability;
+mod user_commands;
 mod viewer;
 
 use attributes_processes::*;

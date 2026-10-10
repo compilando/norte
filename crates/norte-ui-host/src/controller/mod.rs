@@ -76,6 +76,7 @@ mod termpanel;
 mod timeline;
 mod transfer;
 mod tree;
+mod user_commands;
 mod viewer;
 mod views;
 mod wizard;
@@ -2279,6 +2280,13 @@ enum Pending {
     QuerySemantic,
     /// CLOSE the window, already confirmed (`[ui] confirm_quit`).
     Exit,
+    /// Run a user command whose `confirm = true` was just answered (ADR
+    /// 0177). The launch was expanded when asked: the answer runs what the
+    /// question showed, not a re-read of the marks.
+    UserCommand {
+        /// What runs.
+        launch: norte_frontend::user_commands::Launch,
+    },
     /// Hand over a connection's secret and RETRY the navigation that
     /// `Error::SecretNeeded` interrupted (#325/#327).
     ///
@@ -4173,6 +4181,11 @@ impl State {
                 truncated,
                 failed,
             } => self.program_finished(title_key, command, output, *truncated, *failed),
+            UiAction::UserCommandFinished {
+                label,
+                finished,
+                refresh,
+            } => self.user_command_finished(label, finished, *refresh, backend, mailbox),
             UiAction::FilesDropped { paths } => self.released(paths, backend, mailbox),
             UiAction::TerminalSelect { id } => self.select_terminal(*id),
             UiAction::TerminalClose { id } => self.close_terminal(Some(*id)),

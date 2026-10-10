@@ -207,7 +207,10 @@ pub fn execute(effect: &NativeEffect) -> RunOutcome {
         NativeEffect::RunProgram { .. }
         | NativeEffect::PickDirectory { .. }
         | NativeEffect::ThemeChanged { .. }
-        | NativeEffect::CloseWindow => RunOutcome::NoProgram,
+        | NativeEffect::CloseWindow
+        // A user command's background run (ADR 0177): `pump` runs it (Task
+        // 9); reached only by a hand call.
+        | NativeEffect::RunUserCommand { .. } => RunOutcome::NoProgram,
     }
 }
 

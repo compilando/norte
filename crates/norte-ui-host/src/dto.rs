@@ -4326,6 +4326,15 @@ pub enum NativeEffect {
         /// `true` = launch and forget; `false` = wait and capture.
         detached: bool,
     },
+    /// Runs a user command in the BACKGROUND (ADR 0177) with
+    /// `norte_frontend::user_commands::run_background` and answers with
+    /// `UiAction::UserCommandFinished`. The launch is already expanded;
+    /// whoever hosts it decides nothing itself (`run_background` finds the
+    /// program on `PATH`).
+    RunUserCommand {
+        /// What to run, where, and how to report it.
+        launch: norte_frontend::user_commands::Launch,
+    },
     /// Opens a terminal sitting in THIS directory.
     OpenTerminal {
         /// Where it sits.

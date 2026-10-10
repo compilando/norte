@@ -362,6 +362,17 @@ pub enum UiAction {
         /// It did not start, or it ran past the deadline.
         failed: bool,
     },
+    /// A user command run in the background (`NativeEffect::RunUserCommand`,
+    /// ADR 0177) ended. Native-only, like `ProgramFinished`: the shell that
+    /// ran it sends it, never the renderer. The host masks what it says.
+    UserCommandFinished {
+        /// The command's label, as it travelled in the launch.
+        label: String,
+        /// How it ended.
+        finished: norte_frontend::user_commands::Finished,
+        /// The command asked for the panes to be re-listed when it ran.
+        refresh: bool,
+    },
     /// The reader DROPPED files from the desktop onto the window (#283).
     ///
     /// Inbound only: dragging OUT is not offered, because that is

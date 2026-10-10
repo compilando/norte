@@ -138,6 +138,14 @@ impl State {
                     ("n", &warnings.to_string()),
                 ],
             )));
+        } else if let Some(notice) = crate::keys::undefined_user_commands_notice(
+            &self.effective,
+            &self.config.user_commands,
+            self.lang,
+        ) {
+            // Keys the new keymap binds to `user:<id>` ids commands.toml does
+            // not define (ADR 0177): a key that will only say "not defined".
+            self.status.message = Some(clamp_display(notice));
         } else if out.is_empty() {
             self.status.message = Some(clamp_display(norte_i18n::ta_in(
                 self.lang,

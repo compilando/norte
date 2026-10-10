@@ -546,6 +546,7 @@ fn startup_notice(
     lang: Lang,
     lua_discarded: usize,
     profile: Option<&std::ffi::OsStr>,
+    user_undefined: Option<String>,
 ) -> Option<String> {
     let mut msg = None;
     if !cfg.common.project_warnings.is_empty() {
@@ -580,6 +581,11 @@ fn startup_notice(
                 ("n", &cfg.common.profile_warnings.len().to_string()),
             ],
         ));
+    }
+    // Keys bound to `user:<id>` ids commands.toml does not define (ADR
+    // 0177), below Lua's like in the terminal.
+    if user_undefined.is_some() {
+        msg = user_undefined;
     }
     if lua_discarded > 0 {
         msg = Some(norte_i18n::ta_in(
@@ -851,6 +857,9 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         .discarded_lua_bindings()
         .max(keymap_viewer.discarded_lua_bindings())
         .max(keymap_dialog.discarded_lua_bindings());
+    // Read BEFORE the keymap moves into the host, like the Lua count.
+    let user_undefined =
+        norte_ui_host::keys::undefined_user_commands_notice(&keymap, &cfg.user_commands, lang);
 
     // From the command line it is required to exist; from the CONFIGURATION
     // it falls back to the usual one, which is what the user had before
@@ -936,8 +945,15 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // ignored layer, and this one warns that the screen being looked at is
     // not the one requested — which is what the reader cannot work out on
     // their own.
-    snapshot.status.message = notice_layout
-        .or_else(|| startup_notice(&cfg, lang, layers_lua_discarded, cli.profile.as_deref()));
+    snapshot.status.message = notice_layout.or_else(|| {
+        startup_notice(
+            &cfg,
+            lang,
+            layers_lua_discarded,
+            cli.profile.as_deref(),
+            user_undefined,
+        )
+    });
     // The first-run wizard (spec 2026-09-10): without a user `norte.toml` and
     // without `NORTE_NO_WIZARD`, as in the terminal. A `stat`, outside the UI
     // thread (rule 2).

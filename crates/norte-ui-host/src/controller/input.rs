@@ -444,6 +444,14 @@ impl State {
         match self.resolver.push(chord) {
             Resolution::Run { command, count } => {
                 let times = count.times();
+                // `user:<id>` (ADR 0177): commands.toml's, not the
+                // catalogue's, so it runs once whatever the count; an id it
+                // does not define says so on the bar.
+                if let Some(id) = command.strip_prefix("user:") {
+                    self.status.pending = None;
+                    self.whichkey = None;
+                    return self.run_user_command(id, backend, mailbox);
+                }
                 let Some(effect) = effect_of(&command, times) else {
                     // In the catalogue, bound, and this host does not do it.
                     // Said with the SAME phrase as the TUI.

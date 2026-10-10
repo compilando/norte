@@ -16,7 +16,7 @@ use super::*;
 use norte_frontend::goto::{
     Action, BROUGHT_BY_LIST, FixedSource, Goto, GotoLine, GotoRow, GotoSource, INDEX_CAP, Mode,
     PathSource, SECTION_COMMANDS, SECTION_CONNECTIONS, SECTION_FAVORITES, SECTION_HELP,
-    SECTION_HISTORY, SECTION_INDEX, SECTION_POPULAR,
+    SECTION_HISTORY, SECTION_INDEX, SECTION_POPULAR, SECTION_USER,
 };
 
 impl State {
@@ -136,6 +136,20 @@ impl State {
         let commands =
             norte_frontend::goto::command_rows(self.palette_rows(), Some(&self.facts()), self.lang);
         out.push(Box::new(FixedSource::new(SECTION_COMMANDS, commands)));
+        // The user's own commands (ADR 0177); the model lists them under `>`
+        // only. A read-only window starts no program, so it offers none.
+        if self.effects == crate::commands::Effects::Full {
+            let cmds = &self.config.user_commands;
+            out.push(Box::new(FixedSource::new(
+                SECTION_USER,
+                norte_frontend::goto::user_command_rows(
+                    cmds,
+                    &norte_frontend::goto::user_command_chords(cmds, &self.effective),
+                    norte_frontend::shell::is_local(slot.pane.dir()),
+                    self.lang,
+                ),
+            )));
+        }
         out.push(Box::new(FixedSource::new(
             SECTION_HELP,
             norte_frontend::goto::help_rows(self.lang),
@@ -292,6 +306,18 @@ impl State {
             "Home" | "home" => g.home(),
             "End" | "end" => g.end(),
             "F1" | "f1" => {
+                // A user command has no help page: F1 says what it does (or
+                // why not), and the box stays.
+                let note = g.selected().and_then(|r| {
+                    norte_frontend::goto::user_command_f1(
+                        &r.key,
+                        &self.config.user_commands,
+                        self.lang,
+                    )
+                });
+                if let Some(text) = note {
+                    return (self.applied(), self.say_text(text));
+                }
                 let topic = g
                     .selected()
                     .and_then(|r| norte_frontend::goto::help_topic(&r.key, self.lang))
