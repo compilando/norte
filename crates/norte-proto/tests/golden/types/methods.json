@@ -624,6 +624,7 @@
       "dir"
     ],
     "max_hits": 100,
+    "max_matches_per_file": 51,
     "max_size": 1048576,
     "min_size": 1024,
     "mtime_after": 1700000000000,
@@ -1482,6 +1483,21 @@
     "id": 7
   },
   "search_hits": {
+    "all_matches": [
+      [
+        {
+          "line": 3,
+          "offset": 41,
+          "preview": "hay un año aquí",
+          "ranges": [
+            [
+              7,
+              10
+            ]
+          ]
+        }
+      ]
+    ],
     "entries": [
       {
         "kind": "file",
@@ -1502,6 +1518,9 @@
           ]
         ]
       }
+    ],
+    "more": [
+      0
     ],
     "task_id": 7
   },

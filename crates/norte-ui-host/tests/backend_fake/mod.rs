@@ -1077,6 +1077,8 @@ impl HostBackend for Fake {
                             task_id: id,
                             entries,
                             matches: None,
+                            all_matches: None,
+                            more: None,
                         })
                         .await;
                 }

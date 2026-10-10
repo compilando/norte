@@ -502,6 +502,9 @@ pub struct SearchMatchers {
     /// The encoding to read content with, if the reader forced one
     /// (0.81.0). `None` = whatever each file's detection says.
     encoding: Option<&'static Encoding>,
+    /// Matching lines per file the request asked for, already clamped
+    /// (0.86.0). `None` = the first one only, and stop there.
+    per_file: Option<usize>,
 }
 
 /// What is asked of an entry IN ADDITION to matching by name or content
@@ -701,6 +704,9 @@ impl SearchMatchers {
             excluded_dir_names,
             recursive: params.recursive,
             encoding,
+            per_file: params
+                .max_matches_per_file
+                .map(|n| n.clamp(1, norte_proto::methods::SEARCH_MATCHES_PER_FILE_MAX) as usize),
         })
     }
 
@@ -728,45 +734,59 @@ impl SearchMatchers {
     }
 
     /// How many matching lines per file the scan keeps (0.86.0).
-    #[expect(
-        clippy::unused_self,
-        reason = "one line per file until the request can ask for more"
-    )]
     fn want(&self) -> Want {
-        Want {
-            keep: 1,
-            count_more: false,
-        }
+        self.per_file.map_or(
+            Want {
+                keep: 1,
+                count_more: false,
+            },
+            |keep| Want {
+                keep,
+                count_more: true,
+            },
+        )
     }
 }
 
 /// Batch of hits under construction; `matches` is only populated for
-/// content searches (aligned 1:1 with `entries`).
+/// content searches (aligned 1:1 with `entries`), and `all`/`more` only
+/// when the search asked for several lines per file.
 struct Batch {
     task_id: TaskId,
     content: bool,
+    per_file: bool,
     entries: Vec<Entry>,
     matches: Vec<MatchInfo>,
+    all: Vec<Vec<MatchInfo>>,
+    more: Vec<u32>,
 }
 
 impl Batch {
-    fn new(task_id: TaskId, content: bool) -> Self {
+    fn new(task_id: TaskId, content: bool, per_file: bool) -> Self {
         Self {
             task_id,
             content,
+            per_file,
             entries: Vec::new(),
             matches: Vec::new(),
+            all: Vec::new(),
+            more: Vec::new(),
         }
     }
 
     fn push(&mut self, entry: Entry, found: Option<FileMatches>) {
         self.entries.push(entry);
         if self.content {
-            self.matches.push(
-                found
-                    .and_then(|f| f.lines.into_iter().next())
-                    .unwrap_or_default(),
-            );
+            let found = found.unwrap_or_default();
+            if self.per_file {
+                self.matches
+                    .push(found.lines.first().cloned().unwrap_or_default());
+                self.all.push(found.lines);
+                self.more.push(found.more);
+            } else {
+                self.matches
+                    .push(found.lines.into_iter().next().unwrap_or_default());
+            }
         }
     }
 
@@ -788,6 +808,8 @@ impl Batch {
             } else {
                 None
             },
+            all_matches: (self.content && self.per_file).then(|| std::mem::take(&mut self.all)),
+            more: (self.content && self.per_file).then(|| std::mem::take(&mut self.more)),
         }
     }
 }
@@ -880,7 +902,7 @@ pub async fn run_walk(
     }
     let task_id = ctx.progress.snapshot().task_id;
     let content_search = matchers.searches_content();
-    let mut batch = Batch::new(task_id, content_search);
+    let mut batch = Batch::new(task_id, content_search, matchers.per_file.is_some());
     let mut last_flush = Instant::now();
     // In the past, so the first entry is shown.
     let mut last_current = Instant::now()
@@ -1228,6 +1250,10 @@ impl Cursor {
 /// Files every matching LINE `want` asks for (0.86.0): several hits on one
 /// line are that one line, and a hit already seen in the retained tail is
 /// not filed twice.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scan loop: the cursor, the open line and the tail are shared state"
+)]
 async fn scan_bytes(
     needle: &ContentNeedle,
     enc: &'static Encoding,
@@ -1272,7 +1298,13 @@ async fn scan_bytes(
         // Positions are in `tail ++ c`, which is only materialised on a hit
         // or while a filed line is still open (#391: copying every chunk
         // into it doubled the bytes touched).
-        if open_line || first_hit(&finders, &tail, &c, keep).is_some() {
+        // A filed line still open with no `\n` in the new bytes (a giant
+        // single-line file): every hit here is on it, so nothing to search.
+        let inside_open_line = open_line && memchr::memchr(b'\n', &c).is_none();
+        if inside_open_line {
+            resume = end;
+        }
+        if !inside_open_line && (open_line || first_hit(&finders, &tail, &c, keep).is_some()) {
             let mut buf = std::mem::take(&mut tail);
             buf.extend_from_slice(&c);
             if open_line {
@@ -1287,14 +1319,27 @@ async fn scan_bytes(
                     None => resume = end,
                 }
             }
-            let mut hits: Vec<(usize, usize)> = finders
-                .iter()
-                .flat_map(|f| {
-                    let n = f.needle().len();
-                    f.find_iter(&buf).map(move |p| (p, n))
-                })
-                .collect();
-            hits.sort_unstable();
+            let hits: Vec<(usize, usize)> = if want.count_more {
+                let mut all: Vec<(usize, usize)> = finders
+                    .iter()
+                    .flat_map(|f| {
+                        let n = f.needle().len();
+                        f.find_iter(&buf).map(move |p| (p, n))
+                    })
+                    .collect();
+                all.sort_unstable();
+                all
+            } else {
+                // Stopping at the first hit: nothing was filed before, so
+                // the earliest hit is the one, and the rest of the buffer
+                // is never searched (#391).
+                finders
+                    .iter()
+                    .filter_map(|f| f.find(&buf).map(|p| (p, f.needle().len())))
+                    .min()
+                    .into_iter()
+                    .collect()
+            };
             for (p, n) in hits {
                 let abs = base + p as u64;
                 if abs < resume || abs + n as u64 <= searched_to {
@@ -1711,6 +1756,92 @@ mod tests {
             .expect("walk complete");
         drop(ctx);
         h.await.expect("collector")
+    }
+
+    /// A tree of named files with bodies, walked with `p`; every batch.
+    async fn batches(files: &[(&str, &[u8])], p: FsSearchParams) -> Vec<SearchHits> {
+        let mem = Arc::new(MemProvider::new());
+        mem.mkdir(&vp("mem:///t")).await.expect("mkdir");
+        for (name, body) in files {
+            let mut sink = mem
+                .write(&vp(&format!("mem:///t/{name}")))
+                .await
+                .expect("write");
+            sink.write(bytes::Bytes::copy_from_slice(body))
+                .await
+                .expect("chunk");
+            sink.commit().await.expect("commit");
+        }
+        let matchers = SearchMatchers::compile(&p).expect("criteria");
+        let (tx, mut rx) = mpsc::channel::<SearchHits>(64);
+        let ctx = test_ctx();
+        let provider: Arc<dyn Provider> = mem;
+        let h = tokio::spawn(async move {
+            let mut out = Vec::new();
+            while let Some(b) = rx.recv().await {
+                out.push(b);
+            }
+            out
+        });
+        run_walk(provider, vp("mem:///t"), matchers, Vec::new(), tx, &ctx)
+            .await
+            .expect("walk");
+        drop(ctx);
+        h.await.expect("collector")
+    }
+
+    fn content_in_t(needle: &str, per_file: Option<u32>) -> FsSearchParams {
+        FsSearchParams {
+            content: Some(needle.to_owned()),
+            max_matches_per_file: per_file,
+            ..FsSearchParams::new(vp("mem:///t"))
+        }
+    }
+
+    /// Asked for two lines per file: two kept, the third counted, and the
+    /// 0.85 `matches` still carries the FIRST so an old reader is unchanged.
+    #[tokio::test]
+    async fn per_file_cap_keeps_and_counts() {
+        let b = batches(
+            &[("a.txt", b"x\naguja 1\naguja 2\naguja 3\n")],
+            content_in_t("aguja", Some(2)),
+        )
+        .await;
+        let b = &b[0];
+        let all = b.all_matches.as_ref().expect("asked for");
+        assert_eq!(
+            all[0].iter().map(|m| m.line).collect::<Vec<_>>(),
+            vec![Some(2), Some(3)]
+        );
+        assert_eq!(b.more.as_deref(), Some(&[1][..]));
+        assert_eq!(b.matches.as_ref().expect("content")[0].line, Some(2));
+    }
+
+    /// Not asked: the batch is 0.85's shape — no `all_matches`, no `more`.
+    #[tokio::test]
+    async fn without_the_field_the_batch_keeps_its_old_shape() {
+        let b = batches(&[("a.txt", b"aguja\naguja\n")], content_in_t("aguja", None)).await;
+        assert_eq!(
+            (b[0].all_matches.is_none(), b[0].more.is_none()),
+            (true, true)
+        );
+    }
+
+    /// The daemon clamps what it is asked: 0 means one, and nobody gets
+    /// more than the protocol's ceiling.
+    #[test]
+    fn the_per_file_request_is_clamped() {
+        let at = |n| {
+            SearchMatchers::compile(&content_in_t("x", Some(n)))
+                .expect("criteria")
+                .want()
+                .keep
+        };
+        assert_eq!(at(0), 1);
+        assert_eq!(
+            at(5000),
+            norte_proto::methods::SEARCH_MATCHES_PER_FILE_MAX as usize
+        );
     }
 
     /// Excluding a folder NAME skips it at any level, and only stops the
@@ -2360,6 +2491,26 @@ mod tests {
         assert!(!p.contains('…'));
     }
 
+    /// A file that is one giant line, cut in many chunks, while counting:
+    /// the filed line stays open across all of them and a later line is
+    /// still found with the right number.
+    #[test]
+    fn a_giant_single_line_file_is_counted_right() {
+        let n = ContentNeedle::literal("año", true);
+        let mut body = "año ".to_owned();
+        body.push_str(&"x".repeat(5000));
+        body.push_str(" año\naño\n");
+        let cuts: Vec<usize> = (1..20).map(|i| i * 300).collect();
+        let f = scan_cut_with(&n, body.as_bytes(), &cuts, None, ALL);
+        assert_eq!(
+            f.lines.iter().map(|m| m.line).collect::<Vec<_>>(),
+            vec![Some(1), Some(2)]
+        );
+        assert_eq!(f.more, 0);
+    }
+
+    /// Counting does not make a scan miss cancellation: with the token
+    /// already cancelled, a file read on past its first line is `Cancelled`.
     #[test]
     fn counting_the_rest_of_a_file_still_honours_cancellation() {
         let n = ContentNeedle::literal("a", true);
@@ -2383,8 +2534,8 @@ mod tests {
     }
 
     proptest::proptest! {
-        /// Every matching line, its offset and its ranges are the same
-        /// whatever the chunk cuts — a short needle repeated across a seam
+        /// Every matching line, its line number and its offset are the same
+        /// whatever the chunk cuts (the ranges are not compared) — a short needle repeated across a seam
         /// is neither counted twice nor lost.
         #[test]
         fn all_matches_do_not_depend_on_where_chunks_are_cut(

@@ -1454,6 +1454,15 @@ fn a_085_match_info_reads_without_offset_or_ranges() {
     assert_eq!((m.offset, m.ranges), (None, None));
 }
 
+/// A 0.85 batch — no `all_matches`, no `more` — still reads, with both
+/// absent.
+#[test]
+fn a_085_search_hits_reads_without_all_matches_or_more() {
+    let h: norte_proto::methods::SearchHits =
+        serde_json::from_str(r#"{"task_id":7,"entries":[],"matches":[]}"#).expect("0.85 shape");
+    assert_eq!((h.all_matches, h.more), (None, None));
+}
+
 #[test]
 fn connection_degraded_roundtrip_and_omitted_detail() {
     use norte_proto::methods::ConnectionDegraded;

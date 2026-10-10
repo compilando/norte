@@ -3741,6 +3741,7 @@ fn check_methods_search(fixtures: &BTreeMap<String, Value>) {
             whole_word: true,
             recursive: false,
             encoding: Some("windows-1252".to_owned()),
+            max_matches_per_file: Some(51),
             ..FsSearchParams::new(vpath("file:///home/user"))
         },
     );
@@ -3770,6 +3771,13 @@ fn check_methods_search(fixtures: &BTreeMap<String, Value>) {
                 offset: Some(41),
                 ranges: Some(vec![(7, 10)]),
             }]),
+            all_matches: Some(vec![vec![MatchInfo {
+                line: Some(3),
+                preview: Some("hay un año aquí".to_owned()),
+                offset: Some(41),
+                ranges: Some(vec![(7, 10)]),
+            }]]),
+            more: Some(vec![0]),
         },
     );
     check_one(
