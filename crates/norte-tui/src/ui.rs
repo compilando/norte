@@ -72,8 +72,8 @@ use modals::draw_modal;
 pub(crate) use modals::report_text;
 pub use modals::{ModalZone, modal_zones};
 use overlays::{
-    EXTENSIONS_WIDE_MIN, draw_extensions, draw_goto, draw_palette, draw_plugin_config_panel,
-    draw_settings, draw_splash, draw_wizard,
+    EXTENSIONS_WIDE_MIN, draw_extensions, draw_goto, draw_plugin_config_panel, draw_settings,
+    draw_splash, draw_wizard,
 };
 use pane::draw_pane;
 use panels::{
@@ -509,15 +509,12 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
             &app.theme,
         );
     }
-    if let Some(palette) = &app.palette {
-        draw_palette(frame, palette, &app.theme);
-    }
-    // "Go anywhere" (phase 6) goes with the palette, which is its sibling:
-    // over the listing, under the wizard and a modal.
+    // The search box (places and commands): over the listing, under the
+    // wizard and a modal.
     if let Some(goto) = &app.goto {
         draw_goto(frame, goto, &app.theme);
     }
-    // The first-run wizard (spec 2026-09-10): over the palette and the
+    // The first-run wizard (spec 2026-09-10): over the search box and the
     // settings, under a modal, like the rest of the overlays that are not a
     // security question.
     // The splash screen goes UNDER the wizard and over everything else: if
@@ -636,7 +633,6 @@ pub fn something_above_the_viewer(app: &App) -> bool {
         || app.extensions.is_some()
         || app.nav_popup.is_some()
         || app.search_dialog.is_some()
-        || app.palette.is_some()
         || app.goto.is_some()
         || app.splash.is_some()
         || app.wizard.is_some()

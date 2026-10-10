@@ -14,7 +14,7 @@
 //! from underneath here.
 
 use crate::app::{
-    App, ExtensionManager, Modal, NavPopupKind, Palette, Settings, Trail, TrailStep, TransferKind,
+    App, ExtensionManager, Modal, NavPopupKind, Settings, Trail, TrailStep, TransferKind,
     error_message,
 };
 use crate::config;
@@ -1024,60 +1024,11 @@ pub async fn dispatch(
             }
             Err(e) => app.message = Some(error_message(&e)),
         },
-        // Ctrl+P / vim `:` (H1 T4, spec-promised): opens the palette over the
-        // PRECOMPUTED snapshot (`App::palette_rows`, `main::build_keymaps`
-        // + hot-reload) — it never recomputes the effective keymap here.
-        // Choosing `app.palette` FROM the palette (the run loop closes it
-        // BEFORE dispatching, `enter`) is an observable no-op: it closes and
-        // reopens empty — harmless, no state recursion.
-        //
-        // (P1) it is now ASYNC, like `app.extensions` above: the plugin rows
-        // need `backend.plugins_list().await` (approved + activated,
-        // `palette::plugin_rows`). Unlike `app.extensions` (which does NOT
-        // open the manager if the fetch fails), the built-ins must ALWAYS be
-        // dispatchable — a downed daemon must not bring down the whole
-        // palette, only degrade it (no plugin rows + a notice), same
-        // principle as "a listing error does not bring down the TUI" as the
-        // rest of `dispatch`.
+        // Ctrl+P / vim `:` and Ctrl+G: the same box, on commands or places.
         Command::AppPalette => {
-            // MINOR-6 (H1 close): Ctrl+P/`:` live in `[global]`, merged into
-            // BOTH effective keymaps — the palette can also be opened from
-            // the viewer, not only from browse (`rows_for_context` doc).
-            let mut rows =
-                crate::palette::rows_for_context(&app.palette_rows, app.viewer.is_some());
-            match backend.plugins_list().await {
-                Ok(list) => {
-                    // (P1 encoding audit F1) INGEST: same clamp as the
-                    // `app.extensions` arm — a single entry point, same cap.
-                    let mut plugins = list.plugins;
-                    crate::app::clamp_plugin_descriptions(&mut plugins);
-                    // Same catalogue, same panel declaration as in the
-                    // manager's arm (phase 3).
-                    app.kinds.insert_panels(&plugins);
-                    rows.extend(crate::palette::plugin_rows(&plugins));
-                }
-                Err(e) => app.message = Some(error_message(&e)),
-            }
-            app.palette = Some(Palette::with_recent(rows, &app.palette_recent));
+            open_omnibox(app, backend, norte_frontend::goto::PREFIX_COMMANDS).await;
         }
-        // "Go to anywhere" (phase 6). The connections are read HERE, the
-        // same way `pane.connect` reads them, and for the same reason:
-        // touching disk belongs to the run loop, not the model. If they
-        // cannot be read, it opens all the same with one fewer section — the
-        // screen that joins six lists does not fall over because one is
-        // missing, and saying so in the bar would cover up what the reader
-        // came to do.
-        Command::AppGoto => {
-            let dir = norte_core::connect::config_dir();
-            // Only the ones that lead somewhere, HERE: "go to anywhere" is a
-            // list of destinations, and an unusable entry is not one. The
-            // place that says what is wrong with it is the connections
-            // picker (#365), which is where the reader goes to fix it.
-            let (connections, _unusable) = norte_core::connect::named_connections(&dir)
-                .await
-                .unwrap_or_default();
-            crate::goto::open(app, &connections);
-        }
+        Command::AppGoto => open_omnibox(app, backend, "").await,
         // `F11` (S3): settings overlay — the rows are born from the CURRENT
         // `cfg` (same criterion as `help_lines`/`app.palette_rows`: rebuilt
         // on open, never a carried-over copy). Plugins section (G3c): a
@@ -1159,6 +1110,56 @@ pub async fn dispatch(
           // no arm is a COMPILE error, not a runtime panic.
     }
     cd_outcome
+}
+
+/// `app.palette` (`query` = `>`) and `app.goto` (`query` = `""`): one box.
+///
+/// Already open, the chord only switches the mode in place: nothing is read
+/// again, the reader keeps the rows they were looking at. Opening it reads
+/// the two lists that live outside `App`, and neither failing keeps it
+/// closed.
+async fn open_omnibox(app: &mut App, backend: &Backend, query: &str) {
+    if app.goto.is_some() {
+        crate::goto::open(app, &[], &[], query);
+        return;
+    }
+    // The connections are read HERE, the same way `pane.connect` reads them,
+    // and for the same reason: touching disk belongs to the run loop, not
+    // the model. If they cannot be read, it opens all the same with one
+    // fewer section — the screen that joins six lists does not fall over
+    // because one is missing, and saying so in the bar would cover up what
+    // the reader came to do.
+    let dir = norte_core::connect::config_dir();
+    // Only the ones that lead somewhere, HERE: "go to anywhere" is a list of
+    // destinations, and an unusable entry is not one. The place that says
+    // what is wrong with it is the connections picker (#365), which is
+    // where the reader goes to fix it.
+    let (connections, _unusable) = norte_core::connect::named_connections(&dir)
+        .await
+        .unwrap_or_default();
+    // The plugin rows need `backend.plugins_list().await` (approved +
+    // activated, `palette::plugin_rows`). Unlike `app.extensions` (which
+    // does NOT open the manager if the fetch fails), the built-ins must
+    // ALWAYS be reachable — a downed daemon must not bring down the whole
+    // box, only degrade it (no plugin rows + a notice), same principle as "a
+    // listing error does not bring down the TUI" as the rest of `dispatch`.
+    let plugins = match backend.plugins_list().await {
+        Ok(list) => {
+            // (P1 encoding audit F1) INGEST: same clamp as the
+            // `app.extensions` arm — a single entry point, same cap.
+            let mut plugins = list.plugins;
+            crate::app::clamp_plugin_descriptions(&mut plugins);
+            // Same catalogue, same panel declaration as in the manager's arm
+            // (phase 3).
+            app.kinds.insert_panels(&plugins);
+            plugins
+        }
+        Err(e) => {
+            app.message = Some(error_message(&e));
+            Vec::new()
+        }
+    };
+    crate::goto::open(app, &connections, &plugins, query);
 }
 
 /// Fetches a page of the timeline and puts it in its slot (phase 7).

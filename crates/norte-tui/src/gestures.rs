@@ -849,7 +849,7 @@ pub fn keyboard_owner(app: &App) -> u16 {
         // like the viewer and unlike the live-search pane. Its rows are not
         // entries, so nothing behind it could act on what the cursor is on.
         app.compare.is_some(),
-        app.palette.is_some(),
+        app.goto.is_some(),
         app.settings.is_some(),
         // K3c: the shortcut editor. Like the other overlays, and unlike the
         // which-key panel below: it keeps ALL the keys while open, so a
@@ -878,7 +878,7 @@ pub fn keyboard_owner(app: &App) -> u16 {
 #[cfg(test)]
 mod pane_gestures_tests {
     use super::{App, Cd, Trail, keyboard_owner, mirror_plan, mirror_target_plan, pull_plan};
-    use crate::app::{Modal, Palette, Pane, TrailStep};
+    use crate::app::{Modal, Pane, TrailStep};
     use crate::jobs::on_search_dialog_key;
     use crate::keymap::Command;
     use crate::navigate::{record_step, settle_suspended_trail};
@@ -1417,9 +1417,9 @@ mod pane_gestures_tests {
         assert_ne!(keyboard_owner(&app), panels_only, "a modal steps in front");
         app.modal = None;
         assert_eq!(keyboard_owner(&app), panels_only, "and closing it returns");
-        app.palette = Some(Palette::new(Vec::new()));
-        assert_ne!(keyboard_owner(&app), panels_only, "the palette too");
-        app.palette = None;
+        app.goto = Some(norte_frontend::goto::Goto::new(Vec::new()));
+        assert_ne!(keyboard_owner(&app), panels_only, "the search box too");
+        app.goto = None;
         // And the case that forces COMPARING instead of asking: with the
         // viewer open from the start (`5` + `viewer.down`), the owner has
         // not changed between turns and the count has to go on.

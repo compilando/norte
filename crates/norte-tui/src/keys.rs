@@ -12,7 +12,7 @@
 //! loop's `continue`s are `return`s here, which is the same thing said
 //! without a loop.
 
-use crate::app::{App, Modal, PAGE, Palette, PromptKind, error_message};
+use crate::app::{App, Modal, PAGE, PromptKind, error_message};
 use crate::config::{self};
 use crate::dispatch::dispatch;
 use crate::event_loop::{launch_pending, run_command};
@@ -29,7 +29,7 @@ use crate::lua::{resolve_lua_trust, run_lua_command};
 use crate::mutations::{on_dialog_key, submit_transfer};
 use crate::nav;
 use crate::navigate::{cd, settle_cd};
-use crate::overlays::{close_stale_overlays, help_owns_keys, modal_wins, palette_help};
+use crate::overlays::{close_stale_overlays, goto_help, help_owns_keys, modal_wins};
 use crate::refresh::{after_panes_refresh, reap_search_run, refresh_panes};
 use crate::screens::{
     HelpDispatch, on_columns_key, on_connections_picker_key, on_disk_map_key, on_extensions_key,
@@ -450,10 +450,11 @@ pub async fn on_key(
         )
         .await;
     } else if app.goto.is_some() && !modal_wins(app) {
-        // "Go to anywhere" (phase 6): FIXED keys, for the same reason as
-        // the palette's —there is no `dialog.*` verb for "type a letter"
-        // or "go to what I'm pointing at"— and `ctrl+c` keeps its global
-        // exit as in every overlay.
+        // The search box (places, `>` commands, `?` help): FIXED keys, like
+        // the search dialog above — they do not resolve through the `dialog`
+        // context (H1 plan decision 8: there is no `dialog.*` vocabulary for
+        // "type a character" or "move the selection"). `ctrl+c` keeps its
+        // global exit as in every overlay.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             app.quit = true;
             return;
@@ -484,6 +485,36 @@ pub async fn on_key(
             KeyCode::Down if plain => {
                 if let Some(g) = &mut app.goto {
                     g.down();
+                }
+            }
+            KeyCode::PageUp if plain => {
+                if let Some(g) = &mut app.goto {
+                    g.page_up(PAGE);
+                }
+            }
+            KeyCode::PageDown if plain => {
+                if let Some(g) = &mut app.goto {
+                    g.page_down(PAGE);
+                }
+            }
+            KeyCode::Home if plain => {
+                if let Some(g) = &mut app.goto {
+                    g.home();
+                }
+            }
+            KeyCode::End if plain => {
+                if let Some(g) = &mut app.goto {
+                    g.end();
+                }
+            }
+            // H3c: the bridge to the page documenting the highlighted row.
+            // It goes HERE, explicit next to `ctrl+c`, because the box's keys
+            // are FIXED (decision 8, above): there is no `dialog.*` verb for
+            // "explain this row to me", so it cannot be resolved through the
+            // keymap either.
+            KeyCode::F(1) if plain => {
+                if goto_help(app, lang, help_lines) {
+                    crate::jobs::goto::forget(work);
                 }
             }
             KeyCode::Enter if plain => {
@@ -519,20 +550,69 @@ pub async fn on_key(
                             outcome,
                         );
                     }
-                    // A command chosen here runs EXACTLY as if its key had
-                    // been pressed: the SAME `run_command` the resolver
-                    // invokes, as the palette already does. Two paths for
-                    // the same verb diverge the moment one of them grows a
-                    // detail.
-                    //
-                    // Its rows are the palette's, born from `COMMANDS`, so
-                    // the parse cannot fail; the guard is defensive, same as
-                    // there.
                     crate::goto::Action::Command(cmd) => {
-                        let Some(cmd) = Command::parse(&cmd) else {
-                            debug_assert!(false, "goto outside COMMANDS");
+                        // What is launched goes to the top next time (spec
+                        // 2026-09-10); the session saves it with the next
+                        // push.
+                        norte_frontend::session::note_palette_recent(&mut app.palette_recent, &cmd);
+                        // (P1) Enter over a PLUGIN row: the `key` is
+                        // `plugin:{id}:{command}` (`palette::plugin_rows`,
+                        // never painted) — it does not live in `COMMANDS`,
+                        // so it is routed HERE, before the typed vocabulary
+                        // (#112). The plugin's result is UNTRUSTED text:
+                        // `detail_for_bar` (masked + capped, #73 pattern).
+                        if let Some((id, command)) = parse_plugin_key(&cmd) {
+                            let (id, command) = (id.to_owned(), command.to_owned());
+                            run_plugin_command(app, backend, &id, &command).await;
+                            return;
+                        }
+                        // A RENAMER row (C3, ADR 0095): asks the plugin for
+                        // the plan and leaves it in the SAME run as the AI
+                        // one's.
+                        if let Some((id, renamer)) =
+                            norte_frontend::palette::parse_renamer_key(&cmd)
+                        {
+                            let (id, renamer) = (id.to_owned(), renamer.to_owned());
+                            crate::jobs::spawn_renamer_plan(app, backend, work, &id, &renamer);
+                            return;
+                        }
+                        // An ORGANIZER row (phase 8): the same split, a
+                        // different method — and the plan lands in the same
+                        // reviewable tree as the model's.
+                        if let Some((id, org)) = norte_frontend::palette::parse_organizer_key(&cmd)
+                        {
+                            let (id, org) = (id.to_owned(), org.to_owned());
+                            crate::jobs::spawn_organize_plan(
+                                app,
+                                backend,
+                                work,
+                                Some((id.as_str(), org.as_str())),
+                            );
+                            return;
+                        }
+                        // The rows were born from `COMMANDS`, but a hot
+                        // reload can remove a command while the box is open:
+                        // said, not asserted.
+                        let Some(parsed) = Command::parse(&cmd) else {
+                            app.message = Some(norte_frontend::keymap::unavailable_message_in(
+                                &cmd,
+                                norte_frontend::keymap::Availability::NotHere,
+                                lang,
+                            ));
                             return;
                         };
+                        // The SAME dispatch the keymap resolver invokes
+                        // (#dispatch): a command chosen here runs EXACTLY as
+                        // if its key had been pressed — including opening
+                        // another overlay (e.g. `app.help`). Two paths for
+                        // the same verb diverge the moment one of them grows
+                        // a detail.
+                        //
+                        // Parity with the resolver's spot (#118 review): a
+                        // cd chosen here (nav.parent…) can also turn off
+                        // virtual mode — harvested by the run (rule 3); and
+                        // a `pane.open` leaves its external command resolved
+                        // — launch it NOW, not on the next key.
                         run_command(
                             app,
                             backend,
@@ -546,7 +626,7 @@ pub async fn on_key(
                             &mut work.decorate,
                             &mut work.probed,
                             &mut work.search,
-                            cmd,
+                            parsed,
                         )
                         .await;
                         launch_pending(app, events, capture).await;
@@ -562,142 +642,18 @@ pub async fn on_key(
                     crate::goto::Action::SetQuery(_) => {}
                 }
             }
-            _ => {}
-        }
-    } else if app.palette.is_some() && !modal_wins(app) {
-        // Command palette (H1 T4): free-filter editor, like
-        // the search dialog above — its keys are FIXED, they
-        // do not resolve through the `dialog` context (H1
-        // plan decision 8: there is no `dialog.*` vocabulary
-        // for "type a character" or "move the selection").
-        // ctrl+c keeps its global meaning (quit), like EVERY
-        // overlay.
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            app.quit = true;
-            return;
-        }
-        let plain = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
-        match key.code {
-            KeyCode::Char(c) if plain => {
-                if let Some(p) = &mut app.palette {
-                    p.push_char(c);
-                }
-            }
-            KeyCode::Backspace if plain => {
-                if let Some(p) = &mut app.palette {
-                    p.backspace();
-                }
-            }
-            KeyCode::Esc if plain => app.palette = None,
-            // H3c: the bridge to the page documenting the
-            // highlighted row. It goes HERE, explicit next to
-            // `ctrl+c`/`ctrl+p`, because the palette's keys
-            // are FIXED (decision 8, above): there is no
-            // `dialog.*` verb for "explain this row to me",
-            // so it cannot be resolved through the keymap
-            // either.
-            KeyCode::F(1) if plain => {
-                palette_help(app, lang, help_lines);
-            }
-            KeyCode::Up if plain => {
-                if let Some(p) = &mut app.palette {
-                    p.up();
-                }
-            }
-            KeyCode::Down if plain => {
-                if let Some(p) = &mut app.palette {
-                    p.down();
-                }
-            }
-            KeyCode::PageUp if plain => {
-                if let Some(p) = &mut app.palette {
-                    p.page_up(PAGE);
-                }
-            }
-            KeyCode::PageDown if plain => {
-                if let Some(p) = &mut app.palette {
-                    p.page_down(PAGE);
-                }
-            }
-            KeyCode::Enter if plain => {
-                let cmd = app.palette.as_ref().and_then(Palette::selected);
-                app.palette = None;
-                if let Some(cmd) = cmd {
-                    // What is launched goes to the top next time (spec
-                    // 2026-09-10); the session saves it with the next push.
-                    norte_frontend::session::note_palette_recent(&mut app.palette_recent, &cmd);
-                    // (P1) Enter over a PLUGIN row: the `key`
-                    // is `plugin:{id}:{command}`
-                    // (`palette::plugin_rows`, never painted)
-                    // — it does not live in `COMMANDS`, so it
-                    // is routed HERE, before the typed
-                    // vocabulary (#112). The plugin's result
-                    // is UNTRUSTED text: `detail_for_bar`
-                    // (masked + capped, #73 pattern).
-                    if let Some((id, command)) = parse_plugin_key(&cmd) {
-                        let (id, command) = (id.to_owned(), command.to_owned());
-                        run_plugin_command(app, backend, &id, &command).await;
-                        return;
+            // The chord of `app.palette` or `app.goto` pressed inside the
+            // box switches the mode in place; a plain character typed above.
+            _ => {
+                if let Some(q) =
+                    crate::goto::switch_for(resolver.effective(), key.modifiers, key.code)
+                {
+                    if let Some(g) = &mut app.goto {
+                        g.set_query(q);
                     }
-                    // A RENAMER row (C3, ADR 0095): asks the plugin for the
-                    // plan and leaves it in the SAME run as the AI one's.
-                    if let Some((id, renamer)) = norte_frontend::palette::parse_renamer_key(&cmd) {
-                        let (id, renamer) = (id.to_owned(), renamer.to_owned());
-                        crate::jobs::spawn_renamer_plan(app, backend, work, &id, &renamer);
-                        return;
-                    }
-                    // An ORGANIZER row (phase 8): the same split, a
-                    // different method — and the plan lands in the same
-                    // reviewable tree as the model's.
-                    if let Some((id, org)) = norte_frontend::palette::parse_organizer_key(&cmd) {
-                        let (id, org) = (id.to_owned(), org.to_owned());
-                        crate::jobs::spawn_organize_plan(
-                            app,
-                            backend,
-                            work,
-                            Some((id.as_str(), org.as_str())),
-                        );
-                        return;
-                    }
-                    // The SAME dispatch function the keymap
-                    // resolver invokes (#dispatch): a command
-                    // chosen in the palette runs EXACTLY as if
-                    // its key had been pressed — including
-                    // opening another overlay (e.g. `app.help`).
-                    // The palette's rows are born from
-                    // `COMMANDS`, so the parse cannot fail; the
-                    // guard is defensive (#112).
-                    let Some(cmd) = Command::parse(&cmd) else {
-                        debug_assert!(false, "palette outside COMMANDS");
-                        return;
-                    };
-                    // Parity with the resolver's spot (#118
-                    // review): a cd chosen in the palette
-                    // (nav.parent…) can also turn off virtual
-                    // mode — harvested by the run (rule 3); and
-                    // a `pane.open` from the palette leaves its
-                    // external command resolved — launch it NOW,
-                    // not on the next key.
-                    run_command(
-                        app,
-                        backend,
-                        events,
-                        help_lines,
-                        lang,
-                        quick_mode,
-                        confirm_quit,
-                        cfg,
-                        &mut work.fill,
-                        &mut work.decorate,
-                        &mut work.probed,
-                        &mut work.search,
-                        cmd,
-                    )
-                    .await;
-                    launch_pending(app, events, capture).await;
+                    crate::jobs::goto::ask_the_index(app, backend, work);
                 }
             }
-            _ => {}
         }
     } else if app.shortcuts.is_some() && !modal_wins(app) {
         // K3c: the shortcuts editor is painted ON TOP OF the

@@ -1037,8 +1037,13 @@ pub fn help_topic(key: &str, lang: norte_i18n::Lang) -> Option<&'static norte_he
         return norte_help::topic(lang, id);
     }
     let cmd = key.strip_prefix(K_CMD)?;
-    // A plugin's id half comes from a manifest with no charset: never a page
-    // (`palette_help_target`'s reason).
+    // A PLUGIN row is answered `None` explicitly. Its key is
+    // `plugin:{id}:{command}` (or a renamer's or organizer's), which no corpus
+    // page documents and which is not a host command either — the command half
+    // comes from a third-party manifest with no validated charset, so it must
+    // never be handed to a lookup as if it were one of ours. The corpus lookup
+    // would also answer `None` on its own; the guard is what makes that a
+    // decision instead of a coincidence.
     if crate::palette::parse_plugin_key(cmd).is_some()
         || crate::palette::parse_renamer_key(cmd).is_some()
         || crate::palette::parse_organizer_key(cmd).is_some()
