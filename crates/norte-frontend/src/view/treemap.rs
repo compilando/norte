@@ -407,7 +407,7 @@ pub fn squarify(children: &[DirUsageChild], cols: u16, rows: u16) -> StyledFrame
             }
         }
     }
-    let labels: Vec<String> = children.iter().map(label_of).collect();
+    let labels: Vec<[String; 2]> = children.iter().map(label_of).collect();
     let lines = paint(&painted, children, &labels, &rects, width, height);
     let hits = hit_zones(children, &rects);
     StyledFrame::clamped(lines, hits)
@@ -524,22 +524,25 @@ fn shade(tiles: &mut [Tile]) {
     }
 }
 
-/// A child's label: its masked name and what it takes up.
-fn label_of(child: &DirUsageChild) -> String {
+/// A child's labels, longest first: "name size" (masked name, what it takes
+/// up) and the name alone, which is what a rectangle too narrow for both
+/// still shows.
+fn label_of(child: &DirUsageChild) -> [String; 2] {
     let (name, _masked) = crate::display_name(child.name.as_bytes());
     let size = crate::human_bytes_short(child.bytes);
-    if child.partial {
+    let full = if child.partial {
         format!("{name} {PARTIAL_MARK}{size}")
     } else {
         format!("{name} {size}")
-    }
+    };
+    [full, name.to_string()]
 }
 
 /// The frame's lines, one per row of cells.
 fn paint(
     owner: &[Option<usize>],
     children: &[DirUsageChild],
-    labels: &[String],
+    labels: &[[String; 2]],
     rects: &[Rect],
     width: usize,
     height: usize,
@@ -558,13 +561,17 @@ fn paint(
             let text = match current {
                 // The label is painted on the rectangle's FIRST row and only
                 // if it fits whole: half a label names a file that is not
-                // there.
-                Some(i)
-                    if usize::from(rects[i].y) == y && labels[i].chars().count() <= cell_count =>
-                {
-                    let mut t = labels[i].clone();
-                    t.push_str(&" ".repeat(cell_count - labels[i].chars().count()));
-                    t
+                // there. "name size" first, the name alone when that does
+                // not fit (#423).
+                Some(i) if usize::from(rects[i].y) == y => {
+                    match labels[i].iter().find(|l| l.chars().count() <= cell_count) {
+                        Some(label) => {
+                            let mut t = label.clone();
+                            t.push_str(&" ".repeat(cell_count - label.chars().count()));
+                            t
+                        }
+                        None => " ".repeat(cell_count),
+                    }
                 }
                 // No label fits, or no owner: blank cells. It is the SAME
                 // result on purpose — the color already says whose rectangle
@@ -1024,6 +1031,26 @@ mod tests {
             Some(Role::Info),
             "and it still paints as the directory it is"
         );
+    }
+
+    /// A rectangle too narrow for "name size" still says WHOSE it is: the
+    /// name alone is drawn when it fits whole (#423). Narrower than the
+    /// name, nothing is drawn: half a name names a file that is not there.
+    #[test]
+    fn a_rectangle_too_narrow_for_name_and_size_shows_the_name() {
+        let painted = |cols: u16| -> String {
+            squarify(&[child("photos", 1000, EntryKind::Dir)], cols, 3)
+                .lines
+                .iter()
+                .flat_map(|l| l.iter().map(|s| s.text.clone()))
+                .collect()
+        };
+        let wide = painted(30);
+        assert!(wide.contains("photos 1"), "room for both: {wide:?}");
+        let narrow = painted(8);
+        assert_eq!(narrow.trim(), "photos", "the name alone");
+        let tiny = painted(5);
+        assert!(!tiny.contains("photo"), "not half a name: {tiny:?}");
     }
 
     /// Zones do not exceed the cap, and the ones that survive are the BIG
