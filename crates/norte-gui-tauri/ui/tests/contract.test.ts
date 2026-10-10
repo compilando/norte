@@ -9,7 +9,7 @@ import { realCatalog, golden } from "./fixtures";
 /** A screen mounted on a clean DOM, with the real catalogue. */
 function mount(): { screen: Screen; sent: UiAction[]; root: HTMLElement } {
   document.body.replaceChildren();
-  const nodes = Array.from({ length: 22 }, () => document.createElement("div"));
+  const nodes = Array.from({ length: 21 }, () => document.createElement("div"));
   const root = document.createElement("main");
   document.body.append(root, ...nodes);
   document.documentElement.style.setProperty("--cell-h", "20px");
@@ -25,7 +25,6 @@ function mount(): { screen: Screen; sent: UiAction[]; root: HTMLElement } {
   const sent: UiAction[] = [];
   const [
     menu,
-    palette,
     whichkey,
     help,
     settings,
@@ -52,7 +51,6 @@ function mount(): { screen: Screen; sent: UiAction[]; root: HTMLElement } {
     root,
     menu as HTMLElement,
     panelBar,
-    palette as HTMLElement,
     whichkey as HTMLElement,
     help as HTMLElement,
     settings as HTMLElement,
@@ -150,7 +148,6 @@ describe("the contract with the host", () => {
       "layouts",
       "menu",
       "organize",
-      "palette",
       "panel_bar",
       "picker",
       "plugin_output",

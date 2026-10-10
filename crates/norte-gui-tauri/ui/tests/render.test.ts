@@ -146,7 +146,6 @@ function view(browser: Partial<BrowserSlotView>): ViewSnapshot {
       ],
     },
     profiles: null,
-    palette: null,
     whichkey: null,
     help: null,
     settings: null,
@@ -438,7 +437,6 @@ function mount(
   const menu = document.createElement("div");
   const panelBar = document.createElement("div");
   const profiles = document.createElement("div");
-  const palette = document.createElement("div");
   const whichkey = document.createElement("div");
   const help = document.createElement("div");
   const settings = document.createElement("div");
@@ -464,7 +462,6 @@ function mount(
     root,
     panelBar,
     menu,
-    palette,
     whichkey,
     help,
     settings,
@@ -488,7 +485,6 @@ function mount(
     root,
     menu,
     panelBar,
-    palette,
     whichkey,
     help,
     settings,
@@ -3358,72 +3354,6 @@ describe("the menu bar", () => {
     expect(css).toMatch(
       /\.menu-items:not\(\[data-emerge="true"\]\)\s*\{[^}]*animation:\s*none/,
     );
-  });
-});
-
-describe("the palette", () => {
-  function withPalette(cursor: number | null) {
-    const v = view({});
-    v.palette = {
-      query: "cur",
-      rows: [
-        {
-          text: "cursor.up",
-          desc: "subir el cursor",
-          chord: "Up",
-          enabled: true,
-          hostile: false,
-        },
-        {
-          text: "cursor.down",
-          desc: "bajar el cursor",
-          chord: "Down",
-          enabled: true,
-          hostile: false,
-        },
-      ],
-      cursor,
-      total: 24,
-    };
-    return v;
-  }
-
-  it("is modal, says how much it narrows down, and marks the selection", () => {
-    const { screen } = mount();
-    screen.paint(withPalette(1));
-    const box = document.querySelector(".palette") as HTMLElement;
-    expect(box.getAttribute("aria-modal")).toBe("true");
-    expect(document.querySelector(".palette-count")?.textContent).toBe("2/24");
-    const list = document.querySelector(".palette-rows") as HTMLElement;
-    expect(list.getAttribute("aria-activedescendant")).toBe("palette-row-1");
-    const sel = document.querySelectorAll('.palette-row[aria-selected="true"]');
-    expect(sel).toHaveLength(1);
-    expect(sel[0]?.textContent).toContain("cursor.down");
-  });
-
-  it("every row shows its real shortcut", () => {
-    const { screen } = mount();
-    screen.paint(withPalette(0));
-    const chords = [...document.querySelectorAll(".palette-chord")].map(
-      (c) => c.textContent,
-    );
-    expect(chords).toEqual(["Up", "Down"]);
-  });
-
-  it("with no matches it says so instead of staying blank", () => {
-    const { screen } = mount();
-    const v = withPalette(null);
-    if (v.palette !== null) {
-      v.palette.rows = [];
-    }
-    screen.paint(v);
-    expect(document.querySelector(".palette-rows .empty")).not.toBeNull();
-  });
-
-  it("closed, it covers nothing", () => {
-    const { screen } = mount();
-    screen.paint(view({}));
-    expect(document.querySelector(".palette")).toBeNull();
   });
 });
 

@@ -19,7 +19,7 @@ pub(super) async fn by_palette(h: &UiHost, sub: &mut norte_ui_host::UiSubscripti
     }))
     .await
     .expect("host alive");
-    let _ = next_palette(sub).await.expect("the palette opens");
+    let _ = next_goto(sub).await.expect("the box opens");
     for c in cmd.chars() {
         h.dispatch(press(&c.to_string())).await.expect("host alive");
     }

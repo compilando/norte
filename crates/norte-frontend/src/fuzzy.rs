@@ -220,7 +220,7 @@ mod tests {
         );
     }
 
-    /// Moved from `palette_state` with its contract: by chars, not bytes.
+    /// By chars, not bytes.
     #[test]
     fn is_subsequence_is_by_chars() {
         assert!(is_subsequence("", "x") && !is_subsequence("ba", "ab"));

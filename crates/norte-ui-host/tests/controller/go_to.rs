@@ -4,28 +4,6 @@ use super::*;
 // "Go anywhere" in the window (#357, phase 6).
 // ---------------------------------------------------------------------------
 
-/// Waits for the next update that carries "goto".
-async fn next_goto(
-    sub: &mut norte_ui_host::UiSubscription,
-) -> Option<norte_ui_host::dto::GotoView> {
-    for _ in 0..20 {
-        let next = tokio::time::timeout(WAIT_MAX, sub.recv())
-            .await
-            .expect("an update before the deadline")
-            .expect("the host is still alive");
-        if let Update::Message(m) = next
-            && let UiUpdate::Patch(p) = &m.payload
-        {
-            for c in &p.changes {
-                if let norte_ui_host::dto::ViewChange::Goto { goto } = c {
-                    return goto.clone();
-                }
-            }
-        }
-    }
-    panic!("no update with \"goto\" ever arrived");
-}
-
 fn ctrl_g() -> UiAction {
     UiAction::Key(norte_ui_host::keys::KeyInput {
         key: "g".to_owned(),

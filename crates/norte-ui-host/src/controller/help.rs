@@ -467,21 +467,16 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // `Ctrl+P` leaves help for the palette, which is what its footer
-        // promises. BOTH changes travel in the same patch: a renderer that
-        // only received the palette one would keep painting help
-        // underneath.
+        // `Ctrl+P` leaves help for the box's commands, which is what its
+        // footer promises. BOTH changes travel in the same patch: a renderer
+        // that only received the box's would keep painting help underneath.
         if k.ctrl && !k.alt && !k.meta && k.key.eq_ignore_ascii_case("p") {
             self.help = None;
-            self.palette = Some(norte_frontend::palette_state::Palette::with_recent(
-                self.palette_rows(),
-                &self.palette_recent,
-            ));
-            self.request_plugin_rows(backend, mailbox);
+            self.start_go_to(norte_frontend::goto::PREFIX_COMMANDS, backend, mailbox);
             let changes = vec![
                 ViewChange::Help { help: None },
-                ViewChange::Palette {
-                    palette: self.vista_palette(),
+                ViewChange::Goto {
+                    goto: self.vista_ir_a(),
                 },
             ];
             return (self.applied(), vec![self.parche(changes)]);

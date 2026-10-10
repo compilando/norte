@@ -286,7 +286,7 @@ async fn with_the_plan_pane_in_front_no_other_is_requested() {
     let _ = next_sync(&mut sub).await.expect("opens");
 
     // With the panel up front, the keys are ITS OWN: `ctrl+p` does not open
-    // the palette, which is the path through which the command would be
+    // the box, which is the path through which the command would be
     // repeated. It is the first of the two locks.
     h.dispatch(key_mod("p", true, false))
         .await
@@ -294,7 +294,7 @@ async fn with_the_plan_pane_in_front_no_other_is_requested() {
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let snapshot = next_snapshot(&mut sub).await;
     assert!(
-        snapshot.palette.is_none(),
+        snapshot.goto.is_none(),
         "the plan panel cannot let the palette's key through"
     );
     assert!(snapshot.sync.is_some(), "and the panel is still up front");
@@ -978,27 +978,35 @@ async fn the_palette_runs_an_extension_command_and_shows_its_output() {
     h.dispatch(key_mod("p", true, false))
         .await
         .expect("host alive");
-    // Plugin rows are MERGED IN when the daemon answers: the palette is
-    // painted first, with the host's own commands.
+    // Typed BEFORE the plugin rows can have arrived (Review Focus 3): they
+    // are MERGED IN when the daemon answers, and what was typed survives
+    // them.
+    h.dispatch(press("s")).await.expect("host alive");
     let mut got = false;
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let p = next_snapshot(&mut sub).await.palette.expect("open");
-        if p.rows.iter().any(|r| r.text.contains("Saludar")) {
+        let g = next_snapshot(&mut sub).await.goto.expect("open");
+        if goto_texts(&g).iter().any(|t| t.contains("Saludar")) {
+            assert_eq!(g.query, ">s", "the late rows kept the query");
             got = true;
             break;
         }
     }
     assert!(got, "the extension command's row never arrived");
-    // It gets narrowed by typing, which is what the palette is for: the
+    // It gets narrowed by typing, which is what the box is for: the
     // command's title is folded by the shared model together with its
     // description.
-    for c in "Saludar".chars() {
+    for c in "aludar".chars() {
         h.dispatch(press(&c.to_string())).await.expect("host alive");
     }
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let p = next_snapshot(&mut sub).await.palette.expect("open");
-    assert_eq!(p.rows.len(), 1, "the filter leaves a single row: {p:?}");
+    let g = next_snapshot(&mut sub).await.goto.expect("open");
+    assert!(
+        goto_texts(&g)
+            .first()
+            .is_some_and(|t| t.contains("Saludar")),
+        "the first row is the plugin's: {g:?}"
+    );
     h.dispatch(press("Enter")).await.expect("host alive");
 
     for _ in 0..2_000 {
@@ -1072,8 +1080,8 @@ async fn the_palette_requests_the_plan_from_a_renamer_and_reviews_it_like_the_ai
     let mut arrived = false;
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let p = next_snapshot(&mut sub).await.palette.expect("open");
-        if p.rows.iter().any(|r| r.text.contains("Rename by date")) {
+        let g = next_snapshot(&mut sub).await.goto.expect("open");
+        if goto_texts(&g).iter().any(|t| t.contains("Rename by date")) {
             arrived = true;
             break;
         }
@@ -1083,14 +1091,14 @@ async fn the_palette_requests_the_plan_from_a_renamer_and_reviews_it_like_the_ai
         h.dispatch(press(&c.to_string())).await.expect("host alive");
     }
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let p = next_snapshot(&mut sub).await.palette.expect("open");
-    assert_eq!(p.rows.len(), 1, "{p:?}");
+    let g = next_snapshot(&mut sub).await.goto.expect("open");
+    let texts = goto_texts(&g);
+    let first = texts.first().expect("a row");
     // The label comes from the process's GLOBAL catalogue (like the
     // extension commands' does), so either one is valid here.
     assert!(
-        p.rows[0].text.starts_with("[renombrar]") || p.rows[0].text.starts_with("[rename]"),
-        "a different label than a command's: {}",
-        p.rows[0].text
+        first.starts_with("[renombrar]") || first.starts_with("[rename]"),
+        "the first row is the renamer's, with a different label than a command's: {texts:?}"
     );
     h.dispatch(press("Enter")).await.expect("host alive");
 
@@ -1145,8 +1153,8 @@ async fn a_renamer_that_refuses_says_why_in_the_bar() {
     let mut arrived = false;
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let p = next_snapshot(&mut sub).await.palette.expect("open");
-        if p.rows.iter().any(|r| r.text.contains("Rename by date")) {
+        let g = next_snapshot(&mut sub).await.goto.expect("open");
+        if goto_texts(&g).iter().any(|t| t.contains("Rename by date")) {
             arrived = true;
             break;
         }
@@ -1204,9 +1212,9 @@ async fn in_read_only_an_extension_command_does_not_run() {
         .expect("host alive");
     for _ in 0..10 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let p = next_snapshot(&mut sub).await.palette.expect("open");
+        let g = next_snapshot(&mut sub).await.goto.expect("open");
         assert!(
-            !p.rows.iter().any(|r| r.text.contains("Saludar")),
+            !goto_texts(&g).iter().any(|t| t.contains("Saludar")),
             "a window with no effects does not offer to run third-party code"
         );
         settle().await;
@@ -1314,8 +1322,8 @@ async fn a_commands_output_does_not_let_keys_through() {
         .expect("host alive");
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let p = next_snapshot(&mut sub).await.palette.expect("open");
-        if p.rows.iter().any(|r| r.text.contains("Saludar")) {
+        let g = next_snapshot(&mut sub).await.goto.expect("open");
+        if goto_texts(&g).iter().any(|t| t.contains("Saludar")) {
             break;
         }
     }
@@ -2244,7 +2252,7 @@ async fn tab_cycles_the_listings_and_skips_the_sides() {
     // response to the new one.
     snapshot_until(&h, &mut sub, "the tree is on screen", |snapshot| {
         snapshot
-            .palette
+            .goto
             .is_none()
             .then(|| {
                 snapshot
@@ -2910,17 +2918,18 @@ async fn in_read_only_nothing_from_the_desktop_is_launched() {
     h.dispatch(key_mod("p", true, false))
         .await
         .expect("host alive");
-    let _ = next_palette(&mut sub).await;
+    let _ = next_goto(&mut sub).await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let p = next_snapshot(&mut sub).await.palette.expect("open");
+    let g = next_snapshot(&mut sub).await.goto.expect("open");
+    let ids = goto_descs(&g);
     for cmd in ["pane.open", "app.terminal"] {
         assert!(
-            !p.rows.iter().any(|r| r.text == cmd),
+            !ids.iter().any(|d| d == cmd),
             "{cmd} is not offered in a window with no effects"
         );
     }
     // And copying the path IS, because it launches nothing.
-    assert!(p.rows.iter().any(|r| r.text == "pane.copy-path") || p.total > 0);
+    assert!(ids.iter().any(|d| d == "pane.copy-path"));
     assert!(
         matches!(
             native.try_recv(),

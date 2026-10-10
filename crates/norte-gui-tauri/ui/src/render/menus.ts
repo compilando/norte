@@ -10,7 +10,6 @@ import type {
   PanelBarView,
   WizardView,
   GotoView,
-  PaletteView,
   TabGroupView,
   WhichKeyView,
   WindowVerb,
@@ -504,77 +503,6 @@ export function paintMenu(
   }
 }
 
-/** The command palette. */
-export function paintPalette(this: Screen, palette: PaletteView | null): void {
-  if (palette === null) {
-    this.paletteRoot.replaceChildren();
-    this.paletteRoot.dataset["open"] = "false";
-    return;
-  }
-  this.paletteRoot.dataset["open"] = "true";
-  const box = document.createElement("section");
-  box.className = "palette";
-  // Modal: while it is open, the keys are its own — and the host knows it,
-  // so the screen reader has to know it too.
-  box.setAttribute("role", "dialog");
-  box.setAttribute("aria-modal", "true");
-  box.setAttribute("aria-label", this.t("palette-title"));
-
-  const query = document.createElement("div");
-  query.className = "palette-query";
-  query.textContent = palette.query;
-  const count = document.createElement("span");
-  count.className = "palette-count";
-  count.textContent = `${String(palette.rows.length)}/${String(palette.total)}`;
-  query.append(count);
-  box.append(query);
-
-  const list = document.createElement("ul");
-  list.className = "palette-rows";
-  list.setAttribute("role", "listbox");
-  for (const [i, r] of palette.rows.entries()) {
-    const row = document.createElement("li");
-    row.className = "palette-row";
-    row.id = `palette-row-${String(i)}`;
-    row.setAttribute("role", "option");
-    row.setAttribute("aria-selected", String(palette.cursor === i));
-    row.dataset["enabled"] = String(r.enabled);
-    row.dataset["hostile"] = String(r.hostile);
-    row.dataset["recent"] = String(r.recent === true);
-    // The human label first and whole, the id dimmed, the chord on the
-    // right: that is the reading order. The id stays in the DOM because it
-    // is what a reader who already knows it types.
-    const desc = document.createElement("span");
-    desc.className = "palette-desc";
-    desc.textContent = r.desc;
-    const text = document.createElement("span");
-    text.className = "palette-text";
-    text.textContent = r.text;
-    const chord = document.createElement("span");
-    chord.className = "palette-chord";
-    chord.textContent = r.chord;
-    row.append(desc, text, chord);
-    if (r.hostile) {
-      // Only a PLUGIN row can be, and this is the screen where you choose
-      // what third-party code to run: masked text that travels without
-      // saying so reads as trustworthy.
-      row.append(badge(this.t("hostile-name")));
-    }
-    list.append(row);
-  }
-  if (palette.cursor !== null) {
-    list.setAttribute("aria-activedescendant", `palette-row-${String(palette.cursor)}`);
-  }
-  if (palette.rows.length === 0) {
-    const empty = document.createElement("li");
-    empty.className = "empty";
-    empty.textContent = this.t("palette-empty");
-    list.append(empty);
-  }
-  box.append(list);
-  this.paletteRoot.replaceChildren(box);
-}
-
 /**
  * "Go to anywhere" (#357, bridge 77): the query and the lines in order —
  * section headers and rows — with the cursor's marked. What is in each
@@ -589,8 +517,8 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
   }
   this.gotoRoot.dataset["open"] = "true";
   const box = document.createElement("section");
-  // The palette's classes: it is the same screen shape — a query and a list
-  // that narrows — and two stylesheets for the same thing drift apart.
+  // The `.palette*` classes: the box is the command palette too (`>`), and
+  // two stylesheets for the same thing drift apart.
   box.className = "palette goto";
   box.setAttribute("role", "dialog");
   box.setAttribute("aria-modal", "true");

@@ -2632,13 +2632,9 @@ struct State {
     /// The VIEWER's effective keymap, so the palette can say a command's
     /// shortcut for that screen.
     effective_visor: Effective,
-    /// The command palette, if it is open.
-    ///
-    /// It is one more input context, like the incremental search and the
-    /// viewer: while it is open, text keys belong to it.
-    palette: Option<norte_frontend::palette_state::Palette>,
-    /// "Go to anywhere", if it is open (#357). Another free-text input
-    /// context, like the palette.
+    /// The search box ("go to anywhere", #357, and the commands with `>`),
+    /// if it is open. One more input context, like the incremental search
+    /// and the viewer: while it is open, text keys belong to it.
     ir_a: Option<norte_frontend::goto::Goto>,
     /// How many times "go to" has been opened: connections and the index that
     /// answer an earlier opening are dropped.
@@ -3382,7 +3378,6 @@ impl State {
             sequence: 0,
             token: 0,
             locale,
-            palette: None,
             ir_a: None,
             gen_ir_a: 0,
             go_to_index: None,

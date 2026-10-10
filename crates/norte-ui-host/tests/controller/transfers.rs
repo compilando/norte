@@ -2155,7 +2155,8 @@ async fn in_read_only_the_palette_does_not_offer_what_mutates() {
     }))
     .await
     .expect("host alive");
-    let p = next_palette(&mut sub).await.expect("the palette opens");
+    let g = next_goto(&mut sub).await.expect("the box opens");
+    let ids = goto_descs(&g);
     let solo_read =
         norte_ui_host::commands::implemented(norte_ui_host::commands::Effects::SoloRead);
     let no_inertes = norte_ui_host::commands::IMPLEMENTED
@@ -2163,7 +2164,7 @@ async fn in_read_only_the_palette_does_not_offer_what_mutates() {
         .filter(|c| !solo_read.contains(c));
     for cmd in no_inertes {
         assert!(
-            !p.rows.iter().any(|r| r.text == *cmd),
+            !ids.iter().any(|d| d == cmd),
             "a read-only window's palette offers {cmd}"
         );
     }

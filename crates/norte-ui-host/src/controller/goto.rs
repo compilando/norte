@@ -20,25 +20,50 @@ use norte_frontend::goto::{
 };
 
 impl State {
-    /// Opens "go to".
-    ///
-    /// The rows are taken as a SNAPSHOT on open, just like the palette: a
-    /// list that changes under the cursor while it is being read is how an
-    /// Enter ends up somewhere else. The two exceptions arrive late, through
-    /// the mailbox: CONNECTIONS (only the daemon knows them, not this
-    /// process) and whatever the index finds (one question per query).
+    /// Opens the search box on `query` (`>` for commands, `""` for places)
+    /// and sends it.
     pub(super) fn open_go_to(
         &mut self,
+        query: &str,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.start_go_to(query, backend, mailbox);
+        let change = ViewChange::Goto {
+            goto: self.vista_ir_a(),
+        };
+        (self.applied(), vec![self.parche(vec![change])])
+    }
+
+    /// Opens the search box on `query`: the state and its late questions,
+    /// no patch (the caller sends it, alone or alongside another change).
+    ///
+    /// The rows are taken as a SNAPSHOT on open: a list that changes under
+    /// the cursor while it is being read is how an Enter ends up somewhere
+    /// else. The exceptions arrive late, through the mailbox: CONNECTIONS
+    /// (only the daemon knows them, not this process), the PLUGIN commands
+    /// (the daemon's catalogue) and whatever the index finds (one question
+    /// per query).
+    pub(super) fn start_go_to(
+        &mut self,
+        query: &str,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) {
+        // Opening it while open switches the mode in place (spec).
+        if let Some(g) = self.ir_a.as_mut() {
+            g.set_query(query);
+            self.request_goto_from_index(backend, mailbox);
+            return;
+        }
         let sources = self.go_to_sources();
-        // Reopening while the screen is already open (from a menu, say)
-        // closes the previous one properly: its question to the index is
-        // aborted instead of continuing to spend a provider on a query that
-        // no longer exists.
+        // The generation bump: a late answer meant for an earlier box has
+        // nowhere to land.
         self.close_go_to();
-        self.ir_a = Some(Goto::new(sources));
+        let mut g = Goto::new(sources).with_recent(&self.palette_recent);
+        g.set_query(query);
+        self.ir_a = Some(g);
+        self.request_plugin_rows(backend, mailbox);
         let generation = self.gen_ir_a;
         let backend = Arc::clone(backend);
         let mailbox = mailbox.clone();
@@ -58,10 +83,6 @@ impl State {
                 ))))
                 .await;
         });
-        let change = ViewChange::Goto {
-            goto: self.vista_ir_a(),
-        };
-        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// The SYNCHRONOUS sources: what this window already has in memory.
@@ -110,9 +131,8 @@ impl State {
             .collect();
         out.push(Box::new(FixedSource::new(SECTION_FAVORITES, favorites)));
         out.push(Box::new(FixedSource::new(SECTION_CONNECTIONS, Vec::new())));
-        // The commands, the SAME ones this window's palette offers: the
-        // palette already resolves which ones this host implements and with
-        // what effects.
+        // The commands: `palette_rows` already resolves which ones this host
+        // implements and with what effects.
         let commands =
             norte_frontend::goto::command_rows(self.palette_rows(), Some(&self.facts()), self.lang);
         out.push(Box::new(FixedSource::new(SECTION_COMMANDS, commands)));
@@ -142,6 +162,11 @@ impl State {
             .take(crate::bridge::MAX_ROWS_PER_BATCH)
             .map(|c| norte_frontend::goto::row_connection(&c.name, &c.url))
             .collect();
+        // The section opened empty: no connections change nothing, and a
+        // patch that repaints the same box only races the reader's keys.
+        if rows.is_empty() {
+            return None;
+        }
         goto.replace_section(SECTION_CONNECTIONS, rows, false);
         let change = ViewChange::Goto {
             goto: self.vista_ir_a(),
@@ -241,16 +266,19 @@ impl State {
 
     /// The keys while "go to" is open.
     ///
-    /// FIXED, like the palette's and for the same reason: there are no
-    /// `dialog.*` verbs for typing a character or moving the selection.
-    /// `Escape` closes, `Enter` goes, the arrows move and everything else
-    /// types.
+    /// FIXED: there are no `dialog.*` verbs for typing a character or moving
+    /// the selection. `Escape` closes, `Enter` goes, the arrows, pages,
+    /// `Home` and `End` move, `F1` explains the row and everything else
+    /// types — except the chord of `app.palette` or `app.goto`, which
+    /// switches the mode in place. Only a NON-plain chord can: vim's `:` is
+    /// `app.palette`, and inside the box it must type a colon.
     pub(super) fn key_in_goto(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let page = self.goto_page();
         let Some(g) = self.ir_a.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
@@ -259,6 +287,26 @@ impl State {
             "Enter" | "enter" => return self.enter_in_goto(backend, mailbox),
             "ArrowDown" | "down" => g.down(),
             "ArrowUp" | "up" => g.up(),
+            "PageDown" | "pgdn" => g.page_down(page),
+            "PageUp" | "pgup" => g.page_up(page),
+            "Home" | "home" => g.home(),
+            "End" | "end" => g.end(),
+            "F1" | "f1" => {
+                let topic = g
+                    .selected()
+                    .and_then(|r| norte_frontend::goto::help_topic(&r.key, self.lang))
+                    .map(|t| t.id.as_str().to_owned());
+                let Some(id) = topic else {
+                    return (self.applied(), self.say("msg-palette-no-help"));
+                };
+                // The close in its own patch, before help's, like a confirm.
+                self.close_go_to();
+                let closing = self.parche(vec![ViewChange::Goto { goto: None }]);
+                let (ack, mut rest) = self.open_help_on(Some(&id), backend, mailbox);
+                let mut out = vec![closing];
+                out.append(&mut rest);
+                return (ack, out);
+            }
             "Backspace" | "backspace" => {
                 g.backspace();
                 self.request_goto_from_index(backend, mailbox);
@@ -272,7 +320,15 @@ impl State {
                         g.push_char(c);
                         self.request_goto_from_index(backend, mailbox);
                     }
-                    _ => return (self.applied(), Vec::new()),
+                    _ => {
+                        let Some(query) = self.mode_switch(k) else {
+                            return (self.applied(), Vec::new());
+                        };
+                        if let Some(g) = self.ir_a.as_mut() {
+                            g.set_query(query);
+                        }
+                        self.request_goto_from_index(backend, mailbox);
+                    }
                 }
             }
         }
@@ -280,6 +336,30 @@ impl State {
             goto: self.vista_ir_a(),
         };
         (self.applied(), vec![self.parche(vec![change])])
+    }
+
+    /// The query a chord switches the open box to: `>` for the chord of
+    /// `app.palette`, `""` for `app.goto`'s, `None` for any other.
+    fn mode_switch(&self, k: &crate::keys::KeyInput) -> Option<&'static str> {
+        let chord = k.to_chord().ok()?;
+        if self.effective.single_chord_runs(chord, "app.palette") {
+            Some(norte_frontend::goto::PREFIX_COMMANDS)
+        } else if self.effective.single_chord_runs(chord, "app.goto") {
+            Some("")
+        } else {
+            None
+        }
+    }
+
+    /// How many rows a page moves.
+    ///
+    /// The box is at most 70vh tall (`style.css` `.palette`) and a row is
+    /// about a cell; the renderer does not report the painted height, so
+    /// this is the honest approximation.
+    pub(super) fn goto_page(&self) -> usize {
+        (usize::from(self.viewport.1) * 7 / 10)
+            .saturating_sub(2)
+            .max(1)
     }
 
     /// Enter on the chosen row: a prefix row types itself and the box stays
@@ -363,9 +443,9 @@ impl State {
     }
 
     /// Confirms the chosen row: closes the screen BEFORE acting — the close
-    /// in its own patch, like the palette, so that whatever the effect opens
-    /// does not end up underneath it — and does what
-    /// `norte_frontend::goto::Goto::confirm` decided.
+    /// in its own patch, so that whatever the effect opens does not end up
+    /// underneath it — and does what `norte_frontend::goto::Goto::confirm`
+    /// decided.
     fn confirm_go_to(
         &mut self,
         act: Option<Action>,
@@ -382,12 +462,7 @@ impl State {
                 self.applied(),
                 self.navigate(&dir, Trail::Record, backend, mailbox),
             ),
-            // Through the SAME path as a key: "go to" is another door into
-            // the catalogue, not a second dispatcher.
-            Action::Command(cmd) => match effect_of(&cmd, 1) {
-                Some(effect) => self.apply_effect(effect, backend, mailbox),
-                None => self.no_implemented(&cmd),
-            },
+            Action::Command(cmd) => self.run_command_key(&cmd, backend, mailbox),
             Action::Nothing(reason) => (self.applied(), self.say(reason)),
             Action::Help(id) => self.open_help_on(Some(&id), backend, mailbox),
             // Handled by the caller, before closing.

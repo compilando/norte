@@ -79,8 +79,6 @@ pub struct ViewSnapshot {
     pub row_stripes: bool,
     /// The profile picker, if open.
     pub profiles: Option<ProfilePickerView>,
-    /// The command palette, if open.
-    pub palette: Option<PaletteView>,
     /// "Go to anywhere", if open (#357). Bridge 77.
     #[serde(default)]
     pub goto: Option<GotoView>,
@@ -439,24 +437,6 @@ pub enum PanelButtonState {
     Focused,
 }
 
-/// The open command palette.
-///
-/// Filtering, the cursor and what is selected are decided by
-/// `norte_frontend::palette_state`, the same model as the TUI: typing to
-/// narrow a list is a presentation rule, and two copies are two palettes
-/// that behave differently without anyone noticing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PaletteView {
-    /// What was typed, already sanitized for painting.
-    pub query: String,
-    /// The rows that MATCH, in order.
-    pub rows: Vec<PaletteRowView>,
-    /// Which one is selected, if any.
-    pub cursor: Option<u64>,
-    /// How many rows there are in total, to say how much is being narrowed.
-    pub total: u64,
-}
-
 /// "Go to anywhere" open (#357, bridge 77): the typed path, the pane's
 /// history, the popular ones, the favorites, the connections and what the
 /// semantic index found, in SECTIONS. `mode` says which list; `>` commands
@@ -555,32 +535,6 @@ pub struct WizardView {
     pub cursor: u64,
     /// The keys line.
     pub hint: String,
-}
-
-/// A command offered by the palette.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PaletteRowView {
-    /// What is shown (the command's name, or a plugin command's already
-    /// masked title). NEVER the dispatch key.
-    pub text: String,
-    /// What it does, in the user's language.
-    pub desc: String,
-    /// The shortcut that runs it, or `—` if it has none in this preset.
-    pub chord: String,
-    /// This frontend can run it.
-    pub enabled: bool,
-    /// What is painted DIFFERS from what the row's contributor declares.
-    ///
-    /// Can only be true on a PLUGIN row: its title and description are
-    /// written by a manifest, and this is the screen where you choose what
-    /// third-party code to run. A masked text that travels without its flag
-    /// reads as faithful.
-    pub hostile: bool,
-    /// Goes to the top for being among the last launched (spec 2026-09-10).
-    /// Only with an empty query; with a query, the order is by what
-    /// matches.
-    #[serde(default)]
-    pub recent: bool,
 }
 
 /// What can follow a half-typed prefix.
@@ -4131,11 +4085,6 @@ pub enum ViewChange {
     PanelBar {
         /// The whole bar.
         panel_bar: PanelBarView,
-    },
-    /// The palette opened, filtered, moved, or closed.
-    Palette {
-        /// The palette, or `None` if it closed.
-        palette: Option<PaletteView>,
     },
     /// "Go to anywhere" opened, filtered, moved, received a late section
     /// (connections, index) or closed (#357, bridge 77).

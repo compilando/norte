@@ -159,7 +159,6 @@ impl State {
             // the view.
             row_stripes: self.config.common.ui_chrome.row_stripes(),
             profiles: self.vista_profiles(),
-            palette: self.vista_palette(),
             goto: self.vista_ir_a(),
             wizard: self.vista_wizard(),
             splash: self.vista_splash(),
@@ -570,44 +569,6 @@ impl State {
             },
             self.lang,
         )
-    }
-
-    /// The palette's projection.
-    pub(super) fn vista_palette(&self) -> Option<crate::dto::PaletteView> {
-        let p = self.palette.as_ref()?;
-        let rows = p.rows();
-        let visible = p.visible();
-        let no_query = p.query_display().is_empty();
-        Some(crate::dto::PaletteView {
-            query: clamp_display(p.query_display()),
-            rows: visible
-                .iter()
-                // A cap, like any other list that crosses: with an empty
-                // query EVERY row is visible, and the plugin ones are put
-                // there by a third party.
-                .take(crate::bridge::MAX_ROWS_PER_BATCH)
-                .filter_map(|i| rows.get(*i).map(|r| (*i, r)))
-                .map(|(i, r)| crate::dto::PaletteRowView {
-                    // Recent only while it is up top for being one: with a
-                    // query the order is by what matches.
-                    recent: no_query && p.is_recent(i),
-                    text: clamp_display(r.text.clone()),
-                    desc: clamp_display(r.desc.clone()),
-                    chord: clamp_display(r.chord.clone()),
-                    // What is painted DIFFERS from what the manifest says. A
-                    // plugin row is a third party's text on the screen where
-                    // it is chosen what code to run: without this it painted
-                    // masked and without saying so.
-                    hostile: r.hostile,
-                    // This host implements its OWN commands — they come from
-                    // its own list — and the PLUGIN ones are resolved by the
-                    // daemon, which requires approved + enabled on its own.
-                    enabled: true,
-                })
-                .collect(),
-            cursor: (!visible.is_empty()).then_some(p.cursor() as u64),
-            total: rows.len() as u64,
-        })
     }
 
     /// The continuations panel's projection.

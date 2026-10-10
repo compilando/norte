@@ -606,7 +606,9 @@ use serde::{Deserialize, Serialize};
 /// - **108**: the one search box (spec 2026-10-09): `GotoView.mode` and
 ///   `.hint`; `GotoLineView::Row` `chord`, `category`, `unavailable`,
 ///   `recent`, `positions`; `MenuView.goto_chord`; the actions
-///   `goto_point_row`, `goto_activate_row` and `goto_paste`.
+///   `goto_point_row`, `goto_activate_row` and `goto_paste`; and the
+///   palette's own view is gone — `PaletteView`, `ViewSnapshot.palette` and
+///   `ViewChange::Palette`: `app.palette` opens the go-to box with `>`.
 pub const BRIDGE_VERSION: u32 = 108;
 
 /// Cap on a string that crosses to the renderer, in bytes.

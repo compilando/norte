@@ -177,7 +177,6 @@ export class Screen {
     readonly root: HTMLElement,
     readonly menuRoot: HTMLElement,
     readonly panelBarRoot: HTMLElement,
-    readonly paletteRoot: HTMLElement,
     readonly whichKeyRoot: HTMLElement,
     readonly helpRoot: HTMLElement,
     readonly settingsRoot: HTMLElement,
@@ -339,7 +338,6 @@ export class Screen {
       this.paintedLayers.set(key, value);
       painter.call(this, value);
     };
-    layer("palette", view.palette, this.paintPalette);
     layer("goto", view.goto ?? null, this.paintGoto);
     layer("wizard", view.wizard ?? null, this.paintWizard);
     layer("whichkey", view.whichkey, this.paintWhichKey);
@@ -377,7 +375,6 @@ export class Screen {
   readonly paintContextMenu = contextmenu.paintContextMenu;
 
   /** In `render/menus.ts`. */
-  readonly paintPalette = menus.paintPalette;
   readonly paintGoto = menus.paintGoto;
   readonly paintWizard = menus.paintWizard;
 

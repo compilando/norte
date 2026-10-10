@@ -1,7 +1,8 @@
-//! The command palette and the rows extensions contribute.
+//! Plugin command rows for the search box, and running a command chosen
+//! there.
 //!
-//! Part of `controller`: these are methods of `State`, moved here without
-//! touching them (ADR 0086). The only writer is still the actor.
+//! Part of `controller`: these are methods of `State` (ADR 0086). The only
+//! writer is still the actor.
 
 // These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Listing them here would be a forty-line
@@ -11,30 +12,46 @@
 use super::*;
 
 impl State {
-    /// Opens the command palette.
+    /// Runs a command row chosen in the search box, built-in or plugin.
     ///
-    /// The rows are built HERE, on open, and frozen: that is what the shared
-    /// model expects (it folds each row's haystack once, not per keystroke).
-    pub(super) fn open_palette(
+    /// The box's closing patch is the caller's, already sent: this is only
+    /// what the command does.
+    pub(super) fn run_command_key(
         &mut self,
+        cmd: &str,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.palette = Some(norte_frontend::palette_state::Palette::with_recent(
-            self.palette_rows(),
-            &self.palette_recent,
-        ));
-        self.request_plugin_rows(backend, mailbox);
-        let change = ViewChange::Palette {
-            palette: self.vista_palette(),
-        };
-        (self.applied(), vec![self.parche(vec![change])])
+        norte_frontend::session::note_palette_recent(&mut self.palette_recent, cmd);
+        // Through the SAME path as a key: the box is another door into the
+        // catalogue, not a second dispatcher.
+        match effect_of(cmd, 1) {
+            Some(effect) => self.apply_effect(effect, backend, mailbox),
+            // A PLUGIN row is not in the command catalogue and cannot be: a
+            // third party contributes it at runtime.
+            None if cmd.starts_with("plugin:") => self.run_from_plugin(cmd, backend, mailbox),
+            // A RENAMER row (C3, ADR 0095): requests the plan and puts it
+            // into the SAME review as the AI's.
+            None if cmd.starts_with("renamer:") => self.run_from_renamer(cmd, backend, mailbox),
+            // An ORGANIZER row (phase 8): the same dispatch, another method,
+            // and the plan lands on the same reviewable tree as the model's.
+            None if cmd.starts_with("organizer:") => {
+                match norte_frontend::palette::parse_organizer_key(cmd) {
+                    Some((id, org)) => {
+                        let (id, org) = (id.to_owned(), org.to_owned());
+                        self.request_organize_plan(Some((id, org)), backend, mailbox)
+                    }
+                    None => self.no_implemented(cmd),
+                }
+            }
+            None => self.no_implemented(cmd),
+        }
     }
 
-    /// Requests the catalogue for the palette's PLUGIN rows.
+    /// Requests the catalogue for the box's PLUGIN rows.
     ///
-    /// It is not awaited: the palette is already painted with its own
-    /// commands, and the plugin ones are joined in once the daemon answers.
+    /// It is not awaited: the box is already painted with its own commands,
+    /// and the plugin ones are joined in once the daemon answers.
     /// Freezing the window until then would pay for the round trip even when
     /// there is no extension at all.
     pub(super) fn request_plugin_rows(
@@ -67,13 +84,11 @@ impl State {
         });
     }
 
-    /// The plugin rows arrived: they are JOINED into the open palette.
+    /// The plugin rows arrived: they are joined into the open box, query and
+    /// cursor kept (`replace_section`): losing what someone just typed for
+    /// the sake of rows that arrive late is worse than not having them.
     ///
-    /// Preserving what was typed (`extend_rows`): rebuilding it would lose
-    /// the query, and losing what someone just typed for the sake of rows
-    /// that arrive late is worse than not having them.
-    ///
-    /// A failure does NOT bring the palette down, nor is it announced: the
+    /// A failure does NOT bring the box down, nor is it announced: the
     /// window's own commands are still there, which is the same criterion as
     /// the TUI's ("a dead daemon degrades the palette, it does not bring it
     /// down").
@@ -88,7 +103,7 @@ impl State {
         let Ok(list) = res else {
             return Vec::new();
         };
-        let Some(p) = self.palette.as_mut() else {
+        let Some(g) = self.ir_a.as_mut() else {
             return Vec::new();
         };
         // The same filter and the same cap the MANAGER applies to the
@@ -116,7 +131,11 @@ impl State {
         if rows.is_empty() {
             return Vec::new();
         }
-        p.extend_rows(rows);
+        g.replace_section(
+            norte_frontend::goto::SECTION_PLUGINS,
+            norte_frontend::goto::plugin_command_rows(rows),
+            false,
+        );
         self.labels_plugin = catalog
             .iter()
             .map(|p| {
@@ -131,8 +150,8 @@ impl State {
                 )
             })
             .collect();
-        let change = ViewChange::Palette {
-            palette: self.vista_palette(),
+        let change = ViewChange::Goto {
+            goto: self.vista_ir_a(),
         };
         vec![self.parche(vec![change])]
     }
@@ -159,7 +178,7 @@ impl State {
         }
         self.gen_output += 1;
         let generation = self.gen_output;
-        // Both labels are resolved NOW, with the catalogue the palette used:
+        // Both labels are resolved NOW, with the catalogue the box used:
         // the response can take a while, and looking them up again on return
         // means looking them up in a catalogue that is no longer the same
         // one.

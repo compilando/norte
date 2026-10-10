@@ -1621,7 +1621,6 @@ button.status-item:hover {
   color: var(--selection-fg);
 }
 
-#palette[data-open="true"],
 #goto[data-open="true"] {
   position: fixed;
   inset: 0;
@@ -1632,7 +1631,6 @@ button.status-item:hover {
   background: rgb(0 0 0 / 45%);
 }
 
-#palette[data-open="false"],
 #goto[data-open="false"] {
   display: none;
 }

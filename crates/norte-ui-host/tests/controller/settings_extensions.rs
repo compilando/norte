@@ -1087,7 +1087,7 @@ async fn choosing_a_volume_navigates_the_panel() {
     }))
     .await
     .expect("host alive");
-    let _ = next_palette(&mut sub).await.expect("the palette opens");
+    let _ = next_goto(&mut sub).await.expect("the box opens");
     for c in "select-drive".chars() {
         h.dispatch(press(&c.to_string())).await.expect("host alive");
     }
@@ -1150,7 +1150,7 @@ async fn a_volume_with_no_size_says_so() {
     }))
     .await
     .expect("host alive");
-    let _ = next_palette(&mut sub).await.expect("the palette opens");
+    let _ = next_goto(&mut sub).await.expect("the box opens");
     for c in "select-drive".chars() {
         h.dispatch(press(&c.to_string())).await.expect("host alive");
     }

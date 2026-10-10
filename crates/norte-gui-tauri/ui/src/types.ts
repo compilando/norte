@@ -960,27 +960,6 @@ export interface WizardView {
   hint: string;
 }
 
-export interface PaletteRowView {
-  text: string;
-  desc: string;
-  chord: string;
-  enabled: boolean;
-  /** What is painted DIFFERS from what the row's source declares. Can only
-   *  be true for a PLUGIN row, and this is the screen where you choose what
-   *  third-party code to run. */
-  hostile: boolean;
-  /** Goes up top for being among the last launched (only with an empty
-   *  query). Optional: a host older than bridge 63 does not send it. */
-  recent?: boolean;
-}
-
-export interface PaletteView {
-  query: string;
-  rows: PaletteRowView[];
-  cursor: number | null;
-  total: number;
-}
-
 /** A "go to" line (bridge 77): a section header or a row. */
 export type GotoLineView =
   | { line: "header"; title: string }
@@ -1725,7 +1704,6 @@ export interface ViewSnapshot {
    *  earlier host does not send it, and then there is no band. */
   row_stripes?: boolean;
   profiles: ProfilePickerView | null;
-  palette: PaletteView | null;
   /** "Go to anywhere" (bridge 77), if it is open. Optional: an earlier host
    *  does not send it. */
   goto?: GotoView | null;
@@ -1815,7 +1793,6 @@ export type ViewChange =
   | { change: "panel_bar"; panel_bar: PanelBarView }
   | { change: "status_items"; status_items: StatusItemView[] }
   | { change: "profiles"; profiles: ProfilePickerView | null }
-  | { change: "palette"; palette: PaletteView | null }
   | { change: "goto"; goto: GotoView | null }
   | { change: "wizard"; wizard: WizardView | null }
   | { change: "splash"; splash: SplashView | null }

@@ -886,21 +886,6 @@
       "summary": "crea 1 carpetas y mueve 2 ficheros",
       "total": 5
     },
-    "palette": {
-      "cursor": 0,
-      "query": "orde",
-      "rows": [
-        {
-          "chord": "ctrl+f3",
-          "desc": "Ordenar por nombre",
-          "enabled": true,
-          "hostile": false,
-          "recent": false,
-          "text": "pane.sort-name"
-        }
-      ],
-      "total": 42
-    },
     "panel_bar": {
       "bar": true,
       "buttons": [

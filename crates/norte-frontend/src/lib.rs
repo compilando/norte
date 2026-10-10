@@ -47,8 +47,7 @@ pub use chrome::{banners, footer, frame, keybar, layoutbar, menu, panelbar, spla
 pub use navigation::{goto, history, places, tree, watch};
 pub use ops::{checksums, chmod, compare, diffpair, organize, rename_pattern};
 pub use overlays::{
-    columns_picker, connections_picker, layout_picker, palette, palette_state, profile_picker,
-    whichkey, wizard,
+    columns_picker, connections_picker, layout_picker, palette, profile_picker, whichkey, wizard,
 };
 pub use view::{columns, diskmap, display, format, treemap, viewer};
 

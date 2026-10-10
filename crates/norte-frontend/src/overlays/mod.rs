@@ -9,7 +9,6 @@ pub mod columns_picker;
 pub mod connections_picker;
 pub mod layout_picker;
 pub mod palette;
-pub mod palette_state;
 pub mod profile_picker;
 pub mod whichkey;
 pub mod wizard;

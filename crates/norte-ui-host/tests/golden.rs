@@ -1869,19 +1869,6 @@ fn reference_snapshot() -> ViewSnapshot {
         row_stripes: true,
         profiles: Some(reference_profiles()),
         wizard: Some(reference_wizard()),
-        palette: Some(norte_ui_host::dto::PaletteView {
-            query: "orde".to_owned(),
-            rows: vec![norte_ui_host::dto::PaletteRowView {
-                text: "pane.sort-name".to_owned(),
-                desc: "Ordenar por nombre".to_owned(),
-                chord: "ctrl+f3".to_owned(),
-                enabled: true,
-                hostile: false,
-                recent: false,
-            }],
-            cursor: Some(0),
-            total: 42,
-        }),
         goto: Some(reference_goto()),
         whichkey: Some(norte_ui_host::dto::WhichKeyView {
             title: "ctrl+x".to_owned(),
@@ -3020,24 +3007,6 @@ fn rest_changes() -> Vec<(&'static str, ViewChange)> {
             },
         ),
         (
-            "palette",
-            ViewChange::Palette {
-                palette: Some(norte_ui_host::dto::PaletteView {
-                    query: "orde".to_owned(),
-                    rows: vec![norte_ui_host::dto::PaletteRowView {
-                        text: "pane.sort-name".to_owned(),
-                        desc: "Ordenar por nombre".to_owned(),
-                        chord: "ctrl+f3".to_owned(),
-                        hostile: false,
-                        enabled: true,
-                        recent: false,
-                    }],
-                    cursor: Some(0),
-                    total: 42,
-                }),
-            },
-        ),
-        (
             "goto",
             ViewChange::Goto {
                 goto: Some(reference_goto()),
@@ -3242,7 +3211,9 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // 101: `PanelBarView.footer`, the activity column's foot.
     // 107 (spec 2026-10-09): `ViewSnapshot.context_menu` and the
     // `context_menu` change, the right-click menu.
-    const SHAPE: u64 = 9_367_516_704_606_243_225;
+    // 108 (spec 2026-10-09): `ViewSnapshot.palette` and the `palette`
+    // change go; `app.palette` opens the go-to box with `>`.
+    const SHAPE: u64 = 12_326_835_412_188_999_390;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

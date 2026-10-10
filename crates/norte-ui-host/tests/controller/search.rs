@@ -1098,19 +1098,14 @@ async fn in_read_only_there_is_no_semantic_search() {
     h.dispatch(key_mod("p", true, false))
         .await
         .expect("host alive");
-    let palette = next_palette(&mut sub).await.expect("the palette opens");
-    // The palette does not carry the dispatch key — it is chosen by index —
-    // so it is looked up by label, which is what the reader sees.
+    let g = next_goto(&mut sub).await.expect("the box opens");
+    // Looked up by label, which is what the reader sees.
     let label =
         norte_frontend::whichkey::command_label("pane.semantic-search", norte_i18n::Lang::Es);
+    let texts = goto_texts(&g);
     assert!(
-        !palette.rows.iter().any(|r| r.text == label),
-        "a window with no effects does not offer asking a model: {:?}",
-        palette
-            .rows
-            .iter()
-            .map(|r| r.text.clone())
-            .collect::<Vec<_>>()
+        !texts.contains(&label),
+        "a window with no effects does not offer asking a model: {texts:?}"
     );
     assert!(
         backend
@@ -1157,12 +1152,11 @@ pub(super) async fn execute_via_palette_ack(
     sub: &mut norte_ui_host::controller::UiSubscription,
     command: &str,
 ) -> ActionAck {
-    let label = command.to_owned();
     h.dispatch(key_mod("p", true, false))
         .await
         .expect("host alive");
-    let _ = next_palette(sub).await;
-    for c in label.chars().skip(5).take(6) {
+    let _ = next_goto(sub).await;
+    for c in command.chars() {
         h.dispatch(press(&c.to_string())).await.expect("host alive");
     }
     for _ in 0..40 {
@@ -1179,24 +1173,26 @@ pub(super) async fn execute_via_palette_ack(
         // after `Resync`, which is by definition the newest.
         drain_snapshots(sub).await;
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let p = next_snapshot(sub)
+        let g = next_snapshot(sub)
             .await
-            .palette
-            .expect("the palette is still open");
+            .goto
+            .expect("the box is still open");
         assert!(
-            !p.rows.is_empty(),
-            "`{command}` does not show up in the palette with the query `{}`",
-            p.query
+            !g.lines.is_empty(),
+            "`{command}` does not show up in the box with the query `{}`",
+            g.query
         );
-        let i = p
+        // A row's `desc` is the command's id; its `text` is the name.
+        let under_cursor = g
             .cursor
             .and_then(|c| usize::try_from(c).ok())
-            .unwrap_or(0)
-            .min(p.rows.len() - 1);
-        if p.rows[i].text == label {
+            .and_then(|c| g.lines.get(c));
+        if let Some(norte_ui_host::dto::GotoLineView::Row { desc, .. }) = under_cursor
+            && desc == command
+        {
             return h.dispatch(press("Enter")).await.expect("host alive");
         }
-        // `ArrowDown`, not `Down`: the palette accepts the browser's name or
+        // `ArrowDown`, not `Down`: the box accepts the browser's name or
         // the project's, lowercase, and `Down` is neither — this helper had
         // been working since phase 2 only when the sought command happened
         // to land FIRST.
