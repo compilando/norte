@@ -549,11 +549,18 @@ function markGotoCursor(painted: PaintedGoto, cursor: number | null): void {
   revealInView(painted.rows[cursor]);
 }
 
+/** A combining mark (variation selectors are marks too) or a ZWJ: no width. */
+const ZERO_WIDTH = /^(?:\p{M}|‍)$/u;
+
 /**
  * `text` with the characters at `positions` (code-point indices, as the
  * host's matcher counts them) wrapped in `<mark>`, a run of consecutive ones
  * in a single mark. Names are hostile input: only text nodes and
  * `textContent`, and a position past the end is ignored.
+ *
+ * A zero-width char (an NFD accent, a ZWJ, a variation selector) stays with
+ * the char before it whatever `positions` says, as in the TUI's
+ * `marked_spans`: the matcher marks the `e` of an NFD "Café", not its accent.
  */
 export function markedText(
   text: string,
@@ -577,6 +584,10 @@ export function markedText(
     run = "";
   };
   for (const [i, ch] of Array.from(text).entries()) {
+    if (run !== "" && ZERO_WIDTH.test(ch)) {
+      run += ch;
+      continue;
+    }
     const m = marked.has(i);
     if (m !== runMarked) {
       flush();

@@ -273,6 +273,21 @@ describe("go to anywhere (#357)", () => {
     ).toEqual(["<b"]);
   });
 
+  it("keeps a decomposed accent in the mark of its base char", () => {
+    // The matcher marks the `e` of an NFD "Café" and not its U+0301; a bare
+    // accent in a node of its own is what the TUI dropped.
+    const { screen } = mount();
+    const v = view({});
+    const box = commandsBox();
+    box.lines = [{ line: "row", text: "Café", desc: "", hostile: false, positions: [3] }];
+    v.goto = box;
+    screen.paint(v);
+    expect(
+      [...document.querySelectorAll(".goto mark")].map((m) => m.textContent),
+    ).toEqual(["é"]);
+    expect(document.querySelector(".goto .palette-text")?.textContent).toBe("Café");
+  });
+
   it("shows category, chord and recent, and dims what cannot run with its reason", () => {
     const { screen } = mount();
     const v = view({});

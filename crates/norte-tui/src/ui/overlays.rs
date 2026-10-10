@@ -847,16 +847,27 @@ pub fn draw_which_key(
 
 /// `text` as spans, the chars at `positions` (sorted char indices, not byte
 /// offsets) in `mark` and the rest in `base`; a run of equal chars is one span.
+///
+/// A zero-width char (an NFD accent, a ZWJ, a variation selector) stays in
+/// the run of the char before it whatever the positions say: on its own it
+/// would be a zero-width span, which ratatui drops — "Café" in NFD painted
+/// as "Cafe".
 pub(crate) fn marked_spans(
     text: &str,
     positions: &[u32],
     base: Style,
     mark: Style,
 ) -> Vec<Span<'static>> {
+    use unicode_width::UnicodeWidthChar;
+
     let mut out = Vec::new();
     let mut run = String::new();
     let mut in_mark = false;
     for (i, c) in text.chars().enumerate() {
+        if !run.is_empty() && c.width() == Some(0) {
+            run.push(c);
+            continue;
+        }
         let hit = u32::try_from(i).is_ok_and(|i| positions.binary_search(&i).is_ok());
         if hit != in_mark && !run.is_empty() {
             out.push(Span::styled(
@@ -1936,6 +1947,31 @@ mod goto_draw_tests {
             vec![("éc", true), ("l", false), ("a", true), ("t", false)]
         );
         assert_eq!(super::marked_spans("", &[], base, mark).len(), 0);
+    }
+
+    /// A decomposed (NFD) accent is a char the matcher never marks: it stays
+    /// with its base char, or it would be a zero-width span of its own,
+    /// which ratatui drops — and "Café" would paint as "Cafe".
+    #[test]
+    fn marked_spans_keep_a_combining_mark_with_its_base() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::style::{Modifier, Style};
+        use ratatui::text::Line;
+        use ratatui::widgets::Widget;
+        let base = Style::default();
+        let mark = Style::default().add_modifier(Modifier::BOLD);
+        let spans = super::marked_spans("Cafe\u{301}", &[3], base, mark);
+        let got: Vec<(&str, bool)> = spans
+            .iter()
+            .map(|s| (s.content.as_ref(), s.style == mark))
+            .collect();
+        assert_eq!(got, vec![("Caf", false), ("e\u{301}", true)]);
+
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 1));
+        Line::from(spans).render(buf.area, &mut buf);
+        assert_eq!(buf[(3, 0)].symbol(), "e\u{301}");
+        assert!(buf[(3, 0)].modifier.contains(Modifier::BOLD));
     }
 }
 
