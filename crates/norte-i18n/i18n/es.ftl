@@ -320,7 +320,7 @@ msg-lua-busy = ya hay un comando Lua en marcha (encolado)
 msg-lua-queue-full = comando Lua descartado: cola llena
 msg-lua-denied-changed = el init.lua del proyecto se denegó; ha cambiado (no se carga)
 msg-lua-symlink = el init.lua del proyecto es un symlink; no se carga
-msg-lua-keymap-project = keymap.toml del proyecto: { $n } binding(s) lua: ignorados (sin trust)
+msg-lua-keymap-project = keymap.toml del proyecto: { $n } binding(s) lua:/user: ignorados (sin trust)
 # `--cd-file` (S3, shell.rs `cd_bytes`): el pane activo no era `file://`, así
 # que no se escribió nada en el cd-file y el wrapper deja el shell donde
 # estaba. `$path` ya pasó por el enmascarado de `path_display`, con un `!` al

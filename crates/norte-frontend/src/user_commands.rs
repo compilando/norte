@@ -437,6 +437,21 @@ pub fn resolve_in(launch: &Launch, path_var: Option<&OsStr>) -> Result<PathBuf, 
     })
 }
 
+/// The ids of `user:` bindings in `eff` that `cmds` does not define —
+/// sorted, once each. Reported at load (status bar) and by `norte doctor`.
+#[must_use]
+pub fn undefined_bindings(eff: &crate::keymap::Effective, cmds: &UserCommands) -> Vec<String> {
+    let mut out: Vec<String> = eff
+        .bindings_all()
+        .into_iter()
+        .filter_map(|(_, run, _)| run.strip_prefix("user:").map(str::to_owned))
+        .filter(|id| cmds.get(id).is_none())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// The confirm dialog's question.
 #[must_use]
 pub fn confirm_text(launch: &Launch, lang: Lang) -> String {
@@ -604,6 +619,17 @@ refresh = false
         UserCommands::parse(src).expect("valid")
     }
     const PNG: &str = "[[command]]\nid = \"png\"\nlabel = \"Optimize\"\nargv = [\"oxipng\", \"-o\", \"4\", \"%F\"]\n";
+
+    #[test]
+    fn unknown_user_id_loads_and_is_listed() {
+        let kf = crate::keymap::parse_keymap(
+            "[pane]\nkeymap = [{ on = [\"x\"], run = \"user:png\" }, { on = [\"y\"], run = \"user:gone\" }, { on = [\"z\"], run = \"user:gone\" }]\n",
+        )
+        .unwrap();
+        let eff = crate::keymap::Effective::build(&kf, None, &[crate::keymap::USER_HOST])
+            .expect("not fatal");
+        assert_eq!(undefined_bindings(&eff, &cmds(PNG)), ["gone"]);
+    }
 
     #[test]
     fn every_field_code_expands_as_whole_elements() {

@@ -319,7 +319,7 @@ msg-lua-busy = a Lua command is already running (queued)
 msg-lua-queue-full = Lua command discarded: queue full
 msg-lua-denied-changed = project init.lua previously denied; it has changed (not loaded)
 msg-lua-symlink = project init.lua is a symlink; not loaded
-msg-lua-keymap-project = project keymap.toml: { $n } lua: binding(s) ignored (not trusted)
+msg-lua-keymap-project = project keymap.toml: { $n } lua:/user: binding(s) ignored (not trusted)
 # `--cd-file` (S3, shell.rs `cd_bytes`): the active pane was not `file://`, so
 # nothing was written to the cd-file and the wrapper leaves the shell where it
 # is. `$path` is already run through `path_display`'s hostile-name masking,

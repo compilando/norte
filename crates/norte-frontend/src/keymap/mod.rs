@@ -25,7 +25,7 @@ pub use chord::{
     Chord, KeyCode, ModKey, Mods, mod_key, paint_chord, parse_chord, set_chord_lang, set_mod_key,
     unpaint_chord,
 };
-pub use effective::{Availability, Continuation, Effective, LUA_HOST, valid_lua_name};
+pub use effective::{Availability, Continuation, Effective, LUA_HOST, USER_HOST, valid_lua_name};
 // Not public API: the spelling a sequence has IN THE FILE, which the keyboard
 // sheet paints (after `paint_chord`) and the shortcut editor hands to the
 // `keymap.toml` writer. Two copies of it is how the writer and the loader
@@ -879,6 +879,63 @@ mod tests {
             Err(KeymapError::UnknownCommand { .. }) => {}
             other => panic!("expected UnknownCommand, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn user_binding_resolves_with_a_host_and_not_without() {
+        let preset = r#"
+            [pane]
+            keymap = [{ on = ["x"], run = "user:optimize-png" }]
+        "#;
+        let kf = parse_keymap(preset).unwrap();
+        let eff_host = Effective::build(&kf, None, &[USER_HOST]).expect("valid id loads");
+        let mut r = Resolver::new(eff_host);
+        assert_eq!(r.push(parse_chord("x").unwrap()), run("user:optimize-png"));
+
+        let without = eff(preset, None).expect("loads without a host too");
+        let mut r = Resolver::new(without);
+        assert_eq!(
+            r.push(parse_chord("x").unwrap()),
+            Resolution::Unavailable {
+                command: "user:optimize-png".to_owned(),
+                why: Availability::NotHere
+            },
+        );
+
+        let long = format!("user:{}", "a".repeat(65));
+        for bad in ["user:", "user:Bad", "user:a_b", "user:-a", long.as_str()] {
+            let src = format!("[pane]\nkeymap = [{{ on = [\"x\"], run = \"{bad}\" }}]\n");
+            let kf = parse_keymap(&src).unwrap();
+            assert!(
+                Effective::build(&kf, None, &[USER_HOST]).is_err(),
+                "{bad} is a load error"
+            );
+            let d = Effective::build_diagnostics(&kf, &[], &[USER_HOST], Screen::Browse);
+            assert!(
+                matches!(d.as_slice(), [KeymapDiagnostic::Structural { .. }]),
+                "{bad}: {d:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn project_user_binding_is_discarded() {
+        const COMMANDS: &[&str] = &["cursor.down", USER_HOST];
+        let preset =
+            parse_keymap("[pane]\nkeymap = [{ on = [\"j\"], run = \"cursor.down\" }]\n").unwrap();
+        let mut project =
+            parse_keymap("[pane]\nprepend_keymap = [{ on = [\"j\"], run = \"user:wipe\" }]\n")
+                .unwrap();
+        project.mark_project();
+        let eff =
+            Effective::build_layered(&preset, std::slice::from_ref(&project), COMMANDS).unwrap();
+        assert_eq!(
+            eff.discarded_lua_bindings(),
+            1,
+            "counted with the lua: ones"
+        );
+        let mut r = Resolver::new(eff);
+        assert_eq!(r.push(parse_chord("j").unwrap()), run("cursor.down"));
     }
 
     /// M4 Lua (T8, mirrored): a binding to `lua:<name>` passes validation

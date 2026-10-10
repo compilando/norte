@@ -125,6 +125,12 @@ pub struct Effective {
 /// ```
 pub const LUA_HOST: &str = "lua:*";
 
+/// The entry a frontend adds to its `known_commands` to say it RUNS user
+/// commands (ADR 0177). Same contract as [`LUA_HOST`]: without it a
+/// well-formed `user:<id>` binding loads but is [`Availability::NotHere`].
+/// Not a valid id (`*`), so no binding collides with it.
+pub const USER_HOST: &str = "user:*";
+
 /// Charset of a Lua command name (`lua:<name>`): `[a-z0-9._-]{1,64}`. SINGLE
 /// SOURCE (#88): the engine uses it to validate the `lua:<name>` binding, and
 /// a hosting frontend's Lua runtime (the TUI, `norte.command`) reuses it to
@@ -185,6 +191,20 @@ fn check_binding(raw: &RawBinding, known_commands: &[&str]) -> Result<Binding, K
             });
         }
         if known_commands.contains(&LUA_HOST) {
+            Availability::Here
+        } else {
+            Availability::NotHere
+        }
+    } else if let Some(id) = raw.run.strip_prefix("user:") {
+        // The id is validated, never looked up: commands.toml is loaded
+        // apart and may change under a running keymap (ADR 0177). An id it
+        // does not define loads, and says so when pressed and in doctor.
+        if !crate::user_commands::valid_user_id(id) {
+            return Err(KeymapError::UnknownCommand {
+                run: raw.run.clone(),
+            });
+        }
+        if known_commands.contains(&USER_HOST) {
             Availability::Here
         } else {
             Availability::NotHere
@@ -453,7 +473,10 @@ impl Effective {
                     }
                 }
                 Err(KeymapError::UnknownCommand { run })
-                    if run.strip_prefix("lua:").is_none_or(valid_lua_name) =>
+                    if run.strip_prefix("lua:").is_none_or(valid_lua_name)
+                        && run
+                            .strip_prefix("user:")
+                            .is_none_or(crate::user_commands::valid_user_id) =>
                 {
                     // A PLAIN unknown command (or a well-formed `lua:` name
                     // that just is not in `known` — impossible here since
@@ -462,8 +485,9 @@ impl Effective {
                     diags.push(KeymapDiagnostic::UnknownCommand { run });
                 }
                 // The remaining `UnknownCommand` is a `lua:` name that FAILS
-                // the charset (`valid_lua_name` — single source): structural,
-                // never fixable by extending `known_commands`.
+                // the charset (`valid_lua_name` — single source), or a
+                // `user:` id that fails `valid_user_id` for the same reason:
+                // structural, never fixable by extending `known_commands`.
                 Err(e) => diags.push(KeymapDiagnostic::Structural {
                     message: e.to_string(),
                 }),
