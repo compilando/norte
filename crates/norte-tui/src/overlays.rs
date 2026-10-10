@@ -437,6 +437,14 @@ pub fn goto_help(
     lang: norte_help::Lang,
     help_lines: &[ratatui::text::Line<'static>],
 ) -> bool {
+    // A user command has no help page: F1 says what it does (or why not).
+    let user_note = app.goto.as_ref().and_then(|g| g.selected()).and_then(|r| {
+        norte_frontend::goto::user_command_f1(&r.key, &app.user_commands, norte_i18n::active())
+    });
+    if let Some(msg) = user_note {
+        app.message = Some(msg);
+        return false;
+    }
     let Some(topic) = goto_help_target(app, lang) else {
         app.message = Some(t("msg-palette-no-help"));
         return false;
@@ -681,6 +689,20 @@ mod goto_help_tests {
             app.message.as_deref(),
             Some(norte_i18n::t("msg-palette-no-help").as_str())
         );
+    }
+
+    /// `F1` on a user command row says what it does on the bar; the box stays
+    /// and no help page opens.
+    #[test]
+    fn f1_on_a_user_command_says_its_description() {
+        let mut app = app_with_box_on("user:png");
+        app.user_commands = norte_frontend::user_commands::UserCommands::parse(
+            "[[command]]\nid = \"png\"\nlabel = \"Optimize PNGs\"\nargv = [\"oxipng\", \"%F\"]\ndescription = \"Shrinks the PNGs\"\n",
+        )
+        .expect("valid commands");
+        assert!(!goto_help(&mut app, norte_help::Lang::En, &[]));
+        assert_eq!(app.message.as_deref(), Some("Shrinks the PNGs"));
+        assert!(app.help.is_none() && app.goto.is_some());
     }
 
     /// A PLUGIN row's `key` is `plugin:{id}:{command}` (P1): no corpus topic
