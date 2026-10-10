@@ -637,7 +637,12 @@ fn every_bar_button_falls_into_its_place() {
         "and the terminal (#362) after the timeline, by registration order"
     );
     assert_eq!(
-        press(&mut app, 27),
+        press(&mut app, 28).as_deref(),
+        Some("layout.search"),
+        "and the search panel after the terminal, by registration order"
+    );
+    assert_eq!(
+        press(&mut app, 30),
         None,
         "past the last one there is no button"
     );

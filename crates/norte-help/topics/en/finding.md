@@ -3,11 +3,13 @@ id = "finding"
 title = "Finding things"
 tags = ["doing"]
 see_also = ["selection", "panes", "viewer"]
-commands = ["pane.quick-search", "pane.search", "pane.toggle-hidden"]
+commands = ["pane.quick-search", "pane.search", "layout.search", "pane.toggle-hidden"]
 +++
 Two different questions, two different keys. *Which of the rows in front of me
 is it?* is {{cmd:pane.quick-search}}. *Is it anywhere under here?* is
 {{cmd:pane.search}}.
+
+{{cmd:layout.search}} opens the search panel beside the listing.
 
 # Narrowing what is already listed
 

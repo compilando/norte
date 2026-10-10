@@ -253,6 +253,9 @@ pub enum KeyOwner {
     /// The journal timeline (phase 7). No payload, for the same reason as the
     /// map: it declares `multi: false`, so there is at most one.
     Timeline,
+    /// The search panel. No payload, for the same reason as the map: it
+    /// declares `multi: false`, so there is at most one.
+    Search,
     /// The terminal panel (#362). No payload, and that is the reason the kind
     /// declares `multi: false`: with several you would have to carry WHICH
     /// one has the keys, and this type is compared for equality in

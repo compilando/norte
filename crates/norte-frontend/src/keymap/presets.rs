@@ -503,6 +503,8 @@ mod k2b_gate_tests {
             // be norte's. With no key you cannot enter and, what matters,
             // cannot leave. `ctrl+alt+s` in all seven.
             "layout.terminal",
+            // The search panel: `alt+F` (Alt+Shift+F) in all seven.
+            "layout.search",
         ];
         let mut missing: Vec<String> = Vec::new();
         for name in NAMES {

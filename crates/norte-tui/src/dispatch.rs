@@ -182,6 +182,7 @@ pub async fn dispatch(
         Command::LayoutProcesses => app.toggle_processes(),
         Command::LayoutLog => app.toggle_log(),
         Command::LayoutDiskMap => app.toggle_disk_map(),
+        Command::LayoutSearch => app.toggle_search_panel(),
         // The timeline (phase 7): opening is placing the slot, and reading
         // the journal is done HERE, which is where the backend is — like the
         // connections selector reads its file in its own arm.

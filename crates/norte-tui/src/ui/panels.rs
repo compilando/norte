@@ -1621,6 +1621,58 @@ pub(crate) fn draw_timeline(
     frame.render_stateful_widget(list, inner, &mut state);
 }
 
+/// The search panel: a bordered box and, for now, its status line — what
+/// the panel would say about the search it is running (or not running).
+/// The form and the results arrive with the keys that drive them.
+pub(crate) fn draw_search_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    panel: &norte_frontend::search_panel::SearchPanel,
+    app: &App,
+    with_keyboard: bool,
+) {
+    use norte_frontend::search_panel::PanelStatus;
+    let theme = &app.theme;
+    let border = if with_keyboard {
+        Role::BorderFocus
+    } else {
+        Role::BorderUnfocused
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("search-panel-title")))
+        .title_style(theme.role(Role::Title))
+        .border_style(theme.role(border));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let text = match panel.status() {
+        PanelStatus::Idle => t("search-panel-idle"),
+        PanelStatus::Unreadable(field) => {
+            ta("search-panel-unreadable", &[("field", &t(field.key()))])
+        }
+        PanelStatus::Run {
+            key,
+            files,
+            folders,
+            error,
+        } => ta(
+            key,
+            &[
+                ("n", &files.to_string()),
+                ("folders", &folders.to_string()),
+                ("error", error.as_deref().unwrap_or_default()),
+            ],
+        ),
+    };
+    frame.render_widget(
+        Paragraph::new(Line::styled(text, theme.role(Role::Info))),
+        inner,
+    );
+}
+
 #[cfg(test)]
 mod draw_log_tests {
     use super::*;

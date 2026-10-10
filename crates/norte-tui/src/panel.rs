@@ -85,6 +85,11 @@ pub enum TuiPanel {
     /// several pages accumulate, and that must not fix this enum's size for
     /// every other panel.
     Timeline(Box<norte_frontend::timeline::Timeline>),
+    /// The search panel: its form, its results and its cursor.
+    ///
+    /// Boxed like the others: the result tree grows with the run, and that
+    /// must not fix this enum's size for every other panel.
+    Search(Box<norte_frontend::search_panel::SearchPanel>),
     /// A kind this binary does not know: it is painted as a box with its
     /// name, and its `params` are kept intact, so opening the GUI's layout
     /// in the TUI does not erase anything from it.
@@ -109,6 +114,7 @@ impl TuiPanel {
             | Self::Metadata(_)
             | Self::DiskMap(_)
             | Self::Timeline(_)
+            | Self::Search(_)
             | Self::Unknown { .. } => None,
         }
     }
@@ -124,6 +130,7 @@ impl TuiPanel {
             | Self::Metadata(_)
             | Self::DiskMap(_)
             | Self::Timeline(_)
+            | Self::Search(_)
             | Self::Unknown { .. } => None,
         }
     }
@@ -140,6 +147,7 @@ impl TuiPanel {
             | Self::Metadata(_)
             | Self::DiskMap(_)
             | Self::Timeline(_)
+            | Self::Search(_)
             | Self::Unknown { .. } => None,
         }
     }
@@ -155,6 +163,7 @@ impl TuiPanel {
             | Self::Metadata(_)
             | Self::DiskMap(_)
             | Self::Timeline(_)
+            | Self::Search(_)
             | Self::Unknown { .. } => None,
         }
     }
@@ -474,6 +483,35 @@ impl PaneSlots {
     /// Places a slot's timeline.
     pub fn insert_timeline(&mut self, id: SlotId, t: norte_frontend::timeline::Timeline) {
         self.store.insert(id, TuiPanel::Timeline(Box::new(t)));
+    }
+
+    /// A slot's search panel, if it is one.
+    #[must_use]
+    pub fn search_panel(&self, id: SlotId) -> Option<&norte_frontend::search_panel::SearchPanel> {
+        match self.store.get(id) {
+            Some(TuiPanel::Search(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// A slot's search panel, to mutate it.
+    pub fn search_panel_mut(
+        &mut self,
+        id: SlotId,
+    ) -> Option<&mut norte_frontend::search_panel::SearchPanel> {
+        match self.store.get_mut(id) {
+            Some(TuiPanel::Search(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Places a slot's search panel.
+    pub fn insert_search_panel(
+        &mut self,
+        id: SlotId,
+        s: norte_frontend::search_panel::SearchPanel,
+    ) {
+        self.store.insert(id, TuiPanel::Search(Box::new(s)));
     }
 
     /// What a slot's attributes sheet shows, if there is one.

@@ -3,11 +3,13 @@ id = "finding"
 title = "Encontrar cosas"
 tags = ["doing"]
 see_also = ["selection", "panes", "viewer"]
-commands = ["pane.quick-search", "pane.search", "pane.toggle-hidden"]
+commands = ["pane.quick-search", "pane.search", "layout.search", "pane.toggle-hidden"]
 +++
 Dos preguntas distintas, dos teclas distintas. *¿Cuál de las filas que tengo
 delante es?* es {{cmd:pane.quick-search}}. *¿Está en algún sitio aquí debajo?*
 es {{cmd:pane.search}}.
+
+{{cmd:layout.search}} abre el panel de búsqueda junto al listado.
 
 # Estrechar lo que ya está listado
 

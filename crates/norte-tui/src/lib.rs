@@ -42,6 +42,7 @@ pub mod processes;
 pub mod rail_icons;
 pub mod refresh;
 pub mod screens;
+pub mod searchpanel;
 pub mod session_push;
 pub mod settings;
 pub mod shortcuts_editor;

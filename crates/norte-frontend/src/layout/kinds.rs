@@ -182,6 +182,10 @@ impl KindRegistry {
                 // one and what remains is not a terminal, it is a little
                 // window that blinks.
                 decl("terminal", (20, 4), true, true, false, SIN_ROLES),
+                // The search panel: focusable, takes keys (it has inputs),
+                // ONE, and holds no role. 24x6 = an input, the status and
+                // three rows.
+                decl("search", (24, 6), true, true, false, SIN_ROLES),
             ],
         }
     }

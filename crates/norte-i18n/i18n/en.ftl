@@ -1250,6 +1250,7 @@ panelbar-log = Log
 # columns, and the long one dropped it to letters (ADR 0171).
 panelbar-disk-map = Map
 panelbar-timeline = Timeline
+panelbar-search = Search
 # `Tree` and `Timeline` take the T first: `letter_of` gives this one another.
 panelbar-terminal = Terminal
 # The terminal panel's footer: the ONLY key the panel does not pass on to the
@@ -1324,6 +1325,7 @@ menu-item-layout-processes = Processes
 menu-item-layout-log = Log
 menu-item-layout-disk-map = Disk map
 menu-item-layout-timeline = Timeline
+menu-item-layout-search = Search panel
 menu-item-layout-terminal = Terminal
 menu-item-terminal-new = New terminal
 menu-item-terminal-new-profile = New terminal with…
@@ -1457,6 +1459,7 @@ help-cmd-layout-processes = show or hide the processes panel
 help-cmd-layout-log = show or hide this session's log
 help-cmd-layout-disk-map = show or hide the disk map
 help-cmd-layout-timeline = show or hide the timeline
+help-cmd-layout-search = show or hide the search panel
 # Not "show or hide" like its neighbours, and deliberately: the second press
 # hands the keyboard back and leaves the shell running, it does not close it.
 help-cmd-layout-terminal = open a terminal in a panel, or give it the keyboard

@@ -3976,6 +3976,9 @@ async fn the_pane_bar_shows_the_panes_and_a_click_opens_them() {
             // really be needed: the grid is built by `norte-term` once for
             // both frontends (T4).
             "terminal",
+            // The search panel, likewise: shared registry, so its button is
+            // here before the window paints it.
+            "search",
         ],
         "the same buttons and the same order as `panelbar::buttons`"
     );
@@ -4076,6 +4079,30 @@ async fn the_pane_bar_shows_the_panes_and_a_click_opens_them() {
         matches!(ack, norte_ui_host::ActionAck::Stale { .. }),
         "was {ack:?}"
     );
+}
+
+/// `layout.search` places a slot of the `search` kind (projected as
+/// unsupported until the window paints it) and, again, takes it away.
+#[tokio::test]
+async fn layout_search_toggles_a_search_slot() {
+    let (h, _snap) = host_tree(fake_tree()).await;
+    let mut sub = h.subscribe();
+    run_by_palette(&h, &mut sub, "layout.search").await;
+    let () = snapshot_until(&h, &mut sub, "the search slot", |s| {
+        s.slots
+            .iter()
+            .any(|v| matches!(v, SlotView::Unsupported { kind_name, .. } if kind_name == "search"))
+            .then_some(())
+    })
+    .await;
+    run_by_palette(&h, &mut sub, "layout.search").await;
+    let () = snapshot_until(&h, &mut sub, "the search slot gone", |s| {
+        s.slots
+            .iter()
+            .all(|v| !matches!(v, SlotView::Unsupported { kind_name, .. } if kind_name == "search"))
+            .then_some(())
+    })
+    .await;
 }
 
 /// ADR 0134 (phase F): two panels on the same border share a spot as tabs;

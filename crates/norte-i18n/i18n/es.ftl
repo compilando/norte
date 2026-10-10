@@ -1183,6 +1183,7 @@ panelbar-metadata = Detalles
 panelbar-log = Registro
 panelbar-disk-map = Mapa
 panelbar-timeline = Historial
+panelbar-search = Buscar
 panelbar-terminal = Terminal
 # El pie del panel de terminal: la ÚNICA tecla que el panel no le pasa al
 # shell, así que es la única que hay que anunciar.
@@ -1257,6 +1258,7 @@ menu-item-layout-processes = Procesos
 menu-item-layout-log = Registro
 menu-item-layout-disk-map = Mapa de disco
 menu-item-layout-timeline = Historial
+menu-item-layout-search = Panel de búsqueda
 menu-item-layout-terminal = Terminal
 menu-item-terminal-new = Nueva terminal
 menu-item-terminal-new-profile = Nueva terminal con…
@@ -1390,6 +1392,7 @@ help-cmd-layout-processes = muestra u oculta el panel de procesos
 help-cmd-layout-log = muestra u oculta el registro de esta sesión
 help-cmd-layout-disk-map = muestra u oculta el mapa de disco
 help-cmd-layout-timeline = muestra u oculta el historial
+help-cmd-layout-search = muestra u oculta el panel de búsqueda
 # No dice «muestra u oculta» como sus vecinos, y es a propósito: el segundo
 # toque devuelve el foco y deja el shell vivo, no lo cierra.
 help-cmd-layout-terminal = abre un terminal en un panel, o le devuelve el foco

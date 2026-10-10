@@ -100,6 +100,7 @@ pub const IMPLEMENTED: &[&str] = &[
     "layout.log",
     "layout.disk-map",
     "layout.timeline",
+    "layout.search",
     "layout.terminal",
     "terminal.new",
     "terminal.new-profile",
@@ -932,6 +933,7 @@ pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
         "terminal.decorate" => Effect::TerminalDecorate,
         "layout.disk-map" => Effect::ToggleSlot { kind: "disk-map" },
         "layout.timeline" => Effect::ToggleSlot { kind: "timeline" },
+        "layout.search" => Effect::ToggleSlot { kind: "search" },
         // The last of the seven from ADR 0058 (#291): the docked viewer.
         "layout.preview" => Effect::ToggleSlot { kind: "viewer" },
         "pane.tree" => Effect::ToggleSlot { kind: "tree" },

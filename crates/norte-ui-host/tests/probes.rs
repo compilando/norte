@@ -61,13 +61,22 @@ const NO_WINDOW: &[(&str, u32)] = &[("timeline", 359)];
 /// Different from [`NO_WINDOW`], and the difference matters: those are
 /// missing work, with their issue. These the window handles perfectly — what
 /// the harness lacks is the precondition.
-const NO_PROBE: &[(&str, &str)] = &[(
-    "terminal",
-    "a shell sits in a filesystem directory, and this harness's panels are \
-     `mem:///`. The panel REFUSES to open there, which is the correct \
-     behavior and the same as `app.terminal`: probing it would require a \
-     backend with real local paths",
-)];
+const NO_PROBE: &[(&str, &str)] = &[
+    (
+        "terminal",
+        "a shell sits in a filesystem directory, and this harness's panels are \
+         `mem:///`. The panel REFUSES to open there, which is the correct \
+         behavior and the same as `app.terminal`: probing it would require a \
+         backend with real local paths",
+    ),
+    (
+        "search",
+        "the window does not paint it yet (its slot projects as `Unsupported` \
+         until Task 10 of the search-panel plan, which removes this entry): \
+         there is no view to observe moving. It does not follow the cursor \
+         anyway: it searches a ROOT, not a row",
+    ),
+];
 
 const DO_NOT_FOLLOW: &[(&str, &str)] = &[
     (
