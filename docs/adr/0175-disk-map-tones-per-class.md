@@ -50,10 +50,14 @@ rectangles apart — with no wire change and no new claim about content.
    differ.
 2. Both frontends paint it from that one field. The window mixes the
    class colour into the panel at 45 % for tone 0, 30 % for tone 1 and
-   62 % for tone 2 (bridge 105). The terminal, which fills rectangles with
-   the reversed colour, darkens it by 30 % for tone 1 and lightens it by
-   25 % for tone 2. A palette colour, on a terminal without true colour,
-   cannot be mixed: tone 1 is the dimmed fill there.
+   62 % for tone 2 (bridge 105). The terminal fills each rectangle with the
+   class colour as a BACKGROUND (amended for #423: it was the role
+   reversed, which painted the text colour or the panel's own), darkened
+   by 30 % for tone 1 and lightened by 25 % for tone 2, and a label colour
+   that reads on it. The colour is mixed before it is degraded to the
+   terminal's depth, so a 256-colour terminal has the tones too. The class
+   colour itself is `ChildClass::colour_candidates`, shared with the
+   window's stylesheet.
 3. Colouring by content is not taken now, for the costs above. If it is
    ever done, it is a protocol ADR of its own and keeps the tones for
    ties.
@@ -62,7 +66,9 @@ rectangles apart — with no wire change and no new claim about content.
 
 - A map of one class still reads as one class (the legend is unchanged)
   with its rectangles separated.
-- On a 16- or 256-colour terminal there are two tones, the colour and its
-  dimmed fill, where the terminal honours dim under reverse.
+- On a 16-colour terminal the tones are quantised and may coincide.
+- A theme that gives `info`, `border-focus`, `selection` and `title` the
+  same colour (several presets do) makes folders, code and media share a
+  fill in both frontends: the tones separate neighbours, not classes.
 - The terminal computes the tones on every draw: `tiles` is quadratic in
   the rectangles shown, which a panel bounds to a few hundred in practice.
