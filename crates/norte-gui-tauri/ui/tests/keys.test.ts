@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AltSolo, isForTheField, keyInputOf } from "../src/keys";
+import { AltSolo, isForTheField, isPasteIntoTheBox, keyInputOf } from "../src/keys";
 
 function ev(init: KeyboardEventInit): KeyboardEvent {
   return new KeyboardEvent("keydown", init);
@@ -99,6 +99,41 @@ describe("an open text field", () => {
   it("and with no field open, nothing is kept", () => {
     expect(isForTheField(k("a"), false)).toBe(false);
     expect(isForTheField(k("Backspace"), false)).toBe(false);
+  });
+});
+
+describe("the open search box", () => {
+  const k = (
+    key: string,
+    mods: Partial<Record<"ctrl" | "alt" | "meta" | "shift", boolean>> = {},
+  ) => ({
+    key,
+    ctrl: mods.ctrl ?? false,
+    alt: mods.alt ?? false,
+    shift: mods.shift ?? false,
+    meta: mods.meta ?? false,
+  });
+
+  it("lets the paste chords through, so the native paste fires", () => {
+    // The box has no `<input>`: cancelling the chord cancelled the paste, and
+    // the `paste` event the box listens for never came.
+    expect(isPasteIntoTheBox(k("v", { ctrl: true }), true)).toBe(true);
+    expect(isPasteIntoTheBox(k("Insert", { shift: true }), true)).toBe(true);
+    expect(isPasteIntoTheBox(k("v", { meta: true }), true)).toBe(true);
+  });
+
+  it("but every other key is still the host's", () => {
+    expect(isPasteIntoTheBox(k("a"), true)).toBe(false);
+    expect(isPasteIntoTheBox(k("Enter"), true)).toBe(false);
+    expect(isPasteIntoTheBox(k("c", { ctrl: true }), true)).toBe(false);
+    expect(isPasteIntoTheBox(k("v", { ctrl: true, alt: true }), true)).toBe(false);
+    expect(isPasteIntoTheBox(k("v", { ctrl: true, shift: true }), true)).toBe(false);
+    expect(isPasteIntoTheBox(k("Insert"), true)).toBe(false);
+  });
+
+  it("and with the box closed, a paste chord is a key like any other", () => {
+    expect(isPasteIntoTheBox(k("v", { ctrl: true }), false)).toBe(false);
+    expect(isPasteIntoTheBox(k("Insert", { shift: true }), false)).toBe(false);
   });
 });
 
