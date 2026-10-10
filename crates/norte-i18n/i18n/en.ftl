@@ -844,6 +844,26 @@ cmd-ns-profile = Profile
 cmd-ns-task = Tasks
 cmd-ns-terminal = Terminal
 cmd-ns-viewer = Viewer
+# User commands (commands.toml, ADR 0177)
+cmd-ns-user = User
+user-cmd-unknown = no user command named { $id } in commands.toml
+user-cmd-remote = user commands run on local folders
+user-cmd-no-targets = { $label }: nothing selected
+user-cmd-too-long = { $label }: { $count } items do not fit on one command line
+user-cmd-missing = { $program } not found
+user-cmd-confirm-title = Run command
+user-cmd-confirm = { $count ->
+    [0] Run { $label }?
+    [one] Run { $label } on 1 item?
+   *[other] Run { $label } on { $count } items?
+}
+user-cmd-started = { $label } started
+user-cmd-ok = { $label } finished
+user-cmd-failed = { $label } exited with code { $code }
+user-cmd-signalled = { $label } was ended by a signal
+user-cmd-not-started = { $label } could not start: { $error }
+user-cmd-no-description = { $label } has no description
+msg-user-cmd-undefined = { $n } key(s) run user commands commands.toml does not define ({ $first })
 msg-goto-bad-path = that path cannot be read as a destination
 msg-goto-no-home = there is no HOME in the environment, so "~" names nothing
 help-cmd-app-settings = settings

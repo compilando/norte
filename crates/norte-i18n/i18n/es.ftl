@@ -849,6 +849,26 @@ cmd-ns-profile = Perfil
 cmd-ns-task = Tareas
 cmd-ns-terminal = Terminal
 cmd-ns-viewer = Visor
+# Comandos de usuario (commands.toml, ADR 0177)
+cmd-ns-user = Usuario
+user-cmd-unknown = no hay ningún comando de usuario { $id } en commands.toml
+user-cmd-remote = los comandos de usuario se ejecutan en carpetas locales
+user-cmd-no-targets = { $label }: no hay nada seleccionado
+user-cmd-too-long = { $label }: { $count } elementos no caben en una línea de órdenes
+user-cmd-missing = no se encuentra { $program }
+user-cmd-confirm-title = Ejecutar comando
+user-cmd-confirm = { $count ->
+    [0] ¿Ejecutar { $label }?
+    [one] ¿Ejecutar { $label } sobre 1 elemento?
+   *[other] ¿Ejecutar { $label } sobre { $count } elementos?
+}
+user-cmd-started = { $label } en marcha
+user-cmd-ok = { $label } terminó
+user-cmd-failed = { $label } salió con código { $code }
+user-cmd-signalled = { $label } terminó por una señal
+user-cmd-not-started = { $label } no pudo arrancar: { $error }
+user-cmd-no-description = { $label } no tiene descripción
+msg-user-cmd-undefined = { $n } tecla(s) ejecutan comandos de usuario que commands.toml no define ({ $first })
 msg-goto-bad-path = esa ruta no se puede leer como destino
 msg-goto-no-home = no hay HOME en el entorno, así que «~» no nombra nada
 help-cmd-app-settings = ajustes

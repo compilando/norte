@@ -1,5 +1,6 @@
 //! Frontend configuration: the shared scalar merge (`norte-config`) plus the
-//! frontend-only passes — `keymap.toml` layers and `openers.toml` (#28).
+//! frontend-only passes — `keymap.toml` layers, `openers.toml` (#28),
+//! `terminal.toml` and `commands.toml`.
 
 use std::path::{Path, PathBuf};
 
@@ -18,7 +19,8 @@ pub struct FrontendConfig {
     /// The merged scalars (preset, ui, daemon, hotlist, archive, ai, sources).
     /// `common.sources` is NOT grouped by layer: `norte-config::load` fills
     /// it with every layer's `norte.toml` first, and this module's `load`
-    /// then appends each layer's `keymap.toml`/`openers.toml` afterwards —
+    /// then appends each layer's `keymap.toml`/`openers.toml`/`terminal.toml`/
+    /// `commands.toml` afterwards —
     /// treat it as a set of files that participated, not an ordered log.
     pub common: CommonConfig,
     /// `keymap.toml` layers present, ascending precedence.

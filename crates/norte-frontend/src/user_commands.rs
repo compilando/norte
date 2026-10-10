@@ -16,8 +16,11 @@
 //! whole tokens, same contract as the openers. Only the user and system
 //! layers are read, never a project's (ADR 0177).
 
-use std::path::PathBuf;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 
+use norte_i18n::Lang;
+use norte_proto::VPath;
 use serde::Deserialize;
 
 /// What is wrong with a `commands.toml`.
@@ -190,8 +193,12 @@ impl UserCommands {
             if r.argv.first().is_none_or(String::is_empty) {
                 return Err(UserCommandError::EmptyArgv { id });
             }
+            // `skip(1)`: argv[0] is the program and is never expanded, so a
+            // `%x` there is just a (odd) program name. A code is `%` + ONE char.
             if let Some(code) = r.argv.iter().skip(1).find(|t| {
-                t.len() == 2 && t.starts_with('%') && !matches!(t.as_str(), "%f" | "%F" | "%d")
+                t.strip_prefix('%')
+                    .is_some_and(|rest| rest.chars().count() == 1)
+                    && !matches!(t.as_str(), "%f" | "%F" | "%d")
             }) {
                 return Err(UserCommandError::BadFieldCode {
                     id,
@@ -255,6 +262,190 @@ impl UserCommand {
     pub fn uses_targets(&self) -> bool {
         self.argv.iter().skip(1).any(|t| t == "%f" || t == "%F")
     }
+}
+
+/// Bytes an expanded argv may take before norte refuses it. Half of macOS's
+/// `ARG_MAX` (1 MiB, which includes the environment); Linux allows more.
+pub const ARGV_BUDGET: usize = 512 * 1024;
+
+/// A command ready to start: program as written (resolution is
+/// [`resolve`]'s, off the async thread), arguments expanded byte-safely.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Launch {
+    /// The command's id.
+    pub id: String,
+    /// Its label, for messages.
+    pub label: String,
+    /// The program, as written (not yet resolved on `PATH`).
+    pub program: OsString,
+    /// The expanded arguments, one element per argv token or path.
+    pub args: Vec<OsString>,
+    /// Where it runs.
+    pub cwd: PathBuf,
+    /// Background or terminal.
+    pub run_in: RunIn,
+    /// Re-list the panes when a background run exits.
+    pub refresh: bool,
+    /// Ask first.
+    pub confirm: bool,
+    /// How many targets it runs on (0 when the template takes none).
+    pub count: usize,
+}
+
+/// Why a command did not start. `key`/`args` feed Fluent, and every
+/// interpolated value is untrusted text, masked by [`Refusal::args`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    /// No command has this id.
+    Unknown {
+        /// The id asked for.
+        id: String,
+    },
+    /// The pane or a target is not a local path.
+    Remote,
+    /// The template needs a selection and there is none.
+    NoTargets {
+        /// The command's label.
+        label: String,
+    },
+    /// The expanded argv is over [`ARGV_BUDGET`].
+    TooLong {
+        /// The command's label.
+        label: String,
+        /// How many targets.
+        count: usize,
+    },
+    /// The program is not on `PATH`.
+    Missing {
+        /// The program as written.
+        program: String,
+    },
+}
+
+impl Refusal {
+    /// Its Fluent key.
+    #[must_use]
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::Unknown { .. } => "user-cmd-unknown",
+            Self::Remote => "user-cmd-remote",
+            Self::NoTargets { .. } => "user-cmd-no-targets",
+            Self::TooLong { .. } => "user-cmd-too-long",
+            Self::Missing { .. } => "user-cmd-missing",
+        }
+    }
+
+    /// Its Fluent arguments, masked for a terminal.
+    #[must_use]
+    pub fn args(&self) -> Vec<(&'static str, String)> {
+        let m = |s: &str| norte_encoding::mask_terminal_hazards(s);
+        match self {
+            Self::Unknown { id } => vec![("id", m(id))],
+            Self::Remote => vec![],
+            Self::NoTargets { label } => vec![("label", m(label))],
+            Self::TooLong { label, count } => {
+                vec![("label", m(label)), ("count", count.to_string())]
+            }
+            Self::Missing { program } => vec![("program", m(program))],
+        }
+    }
+
+    /// The status-bar line.
+    #[must_use]
+    pub fn message(&self, lang: Lang) -> String {
+        let args = self.args();
+        let refs: Vec<(&str, &str)> = args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        norte_i18n::ta_in(lang, self.key(), &refs)
+    }
+}
+
+/// `id` + the focused pane + its targets (marks, or the cursor) → a launch,
+/// or why not. Pure: no disk.
+///
+/// # Errors
+/// [`Refusal`] — unknown id, a remote pane, no selection for a `%f`/`%F`
+/// template, or an argv over [`ARGV_BUDGET`].
+pub fn request(
+    cmds: &UserCommands,
+    id: &str,
+    dir: &VPath,
+    targets: &[VPath],
+) -> Result<Launch, Refusal> {
+    use norte_vfs::native::vpath_to_native;
+    let cmd = cmds
+        .get(id)
+        .ok_or_else(|| Refusal::Unknown { id: id.to_owned() })?;
+    let dir_native = vpath_to_native(dir).map_err(|_| Refusal::Remote)?;
+    let files: Vec<PathBuf> = targets
+        .iter()
+        .map(vpath_to_native)
+        .collect::<Result<_, _>>()
+        .map_err(|_| Refusal::Remote)?;
+    if cmd.uses_targets() && files.is_empty() {
+        return Err(Refusal::NoTargets {
+            label: cmd.label.clone(),
+        });
+    }
+    let refs: Vec<&Path> = files.iter().map(PathBuf::as_path).collect();
+    let mut argv = crate::openers::expand_argv(&cmd.argv, &refs, &dir_native);
+    if argv.iter().map(|a| a.len() + 1).sum::<usize>() > ARGV_BUDGET {
+        return Err(Refusal::TooLong {
+            label: cmd.label.clone(),
+            count: files.len(),
+        });
+    }
+    if argv.is_empty() {
+        // `parse` refuses an empty argv; never panic if one slips through.
+        return Err(Refusal::Missing {
+            program: String::new(),
+        });
+    }
+    let program = argv.remove(0);
+    Ok(Launch {
+        id: cmd.id.clone(),
+        label: cmd.label.clone(),
+        program,
+        args: argv,
+        cwd: match &cmd.cwd {
+            Cwd::Pane => dir_native,
+            Cwd::Fixed(p) => p.clone(),
+        },
+        run_in: cmd.run_in,
+        refresh: cmd.refresh,
+        confirm: cmd.confirm,
+        count: if cmd.uses_targets() { files.len() } else { 0 },
+    })
+}
+
+/// Finds the launch's program on `PATH`.
+///
+/// Blocking: stats the disk — call it from `spawn_blocking` in async code.
+///
+/// # Errors
+/// [`Refusal::Missing`] when it is not there.
+pub fn resolve(launch: &Launch) -> Result<PathBuf, Refusal> {
+    resolve_in(launch, std::env::var_os("PATH").as_deref())
+}
+
+/// [`resolve`] against an explicit `PATH` value (for tests).
+///
+/// # Errors
+/// [`Refusal::Missing`] when it is not there.
+pub fn resolve_in(launch: &Launch, path_var: Option<&OsStr>) -> Result<PathBuf, Refusal> {
+    crate::openers::resolve_program_in(&launch.program, path_var).ok_or_else(|| Refusal::Missing {
+        program: launch.program.to_string_lossy().into_owned(),
+    })
+}
+
+/// The confirm dialog's question.
+#[must_use]
+pub fn confirm_text(launch: &Launch, lang: Lang) -> String {
+    let label = norte_encoding::mask_terminal_hazards(&launch.label);
+    norte_i18n::ta_in(
+        lang,
+        "user-cmd-confirm",
+        &[("label", &label), ("count", &launch.count.to_string())],
+    )
 }
 
 #[cfg(test)]
@@ -372,6 +563,20 @@ refresh = false
     }
 
     #[test]
+    fn a_non_ascii_field_code_is_refused_and_the_program_is_not_checked() {
+        let bad = "[[command]]\nid = \"a\"\nlabel = \"x\"\nargv = [\"a\", \"%é\"]\n";
+        assert_eq!(
+            UserCommands::parse(bad).unwrap_err(),
+            UserCommandError::BadFieldCode {
+                id: "a".into(),
+                code: "%é".into()
+            }
+        );
+        let prog = "[[command]]\nid = \"a\"\nlabel = \"x\"\nargv = [\"%x\"]\n";
+        assert!(UserCommands::parse(prog).is_ok(), "argv[0] is never a code");
+    }
+
+    #[test]
     fn a_literal_with_a_percent_inside_is_not_a_field_code() {
         // Only a WHOLE token `%x` is a code (openers.rs contract); `--q=%f`
         // and `100%` are literals and stay legal.
@@ -390,5 +595,144 @@ refresh = false
         assert_eq!(low.get("here").unwrap().label, "Mine");
         assert!(low.get("optimize-png").is_some(), "the rest survives");
         assert_eq!(low.iter().count(), 2);
+    }
+
+    fn vp(s: &str) -> VPath {
+        VPath::parse(s).expect("vpath")
+    }
+    fn cmds(src: &str) -> UserCommands {
+        UserCommands::parse(src).expect("valid")
+    }
+    const PNG: &str = "[[command]]\nid = \"png\"\nlabel = \"Optimize\"\nargv = [\"oxipng\", \"-o\", \"4\", \"%F\"]\n";
+
+    #[test]
+    fn every_field_code_expands_as_whole_elements() {
+        let c = cmds(
+            "[[command]]\nid = \"x\"\nlabel = \"X\"\nargv = [\"p\", \"%f\", \"--\", \"%F\", \"%d\"]\n",
+        );
+        let l = request(
+            &c,
+            "x",
+            &vp("file:///d"),
+            &[vp("file:///d/a"), vp("file:///d/b")],
+        )
+        .unwrap();
+        assert_eq!(l.program, std::ffi::OsString::from("p"));
+        let args: Vec<_> = l
+            .args
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["/d/a", "--", "/d/a", "/d/b", "/d"]);
+        assert_eq!(l.cwd, std::path::PathBuf::from("/d"));
+        assert_eq!(l.count, 2);
+        assert!(l.refresh && !l.confirm);
+    }
+
+    #[test]
+    fn fixed_cwd_wins_but_percent_d_is_still_the_pane() {
+        let c = cmds(
+            "[[command]]\nid = \"x\"\nlabel = \"X\"\nargv = [\"p\", \"%d\"]\ncwd = \"/srv\"\n",
+        );
+        let l = request(&c, "x", &vp("file:///d"), &[]).unwrap();
+        assert_eq!(l.cwd, std::path::PathBuf::from("/srv"));
+        assert_eq!(l.args, [std::ffi::OsString::from("/d")]);
+        assert_eq!(l.count, 0, "%d-only runs with no selection");
+    }
+
+    #[test]
+    fn refusals() {
+        let c = cmds(PNG);
+        assert_eq!(
+            request(&c, "nope", &vp("file:///d"), &[]),
+            Err(Refusal::Unknown { id: "nope".into() })
+        );
+        assert_eq!(
+            request(&c, "png", &vp("sftp://h/d"), &[vp("sftp://h/d/a")]),
+            Err(Refusal::Remote)
+        );
+        assert_eq!(
+            request(&c, "png", &vp("file:///d"), &[]),
+            Err(Refusal::NoTargets {
+                label: "Optimize".into()
+            })
+        );
+    }
+
+    #[test]
+    fn too_many_targets_are_refused_with_the_count() {
+        let c = cmds(PNG);
+        let name = "n".repeat(200);
+        let many: Vec<VPath> = (0..4000)
+            .map(|i| vp(&format!("file:///d/{name}{i}")))
+            .collect();
+        assert_eq!(
+            request(&c, "png", &vp("file:///d"), &many),
+            Err(Refusal::TooLong {
+                label: "Optimize".into(),
+                count: 4000
+            })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hostile_names_are_absolute_whole_elements() {
+        use std::os::unix::ffi::OsStrExt;
+        let c = cmds(PNG);
+        let dir = vp("file:///d");
+        let dash = norte_vfs::native::vpath_from_native(std::path::Path::new("/d/-rf")).unwrap();
+        let bytes = norte_vfs::native::vpath_from_native(std::path::Path::new(
+            std::ffi::OsStr::from_bytes(b"/d/caf\xe9 name"),
+        ))
+        .unwrap();
+        let l = request(&c, "png", &dir, &[dash, bytes]).unwrap();
+        assert_eq!(l.args[2].as_bytes(), b"/d/-rf", "a path, never a flag");
+        assert_eq!(
+            l.args[3].as_bytes(),
+            b"/d/caf\xe9 name",
+            "bytes intact, spaces kept in ONE element"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_finds_on_path_or_says_missing() {
+        let c = cmds("[[command]]\nid = \"x\"\nlabel = \"X\"\nargv = [\"sh\"]\n");
+        let l = request(&c, "x", &vp("file:///"), &[]).unwrap();
+        let p = resolve_in(&l, Some(std::ffi::OsStr::new("/bin:/usr/bin"))).expect("sh exists");
+        assert!(p.is_absolute());
+        assert_eq!(
+            resolve_in(&l, Some(std::ffi::OsStr::new("/nonexistent"))),
+            Err(Refusal::Missing {
+                program: "sh".into()
+            })
+        );
+    }
+
+    #[test]
+    fn every_message_key_exists_in_both_languages() {
+        for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+            let ids = norte_i18n::message_ids(lang);
+            for k in [
+                "user-cmd-unknown",
+                "user-cmd-remote",
+                "user-cmd-no-targets",
+                "user-cmd-too-long",
+                "user-cmd-missing",
+                "user-cmd-confirm",
+                "user-cmd-confirm-title",
+                "user-cmd-started",
+                "user-cmd-ok",
+                "user-cmd-failed",
+                "user-cmd-signalled",
+                "user-cmd-not-started",
+                "user-cmd-no-description",
+                "msg-user-cmd-undefined",
+                "cmd-ns-user",
+            ] {
+                assert!(ids.iter().any(|i| i == k), "{k} missing in {lang:?}");
+            }
+        }
     }
 }

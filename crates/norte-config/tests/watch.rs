@@ -143,8 +143,8 @@ async fn polling_detects_changes_in_commands_toml() {
 /// user's config dir does not hold only TOMLs: `index.db` (semantic index)
 /// and `journal.db`/`journal.db-shm` live there too, which `SQLite` writes
 /// while the app runs — and every write reloaded the config, closing the
-/// open help (F1) and palette and painting "config reloaded". Only the three
-/// TOML layers count, same as in the polling snapshot.
+/// open help (F1) and palette and painting "config reloaded". Only the
+/// config TOMLs (norte, keymap, openers, terminal, commands) count, same as in the polling snapshot.
 #[tokio::test]
 async fn watcher_ignores_neighbor_files_in_the_config_dir() {
     let d = dir_with(&[("norte.toml", "[keymap]\npreset = \"vim\"\n")]);
