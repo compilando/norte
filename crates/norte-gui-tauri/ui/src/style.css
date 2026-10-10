@@ -6023,7 +6023,10 @@ button.status-item:hover {
   opacity: 0.8;
 }
 
-/* One colour per class, from the theme's own roles (ADR 0037). */
+/* One colour per class, from the theme's own roles (ADR 0037). The terminal
+   reads the same list, in the same order, from
+   `ChildClass::colour_candidates` (norte-frontend, view/treemap.rs), where
+   the why lives: change one, change both. */
 [data-class="directory"] {
   --tile: var(--info-fg);
 }

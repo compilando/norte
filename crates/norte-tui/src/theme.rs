@@ -10,6 +10,8 @@ use norte_proto::EntryKind;
 use norte_theme::{Color, ColorDepth, FileKind, ResolvedColor, Role, Theme};
 use ratatui::style::{Color as RColor, Modifier, Style as RStyle};
 
+use norte_frontend::treemap::{ChildClass, Ground};
+
 pub use norte_frontend::theme::{ResolveError, resolve_theme};
 
 /// The resolved theme + the color depth it is painted at.
@@ -91,6 +93,49 @@ impl TuiTheme {
         self.convert(self.theme.file_style(name, map_kind(kind)))
     }
 
+    /// The fill of a disk-map rectangle of `class` in tone `shade`, and the
+    /// colour its label reads in: `(background, foreground)`.
+    ///
+    /// The class colour is the first of
+    /// [`ChildClass::colour_candidates`] the theme defines, toned
+    /// (ADR 0175) and degraded to this terminal's depth. It is mixed BEFORE
+    /// degrading, so a 256-colour terminal gets three tones too, not one.
+    /// `None` when the theme defines none (a monochrome one): the caller
+    /// falls back to the role's own style, reversed.
+    #[must_use]
+    pub fn class_fill(&self, class: ChildClass, shade: u8) -> Option<(RColor, RColor)> {
+        let colour = class
+            .colour_candidates()
+            .iter()
+            .find_map(|(role, ground)| {
+                let style = self.theme.style(*role);
+                match ground {
+                    Ground::Fg => style.fg,
+                    Ground::Bg => style.bg,
+                }
+            })?;
+        let toned = tone(colour, shade);
+        // Dark text on a light fill and the other way round: the class
+        // colour is what the theme chose for ITS text or fill, so what
+        // reads on it is decided from the colour, not from the theme.
+        let luma =
+            (299 * u32::from(toned.r) + 587 * u32::from(toned.g) + 114 * u32::from(toned.b)) / 1000;
+        let label = if luma > 140 {
+            Color {
+                r: 16,
+                g: 16,
+                b: 16,
+            }
+        } else {
+            Color {
+                r: 245,
+                g: 245,
+                b: 245,
+            }
+        };
+        Some((self.color(toned), self.color(label)))
+    }
+
     fn convert(&self, s: norte_theme::Style) -> RStyle {
         let mut out = RStyle::default();
         if let Some(c) = s.fg {
@@ -113,6 +158,25 @@ impl TuiTheme {
             ResolvedColor::Rgb(r, g, b) => RColor::Rgb(r, g, b),
             ResolvedColor::Indexed(i) => RColor::Indexed(i),
         }
+    }
+}
+
+/// A class colour in one of the disk map's tones (ADR 0175): `0` as the
+/// theme gives it, `1` darker by 30 %, `2` lighter by 25 %.
+fn tone(colour: Color, shade: u8) -> Color {
+    let mix = |v: u8, to: u8, pct: u16| {
+        let (v, to) = (u16::from(v), u16::from(to));
+        u8::try_from((v * (100 - pct) + to * pct) / 100).unwrap_or(u8::MAX)
+    };
+    let by = |to: u8, pct: u16| Color {
+        r: mix(colour.r, to, pct),
+        g: mix(colour.g, to, pct),
+        b: mix(colour.b, to, pct),
+    };
+    match shade {
+        1 => by(0, 30),
+        2 => by(255, 25),
+        _ => colour,
     }
 }
 

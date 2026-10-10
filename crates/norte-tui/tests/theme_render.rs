@@ -460,7 +460,9 @@ fn a_landed_disk_map_paints_its_children() {
         screen.join("\n")
     );
     // And the rectangles are FILLED: the label's cell carries the class
-    // colour as its background (reversed), not as text on nothing.
+    // colour as its background, not as text on nothing. (It asserted
+    // REVERSED until #423: the fill is now a real background colour, with
+    // a foreground chosen to read on it.)
     let buf = terminal.backend().buffer();
     let (y, line) = screen
         .iter()
@@ -473,7 +475,7 @@ fn a_landed_disk_map_paints_its_children() {
         .expect("x");
     let cell = &buf[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())];
     assert!(
-        cell.modifier.contains(ratatui::style::Modifier::REVERSED),
+        matches!(cell.bg, Color::Rgb(..)),
         "a filled rectangle: {cell:?}"
     );
 }
@@ -516,13 +518,158 @@ fn a_map_of_folders_paints_more_than_one_tone() {
     let mut terminal = Terminal::new(TestBackend::new(116, 37)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let buf = terminal.backend().buffer();
-    let fills: std::collections::BTreeSet<String> = buf
-        .content()
-        .iter()
-        .filter(|c| c.modifier.contains(ratatui::style::Modifier::REVERSED))
-        .map(|c| format!("{:?}", c.fg))
+    // The fill is the cell's BACKGROUND (#423), read where each label starts.
+    let fills: std::collections::BTreeSet<String> = (0..6)
+        .filter_map(|i| label_cell(buf, &format!("d{i}")))
+        .map(|c| format!("{:?}", c.bg))
         .collect();
     assert!(fills.len() >= 2, "one tone for every folder: {fills:?}");
+}
+
+/// The first cell of the label `name` on the screen, if it is painted.
+fn label_cell<'a>(
+    buf: &'a ratatui::buffer::Buffer,
+    name: &str,
+) -> Option<&'a ratatui::buffer::Cell> {
+    for y in 0..buf.area.height {
+        let text: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+        if let Some(b) = text.find(name) {
+            let x = text[..b].chars().count();
+            return Some(&buf[(u16::try_from(x).unwrap(), y)]);
+        }
+    }
+    None
+}
+
+/// One child per class, drawn under `theme`.
+fn class_map(theme: Theme) -> (TuiTheme, ratatui::buffer::Buffer) {
+    use norte_proto::methods::{DirUsageChild, FsDirUsageReportResult};
+    let mut app = app_con_dir(ColorDepth::Truecolor);
+    app.theme = TuiTheme::new(theme, ColorDepth::Truecolor);
+    app.open_disk_map();
+    let slot = app.disk_map_slot().expect("open");
+    let dir = app.focused().dir().clone();
+    let children: Vec<DirUsageChild> = [
+        ("film.mp4", EntryKind::File, 900_000u64),
+        ("shot.png", EntryKind::File, 800_000),
+        ("book.pdf", EntryKind::File, 700_000),
+        ("disk.iso", EntryKind::File, 600_000),
+        ("pack.zip", EntryKind::File, 500_000),
+        ("main.rs", EntryKind::File, 400_000),
+        ("folder", EntryKind::Dir, 300_000),
+    ]
+    .into_iter()
+    .map(|(name, kind, bytes)| DirUsageChild {
+        name: Segment::new(name.as_bytes().to_vec()).unwrap(),
+        kind,
+        bytes,
+        entries: 1,
+        partial: false,
+    })
+    .collect();
+    let map = app.panes.disk_map_mut(slot).expect("map");
+    map.aim(dir);
+    map.land(
+        FsDirUsageReportResult {
+            children,
+            listed: true,
+            ..FsDirUsageReportResult::default()
+        },
+        true,
+    );
+    let mut terminal = Terminal::new(TestBackend::new(116, 37)).expect("terminal");
+    terminal.draw(|f| ui::draw(f, &app)).expect("draw");
+    (app.theme.clone(), terminal.backend().buffer().clone())
+}
+
+/// The disk map painted its rectangles in the text colour, and left audio,
+/// video and code as holes in the panel (#423): the roles it borrowed carry
+/// the theme's background as their FOREGROUND (`selection`, `match`), so
+/// reversing them filled with the panel; `regular` was the text; `badge` and
+/// `muted` have no colour in most themes. Every class now gets a fill that
+/// is neither, on every preset, and the fills tell the classes apart.
+#[test]
+fn every_class_of_the_disk_map_has_its_own_fill_on_every_preset() {
+    use norte_frontend::treemap::{ChildClass, Ground};
+    let classes = [
+        ("film.mp4", ChildClass::Media),
+        ("shot.png", ChildClass::Image),
+        ("book.pdf", ChildClass::Document),
+        ("disk.iso", ChildClass::Other),
+        ("pack.zip", ChildClass::Archive),
+        ("main.rs", ChildClass::Code),
+        ("folder", ChildClass::Directory),
+    ];
+    for name in norte_theme::preset_names() {
+        let theme = Theme::preset(name).unwrap().unwrap();
+        let (tt, buf) = class_map(theme.clone());
+        let mut panel = vec![Color::Reset];
+        for role in [
+            norte_theme::Role::Background,
+            norte_theme::Role::PaneBackground,
+        ] {
+            panel.extend(tt.role(role).bg);
+        }
+        let text = tt.role(norte_theme::Role::Regular).fg;
+        let mut seen: Vec<(&str, Color)> = Vec::new();
+        for (file, class) in classes {
+            let resolved = class.colour_candidates().iter().find_map(|(role, ground)| {
+                let s = theme.style(*role);
+                match ground {
+                    Ground::Fg => s.fg,
+                    Ground::Bg => s.bg,
+                }
+            });
+            let Some(resolved) = resolved else {
+                continue;
+            };
+            let cell = label_cell(&buf, file).unwrap_or_else(|| panic!("{name}: {file} labelled"));
+            assert!(
+                !panel.contains(&cell.bg),
+                "{name}: {file} is a hole in the panel: {:?}",
+                cell.bg
+            );
+            // Some themes DO give a class the text colour (vscode's `title`
+            // is its `regular`): that is the theme's choice and the window
+            // paints it too; only a map that fell into it by accident fails.
+            let theme_says_text = theme.style(norte_theme::Role::Regular).fg == Some(resolved);
+            assert!(
+                theme_says_text || Some(cell.bg) != text,
+                "{name}: {file} is painted in the text colour: {:?}",
+                cell.bg
+            );
+            assert!(
+                !cell.modifier.contains(ratatui::style::Modifier::REVERSED),
+                "{name}: {file} is filled, not reversed"
+            );
+            assert_ne!(cell.fg, cell.bg, "{name}: {file}'s label reads");
+            seen.push((file, cell.bg));
+        }
+        // The classes stand apart, as far as the theme lets them: several
+        // presets give `info`, `border-focus`, `selection` and `title` one
+        // and the same blue, so folders, code and media can share a fill
+        // there (the window has the same collisions: it reads the same
+        // table). What a theme cannot give, the map cannot invent; what it
+        // can, it must show: at least three different fills.
+        let distinct: std::collections::BTreeSet<String> =
+            seen.iter().map(|(_, c)| format!("{c:?}")).collect();
+        assert!(
+            distinct.len() >= 3,
+            "{name}: the classes are told apart: {seen:?}"
+        );
+    }
+}
+
+/// A theme with no colour at all keeps what the map always did: the role's
+/// own style, reversed.
+#[test]
+fn a_monochrome_theme_still_reverses_the_map() {
+    let (_, buf) = class_map(Theme::from_toml("name = \"mono\"").unwrap());
+    let cell = label_cell(&buf, "film.mp4").expect("labelled");
+    assert!(
+        cell.modifier.contains(ratatui::style::Modifier::REVERSED),
+        "{cell:?}"
+    );
 }
 
 /// A long measurement says what it has counted in the title: "measuring"

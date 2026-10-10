@@ -435,25 +435,6 @@ fn frame_lines<'a>(marco: &norte_frontend::frame::StyledFrame, theme: &TuiTheme)
         .collect()
 }
 
-/// A class colour in one of the map's tones (ADR 0175): `0` as the theme
-/// gives it, `1` darker, `2` lighter. Only a true colour can be mixed; a
-/// palette colour comes back as it is, and the caller dims it instead.
-pub(crate) fn tone(colour: ratatui::style::Color, shade: u8) -> ratatui::style::Color {
-    use ratatui::style::Color;
-    let Color::Rgb(r, g, b) = colour else {
-        return colour;
-    };
-    let mix = |v: u8, to: u8, pct: u16| {
-        let (v, to) = (u16::from(v), u16::from(to));
-        u8::try_from((v * (100 - pct) + to * pct) / 100).unwrap_or(u8::MAX)
-    };
-    match shade {
-        1 => Color::Rgb(mix(r, 0, 30), mix(g, 0, 30), mix(b, 0, 30)),
-        2 => Color::Rgb(mix(r, 255, 25), mix(g, 255, 25), mix(b, 255, 25)),
-        _ => colour,
-    }
-}
-
 /// The disk map (phase 4): what the directory is made of, in rectangles.
 ///
 /// The frame is laid out by [`norte_frontend::treemap::squarify`] with the
@@ -525,29 +506,27 @@ pub(crate) fn draw_disk_map(
     // layout: touching rectangles of one class — a home of folders — are
     // told apart.
     let tiles = norte_frontend::treemap::tiles(&map.report().children, inside.width, inside.height);
-    let shade_at = |x: u16, y: u16| {
+    let tile_at = |x: u16, y: u16| {
         tiles
             .iter()
             .find(|t| x >= t.x && x < t.x + t.w && y >= t.y && y < t.y + t.h)
-            .map_or(0, |t| t.shade)
     };
     for (y, (line, src)) in lines.iter_mut().zip(&marco.lines).enumerate() {
         let y = u16::try_from(y).unwrap_or(u16::MAX);
         let mut x: u16 = 0;
         for (span, s) in line.spans.iter_mut().zip(src) {
             if s.role.is_some() {
-                let shade = shade_at(x, y);
-                if let Some(fg) = span.style.fg {
-                    let toned = tone(fg, shade);
-                    span.style.fg = Some(toned);
-                    // A palette colour cannot be mixed: the darker tone is
-                    // the dimmed fill, so a 256-colour terminal still tells
-                    // two of them apart.
-                    if toned == fg && shade == 1 {
-                        span.style = span.style.add_modifier(ratatui::style::Modifier::DIM);
-                    }
-                }
-                span.style = span.style.add_modifier(ratatui::style::Modifier::REVERSED);
+                // The class colour as a BACKGROUND, with a label colour that
+                // reads on it (#423). Reversing a role painted the text
+                // colour, or the panel's own where a role's foreground is
+                // the theme's background.
+                let fill = tile_at(x, y).and_then(|t| app.theme.class_fill(t.class, t.shade));
+                span.style = match fill {
+                    Some((bg, fg)) => Style::default().bg(bg).fg(fg),
+                    // A monochrome theme has no colour to fill with: the
+                    // role's own style, reversed, as it always was.
+                    None => span.style.add_modifier(ratatui::style::Modifier::REVERSED),
+                };
             }
             // In the layout's cells, which `squarify` counts as chars: a span
             // is `cell_count` of them, label and padding.

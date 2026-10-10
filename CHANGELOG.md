@@ -55,6 +55,11 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The terminal's disk map paints every class in a colour of its own**
+  (#423): rectangles came out in the text colour, and audio, video and
+  code as holes in the panel. They are filled with the class colour the
+  window already used, toned per ADR 0175, with a label that reads on
+  it; a rectangle too narrow for "name size" shows the name alone.
 - **A plain copy, move, delete or quit question no longer offers
   "y approve · n deny"** in the terminal: those read as an agent's
   approval. The footer says Enter and Esc; `y` and `n` still answer.
