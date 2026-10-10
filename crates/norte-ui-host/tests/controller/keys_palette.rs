@@ -403,6 +403,32 @@ async fn vims_colon_types_inside_the_box() {
     assert_eq!(g.query, ">:");
 }
 
+/// The same `:` as most keyboards send it — with Shift held — still types a
+/// colon inside the box, and does not reopen it.
+#[tokio::test]
+async fn vims_shifted_colon_types_inside_the_box() {
+    let (h, _snap) = host_tree_with_preset(fake_tree(), "vim").await;
+    let mut sub = h.subscribe();
+    h.dispatch(key_mod(":", false, true))
+        .await
+        .expect("host alive");
+    let g = next_goto(&mut sub).await.expect("`:` opens the box");
+    assert_eq!(g.query, ">");
+    h.dispatch(key_mod(":", false, true))
+        .await
+        .expect("host alive");
+    let g = next_goto(&mut sub).await.expect("open");
+    assert_eq!(g.query, ">:");
+}
+
+/// A preset that does not bind `app.goto` (Krusader) puts no key on the menu
+/// bar's box: an empty chord, not a made-up one.
+#[tokio::test]
+async fn a_preset_without_app_goto_shows_no_chord_on_the_box() {
+    let (_h, snap) = host_tree_with_preset(fake_tree(), "krusader").await;
+    assert_eq!(snap.menu.goto_chord, "");
+}
+
 /// A key bound to `lua:` in the user's layer says it is not here (ADR 0110).
 ///
 /// The window does not run Lua. It used to resolve it as available — the Lua

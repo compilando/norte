@@ -278,6 +278,39 @@ async fn a_paste_lands_in_the_query_first_line_only() {
     );
 }
 
+/// A DIMMED command row, confirmed by Enter or by a click, runs nothing: the
+/// box closes and the status bar says why, in the row's own words.
+#[tokio::test]
+async fn a_dimmed_row_says_why_and_runs_nothing() {
+    let (h, _snap) = host_tree(fake_tree()).await;
+    let mut sub = h.subscribe();
+    // The cursor starts on `docs`, a directory: there is nothing to view.
+    for confirm in [press("Enter"), UiAction::GotoActivateRow { row: 0 }] {
+        h.dispatch(ctrl_g()).await.expect("host alive");
+        for c in ">pane.view".chars() {
+            h.dispatch(press(&c.to_string())).await.expect("host alive");
+        }
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let g = next_snapshot(&mut sub).await.goto.expect("open");
+        let Some(norte_ui_host::dto::GotoLineView::Row {
+            desc, unavailable, ..
+        }) = g.lines.first()
+        else {
+            panic!("commands mode has no headers: {:?}", g.lines);
+        };
+        assert_eq!(desc, "pane.view");
+        assert!(!unavailable.is_empty(), "the row is dimmed, with a reason");
+        let why = unavailable.clone();
+
+        h.dispatch(confirm).await.expect("host alive");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = next_snapshot(&mut sub).await;
+        assert!(snap.goto.is_none(), "the box closes");
+        assert!(snap.viewer.is_none(), "and nothing ran");
+        assert_eq!(snap.status.message.as_deref(), Some(why.as_str()));
+    }
+}
+
 /// The query the window paints is MASKED, as the TUI paints it: a bidi
 /// control pasted into the box would otherwise reorder the line it is in.
 #[tokio::test]
