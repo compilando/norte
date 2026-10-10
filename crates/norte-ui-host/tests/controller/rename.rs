@@ -1476,9 +1476,9 @@ async fn in_read_only_no_plan_is_requested() {
     }))
     .await
     .expect("host alive");
-    let p = next_palette(&mut sub).await.expect("the palette opens");
+    let g = next_goto(&mut sub).await.expect("the box opens");
     assert!(
-        !p.rows.iter().any(|r| r.text == "pane.ai-rename"),
+        !goto_descs(&g).iter().any(|d| d == "pane.ai-rename"),
         "a read-only window does not offer requesting a plan"
     );
     settle().await;
@@ -1609,11 +1609,11 @@ async fn with_a_plan_in_flight_escape_closes_the_palette() {
     }))
     .await
     .expect("host alive");
-    let _ = next_palette(&mut sub).await.expect("opens");
+    let _ = next_goto(&mut sub).await.expect("opens");
     h.dispatch(press("Escape")).await.expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let snapshot = next_snapshot(&mut sub).await;
-    assert!(snapshot.palette.is_none(), "Escape closed the palette");
+    assert!(snapshot.goto.is_none(), "Escape closed the box");
 
     // And the plan is still alive: released now, it lands. Through the
     // snapshot, for the reason the filter test gives.

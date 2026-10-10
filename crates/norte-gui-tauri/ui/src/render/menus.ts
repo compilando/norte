@@ -10,7 +10,6 @@ import type {
   PanelBarView,
   WizardView,
   GotoView,
-  PaletteView,
   TabGroupView,
   WhichKeyView,
   WindowVerb,
@@ -299,6 +298,37 @@ function markMenuCursor(painted: PaintedMenu, cursor: number): void {
 }
 
 /**
+ * The COMMAND CENTRE (ADR 0172): VS Code's box, which in norte is the "go
+ * anywhere" box. Between the menus and the buttons, in the flow. It names a
+ * button, not a command: the host maps `goto` (ADR 0069). The chord is the
+ * `app.goto` one, empty when the preset binds none.
+ */
+function commandCenter(this: Screen, label: string, chord: string): HTMLButtonElement {
+  const center = document.createElement("button");
+  center.type = "button";
+  center.className = "command-center";
+  center.setAttribute("aria-label", label);
+  const glass = panelIcon(document, "ui:search");
+  if (glass !== null) {
+    center.append(glass);
+  }
+  const text = document.createElement("span");
+  text.className = "command-center-label";
+  text.textContent = label;
+  center.append(text);
+  if (chord !== "") {
+    const key = document.createElement("span");
+    key.className = "command-center-chord";
+    key.textContent = chord;
+    center.append(key);
+  }
+  center.addEventListener("click", () => {
+    this.send({ action: "activity_activate", id: "goto" });
+  });
+  return center;
+}
+
+/**
  * The menu bar, and the dropdown if one is open.
  *
  * The same commands as the keyboard, sorted by topic. It adds no
@@ -366,25 +396,10 @@ export function paintMenu(
     });
     bar.append(button);
   }
-  if (custom) {
-    // The COMMAND CENTRE (ADR 0172): VS Code's box in the middle of its
-    // title bar, which in norte is "go anywhere". Between the menus and the
-    // buttons, in the flow. It names a button, not a command: the host maps
-    // `goto` (ADR 0069).
-    const center = document.createElement("button");
-    center.type = "button";
-    center.className = "command-center";
-    const glass = panelIcon(document, "ui:search");
-    if (glass !== null) {
-      center.append(glass);
-    }
-    const label = document.createElement("span");
-    label.textContent = this.t("menu-item-app-goto");
-    center.append(label);
-    center.addEventListener("click", () => {
-      this.send({ action: "activity_activate", id: "goto" });
-    });
-    bar.append(center);
+  // With the native title bar the box lives in the menu bar, so with the bar
+  // hidden there is no box.
+  if (custom || menu.bar) {
+    bar.append(commandCenter.call(this, this.t("goto-box-label"), menu.goto_chord ?? ""));
   }
   // The layout buttons (ADR 0133), on the right edge: one icon per command,
   // with its name and its shortcut on hover. A click comes back as the id;
@@ -504,75 +519,93 @@ export function paintMenu(
   }
 }
 
-/** The command palette. */
-export function paintPalette(this: Screen, palette: PaletteView | null): void {
-  if (palette === null) {
-    this.paletteRoot.replaceChildren();
-    this.paletteRoot.dataset["open"] = "false";
+/** The painted box, so a cursor-only change marks it in place. */
+interface PaintedGoto {
+  list: HTMLElement | null;
+  /** By line index: headers leave holes. */
+  rows: (HTMLElement | undefined)[];
+  /** The row the host last heard of: the cursor, or the one pointed since. */
+  pointed: number | null;
+  doc: Document;
+  onPaste: (e: ClipboardEvent) => void;
+}
+
+const paintedGotos = new WeakMap<HTMLElement, PaintedGoto>();
+
+/**
+ * Cancelling `beforepaste` is WebKit's hook to ENABLE Paste: with nothing
+ * editable focused (the box has no `<input>`) its Paste command is disabled
+ * and Ctrl+V would never fire the `paste` the box listens for.
+ */
+function enablePaste(e: Event): void {
+  e.preventDefault();
+}
+
+function markGotoCursor(painted: PaintedGoto, cursor: number | null): void {
+  painted.pointed = cursor;
+  for (const [i, row] of painted.rows.entries()) {
+    row?.setAttribute("aria-selected", String(i === cursor));
+  }
+  if (cursor === null) {
+    painted.list?.removeAttribute("aria-activedescendant");
     return;
   }
-  this.paletteRoot.dataset["open"] = "true";
-  const box = document.createElement("section");
-  box.className = "palette";
-  // Modal: while it is open, the keys are its own — and the host knows it,
-  // so the screen reader has to know it too.
-  box.setAttribute("role", "dialog");
-  box.setAttribute("aria-modal", "true");
-  box.setAttribute("aria-label", this.t("palette-title"));
+  painted.list?.setAttribute("aria-activedescendant", `goto-row-${String(cursor)}`);
+  // With an empty query, the sections can go past the box's height, and the
+  // list is rebuilt on every patch with the scroll at the top: without this,
+  // going down moved an invisible cursor and Enter went to a spot the reader
+  // could not see.
+  revealInView(painted.rows[cursor]);
+}
 
-  const query = document.createElement("div");
-  query.className = "palette-query";
-  query.textContent = palette.query;
-  const count = document.createElement("span");
-  count.className = "palette-count";
-  count.textContent = `${String(palette.rows.length)}/${String(palette.total)}`;
-  query.append(count);
-  box.append(query);
+/** A combining mark (variation selectors are marks too) or a ZWJ: no width. */
+const ZERO_WIDTH = /^(?:\p{M}|\u{200D})$/u;
 
-  const list = document.createElement("ul");
-  list.className = "palette-rows";
-  list.setAttribute("role", "listbox");
-  for (const [i, r] of palette.rows.entries()) {
-    const row = document.createElement("li");
-    row.className = "palette-row";
-    row.id = `palette-row-${String(i)}`;
-    row.setAttribute("role", "option");
-    row.setAttribute("aria-selected", String(palette.cursor === i));
-    row.dataset["enabled"] = String(r.enabled);
-    row.dataset["hostile"] = String(r.hostile);
-    row.dataset["recent"] = String(r.recent === true);
-    // The human label first and whole, the id dimmed, the chord on the
-    // right: that is the reading order. The id stays in the DOM because it
-    // is what a reader who already knows it types.
-    const desc = document.createElement("span");
-    desc.className = "palette-desc";
-    desc.textContent = r.desc;
-    const text = document.createElement("span");
-    text.className = "palette-text";
-    text.textContent = r.text;
-    const chord = document.createElement("span");
-    chord.className = "palette-chord";
-    chord.textContent = r.chord;
-    row.append(desc, text, chord);
-    if (r.hostile) {
-      // Only a PLUGIN row can be, and this is the screen where you choose
-      // what third-party code to run: masked text that travels without
-      // saying so reads as trustworthy.
-      row.append(badge(this.t("hostile-name")));
+/**
+ * `text` with the characters at `positions` (code-point indices, as the
+ * host's matcher counts them) wrapped in `<mark>`, a run of consecutive ones
+ * in a single mark. Names are hostile input: only text nodes and
+ * `textContent`, and a position past the end is ignored.
+ *
+ * A zero-width char (an NFD accent, a ZWJ, a variation selector) stays with
+ * the char before it whatever `positions` says, as in the TUI's
+ * `marked_spans`: the matcher marks the `e` of an NFD "Café", not its accent.
+ */
+export function markedText(
+  text: string,
+  positions: readonly number[] | undefined,
+): DocumentFragment {
+  const out = document.createDocumentFragment();
+  const marked = new Set(positions ?? []);
+  let run = "";
+  let runMarked = false;
+  const flush = (): void => {
+    if (run === "") {
+      return;
     }
-    list.append(row);
+    if (runMarked) {
+      const mark = document.createElement("mark");
+      mark.textContent = run;
+      out.append(mark);
+    } else {
+      out.append(document.createTextNode(run));
+    }
+    run = "";
+  };
+  for (const [i, ch] of Array.from(text).entries()) {
+    if (run !== "" && ZERO_WIDTH.test(ch)) {
+      run += ch;
+      continue;
+    }
+    const m = marked.has(i);
+    if (m !== runMarked) {
+      flush();
+      runMarked = m;
+    }
+    run += ch;
   }
-  if (palette.cursor !== null) {
-    list.setAttribute("aria-activedescendant", `palette-row-${String(palette.cursor)}`);
-  }
-  if (palette.rows.length === 0) {
-    const empty = document.createElement("li");
-    empty.className = "empty";
-    empty.textContent = this.t("palette-empty");
-    list.append(empty);
-  }
-  box.append(list);
-  this.paletteRoot.replaceChildren(box);
+  flush();
+  return out;
 }
 
 /**
@@ -582,24 +615,83 @@ export function paintPalette(this: Screen, palette: PaletteView | null): void {
  * here it is only painted.
  */
 export function paintGoto(this: Screen, goto: GotoView | null): void {
+  const before = paintedGotos.get(this.gotoRoot);
   if (goto === null) {
+    if (before !== undefined) {
+      before.doc.removeEventListener("paste", before.onPaste, true);
+      before.doc.removeEventListener("beforepaste", enablePaste, true);
+      paintedGotos.delete(this.gotoRoot);
+    }
+    // Recorded as closed, so that reopening with the same shape paints.
+    unchanged(this.gotoRoot, "closed");
     this.gotoRoot.replaceChildren();
     this.gotoRoot.dataset["open"] = "false";
     return;
   }
+  // The cursor stays out of the signature (see `paintMenu`): a cursor-only
+  // change moves the highlight in place.
+  const { cursor, ...shape } = goto;
+  if (unchanged(this.gotoRoot, JSON.stringify(shape))) {
+    if (before !== undefined) {
+      markGotoCursor(before, cursor);
+    }
+    return;
+  }
   this.gotoRoot.dataset["open"] = "true";
+  // ONE paste listener while the box is open: the box has no input of its
+  // own, so a paste is the host's to put in the query. A dialog's own field
+  // keeps its paste.
+  const doc = this.gotoRoot.ownerDocument;
+  const onPaste =
+    before?.onPaste ??
+    ((e: ClipboardEvent): void => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      ) {
+        return;
+      }
+      e.preventDefault();
+      this.send({
+        action: "goto_paste",
+        text: e.clipboardData?.getData("text/plain") ?? "",
+      });
+    });
+  if (before === undefined) {
+    doc.addEventListener("paste", onPaste, true);
+    doc.addEventListener("beforepaste", enablePaste, true);
+  }
+  const painted: PaintedGoto = { list: null, rows: [], pointed: cursor, doc, onPaste };
+  paintedGotos.set(this.gotoRoot, painted);
+  const mode = goto.mode ?? "places";
   const box = document.createElement("section");
-  // The palette's classes: it is the same screen shape — a query and a list
-  // that narrows — and two stylesheets for the same thing drift apart.
+  // The `.palette*` classes: the box is the command palette too (`>`), and
+  // two stylesheets for the same thing drift apart.
   box.className = "palette goto";
+  box.dataset["mode"] = mode;
   box.setAttribute("role", "dialog");
   box.setAttribute("aria-modal", "true");
-  box.setAttribute("aria-label", this.t("goto-title"));
+  box.setAttribute(
+    "aria-label",
+    this.t(
+      mode === "commands"
+        ? "palette-title"
+        : mode === "help"
+          ? "goto-title-help"
+          : "goto-title",
+    ),
+  );
 
   const query = document.createElement("div");
   query.className = "palette-query";
   query.textContent = goto.query;
   box.append(query);
+  if (goto.hint !== undefined && goto.hint !== "") {
+    const hint = document.createElement("div");
+    hint.className = "goto-hint";
+    hint.textContent = goto.hint;
+    box.append(hint);
+  }
 
   const list = document.createElement("ul");
   list.className = "palette-rows";
@@ -618,28 +710,55 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
     item.className = "palette-row";
     item.id = `goto-row-${String(i)}`;
     item.setAttribute("role", "option");
-    item.setAttribute("aria-selected", String(goto.cursor === i));
     item.dataset["hostile"] = String(l.hostile);
+    item.dataset["recent"] = String(l.recent === true);
+    if (l.unavailable !== undefined && l.unavailable !== "") {
+      // Dimmed, not hidden, and still clickable: the host refuses with the
+      // reason, which the tooltip gives up front.
+      item.dataset["unavailable"] = "true";
+      item.setAttribute("aria-disabled", "true");
+      item.title = l.unavailable;
+    }
+    if (l.category !== undefined && l.category !== "") {
+      const category = document.createElement("span");
+      category.className = "goto-category";
+      category.textContent = l.category;
+      item.append(category);
+    }
     const text = document.createElement("span");
     text.className = "palette-text";
     // Cut from the LEFT: these are places, and what tells two of them apart
     // is their end — three rows of "/tmp/claude-1000/-…" said nothing
     // (2026-10-08).
-    cutStart(text).textContent = l.text;
+    cutStart(text).replaceChildren(markedText(l.text, l.positions));
     const desc = document.createElement("span");
     desc.className = "palette-desc";
     desc.textContent = l.desc;
     item.append(text, desc);
+    if (l.chord !== undefined && l.chord !== "") {
+      const chord = document.createElement("span");
+      chord.className = "palette-chord";
+      chord.textContent = l.chord;
+      item.append(chord);
+    }
     if (l.hostile) {
       // A masked name on the screen where you choose where to go: the reader
       // has to know it is not really called that.
       item.append(badge(this.t("hostile-name")));
     }
+    item.addEventListener("mousemove", () => {
+      if (painted.pointed !== i) {
+        painted.pointed = i;
+        this.send({ action: "goto_point_row", row: i });
+      }
+    });
+    item.addEventListener("click", () => {
+      this.send({ action: "goto_activate_row", row: i });
+    });
+    painted.rows[i] = item;
     list.append(item);
   }
-  if (goto.cursor !== null) {
-    list.setAttribute("aria-activedescendant", `goto-row-${String(goto.cursor)}`);
-  }
+  painted.list = list;
   if (goto.lines.length === 0) {
     const empty = document.createElement("li");
     empty.className = "empty";
@@ -648,11 +767,7 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
   }
   box.append(list);
   this.gotoRoot.replaceChildren(box);
-  // With an empty query, the sections can go past the box's height, and the
-  // list is rebuilt on every patch with the scroll at the top: without this,
-  // going down moved an invisible cursor and Enter went to a spot the reader
-  // could not see.
-  revealInView(list.querySelector('[aria-selected="true"]') ?? undefined);
+  markGotoCursor(painted, cursor);
 }
 
 /** What can follow a half-finished prefix. */

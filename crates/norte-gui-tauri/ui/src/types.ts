@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 107;
+export const BRIDGE_VERSION = 108;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -960,31 +960,22 @@ export interface WizardView {
   hint: string;
 }
 
-export interface PaletteRowView {
-  text: string;
-  desc: string;
-  chord: string;
-  enabled: boolean;
-  /** What is painted DIFFERS from what the row's source declares. Can only
-   *  be true for a PLUGIN row, and this is the screen where you choose what
-   *  third-party code to run. */
-  hostile: boolean;
-  /** Goes up top for being among the last launched (only with an empty
-   *  query). Optional: a host older than bridge 63 does not send it. */
-  recent?: boolean;
-}
-
-export interface PaletteView {
-  query: string;
-  rows: PaletteRowView[];
-  cursor: number | null;
-  total: number;
-}
-
 /** A "go to" line (bridge 77): a section header or a row. */
 export type GotoLineView =
   | { line: "header"; title: string }
-  | { line: "row"; text: string; desc: string; hostile: boolean };
+  | {
+      line: "row";
+      text: string;
+      desc: string;
+      hostile: boolean;
+      /** Bridge 108; empty or absent = none. */
+      chord?: string;
+      category?: string;
+      unavailable?: string;
+      recent?: boolean;
+      /** Char indices of `text` the query matched; ignore past its end. */
+      positions?: number[];
+    };
 
 /** "Go to anywhere" (#357, bridge 77). The cursor's index is into `lines`,
  *  and never lands on a header. */
@@ -993,6 +984,10 @@ export interface GotoView {
   lines: GotoLineView[];
   cursor: number | null;
   empty: string;
+  /** Which list the query asks for (bridge 108). */
+  mode?: "places" | "commands" | "help";
+  /** The empty places box's prefix hint (bridge 108). */
+  hint?: string;
 }
 
 export interface ProfileRowView {
@@ -1039,6 +1034,8 @@ export interface MenuView {
   /** The dropdown's entries; empty if there is none. */
   items: MenuItemView[];
   cursor: number;
+  /** The first chord of `app.goto`, empty if unbound (bridge 108). */
+  goto_chord?: string;
 }
 
 /** An entry of the right-click menu (bridge 107). */
@@ -1707,7 +1704,6 @@ export interface ViewSnapshot {
    *  earlier host does not send it, and then there is no band. */
   row_stripes?: boolean;
   profiles: ProfilePickerView | null;
-  palette: PaletteView | null;
   /** "Go to anywhere" (bridge 77), if it is open. Optional: an earlier host
    *  does not send it. */
   goto?: GotoView | null;
@@ -1797,7 +1793,6 @@ export type ViewChange =
   | { change: "panel_bar"; panel_bar: PanelBarView }
   | { change: "status_items"; status_items: StatusItemView[] }
   | { change: "profiles"; profiles: ProfilePickerView | null }
-  | { change: "palette"; palette: PaletteView | null }
   | { change: "goto"; goto: GotoView | null }
   | { change: "wizard"; wizard: WizardView | null }
   | { change: "splash"; splash: SplashView | null }
@@ -2002,6 +1997,9 @@ export type UiAction =
   | { action: "context_menu_point_row"; row: number }
   | { action: "context_menu_activate_row"; row: number }
   | { action: "context_menu_close" }
+  | { action: "goto_point_row"; row: number }
+  | { action: "goto_activate_row"; row: number }
+  | { action: "goto_paste"; text: string }
   /** Alt pressed and released alone: folds or opens the menu (bridge 68). */
   | { action: "menu_toggle" }
   | { action: "wizard_open" }

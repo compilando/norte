@@ -268,9 +268,6 @@ export class Session {
       case "splash":
         s.splash = c.splash;
         return true;
-      case "palette":
-        s.palette = c.palette;
-        return true;
       case "goto":
         s.goto = c.goto;
         return true;

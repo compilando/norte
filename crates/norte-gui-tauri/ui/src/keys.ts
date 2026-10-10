@@ -72,6 +72,27 @@ export function isForTheField(k: KeyInput, hasField: boolean): boolean {
   return isText || EDITING.has(k.key) || isClipboard;
 }
 
+/**
+ * Is this the clipboard's paste chord, pressed with the search box open?
+ *
+ * The box has no `<input>` of its own, so [`isForTheField`] never keeps its
+ * keys — and `preventDefault` on the chord cancels the paste itself: the
+ * `paste` event the box listens for (`paintGoto`) never fired and the host
+ * got a bare `ctrl+v` it ignores. So the chord is let through, unsent, and
+ * the text arrives by the `paste` event. Ctrl+V and Shift+Insert, and Cmd+V
+ * where Cmd is the clipboard's modifier.
+ */
+export function isPasteIntoTheBox(k: KeyInput, boxOpen: boolean): boolean {
+  if (!boxOpen) {
+    return false;
+  }
+  const v = k.key === "v" || k.key === "V";
+  const ctrlV = k.ctrl && !k.alt && !k.meta && !k.shift && v;
+  const cmdV = k.meta && !k.ctrl && !k.alt && !k.shift && v;
+  const shiftInsert = k.shift && !k.ctrl && !k.alt && !k.meta && k.key === "Insert";
+  return ctrlV || cmdV || shiftInsert;
+}
+
 export function keyAction(k: KeyInput): UiAction {
   return { action: "key", ...k };
 }

@@ -324,9 +324,9 @@ async fn with_help_open_the_listing_does_not_move() {
     );
 }
 
-/// `Ctrl+P` switches from help to the palette, and BOTH changes travel in the
-/// same patch: a renderer that only received the palette's would keep
-/// painting help underneath.
+/// `Ctrl+P` switches from help to the box's commands (`>`), and BOTH changes
+/// travel in the same patch: a renderer that only received the box's would
+/// keep painting help underneath.
 #[tokio::test]
 async fn ctrl_p_switches_help_for_the_palette_in_one_patch() {
     let (h, _snap) = host_tree(fake_tree()).await;
@@ -356,8 +356,8 @@ async fn ctrl_p_switches_help_for_the_palette_in_one_patch() {
             for c in &p.changes {
                 match c {
                     norte_ui_host::dto::ViewChange::Help { help } => saw_close = help.is_none(),
-                    norte_ui_host::dto::ViewChange::Palette { palette } => {
-                        saw_palette = palette.is_some();
+                    norte_ui_host::dto::ViewChange::Goto { goto: Some(g) } => {
+                        saw_palette = g.query == ">";
                     }
                     _ => {}
                 }

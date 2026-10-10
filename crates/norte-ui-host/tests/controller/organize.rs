@@ -212,8 +212,8 @@ async fn an_organizer_is_given_the_directorys_names() {
     let mut arrived = false;
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let p = next_snapshot(&mut sub).await.palette.expect("open");
-        if p.rows.iter().any(|r| r.text.contains("Into folders")) {
+        let g = next_snapshot(&mut sub).await.goto.expect("open");
+        if goto_texts(&g).iter().any(|t| t.contains("Into folders")) {
             arrived = true;
             break;
         }

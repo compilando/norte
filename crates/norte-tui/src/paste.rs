@@ -121,11 +121,9 @@ pub fn route_paste(app: &mut App, text: &str) {
             }
         }
         PasteOutcome::Inserted
-    } else if app.palette.is_some() && !modal_wins(app) {
-        for c in first_line.chars() {
-            if let Some(p) = &mut app.palette {
-                p.push_char(c);
-            }
+    } else if app.goto.is_some() && !modal_wins(app) {
+        if let Some(g) = &mut app.goto {
+            g.push_str(first_line);
         }
         PasteOutcome::Inserted
     } else if app.shortcuts.is_some() && !modal_wins(app) {
@@ -211,7 +209,7 @@ pub fn route_paste(app: &mut App, text: &str) {
 #[cfg(test)]
 mod paste_tests {
     use super::*;
-    use crate::app::{HelpView, NavPopupKind, Palette, Pane, TransferKind};
+    use crate::app::{HelpView, NavPopupKind, Pane, TransferKind};
     use crate::nav;
     use norte_proto::VPath;
 
@@ -415,17 +413,17 @@ mod paste_tests {
         );
     }
 
-    /// The command palette (`Ctrl+P`): fixed keys, free text, same molde as
-    /// the search dialog — grouped with it under "the generic dialog" in the
-    /// plan's list of eleven.
+    /// The search box (`Ctrl+G`/`Ctrl+P`): fixed keys, free text, same molde
+    /// as the search dialog — grouped with it under "the generic dialog" in
+    /// the plan's list of eleven. The paste lands after the mode prefix.
     #[test]
-    fn the_command_palette_gets_the_first_line() {
+    fn the_search_box_gets_the_first_line() {
         let mut a = app();
-        a.palette = Some(Palette::new(Vec::new()));
+        crate::goto::open(&mut a, &[], &[], ">");
         route_paste(&mut a, "copy\ntail");
         assert_eq!(
-            a.palette.as_ref().map(Palette::query_display),
-            Some("copy".to_owned())
+            a.goto.as_ref().map(|g| g.query().to_owned()),
+            Some(">copy".to_owned())
         );
     }
 

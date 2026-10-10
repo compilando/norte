@@ -17,7 +17,6 @@ use norte_frontend::goto::SECTION_INDEX;
 use norte_proto::Error;
 
 use crate::app::App;
-use crate::goto::MINIMUM_FOR_THE_INDEX;
 use crate::jobs::{GotoIndexRun, InFlight};
 
 /// How many results are requested: the same number in both frontends.
@@ -30,23 +29,23 @@ const CAP: u32 = norte_frontend::goto::INDEX_CAP;
 /// requests alive, and the answer to a query that is no longer typed is of
 /// no use to anyone.
 ///
-/// Below [`MINIMUM_FOR_THE_INDEX`] no query is made AND the section is
-/// CLEARED: leaving there what answered a longer query would be showing an
-/// answer to a question that is no longer being asked.
+/// Below [`crate::goto::MINIMUM_FOR_THE_INDEX`] no query is made AND the
+/// section is CLEARED: leaving there what answered a longer query would be
+/// showing an answer to a question that is no longer being asked.
 pub fn ask_the_index(app: &mut App, backend: &Backend, work: &mut InFlight) {
     let Some(goto) = &mut app.goto else {
         forget(work);
         return;
     };
-    let q = goto.query().to_owned();
     // A typed PATH doesn't count either: it's not a semantic query, and
     // sending it to an embeddings provider — maybe remote — is sending it
     // the name of a directory of the reader's.
-    if q.chars().count() < MINIMUM_FOR_THE_INDEX || norte_frontend::goto::looks_path(&q).is_some() {
+    // A `>`/`?` query is not a place: `index_query` says no to it too.
+    let Some(q) = goto.index_query().map(str::to_owned) else {
         forget(work);
         goto.replace_section(SECTION_INDEX, Vec::new(), true);
         return;
-    }
+    };
     let b = backend.clone();
     let query = q.clone();
     // No root: against EVERYTHING indexed, like the `ai.search` semantic
@@ -98,7 +97,7 @@ pub fn harvest_goto_index(
     };
     let Some(requested) = requested else { return };
     let Some(goto) = &app.goto else { return };
-    if goto.query() != requested {
+    if goto.index_query() != Some(requested.as_str()) {
         return;
     }
     let Some(hits) = norte_frontend::validate_semantic_hits(hits) else {

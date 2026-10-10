@@ -786,8 +786,10 @@ impl State {
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match effect {
-            Effect::Palette => self.open_palette(backend, mailbox),
-            Effect::IrA => self.open_go_to(backend, mailbox),
+            Effect::Palette => {
+                self.open_go_to(norte_frontend::goto::PREFIX_COMMANDS, backend, mailbox)
+            }
+            Effect::IrA => self.open_go_to("", backend, mailbox),
             Effect::Help => self.open_help(backend, mailbox),
             Effect::Settings => self.open_settings(),
             Effect::Extensions => self.open_extensions(backend, mailbox),

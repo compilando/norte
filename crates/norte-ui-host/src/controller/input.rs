@@ -17,8 +17,8 @@ impl State {
     /// key goes its normal way: the listing's resolver.
     ///
     /// The ORDER is who covers whom. The viewer is a whole other screen; help
-    /// covers the listing and the palette can be opened from it, so it goes
-    /// first; the palette is a free text editor; and the incremental search
+    /// covers the listing and the search box can be opened from it, so it
+    /// goes first; the search box is a free text editor; and the incremental search
     /// only keeps TEXT keys.
     // TODO(translation): review — this paragraph describes the general
     /// input-context precedence order, but the item right after it is
@@ -193,7 +193,6 @@ impl State {
             || self.agency.panel
             || self.settings.is_some()
             || self.visor.is_some()
-            || self.palette.is_some()
             || self.ir_a.is_some()
     }
 
@@ -319,17 +318,13 @@ impl State {
         if self.context_menu.is_some() {
             return Some(self.key_in_context_menu(k, backend, mailbox));
         }
-        // The open menu keeps the keys, same as the palette: an arrow that
+        // The open menu keeps the keys, same as the search box: an arrow that
         // slipped through it would move the listing underneath.
         if self.menu.is_some() {
             return Some(self.key_in_menu(k, backend, mailbox));
         }
-        if self.palette.is_some() {
-            return Some(self.key_in_palette(k, backend, mailbox));
-        }
-        // "Go to" (#357), for the same reason as the palette: it is a free
-        // text editor, and a letter that slipped through it would act on the
-        // listing.
+        // The search box (#357): it is a free text editor, and a letter that
+        // slipped through it would act on the listing.
         if self.ir_a.is_some() {
             return Some(self.key_in_goto(k, backend, mailbox));
         }
@@ -339,7 +334,7 @@ impl State {
         // And, when NOBODY else wanted it, `Escape` abandons a rename plan
         // still thinking. It goes LAST, which is the only position where
         // "nobody wanted it" is true: above it, it ate the `Escape` that
-        // closes the palette and the one that cancels the quick filter — one
+        // closes the search box and the one that cancels the quick filter — one
         // key doing two things badly at once — and it skipped the viewer's
         // in-flight cut.
         //
@@ -587,18 +582,9 @@ impl State {
         (self.applied(), Vec::new())
     }
 
-    /// The keys while the palette is open.
-    ///
-    /// Fixed on purpose: `esc` closes, `enter` runs what is selected, the
-    /// arrows move and everything else types. It is the same thing the TUI
-    /// does, and for the same reason — the catalogue has no commands for
-    /// this.
-    // TODO(translation): review — this paragraph documents the palette's
-    /// keys, but the item right after it is `key_in_menu`'s doc, about the
-    /// menu's keys; it looks like a stale fragment left by an earlier edit.
     /// Open menu keys.
     ///
-    /// FIXED, like the palette's and for the same reason: there are no
+    /// FIXED, like the search box's and for the same reason: there are no
     /// `dialog.*` verbs for "next menu item", so they cannot come from the
     /// keymap either. The arrows walk, `Enter` runs and `Escape` closes; any
     /// other is discarded instead of falling through to the listing
@@ -634,7 +620,7 @@ impl State {
     /// Closes the menu and runs what was chosen.
     ///
     /// The close travels in its OWN patch and BEFORE the effect, for the same
-    /// reason as the palette: the command can open another screen, and doing
+    /// reason as the search box: the command can open another screen, and doing
     /// it behind the menu would leave it eating the keys of the one that just
     /// opened.
     pub(super) fn run_from_menu(
@@ -659,87 +645,6 @@ impl State {
         let mut outgoing = vec![closing];
         outgoing.append(&mut rest);
         (ack, outgoing)
-    }
-
-    pub(super) fn key_in_palette(
-        &mut self,
-        k: &crate::keys::KeyInput,
-        backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Message>,
-    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(palette) = self.palette.as_mut() else {
-            return (Self::stale(StaleAction::Modal), Vec::new());
-        };
-        let height = 10;
-        match k.key.as_str() {
-            "Escape" | "esc" => {
-                self.palette = None;
-            }
-            "Enter" | "enter" => {
-                let chosen = palette.selected();
-                self.palette = None;
-                if let Some(cmd) = chosen {
-                    norte_frontend::session::note_palette_recent(&mut self.palette_recent, &cmd);
-                    // The close travels in its OWN patch and before the
-                    // effect. Without it, a renderer that applies patches —
-                    // which is what the reference one does — received the
-                    // command's change and none of the palette's, and kept
-                    // painting it over the listing until the next snapshot.
-                    let closing = self.parche(vec![ViewChange::Palette { palette: None }]);
-                    // It runs through the SAME path as a key: the palette is
-                    // another door into the catalogue, not a second
-                    // dispatcher.
-                    let (ack, mut rest) = match effect_of(&cmd, 1) {
-                        Some(effect) => self.apply_effect(effect, backend, mailbox),
-                        // A PLUGIN row is not in the command catalogue and
-                        // cannot be: a third party contributes it at
-                        // runtime.
-                        None if cmd.starts_with("plugin:") => {
-                            self.run_from_plugin(&cmd, backend, mailbox)
-                        }
-                        // A RENAMER row (C3, ADR 0095): requests the plan and
-                        // puts it into the SAME review as the AI's.
-                        None if cmd.starts_with("renamer:") => {
-                            self.run_from_renamer(&cmd, backend, mailbox)
-                        }
-                        // An ORGANIZER row (phase 8): the same dispatch,
-                        // another method, and the plan lands on the same
-                        // reviewable tree as the model's.
-                        None if cmd.starts_with("organizer:") => {
-                            match norte_frontend::palette::parse_organizer_key(&cmd) {
-                                Some((id, org)) => {
-                                    let (id, org) = (id.to_owned(), org.to_owned());
-                                    self.request_organize_plan(Some((id, org)), backend, mailbox)
-                                }
-                                None => self.no_implemented(&cmd),
-                            }
-                        }
-                        None => self.no_implemented(&cmd),
-                    };
-                    let mut outgoing = vec![closing];
-                    outgoing.append(&mut rest);
-                    return (ack, outgoing);
-                }
-            }
-            "ArrowDown" | "down" => palette.down(),
-            "ArrowUp" | "up" => palette.up(),
-            "PageDown" | "pgdn" => palette.page_down(height),
-            "PageUp" | "pgup" => palette.page_up(height),
-            "Backspace" | "backspace" => palette.backspace(),
-            other => {
-                // A TEXT key is a code point, not a UTF-16 unit nor a key
-                // name: `ArrowLeft` is not typed.
-                let mut chars = other.chars();
-                match (chars.next(), chars.next()) {
-                    (Some(c), None) if !k.ctrl && !k.alt && !k.meta => palette.push_char(c),
-                    _ => return (self.applied(), Vec::new()),
-                }
-            }
-        }
-        let change = ViewChange::Palette {
-            palette: self.vista_palette(),
-        };
-        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// A catalogue command this host does not execute, said with the same

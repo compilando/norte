@@ -50,7 +50,7 @@ La última entrada de la lista, *keys*, es el camino contrario: el keymap
 efectivo entero, generado, con los verbos `dialog.*` que los pies de los
 overlays se dejan fuera por falta de ancho.
 
-> 💡 {{cmd:app.palette}} es la versión rápida del mismo modelo: escribes, Enter, y fuera. Esta ayuda es la versión que explica.
+> 💡 {{cmd:app.palette}} es la versión rápida del mismo modelo: escribes, Enter, y fuera — y `?` en esa caja lista estas páginas. Esta ayuda es la versión que explica.
 
 {{cmd:app.menu}} abre una barra de menús con las mismas órdenes ordenadas por
 tema. No añade nada que el teclado no pueda: añade una forma de ENCONTRARLO —

@@ -13,22 +13,21 @@
 use norte_core::backend::Backend;
 use norte_i18n::t;
 
-use crate::app::{App, HelpView, Modal, Palette};
-use crate::keymap::parse_plugin_key;
+use crate::app::{App, HelpView, Modal};
 
 /// MINOR-4 (H1 close): a modal can arrive ASYNCHRONOUSLY (e.g.
 /// `Modal::ApproveAgentOp`, via `ConnEvent` — an agent can ask for approval
-/// at any moment) while the palette is open. Without this guard, the run
-/// loop resolved the key against the palette FIRST (`app.palette.is_some()`
-/// was checked before `app.modal.is_some()`): an Enter pressed to answer the
-/// modal actually dispatched the palette's highlighted row IN SILENCE, and
-/// the security modal kept waiting for an answer that never arrived through
-/// that key. The modal ALWAYS wins: the run loop's palette arm excludes this
-/// case from its condition (it stops consuming the key) and the modal arm
-/// closes the palette, now stale, the moment it enters — the SAME key falls
-/// through to the modal in the same iteration.
+/// at any moment) while the search box is open. Without this guard, the run
+/// loop resolved the key against the box FIRST (`app.goto.is_some()` was
+/// checked before `app.modal.is_some()`): an Enter pressed to answer the
+/// modal actually ran the box's highlighted row IN SILENCE, and the security
+/// modal kept waiting for an answer that never arrived through that key. The
+/// modal ALWAYS wins: the run loop's box arm excludes this case from its
+/// condition (it stops consuming the key) and the modal arm closes the box,
+/// now stale, the moment it enters — the SAME key falls through to the modal
+/// in the same iteration.
 ///
-/// GENERALIZED to ALL overlays: the guard only used to hold for the palette
+/// GENERALIZED to ALL overlays: the guard only used to hold for the box
 /// and the settings overlay, but the modal is painted LAST — over ANY
 /// overlay ([`crate::ui::draw`]) — while the run loop's key chain resolved
 /// BEFORE it against the theme selector, the column picker, the extension
@@ -53,7 +52,7 @@ pub fn modal_wins(app: &App) -> bool {
 ///   an overlay the reader asked for and cannot use.
 /// * a modal that ARRIVED over an already-open help does NOT lose the key. The
 ///   help is the stale one there, and [`close_stale_overlays`] is what retires
-///   it — same treatment the palette and the settings overlay already get.
+///   it — same treatment the search box and the settings overlay already get.
 ///
 /// While the help owns the keys the modal's own verbs are unreachable, which is
 /// the point: nothing gets approved through a page covering it. The modal is
@@ -118,7 +117,7 @@ pub fn settle_help_over_modal(app: &mut App) {
 /// to the help in H3c).
 ///
 /// Called from the modal arm of the run loop's key chain — i.e. exactly when a
-/// modal has the key and some overlay is still on screen. The palette and the
+/// modal has the key and some overlay is still on screen. The search box and the
 /// settings overlay are dropped because their rows EXPIRE (they were built
 /// against a state the modal is about to change) and because that same key must
 /// reach the modal instead of vanishing into a filter.
@@ -133,12 +132,12 @@ pub fn settle_help_over_modal(app: &mut App) {
 /// search dialog) yield the key but SURVIVE: their rows do not expire and the
 /// reader gets them back intact after answering.
 pub fn close_stale_overlays(app: &mut App) {
-    app.palette = None;
+    app.goto = None;
     app.settings = None;
     // K3c: and with settings the shortcuts editor goes too, since it lives
     // ON TOP of it — leaving it orphaned over a closed overlay would make
     // `Esc` fall through to the panes instead of returning where the reader
-    // was. Its rows also expire for the same reason the palette's do: the
+    // was. Its rows also expire for the same reason the box's do: the
     // modal is about to change the state they were built against.
     app.shortcuts = None;
     if app.help.as_ref().is_some_and(|help| !help.over_modal) {
@@ -244,14 +243,14 @@ pub fn modal_scroll(app: &mut App, cmd: &str) -> bool {
 /// closed vocabulary, anchored on `Modal`) and the page from the CORPUS, so
 /// moving an explanation between pages is an edit to prose.
 ///
-/// A word on the overlays that are NOT in that vocabulary — the palette, the
+/// A word on the overlays that are NOT in that vocabulary — the search box, the
 /// settings overlay, the theme and column pickers, the extension manager, the
 /// nav popup, the search dialog. `help_context` answers `browse` for all of
 /// them, and that answer is UNREACHABLE: each of those arms sits ahead of this
 /// dispatch in the run loop's key chain with its own fixed keys, so `F1` there
-/// is inert and never gets here. The one exception proves it — the palette's
-/// `Enter` can dispatch `app.help`, and it clears `app.palette` BEFORE
-/// dispatching, so by the time this runs the palette is gone and `browse` (or
+/// is inert and never gets here. The one exception proves it — the box's
+/// `Enter` can dispatch `app.help`, and it clears `app.goto` BEFORE
+/// dispatching, so by the time this runs the box is gone and `browse` (or
 /// `viewer`) is the honest answer. Growing the vocabulary for those overlays
 /// would be vocabulary for a state that cannot happen.
 ///
@@ -270,7 +269,7 @@ pub fn modal_scroll(app: &mut App, cmd: &str) -> bool {
 /// freezes the dialog's verbs, replaces its footer, and lets the reader walk
 /// from the index into another dialog's `y`/`n` prose while an agent approval
 /// waits behind it. So the reader is TOLD and the prompt stays answerable —
-/// the same decision [`palette_help`] already makes for an undocumented row,
+/// the same decision [`goto_help`] already makes for an undocumented row,
 /// applied where it matters more. The pages still missing are on the
 /// documentation gate's shrinking allowlist, so this is temporary by
 /// construction.
@@ -342,7 +341,7 @@ pub fn open_contextual_help(
 /// The sibling of [`open_contextual_help`] for whoever already knows which
 /// page they want — the bar's detached-session indicator, which is not a
 /// screen the reader is in but a fact about this window — and the same path
-/// as `F1` over a palette row: [`HelpView::new_at_topic`], with the page as
+/// as `F1` over a box row: [`HelpView::new_at_topic`], with the page as
 /// the trail's ROOT so `Esc` closes it instead of walking back to an index
 /// nobody asked for. Facts are frozen the same way as in the contextual one.
 ///
@@ -407,64 +406,44 @@ pub async fn fetch_plugin_page(backend: &Backend, app: &mut App) {
     help.state.install_plugin_topic(parsed.topic);
 }
 
-/// The page that documents the palette row under the cursor, if one does (H3c).
+/// The page that documents the box row under the cursor, if one does (H3c).
 ///
 /// The other direction of the bridge H3b built: from the help, `Ctrl+P` carries
-/// the filter into the palette; from the palette, `F1` opens the page about the
-/// highlighted command. Two views of one model at two densities, so crossing
+/// the filter into the box; from the box, `F1` opens the page about the
+/// highlighted row. Two views of one model at two densities, so crossing
 /// between them should not cost the reader a re-type.
 ///
-/// A PLUGIN row is answered `None` explicitly. Its key is
-/// `plugin:{id}:{command}` ([`parse_plugin_key`]), which no corpus page
-/// documents and which is not a host command either — the `command_id` half
-/// comes from a third-party manifest with no validated charset, so it must never
-/// be handed to a lookup as if it were one of ours. The corpus lookup would also
-/// answer `None` on its own; the guard is what makes that a decision instead of
-/// a coincidence, and it is the same `key`/`text` split the palette already
-/// makes between dispatch and paint.
-fn palette_help_target(app: &App, lang: norte_help::Lang) -> Option<&'static norte_help::Topic> {
-    let key = app.palette.as_ref().and_then(Palette::selected)?;
-    if parse_plugin_key(&key).is_some() {
-        return None;
-    }
-    norte_help::topic_for_command(lang, &key)
+/// A plugin row has no page: [`norte_frontend::goto::help_topic`] says why.
+fn goto_help_target(app: &App, lang: norte_help::Lang) -> Option<&'static norte_help::Topic> {
+    let key = app.goto.as_ref()?.selected()?.key.clone();
+    norte_frontend::goto::help_topic(&key, lang)
 }
 
-/// `F1` inside the command palette: open the page for the highlighted row, or
-/// say that no page documents it (H3c).
+/// `F1` inside the box: open the page for the highlighted row, or say that no
+/// page documents it (H3c). `true` when the page opened.
 ///
-/// On success the palette CLOSES — the help takes the screen and the next key
+/// On success the box CLOSES — the help takes the screen and the next key
 /// belongs to what the reader is looking at — and the page arrives as the root
-/// of the trail ([`HelpView::new_at_topic`]), so one `Esc` leaves it.
+/// of the trail ([`open_help_topic`]), so one `Esc` leaves it. The box's arm
+/// of the key chain only runs when no modal is on screen (`modal_wins`), so
+/// the help is never opened over one.
 ///
-/// On failure the palette STAYS and the status bar says so. Opening the index
+/// On failure the box STAYS and the status bar says so. Opening the index
 /// instead would be worse than nothing: the reader asked about one command and
 /// would land on a table of contents, with no way to tell whether their command
 /// is in there somewhere or simply undocumented.
-///
-/// `over_modal` is `false` and not `app.modal.is_some()`: the palette's arm of
-/// the key chain only runs when no modal is on screen (`modal_wins`), so there
-/// is no modal for this help to have been opened over.
-pub fn palette_help(
+pub fn goto_help(
     app: &mut App,
     lang: norte_help::Lang,
     help_lines: &[ratatui::text::Line<'static>],
-) {
-    match palette_help_target(app, lang).map(|topic| topic.id.clone()) {
-        Some(id) => {
-            app.palette = None;
-            // H3d: same freeze as `open_contextual_help` — the help opened
-            // from the palette is the same help.
-            app.freeze_help_facts();
-            app.help = Some(HelpView::new_at_topic(
-                lang,
-                help_lines.to_vec(),
-                &id,
-                false,
-            ));
-        }
-        None => app.message = Some(t("msg-palette-no-help")),
-    }
+) -> bool {
+    let Some(topic) = goto_help_target(app, lang) else {
+        app.message = Some(t("msg-palette-no-help"));
+        return false;
+    };
+    app.goto = None;
+    open_help_topic(app, lang, help_lines, topic.id.as_str());
+    true
 }
 
 /// Can a watch event fire a refresh NOW? (#106, review MAJOR-2): with any
@@ -476,7 +455,7 @@ pub fn palette_help(
 #[must_use]
 pub fn watch_refresh_allowed(app: &App) -> bool {
     app.modal.is_none()
-        && app.palette.is_none()
+        && app.goto.is_none()
         && app.settings.is_none()
         && app.help.is_none()
         && app.viewer.is_none()
@@ -491,8 +470,9 @@ pub fn watch_refresh_allowed(app: &App) -> bool {
 #[cfg(test)]
 mod palette_modal_guard_tests {
     use super::*;
-    use crate::app::{App, Modal, Palette, Pane, Settings};
+    use crate::app::{App, Modal, Pane, Settings};
     use crate::nav;
+    use norte_frontend::goto::Goto;
     use norte_proto::VPath;
 
     fn app() -> App {
@@ -514,26 +494,36 @@ mod palette_modal_guard_tests {
         }
     }
 
-    /// MINOR-4 (H1 close): with ONLY the palette open, there is nothing to
+    /// MINOR-4 (H1 close): with ONLY the box open, there is nothing to
     /// precede — the guard does not fire. With BOTH open (a modal arrived
-    /// asynchronously over the palette), the modal must win.
+    /// asynchronously over the box), the modal must win.
     #[test]
     fn modal_preempts_palette_only_when_both_are_open() {
         let mut a = app();
         assert!(!modal_wins(&a), "with no modal, nobody precedes anybody");
-        a.palette = Some(Palette::new(Vec::new()));
+        a.goto = Some(Goto::new(Vec::new()));
         assert!(
             !modal_wins(&a),
-            "only the palette open: the palette handles its keys normally"
+            "only the box open: the box handles its keys normally"
         );
         a.modal = Some(approval_modal());
         assert!(
             modal_wins(&a),
-            "a modal in flight with the palette open MUST beat it"
+            "a modal in flight with the box open MUST beat it"
         );
     }
 
-    /// The guard holds for ANY overlay, not just palette/settings: the modal
+    /// A modal that takes the keys closes the box: its chords and its
+    /// "cannot run here" were computed against a state the modal changes.
+    #[test]
+    fn a_modal_closes_the_box() {
+        let mut a = app();
+        crate::goto::open(&mut a, &[], &[], ">");
+        close_stale_overlays(&mut a);
+        assert!(a.goto.is_none());
+    }
+
+    /// The guard holds for ANY overlay, not just box/settings: the modal
     /// is painted last (over everything), so the key the user aims at what
     /// they SEE has to reach it. Before, the theme selector, the column
     /// picker, the extension manager, the nav popup, the search dialog and
@@ -608,9 +598,10 @@ mod palette_modal_guard_tests {
 }
 
 #[cfg(test)]
-mod palette_help_tests {
+mod goto_help_tests {
     use super::*;
-    use crate::app::{App, Palette, Pane};
+    use crate::app::{App, Pane};
+    use norte_frontend::goto::{FixedSource, Goto, GotoRow, SECTION_COMMANDS};
     use norte_proto::VPath;
 
     fn app() -> App {
@@ -618,46 +609,51 @@ mod palette_help_tests {
         App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
     }
 
-    /// The palette open with ONE row, `key`'s, under the cursor. The rows
-    /// are built by hand and not from the live keymap on purpose: what is
-    /// being tested is what `F1` does with the highlighted row's dispatch
-    /// key, and a plugin row does not come from `COMMANDS`.
-    fn app_with_palette_on(key: &str) -> App {
+    /// The box open in commands mode with ONE row, `key`'s, under the
+    /// cursor. The row is built by hand and not from the live keymap on
+    /// purpose: what is being tested is what `F1` does with the highlighted
+    /// row's dispatch key, and a plugin row does not come from `COMMANDS`.
+    fn app_with_box_on(key: &str) -> App {
         let mut app = app();
-        app.palette = Some(Palette::new(vec![crate::palette::Row {
-            key: key.to_owned(),
-            text: key.to_owned(),
-            desc: "test description".to_owned(),
-            chord: "—".to_owned(),
-            hostile: false,
-        }]));
+        let mut g = Goto::new(vec![Box::new(FixedSource::new(
+            SECTION_COMMANDS,
+            vec![GotoRow {
+                section: SECTION_COMMANDS.id,
+                key: format!("cmd:{key}"),
+                text: "test description".to_owned(),
+                desc: key.to_owned(),
+                ..GotoRow::default()
+            }],
+        ))]);
+        g.set_query(">");
+        app.goto = Some(g);
         app
     }
 
-    /// `F1` over a palette row opens the page that documents that command:
+    /// `F1` over a command row opens the page that documents that command:
     /// the two are views of the same model at two densities, so crossing
     /// from the quick one to the explaining one should not cost a re-type.
     #[test]
-    fn f1_in_the_palette_opens_the_page_for_the_command_under_the_cursor() {
-        let app = app_with_palette_on("pane.copy");
-        let open = palette_help_target(&app, norte_help::Lang::En).expect("pane.copy has a page");
+    fn f1_in_the_box_opens_the_page_for_the_command_under_the_cursor() {
+        let app = app_with_box_on("pane.copy");
+        let open = goto_help_target(&app, norte_help::Lang::En).expect("pane.copy has a page");
         assert_eq!(open.id.as_str(), "copying");
     }
 
-    /// …and it really opens it: the palette CLOSES (the next key belongs to
+    /// …and it really opens it: the box CLOSES (the next key belongs to
     /// the help, which is what is seen) and the page arrives as the trail's
     /// ROOT — `Esc` closes the overlay instead of walking to an index the
     /// reader did not ask for, same as a modal's contextual help.
     #[test]
-    fn opening_the_page_closes_the_palette_and_arrives_with_no_history() {
-        let mut app = app_with_palette_on("pane.copy");
-        palette_help(&mut app, norte_help::Lang::En, &[]);
-        assert!(app.palette.is_none(), "the palette closes");
+    fn opening_the_page_closes_the_box_and_arrives_with_no_history() {
+        let mut app = app_with_box_on("pane.copy");
+        assert!(goto_help(&mut app, norte_help::Lang::En, &[]));
+        assert!(app.goto.is_none(), "the box closes");
         let help = app.help.as_mut().expect("the help opened");
         assert_eq!(help.state.current().as_str(), "copying");
         assert!(
             !help.over_modal,
-            "the palette's branch only runs with no modal on screen"
+            "the box's branch only runs with no modal on screen"
         );
         assert!(!help.state.back(), "no history: Esc closes");
         assert!(app.message.is_none(), "and nothing to apologize for");
@@ -673,14 +669,14 @@ mod palette_help_tests {
         // measuring the corpus, not the branch. This branch still exists —
         // `topic_for_command` can answer `None` — and what gets painted then
         // is what needs pinning down.
-        let mut app = app_with_palette_on("app.no-such-command");
-        assert!(palette_help_target(&app, norte_help::Lang::En).is_none());
-        palette_help(&mut app, norte_help::Lang::En, &[]);
+        let mut app = app_with_box_on("app.no-such-command");
+        assert!(goto_help_target(&app, norte_help::Lang::En).is_none());
+        assert!(!goto_help(&mut app, norte_help::Lang::En, &[]));
         assert!(
             app.help.is_none(),
             "the index is not opened as a consolation"
         );
-        assert!(app.palette.is_some(), "and the palette stays where it was");
+        assert!(app.goto.is_some(), "and the box stays where it was");
         assert_eq!(
             app.message.as_deref(),
             Some(norte_i18n::t("msg-palette-no-help").as_str())
@@ -693,11 +689,11 @@ mod palette_help_tests {
     /// its to make.
     #[test]
     fn a_plugin_row_takes_the_no_page_path() {
-        let mut app = app_with_palette_on("plugin:dev.norte.demo:greet");
-        assert!(palette_help_target(&app, norte_help::Lang::En).is_none());
-        palette_help(&mut app, norte_help::Lang::En, &[]);
+        let mut app = app_with_box_on("plugin:dev.norte.demo:greet");
+        assert!(goto_help_target(&app, norte_help::Lang::En).is_none());
+        assert!(!goto_help(&mut app, norte_help::Lang::En, &[]));
         assert!(app.help.is_none());
-        assert!(app.palette.is_some());
+        assert!(app.goto.is_some());
         assert_eq!(
             app.message.as_deref(),
             Some(norte_i18n::t("msg-palette-no-help").as_str())
@@ -708,14 +704,12 @@ mod palette_help_tests {
     /// to document: same path, with no `unwrap` involved.
     #[test]
     fn with_no_row_visible_there_is_no_page() {
-        let mut app = app_with_palette_on("pane.copy");
-        for c in "zzzz".chars() {
-            app.palette.as_mut().expect("abierta").push_char(c);
-        }
-        assert!(app.palette.as_ref().expect("abierta").visible().is_empty());
-        assert!(palette_help_target(&app, norte_help::Lang::En).is_none());
-        palette_help(&mut app, norte_help::Lang::En, &[]);
+        let mut app = app_with_box_on("pane.copy");
+        app.goto.as_mut().expect("open").push_str("zzzz");
+        assert!(app.goto.as_ref().expect("open").selected().is_none());
+        assert!(goto_help_target(&app, norte_help::Lang::En).is_none());
+        assert!(!goto_help(&mut app, norte_help::Lang::En, &[]));
         assert!(app.help.is_none());
-        assert!(app.palette.is_some());
+        assert!(app.goto.is_some());
     }
 }

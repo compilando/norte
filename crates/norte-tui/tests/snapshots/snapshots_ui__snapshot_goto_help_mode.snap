@@ -1,0 +1,20 @@
+---
+source: crates/norte-tui/tests/snapshots_ui.rs
+expression: render(&app)
+---
+" Arc┌ Temas de ayuda ──────────────────────────────────────────────────────┐    "
+"   ┌│   > Ejecutar un comando                                              │───┐"
+"   ││   Ir a un sitio                                                      │cha│"
+"   ││   Esto es norte                                                      │   │"
+"   ││   Dos paneles, un destino                                            │   │"
+"   ││   Pestañas en un panel                                               │   │"
+"   ││   Historia de navegación                                             │   │"
+"   ││   Marcar sobre qué se actúa                                          │   │"
+"   ││   Usar el ratón                                                      │   │"
+"   ││   Cómo se lee esta ayuda                                             │   │"
+"   ││   Contestar a un diálogo                                             │   │"
+"   ││   Ajustes y temas                                                    │   │"
+"   ││   Lo que la pantalla enseña alrededor del listado                    │   │"
+"   ││   Perfiles y sesión                                                  │   │"
+"   └│   Copiar, mover, renombrar y borrar                                  │───┘"
+"    └ ❯?_ ─────────────────────────────────────────────────────────────────┘F-8 "

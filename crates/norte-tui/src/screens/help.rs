@@ -20,7 +20,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::backend::Backend;
 use norte_i18n::{t, ta};
 
-use crate::app::{App, HelpOutcome, PAGE, Palette, detail_for_bar, error_message};
+use crate::app::{App, HelpOutcome, PAGE, detail_for_bar, error_message};
 use crate::keymap::{Command, Resolution, Resolver, chord_from_crossterm, parse_plugin_key};
 
 /// Keys that MOVE, in the sidebar or in the body: arrows, page, ends and
@@ -114,13 +114,13 @@ pub async fn run_plugin_command(app: &mut App, backend: &Backend, id: &str, comm
 ///
 /// Two keys keep their global meaning ahead of both regimes (H1 T2, as in
 /// every other overlay): `ctrl+c` quits, and `ctrl+p` hands what the reader
-/// has typed to the command palette — the two are the same model at different
+/// has typed to the search box's commands (`>`) — the two are the same model at different
 /// speeds (the `help` topic says as much), so the filter should not have to be
 /// retyped to cross between them.
 ///
 /// That second bridge is REFUSED while the page covers a modal
 /// (`HelpView::over_modal`), the same guard the `Action::Run` arm makes: the
-/// palette would open behind a live dialog, painted but unable to receive a
+/// box would open behind a live dialog, painted but unable to receive a
 /// key, and every keystroke meant for its filter would be answering the dialog
 /// instead.
 pub fn on_help_key(
@@ -138,9 +138,9 @@ pub fn on_help_key(
     if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('p') {
         let help = app.help.as_ref()?;
         // Review H3c MAJOR-1: the SAME guard as the `Action::Run` arm
-        // below, and for a worse reason. Crossing to the palette would
-        // leave the modal standing, and the run loop's palette branch is
-        // gated by `!modal_wins`: the palette would end up PAINTED looking
+        // below, and for a worse reason. Crossing to the box would
+        // leave the modal standing, and the run loop's box branch is
+        // gated by `!modal_wins`: the box would end up PAINTED looking
         // alive and receiving not a single key — all of them fall into the
         // modal branch and resolve against its allowlist. Typing `copy` to
         // filter over an agent approval would discard `c`, `o`, `p`, and
@@ -151,21 +151,20 @@ pub fn on_help_key(
         }
         let filter = help.state.filter_raw().to_owned();
         app.help = None;
-        // With no plugin rows: `Command::AppPalette` requests them from the
-        // backend and this function is SYNC on purpose (everything else
-        // here is too). A known, bounded degradation — the built-ins, which
-        // are what help documents, are all there.
-        let mut palette = Palette::new(crate::palette::rows_for_context(
-            &app.palette_rows,
-            app.viewer.is_some(),
-        ));
+        // With no plugin rows or connections: `Command::AppPalette` requests
+        // them from the backend and this function is SYNC on purpose
+        // (everything else here is too). A known, bounded degradation — the
+        // built-ins, which are what help documents, are all there.
+        //
         // The RAW filter (`filter_raw`, not the masked one used for
-        // painting): it is what gets matched, and the palette masks it
-        // again when painting it.
-        for c in filter.chars() {
-            palette.push_char(c);
-        }
-        app.palette = Some(palette);
+        // painting): it is what gets matched, and the box masks it again
+        // when painting it.
+        crate::goto::open(
+            app,
+            &[],
+            &[],
+            &format!("{}{filter}", norte_frontend::goto::PREFIX_COMMANDS),
+        );
         return None;
     }
     // Regime 1: filter editor. FIXED keys (see doc above).
@@ -512,7 +511,8 @@ mod help_key_tests {
     /// Two panes…," froze its verbs, replaced its footer and let the reader
     /// walk from the index to `copying` to read ANOTHER dialog's `y`/`n`
     /// prose while the approval waited behind it. It is the same decision
-    /// [`palette_help`] had already made for an undocumented row, applied
+    /// [`crate::overlays::goto_help`] had already made for an undocumented
+    /// command row of the search box, applied
     /// where it matters most.
     #[test]
     fn f1_over_a_modal_with_no_page_does_not_cover_the_question() {
@@ -742,8 +742,8 @@ mod help_key_tests {
         let cmd = on_help_key(&mut app, &mut r, KeyModifiers::CONTROL, KeyCode::Char('p'));
         assert_eq!(cmd, None, "nothing to dispatch");
         assert!(
-            app.palette.is_none(),
-            "the palette does NOT open: its keys would be kept by the modal"
+            app.goto.is_none(),
+            "the box does NOT open: its keys would be kept by the modal"
         );
         assert!(app.help.is_some(), "help stays where it was");
         assert!(
@@ -889,9 +889,9 @@ mod help_key_tests {
         let mut app = app_with_help_closed();
         app.modal = Some(test_trust_host_modal());
         open_help(&mut app);
-        app.palette = Some(Palette::new(Vec::new()));
+        app.goto = Some(norte_frontend::goto::Goto::new(Vec::new()));
         close_stale_overlays(&mut app);
-        assert!(app.palette.is_none(), "the palette does expire");
+        assert!(app.goto.is_none(), "the box does expire");
         assert!(
             app.help.is_some(),
             "the help the reader asked for over THIS modal stays"
@@ -1270,9 +1270,9 @@ mod help_key_tests {
         );
     }
 
-    /// `ctrl+c` keeps its global quit and `ctrl+p` crosses to the palette
-    /// TAKING the filter along — both are the same model at two speeds (the
-    /// `help` topic says so), so there is no need to retype it.
+    /// `ctrl+c` keeps its global quit and `ctrl+p` crosses to the box's
+    /// commands TAKING the filter along — both are the same model at two
+    /// speeds (the `help` topic says so), so there is no need to retype it.
     #[test]
     fn ctrl_c_quits_and_ctrl_p_hands_the_filter_to_the_palette() {
         let mut app = app_with_help();
@@ -1288,16 +1288,8 @@ mod help_key_tests {
         }
         on_help_key(&mut app, &mut r, KeyModifiers::CONTROL, KeyCode::Char('p'));
         assert!(app.help.is_none(), "help yields its spot");
-        let palette = app.palette.as_ref().expect("the palette opened");
-        assert!(
-            !palette.visible().is_empty(),
-            "the filter arrived and still matches something"
-        );
-        assert!(
-            palette.visible().len() < palette.rows().len(),
-            "…and it really filtered: {} of {}",
-            palette.visible().len(),
-            palette.rows().len()
-        );
+        let g = app.goto.as_ref().expect("the box opened");
+        assert_eq!(g.query(), format!(">{}", "copy"), "the filter arrived");
+        assert!(g.selected().is_some(), "…and still matches something");
     }
 }

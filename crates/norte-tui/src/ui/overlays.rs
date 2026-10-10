@@ -845,132 +845,164 @@ pub fn draw_which_key(
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-/// Command palette (`Ctrl+P`/vim `:`, H1 T4, spec-promised): free filter over
-/// ALL commands, same visual idiom as [`draw_nav_popup`] (centered, input at
-/// the foot, `Clear` before painting) but WIDER (60 columns: `{text}
-/// {description} {chord}` does not fit in a normal popup's width). A
-/// built-in row ([`crate::palette::build_rows`]) brings TRUSTED
-/// `text`/`desc`/`chord` (binary constants + Fluent catalogue) — this draw
-/// never masks them. A plugin row (P1, [`crate::palette::plugin_rows`])
-/// brings THIRD-PARTY text, but ALREADY masked in the row itself (same
-/// criterion as `first_chord` with the chord column: masking lives where
-/// the row is BUILT, not here) — this draw still does not distinguish, it
-/// only paints what is already safe. The dispatch `key` (P1: can carry a
-/// plugin's raw `command_id`, with no validated charset) is NEVER read here
-/// — [`crate::app::Palette::rows`] is only consulted for
-/// `text`/`desc`/`chord`. The query (typed by the user) goes through
-/// [`crate::app::Palette::query_display`] (same contract as
-/// `QuickSearch::query_display`: a hostile paste does not paint raw
-/// bidi/invisibles on the border) + [`display_name`] (same double filter as
-/// the pane's quick search bar, line below). The hint is STATIC
-/// (`palette-hint`): the palette does NOT resolve through the `dialog`
-/// context (decision 8 of the H1 plan — it is a free-filter editor like the
-/// search dialog), so there is no GENERATED hint to show here.
+/// `text` as spans, the chars at `positions` (sorted char indices, not byte
+/// offsets) in `mark` and the rest in `base`; a run of equal chars is one span.
 ///
-/// That footer joins with `palette-hint-help` (H3c: `F1` over a row opens
-/// the page documenting its command). They go in two keys and are joined
-/// HERE because `palette-hint` is also painted by the GUI, which does not
-/// yet have a help overlay (phase H3f): a single string would make it
-/// announce an inert key.
-pub(crate) fn draw_palette(frame: &mut Frame<'_>, palette: &crate::app::Palette, theme: &TuiTheme) {
-    let rows = u16::try_from(palette.visible().len().max(1))
-        .unwrap_or(u16::MAX)
-        .saturating_add(2);
-    let area = centered(frame.area(), 60, rows.min(frame.area().height.max(3)));
-    clear_themed(frame, area, theme);
-    let inner = usize::from(area.width.saturating_sub(3));
-    // Three columns, by CELLS (spec 2026-09-10): the human label first and
-    // whole — it is what is read —, the dimmed id, and the chord on the
-    // right. The truncation falls on the label and on the id, each in its
-    // own column; before, the composed line was truncated and a long id ate
-    // into the label until it left "sw…ane".
-    let chord_w = palette
-        .visible()
-        .iter()
-        .map(|&i| cells(&palette.rows()[i].chord))
-        .max()
-        .unwrap_or(1)
-        .max(1);
-    let id_w = 22.min(inner.saturating_sub(chord_w + 3) / 3);
-    let label_w = inner.saturating_sub(id_w + chord_w + 4).max(1);
-    let fit = |s: &str, w: usize| {
-        let s = middle_ellipsis(s, w);
-        let pad = w.saturating_sub(cells(&s));
-        format!("{s}{}", " ".repeat(pad))
-    };
-    let dim = ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::DIM);
-    let no_query = palette.query_display().is_empty();
-    let (items, selected): (Vec<ListItem<'_>>, Option<usize>) = if palette.visible().is_empty() {
-        (vec![ListItem::new(Line::raw(" —"))], None)
-    } else {
-        (
-            palette
-                .visible()
-                .iter()
-                .map(|&i| {
-                    let row = &palette.rows()[i];
-                    // A recent one is marked only while it is on top for
-                    // being one: with a query, the order is whatever
-                    // matches.
-                    let mark = if no_query && palette.is_recent(i) {
-                        "•"
-                    } else {
-                        " "
-                    };
-                    ListItem::new(Line::from(vec![
-                        Span::styled(mark.to_owned(), theme.role(Role::Info)),
-                        Span::raw(format!("{} ", fit(&row.desc, label_w))),
-                        Span::styled(format!("{} ", fit(&row.text, id_w)), dim),
-                        Span::raw(format!("{:>chord_w$}", row.chord)),
-                    ]))
-                })
-                .collect(),
-            Some(palette.cursor()),
-        )
-    };
-    let (query, _) = display_name(palette.query_display().as_bytes());
-    let footer = Line::raw(format!(
-        " /{query}  {} · {} ",
-        t("palette-hint"),
-        t("palette-hint-help")
-    ));
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" {} ", t("palette-title")))
-        .title_style(theme.role(Role::Title))
-        .title_bottom(footer)
-        .border_style(theme.role(Role::ModalBorder));
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(theme.role(Role::Selection));
-    let mut state = ListState::default();
-    state.select(selected);
-    frame.render_stateful_widget(list, area, &mut state);
+/// A zero-width char (an NFD accent, a ZWJ, a variation selector) stays in
+/// the run of the char before it whatever the positions say: on its own it
+/// would be a zero-width span, which ratatui drops — "Café" in NFD painted
+/// as "Cafe".
+pub(crate) fn marked_spans(
+    text: &str,
+    positions: &[u32],
+    base: Style,
+    mark: Style,
+) -> Vec<Span<'static>> {
+    use unicode_width::UnicodeWidthChar;
+
+    let mut out = Vec::new();
+    let mut run = String::new();
+    let mut in_mark = false;
+    for (i, c) in text.chars().enumerate() {
+        if !run.is_empty() && c.width() == Some(0) {
+            run.push(c);
+            continue;
+        }
+        let hit = u32::try_from(i).is_ok_and(|i| positions.binary_search(&i).is_ok());
+        if hit != in_mark && !run.is_empty() {
+            out.push(Span::styled(
+                std::mem::take(&mut run),
+                if in_mark { mark } else { base },
+            ));
+        }
+        in_mark = hit;
+        run.push(c);
+    }
+    if !run.is_empty() {
+        out.push(Span::styled(run, if in_mark { mark } else { base }));
+    }
+    out
 }
 
-/// "Go to anywhere" (phase 6): a box with titled sections and one row per
-/// destination.
+/// The footer of the search box: the query, then what the reader needs next.
 ///
-/// Same visual idiom as the palette — centered box, query at the foot,
-/// selection cursor — with one difference that is why this screen exists:
-/// here the rows come from DIFFERENT places, and a list mixing a connection
-/// with a command without saying which is which cannot be read. Hence the
-/// headers, which do not take the cursor (the model handles that:
+/// The reason the selected command cannot run goes here, in the box's own
+/// footer, which is what the reader is looking at (the status bar is under
+/// the overlay). In commands mode `F1` opens the help of the row; those keys
+/// are fixed in Fluent, not resolved through a keymap.
+fn goto_footer(goto: &norte_frontend::goto::Goto, query: &str) -> String {
+    use norte_frontend::goto::Mode;
+
+    if let Some(why) = goto.selected().and_then(|r| r.unavailable.as_deref()) {
+        format!(" ❯{query}_  {why} ")
+    } else if goto.mode() == Mode::Commands {
+        format!(
+            " ❯{query}_  {} · {} ",
+            t("palette-hint"),
+            t("palette-hint-help")
+        )
+    } else if let Some(hint) = goto.hint() {
+        format!(" ❯{query}_  {} ", t(hint))
+    } else {
+        format!(" ❯{query}_ ")
+    }
+}
+
+/// One row of the search box, laid out by CELLS: badge, recent dot, dim
+/// category, the text (matched chars marked), the dim description, and the
+/// chord against the right edge.
+fn goto_row_line(
+    row: &norte_frontend::goto::GotoRow,
+    inner: usize,
+    chord_w: usize,
+    theme: &TuiTheme,
+) -> Line<'static> {
+    /// What is taken from each row on the left: the hostile-text badge, or
+    /// the two spaces that replace it when there is none.
+    const GOTO_INDENT: usize = 2;
+
+    let dim = theme.role(Role::BorderUnfocused);
+    let base = if row.unavailable.is_some() {
+        dim
+    } else {
+        Style::default()
+    };
+    // The badge goes IN FRONT and in its own span, as in every decision
+    // surface: what is painted differently from what the bytes say is said,
+    // not left to guess.
+    let mut spans = Vec::new();
+    if row.hostile {
+        spans.push(Span::styled(
+            format!("{HOSTILE_BADGE} "),
+            theme.role(Role::HostileBadge),
+        ));
+    } else {
+        spans.push(Span::raw("  "));
+    }
+    spans.push(if row.recent {
+        Span::styled("•", theme.role(Role::Info))
+    } else {
+        Span::raw(" ")
+    });
+    let chord = row.chord.as_deref().unwrap_or("");
+    let cat = row
+        .category
+        .as_deref()
+        .map(|c| format!("{c}: "))
+        .unwrap_or_default();
+    // `GOTO_INDENT`: the badge takes the same room as the two spaces that
+    // replace it, so the texts line up whether they carry a flag or not.
+    let lead = GOTO_INDENT + 1; // badge/indent + recent dot
+    let room = inner.saturating_sub(lead + cells(&cat) + chord_w + 1);
+    let text_w = cells(&row.text).min(room).max(1);
+    // Marks only when the text is painted WHOLE: an ellipsis moves every
+    // char after it, and a mark on the wrong letter is worse than none.
+    let text_spans = if cells(&row.text) <= text_w {
+        marked_spans(&row.text, &row.positions, base, theme.role(Role::Match))
+    } else {
+        vec![Span::styled(middle_ellipsis(&row.text, text_w), base)]
+    };
+    let shown = cells(&row.text).min(text_w);
+    let desc_w = room.saturating_sub(shown + 2);
+    let desc = if desc_w > 0 && !row.desc.is_empty() {
+        format!("  {}", middle_ellipsis(&row.desc, desc_w))
+    } else {
+        String::new()
+    };
+    let used = lead + cells(&cat) + shown + cells(&desc);
+    let pad = inner.saturating_sub(used + cells(chord));
+    spans.push(Span::styled(cat, dim));
+    spans.extend(text_spans);
+    spans.push(Span::styled(desc, dim));
+    spans.push(Span::raw(" ".repeat(pad)));
+    spans.push(Span::styled(chord.to_owned(), base));
+    Line::from(spans)
+}
+
+/// The search box (places, `>` commands, `?` help): a box with titled
+/// sections and one row per destination.
+///
+/// Centered box, query at the foot, selection cursor: the rows come from
+/// DIFFERENT places, and a list mixing a connection with a command without
+/// saying which is which cannot be read. Hence the headers, which do not
+/// take the cursor (the model handles that:
 /// [`norte_frontend::goto::Goto::up`]/`down`).
 ///
+/// A plugin row brings THIRD-PARTY text, but ALREADY masked in the row
+/// itself (same criterion as `first_chord` with the chord column: masking
+/// lives where the row is BUILT, not here) — this draw does not distinguish,
+/// it only paints what is already safe. The dispatch `key` (it can carry a
+/// plugin's raw `command_id`, with no validated charset) is NEVER read here.
+///
 /// The height comes from what there is, bounded by the frame; the width is
-/// fixed and more generous than the palette's because what is painted are
-/// PATHS, which are read by their end and truncated in the middle.
+/// generous because what is painted are PATHS, which are read by their end
+/// and truncated in the middle.
 pub(crate) fn draw_goto(
     frame: &mut Frame<'_>,
     goto: &norte_frontend::goto::Goto,
     theme: &TuiTheme,
 ) {
-    use norte_frontend::goto::GotoLine;
-
-    /// What is taken from each row on the left: the hostile-text badge, or
-    /// the two spaces that replace it when there is none.
-    const GOTO_INDENT: usize = 2;
+    use norte_frontend::goto::{GotoLine, Mode};
 
     let height = u16::try_from(goto.lines().len().max(1))
         .unwrap_or(u16::MAX)
@@ -980,6 +1012,14 @@ pub(crate) fn draw_goto(
     clear_themed(frame, area, theme);
     let inner = usize::from(area.width.saturating_sub(3));
     let dim = theme.role(Role::BorderUnfocused);
+    // The chord column is as wide as the widest chord on screen, so every
+    // chord lands on the same right edge.
+    let chord_w = goto
+        .rows()
+        .iter()
+        .map(|r| r.chord.as_deref().map_or(0, cells))
+        .max()
+        .unwrap_or(0);
     let items: Vec<ListItem<'_>> = if goto.is_empty() {
         vec![ListItem::new(Line::styled(
             format!(" {}", t("goto-empty")),
@@ -993,45 +1033,26 @@ pub(crate) fn draw_goto(
                     ListItem::new(Line::styled(t(s.title_key), theme.role(Role::Title)))
                 }
                 GotoLine::Row(i) => {
-                    let row = &goto.rows()[*i];
-                    // The badge goes IN FRONT and in its own span, as in
-                    // every decision surface: what is painted differently
-                    // from what the bytes say is said, not left to guess.
-                    let mut spans = Vec::new();
-                    if row.hostile {
-                        spans.push(Span::styled(
-                            format!("{HOSTILE_BADGE} "),
-                            theme.role(Role::HostileBadge),
-                        ));
-                    } else {
-                        spans.push(Span::raw("  "));
-                    }
-                    // `GOTO_INDENT`: the badge takes the same room as the
-                    // two spaces that replace it, so the texts line up
-                    // whether they carry a flag or not.
-                    let detail = cells(&row.desc).min(inner / 2);
-                    let text_w = inner.saturating_sub(GOTO_INDENT + detail + 2).max(1);
-                    spans.push(Span::raw(middle_ellipsis(&row.text, text_w)));
-                    if !row.desc.is_empty() {
-                        spans.push(Span::styled(
-                            format!("  {}", middle_ellipsis(&row.desc, detail)),
-                            dim,
-                        ));
-                    }
-                    ListItem::new(Line::from(spans))
+                    ListItem::new(goto_row_line(&goto.rows()[*i], inner, chord_w, theme))
                 }
             })
             .collect()
     };
-    let (query, _) = display_name(goto.query().as_bytes());
+    let (query, _) = display_name(goto.query_display().as_bytes());
+    let title = match goto.mode() {
+        Mode::Places => t("goto-title"),
+        Mode::Commands => t("palette-title"),
+        Mode::Help => t("goto-title-help"),
+    };
+    let footer = goto_footer(goto, &query);
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" {} ", t("goto-title")))
+        .title(format!(" {title} "))
         .title_style(theme.role(Role::Title))
-        // `>` and not the palette's `/`: here what is written CAN be a
-        // path, and a prompt slash glued to an absolute path reads as part
-        // of it (`//etc`).
-        .title_bottom(Line::raw(format!(" ❯{query}_ ")))
+        // `❯` and not a `/`: here what is written CAN be a path, and a
+        // prompt slash glued to an absolute path reads as part of it
+        // (`//etc`).
+        .title_bottom(Line::raw(footer))
         .border_style(theme.role(Role::ModalBorder));
     let list = List::new(items)
         .block(block)
@@ -1904,6 +1925,53 @@ keymap = [
             tiny.draw(|f| draw_which_key(f, &panel(None), &theme))
                 .expect("draw");
         }
+    }
+}
+
+#[cfg(test)]
+mod goto_draw_tests {
+    /// One span per run, chars not bytes: `é` is one char, and a run of
+    /// matched chars is one span.
+    #[test]
+    fn marked_spans_group_runs_by_char() {
+        use ratatui::style::{Modifier, Style};
+        let base = Style::default();
+        let mark = Style::default().add_modifier(Modifier::BOLD);
+        let spans = super::marked_spans("éclat", &[0, 1, 3], base, mark);
+        let got: Vec<(&str, bool)> = spans
+            .iter()
+            .map(|s| (s.content.as_ref(), s.style == mark))
+            .collect();
+        assert_eq!(
+            got,
+            vec![("éc", true), ("l", false), ("a", true), ("t", false)]
+        );
+        assert_eq!(super::marked_spans("", &[], base, mark).len(), 0);
+    }
+
+    /// A decomposed (NFD) accent is a char the matcher never marks: it stays
+    /// with its base char, or it would be a zero-width span of its own,
+    /// which ratatui drops — and "Café" would paint as "Cafe".
+    #[test]
+    fn marked_spans_keep_a_combining_mark_with_its_base() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::style::{Modifier, Style};
+        use ratatui::text::Line;
+        use ratatui::widgets::Widget;
+        let base = Style::default();
+        let mark = Style::default().add_modifier(Modifier::BOLD);
+        let spans = super::marked_spans("Cafe\u{301}", &[3], base, mark);
+        let got: Vec<(&str, bool)> = spans
+            .iter()
+            .map(|s| (s.content.as_ref(), s.style == mark))
+            .collect();
+        assert_eq!(got, vec![("Caf", false), ("e\u{301}", true)]);
+
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 1));
+        Line::from(spans).render(buf.area, &mut buf);
+        assert_eq!(buf[(3, 0)].symbol(), "e\u{301}");
+        assert!(buf[(3, 0)].modifier.contains(Modifier::BOLD));
     }
 }
 

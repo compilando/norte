@@ -393,7 +393,7 @@ fn the_order_of_the_anchors_is_who_covers_whom() {
     );
     // And the surfaces that grab the keyboard go after the menu: a dialog or
     // help rule over a menu bar, never the other way around.
-    for above in ["palette", "dialogs", "help", "profiles"] {
+    for above in ["goto", "dialogs", "help", "profiles"] {
         assert!(
             pos("menu") < pos(above),
             "#{above} has to cover the menu, so it goes after"

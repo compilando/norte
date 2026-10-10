@@ -2343,13 +2343,15 @@ fn snapshot_help_body_with_focus() {
     insta::assert_snapshot!(text);
 }
 
-/// Command palette (`Ctrl+P`/vim `:`, H1 T4): filtered to "principio"
-/// leaves TWO rows visible (`cursor.top`/`viewer.top` — both "go to the
-/// start" in ES) with their real chord from the orthodox preset — the SAME
-/// builder the binary uses (`norte_tui::palette::build_rows`), not a copy of
-/// the format.
+/// The search box in commands mode (`Ctrl+P`/vim `:`) filtered to
+/// `principio`: the rows that "go to the start" in ES, each with its category,
+/// its real chord from the orthodox preset (right-aligned) and the matched
+/// letters marked — the SAME builders the binary uses
+/// (`norte_tui::palette::build_rows`, `command_rows`), not a copy of the
+/// format.
 #[test]
 fn snapshot_palette_open() {
+    use norte_frontend::goto::{FixedSource, Goto, SECTION_COMMANDS, command_rows};
     let mut app = app_base();
     let presets = norte_tui::keymap::presets();
     let (_, preset) = presets.iter().find(|(n, _)| *n == "orthodox").unwrap();
@@ -2361,11 +2363,44 @@ fn snapshot_palette_open() {
         &build(norte_tui::keymap::Screen::Browse),
         &build(norte_tui::keymap::Screen::Viewer),
     );
-    let mut palette = norte_tui::app::Palette::new(rows);
-    for c in "principio".chars() {
-        palette.push_char(c);
-    }
-    app.palette = Some(palette);
+    let mut goto = Goto::new(vec![Box::new(FixedSource::new(
+        SECTION_COMMANDS,
+        command_rows(rows, None, norte_i18n::active()),
+    ))]);
+    goto.set_query(">principio");
+    app.goto = Some(goto);
+    insta::assert_snapshot!(render(&app));
+}
+
+/// The box with an empty query: the footer carries the hint that says `>`
+/// and `?` are there.
+#[test]
+fn snapshot_goto_places_hint() {
+    use norte_frontend::goto::{FixedSource, Goto, SECTION_HISTORY, row_path};
+    let mut app = app_base();
+    app.goto = Some(Goto::new(vec![Box::new(FixedSource::new(
+        SECTION_HISTORY,
+        vec![row_path(
+            SECTION_HISTORY.id,
+            None,
+            &vp("file:///casa/docs"),
+            None,
+        )],
+    ))]));
+    insta::assert_snapshot!(render(&app));
+}
+
+/// `?` switches the box to help topics.
+#[test]
+fn snapshot_goto_help_mode() {
+    use norte_frontend::goto::{FixedSource, Goto, SECTION_HELP, help_rows};
+    let mut app = app_base();
+    let mut goto = Goto::new(vec![Box::new(FixedSource::new(
+        SECTION_HELP,
+        help_rows(norte_i18n::active()),
+    ))]);
+    goto.set_query("?");
+    app.goto = Some(goto);
     insta::assert_snapshot!(render(&app));
 }
 
@@ -2401,13 +2436,18 @@ fn snapshot_palette_hostile_plugin_row() {
         has_help: false,
         manifest_digest: None,
     };
-    // No query: `plugin_rows` over ONE plugin with ONE command already
+    // Only `>`: `plugin_rows` over ONE plugin with ONE command already
     // leaves a single row — "filtered down to just it" by construction, not
     // by typed text (the hostile title has no reason to contain anything
     // searchable).
     let rows = norte_tui::palette::plugin_rows(std::slice::from_ref(&plugin));
-    let palette = norte_tui::app::Palette::new(rows);
-    app.palette = Some(palette);
+    let mut goto =
+        norte_frontend::goto::Goto::new(vec![Box::new(norte_frontend::goto::FixedSource::new(
+            norte_frontend::goto::SECTION_PLUGINS,
+            norte_frontend::goto::plugin_command_rows(rows),
+        ))]);
+    goto.set_query(">");
+    app.goto = Some(goto);
     let text = render(&app);
     // See the equivalent comment in
     // `snapshot_extensions_description_hostile_80x24`: the check is on the
@@ -2728,10 +2768,12 @@ fn snapshot_modal_paints_over_the_settings_overlay() {
     insta::assert_snapshot!(render_80x24(&app));
 }
 
-/// Same case as above, with the PALETTE instead of the settings overlay
-/// (`modal_preempts_palette`) — the other half of H1 MINOR-4's class.
+/// Same case as above, with the search box in commands mode instead of the
+/// settings overlay (`modal_preempts_palette`) — the other half of H1
+/// MINOR-4's class.
 #[test]
 fn snapshot_modal_paints_over_the_palette() {
+    use norte_frontend::goto::{FixedSource, Goto, SECTION_COMMANDS, command_rows};
     let mut app = app_base();
     let presets = norte_tui::keymap::presets();
     let (_, preset) = presets.iter().find(|(n, _)| *n == "orthodox").unwrap();
@@ -2743,7 +2785,12 @@ fn snapshot_modal_paints_over_the_palette() {
         &build(norte_tui::keymap::Screen::Browse),
         &build(norte_tui::keymap::Screen::Viewer),
     );
-    app.palette = Some(norte_tui::app::Palette::new(rows));
+    let mut goto = Goto::new(vec![Box::new(FixedSource::new(
+        SECTION_COMMANDS,
+        command_rows(rows, None, norte_i18n::active()),
+    ))]);
+    goto.set_query(">");
+    app.goto = Some(goto);
     app.modal = Some(Modal::ConfirmDelete {
         items: vec![vp("file:///casa/notas.txt")],
         permanent: false,

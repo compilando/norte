@@ -507,6 +507,29 @@ body {
   cursor: pointer;
 }
 
+/* In the native menu bar the box shrinks its label first, then to the icon. */
+.menubar:not([data-titlebar="true"]) .command-center {
+  flex: 0 1 32ch;
+  min-width: calc(var(--cell-h) + 8px);
+  overflow: hidden;
+}
+
+.command-center-label {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-center-chord {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  opacity: 0.6;
+  margin-left: 8px;
+}
+
 /* With the centre taking the free space, the buttons sit right after it. */
 .command-center + .menubar-actions {
   margin-left: 0;
@@ -523,11 +546,17 @@ body {
   fill: none;
   stroke: currentcolor;
   stroke-width: 1.6;
+  flex-shrink: 0;
 }
 
-/* A window too narrow for the menus AND the box: the menus win. */
+/* The custom title bar, too narrow for the menus AND the box: the menus win.
+   The native menu bar's box does not vanish: it shrinks to its icon. */
 @media (width <= 900px) {
-  .command-center {
+  .menubar[data-titlebar="true"] .command-center {
+    display: none;
+  }
+
+  .menubar:not([data-titlebar="true"]) .command-center-chord {
     display: none;
   }
 }
@@ -1621,7 +1650,6 @@ button.status-item:hover {
   color: var(--selection-fg);
 }
 
-#palette[data-open="true"],
 #goto[data-open="true"] {
   position: fixed;
   inset: 0;
@@ -1632,24 +1660,28 @@ button.status-item:hover {
   background: rgb(0 0 0 / 45%);
 }
 
-#palette[data-open="false"],
 #goto[data-open="false"] {
   display: none;
 }
 
-/* In "go to" the PLACE is the row: it takes the room and is cut (from the
-   left, `cutStart`) only when it really does not fit. The palette's 22ch
-   id column cut "/home/ada/Photos/2026-01 Tromsø" in a box with room to
-   spare (landing shots, 2026-10-08). What comes after is the aside. */
+/* The row's text — a place, or a command's human label — is the row: it
+   takes the room and is cut (from the left, `cutStart`) only when it really
+   does not fit. A fixed-width text column cut
+   "/home/ada/Photos/2026-01 Tromsø" in a box with room to spare (landing
+   shots, 2026-10-08). The desc after it (a command's id, for one) is the
+   aside, dimmed. */
 .goto .palette-text {
   flex: 1 1 auto;
   min-width: 0;
-  opacity: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .goto .palette-desc {
   flex: 0 1 auto;
   max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   opacity: 0.6;
 }
 
@@ -1662,6 +1694,29 @@ button.status-item:hover {
   opacity: 0.7;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+/* What the query matched, in the row's own text. */
+.goto mark {
+  background: none;
+  color: var(--border-focus);
+  font-weight: 600;
+}
+
+.goto-category {
+  flex: 0 0 auto;
+  opacity: 0.6;
+}
+
+.goto-category::after {
+  content: ":";
+}
+
+/* The empty box's way in: which prefix asks for what. */
+.goto-hint {
+  padding: 0.35em 0.75em;
+  opacity: 0.6;
+  font-size: 0.9em;
 }
 
 .palette {
@@ -1718,13 +1773,6 @@ button.status-item:hover {
   font-weight: 600;
 }
 
-.palette-count {
-  margin-left: auto;
-  padding-left: 12px;
-  opacity: 0.6;
-  font-size: 0.9em;
-}
-
 .palette-rows {
   margin: 0;
   padding: 0;
@@ -1758,28 +1806,13 @@ button.status-item:hover {
   color: var(--selection-fg);
 }
 
-.palette-row[data-enabled="false"] {
+.palette-row[data-unavailable="true"] {
   opacity: 0.55;
-}
-
-/* The human label grows and reads whole; the id comes after, dimmed and at
-   a fixed width. Same layout as the terminal's. */
-.palette-desc {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.palette-text {
-  flex: 0 0 22ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  opacity: 0.6;
 }
 
 /* A recent one goes up top for being recent, and says so with a dot in
    front. */
-.palette-row[data-recent="true"]::before {
+.goto .palette-row[data-recent="true"]::before {
   content: "• ";
   color: var(--info-fg);
 }

@@ -155,6 +155,7 @@ fn actions() {
 /// pass with nothing saying anything — and it did: `SearchActivateRow`
 /// crossed the wire with no fixture. With this, adding a variant breaks this
 /// file's compilation, which is where it needs to be noticed.
+#[allow(clippy::too_many_lines)] // one arm per action, by design
 fn action_tag(a: &UiAction) -> &'static str {
     match a {
         UiAction::MoveCursor { .. } => "move_cursor",
@@ -238,6 +239,9 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::ContextMenuBranch { .. } => "context_menu_branch",
         UiAction::ContextMenuPointRow { .. } => "context_menu_point_row",
         UiAction::ContextMenuActivateRow { .. } => "context_menu_activate_row",
+        UiAction::GotoPointRow { .. } => "goto_point_row",
+        UiAction::GotoActivateRow { .. } => "goto_activate_row",
+        UiAction::GotoPaste { .. } => "goto_paste",
         UiAction::ContextMenuClose => "context_menu_close",
         UiAction::WizardOpen => "wizard_open",
         UiAction::SplashOpen => "splash_open",
@@ -739,6 +743,14 @@ fn context_menu_actions() -> Vec<(&'static str, UiAction)> {
             UiAction::ContextMenuActivateRow { row: 3 },
         ),
         ("context_menu_close", UiAction::ContextMenuClose),
+        ("goto_point_row", UiAction::GotoPointRow { row: 2 }),
+        ("goto_activate_row", UiAction::GotoActivateRow { row: 2 }),
+        (
+            "goto_paste",
+            UiAction::GotoPaste {
+                text: ">copia".to_owned(),
+            },
+        ),
     ]
 }
 
@@ -1594,15 +1606,37 @@ fn reference_goto() -> norte_ui_host::dto::GotoView {
                 text: "/home/ana/docs".to_owned(),
                 desc: String::new(),
                 hostile: false,
+                chord: String::new(),
+                category: String::new(),
+                unavailable: String::new(),
+                recent: false,
+                positions: Vec::new(),
             },
             GotoLineView::Row {
                 text: "caf\u{fffd}".to_owned(),
                 desc: "/srv/caf\u{fffd}".to_owned(),
                 hostile: true,
+                chord: String::new(),
+                category: String::new(),
+                unavailable: String::new(),
+                recent: false,
+                positions: vec![0, 1],
+            },
+            GotoLineView::Row {
+                text: "Cerrar panel".to_owned(),
+                desc: String::new(),
+                hostile: false,
+                chord: "F8".to_owned(),
+                category: "Panel".to_owned(),
+                unavailable: "solo lectura".to_owned(),
+                recent: true,
+                positions: vec![2],
             },
         ],
         cursor: Some(1),
         empty: "nada casa con eso".to_owned(),
+        mode: norte_ui_host::dto::GotoModeView::Places,
+        hint: String::new(),
     }
 }
 
@@ -1757,6 +1791,7 @@ fn reference_menu() -> norte_ui_host::dto::MenuView {
             },
         ],
         cursor: 1,
+        goto_chord: "ctrl+g".to_owned(),
     }
 }
 
@@ -1834,19 +1869,6 @@ fn reference_snapshot() -> ViewSnapshot {
         row_stripes: true,
         profiles: Some(reference_profiles()),
         wizard: Some(reference_wizard()),
-        palette: Some(norte_ui_host::dto::PaletteView {
-            query: "orde".to_owned(),
-            rows: vec![norte_ui_host::dto::PaletteRowView {
-                text: "pane.sort-name".to_owned(),
-                desc: "Ordenar por nombre".to_owned(),
-                chord: "ctrl+f3".to_owned(),
-                enabled: true,
-                hostile: false,
-                recent: false,
-            }],
-            cursor: Some(0),
-            total: 42,
-        }),
         goto: Some(reference_goto()),
         whichkey: Some(norte_ui_host::dto::WhichKeyView {
             title: "ctrl+x".to_owned(),
@@ -2985,24 +3007,6 @@ fn rest_changes() -> Vec<(&'static str, ViewChange)> {
             },
         ),
         (
-            "palette",
-            ViewChange::Palette {
-                palette: Some(norte_ui_host::dto::PaletteView {
-                    query: "orde".to_owned(),
-                    rows: vec![norte_ui_host::dto::PaletteRowView {
-                        text: "pane.sort-name".to_owned(),
-                        desc: "Ordenar por nombre".to_owned(),
-                        chord: "ctrl+f3".to_owned(),
-                        hostile: false,
-                        enabled: true,
-                        recent: false,
-                    }],
-                    cursor: Some(0),
-                    total: 42,
-                }),
-            },
-        ),
-        (
             "goto",
             ViewChange::Goto {
                 goto: Some(reference_goto()),
@@ -3150,6 +3154,9 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // Bridge 74: `MenuItemView.section` and `.role` (ADR 0125).
     // Bridge 75: `HelpSpanView::Link.action`, the row the link follows.
     // Bridge 76: `HelpView.scroll`, the request to scroll the body.
+    // Bridge 108: `GotoView.mode`/`.hint`, the row's chord, category,
+    // unavailable, recent and positions, `MenuView.goto_chord` and the
+    // `goto_*` actions.
     // Bridge 77: `GotoView` ("go to", #357) in the snapshot and its change.
     // Bridge 78: `SlotView::Timeline` (the timeline, #359).
     // Bridge 79: an extension that failed to load carries the id it is
@@ -3204,7 +3211,9 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // 101: `PanelBarView.footer`, the activity column's foot.
     // 107 (spec 2026-10-09): `ViewSnapshot.context_menu` and the
     // `context_menu` change, the right-click menu.
-    const SHAPE: u64 = 17_027_469_966_710_062_053;
+    // 108 (spec 2026-10-09): `ViewSnapshot.palette` and the `palette`
+    // change go; `app.palette` opens the go-to box with `>`.
+    const SHAPE: u64 = 12_326_835_412_188_999_390;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

@@ -829,9 +829,26 @@ goto-section-favorites = Favoritos
 goto-section-connections = Conexiones
 goto-section-commands = Comandos
 goto-section-index = Encontrado por el índice
+goto-title-help = Temas de ayuda
+goto-prefix-commands = Ejecutar un comando
+goto-prefix-places = Ir a un sitio
 goto-empty = nada casa con eso
 goto-index-off = el índice semántico no está encendido
 goto-path-desc = ir a esta ruta
+goto-hint = > comandos · ? ayuda
+goto-box-label = Buscar sitios y comandos (>)
+# La categoría bajo la que se archiva una fila de comando: el espacio de nombres de su id.
+cmd-ns-app = Aplicación
+cmd-ns-cursor = Cursor
+cmd-ns-dialog = Diálogo
+cmd-ns-layout = Disposición
+cmd-ns-mark = Marcas
+cmd-ns-nav = Navegar
+cmd-ns-pane = Panel
+cmd-ns-profile = Perfil
+cmd-ns-task = Tareas
+cmd-ns-terminal = Terminal
+cmd-ns-viewer = Visor
 msg-goto-bad-path = esa ruta no se puede leer como destino
 msg-goto-no-home = no hay HOME en el entorno, así que «~» no nombra nada
 help-cmd-app-settings = ajustes
@@ -861,11 +878,11 @@ window-maximize = Maximizar o restaurar
 window-close = Cerrar
 # La marca de novedad de un botón de la barra, para un lector de pantalla.
 panelbar-attention = Novedades
-# H3c, y clave SEPARADA a propósito: `palette-hint` lo pintan los DOS
-# frontends, y solo la TUI tiene overlay de ayuda que F1 pueda abrir (el de la
-# GUI es la fase H3f). Metido en la cadena de arriba, el pie de la GUI
-# anunciaría una tecla que allí no hace nada. Cuando llegue H3f, la GUI une
-# también este grupo.
+# El pie de la caja de búsqueda en modo comandos (`>`), tras `palette-hint`:
+# F1 sobre una fila abre su ayuda, en el terminal y en la ventana por igual.
+# Solo la caja de la TUI pinta este pie; la de la ventana no muestra pie de
+# teclas, así que un pie en la ventana tomaría las dos teclas de aquí, no una
+# redacción propia.
 palette-hint-help = [f1] ayuda
 # H3c: F1 sobre una fila abre la página que documenta ese comando. Si ninguna
 # lo documenta, la palette se queda abierta y lo dice — abrir el índice
@@ -2003,7 +2020,7 @@ listing-empty = vacío
 # redacción, sin el ⚠ que la hace leerse como aviso, y era la que pintaba la
 # ventana: dos claves para un hecho es cómo dos superficies acaban diciendo
 # cosas distintas de lo mismo.
-palette-empty = nada casa con lo que has tecleado
+
 gui-menu-acts-on = actúa sobre { $target }
 gui-menu-target-marks = { $n } elementos marcados
 gui-menu-entry-disabled = { $label } — { $reason }

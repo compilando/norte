@@ -15,7 +15,7 @@ import "@fontsource/inter/latin-600.css";
 
 import { invokeMetrics, tauriPort } from "./bridge";
 import type { HostPort } from "./bridge";
-import { AltSolo, isForTheField, keyAction, keyInputOf } from "./keys";
+import { AltSolo, isForTheField, isPasteIntoTheBox, keyAction, keyInputOf } from "./keys";
 import { Screen } from "./render";
 import { installContextMenuGuard } from "./render/contextmenu";
 import { mountTitleBar } from "./render/menus";
@@ -38,7 +38,6 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const screenEl = doc.getElementById("screen");
   const menuEl = doc.getElementById("menu");
   const panelBarEl = doc.getElementById("panelbar");
-  const paletteEl = doc.getElementById("palette");
   const whichKeyEl = doc.getElementById("whichkey");
   const helpEl = doc.getElementById("help");
   const settingsEl = doc.getElementById("settings");
@@ -65,7 +64,6 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     screenEl === null ||
     menuEl === null ||
     panelBarEl === null ||
-    paletteEl === null ||
     whichKeyEl === null ||
     helpEl === null ||
     settingsEl === null ||
@@ -160,7 +158,6 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     screenEl,
     menuEl,
     panelBarEl,
-    paletteEl,
     whichKeyEl,
     helpEl,
     settingsEl,
@@ -373,6 +370,10 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     // An open text field owns its keys: the ones that type and the ones
     // that EDIT. The rule lives in `keys.ts`, where it can be tested.
     if (isForTheField(k, e.target instanceof HTMLInputElement)) {
+      return;
+    }
+    // The open search box's paste chord: its text comes by the `paste` event.
+    if (isPasteIntoTheBox(k, gotoEl.dataset["open"] === "true")) {
       return;
     }
     // The keys that scroll help also go to the host (bridge 76): it resolves

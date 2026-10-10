@@ -398,24 +398,52 @@
     "goto": {
       "cursor": 1,
       "empty": "nada casa con eso",
+      "hint": "",
       "lines": [
         {
           "line": "header",
           "title": "Historia"
         },
         {
+          "category": "",
+          "chord": "",
           "desc": "",
           "hostile": false,
           "line": "row",
-          "text": "/home/ana/docs"
+          "positions": [],
+          "recent": false,
+          "text": "/home/ana/docs",
+          "unavailable": ""
         },
         {
+          "category": "",
+          "chord": "",
           "desc": "/srv/caf�",
           "hostile": true,
           "line": "row",
-          "text": "caf�"
+          "positions": [
+            0,
+            1
+          ],
+          "recent": false,
+          "text": "caf�",
+          "unavailable": ""
+        },
+        {
+          "category": "Panel",
+          "chord": "F8",
+          "desc": "",
+          "hostile": false,
+          "line": "row",
+          "positions": [
+            2
+          ],
+          "recent": true,
+          "text": "Cerrar panel",
+          "unavailable": "solo lectura"
         }
       ],
+      "mode": "places",
       "query": "doc"
     }
   },
@@ -707,6 +735,7 @@
     "menu": {
       "bar": true,
       "cursor": 1,
+      "goto_chord": "ctrl+g",
       "items": [
         {
           "chord": "tab",
@@ -776,24 +805,6 @@
       "seen_all": false,
       "summary": "crea 1 carpetas y mueve 2 ficheros",
       "total": 5
-    }
-  },
-  "palette": {
-    "change": "palette",
-    "palette": {
-      "cursor": 0,
-      "query": "orde",
-      "rows": [
-        {
-          "chord": "ctrl+f3",
-          "desc": "Ordenar por nombre",
-          "enabled": true,
-          "hostile": false,
-          "recent": false,
-          "text": "pane.sort-name"
-        }
-      ],
-      "total": 42
     }
   },
   "panel_bar": {

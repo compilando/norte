@@ -695,7 +695,7 @@ pub(crate) fn overlay_open(app: &App) -> bool {
     app.modal.is_some()
         || app.viewer.is_some()
         || app.help.is_some()
-        || app.palette.is_some()
+        || app.goto.is_some()
         || app.wizard.is_some()
         || app.settings.is_some()
         // K3c: the shortcut editor. Today it is always behind `settings`,

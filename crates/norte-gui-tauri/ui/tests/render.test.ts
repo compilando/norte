@@ -18,6 +18,7 @@ import { BRIDGE_VERSION } from "../src/types";
 import type {
   BrowserSlotView,
   ContextMenuView,
+  GotoView,
   HostCatalog,
   LogSlotView,
   PanelSlotView,
@@ -146,7 +147,6 @@ function view(browser: Partial<BrowserSlotView>): ViewSnapshot {
       ],
     },
     profiles: null,
-    palette: null,
     whichkey: null,
     help: null,
     settings: null,
@@ -195,13 +195,192 @@ describe("go to anywhere (#357)", () => {
 
   it("a row's place takes the room, and is cut only when it does not fit", () => {
     // Landing shots, 2026-10-08: "…tos/2026-01 Tromsø" in a box with room
-    // for "/home/ada/Photos/2026-01 Tromsø". The palette's id column is a
-    // fixed 22ch; here the place IS the row, so it grows.
+    // for "/home/ada/Photos/2026-01 Tromsø". No fixed-width text column:
+    // the row's text grows and the desc is the dimmed aside.
     const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
     const text = /\.goto \.palette-text\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
     expect(text).toMatch(/flex:\s*1 1 auto/);
     const desc = /\.goto \.palette-desc\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
     expect(desc).toMatch(/flex:\s*0 1 auto/);
+  });
+
+  function commandsBox(): GotoView {
+    return {
+      query: ">co",
+      mode: "commands",
+      hint: "",
+      lines: [
+        {
+          line: "row",
+          text: "copy 🦀 now",
+          desc: "pane.copy",
+          hostile: false,
+          chord: "F5",
+          category: "Panel",
+          unavailable: "",
+          recent: true,
+          positions: [0, 5],
+        },
+        {
+          line: "row",
+          text: "delete",
+          desc: "pane.delete",
+          hostile: false,
+          chord: "F8",
+          category: "Panel",
+          unavailable: "solo lectura",
+          recent: false,
+          positions: [],
+        },
+      ],
+      cursor: 0,
+      empty: "nada",
+    };
+  }
+
+  it("marks the matched characters by code point, not UTF-16 unit", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.goto = commandsBox();
+    screen.paint(v);
+    const marks = [...document.querySelectorAll(".goto .palette-row mark")].map(
+      (m) => m.textContent,
+    );
+    // Position 5 is the crab (one code point, two UTF-16 units).
+    expect(marks).toEqual(["c", "🦀"]);
+  });
+
+  it("ignores positions past the end and never reads the text as markup", () => {
+    const { screen } = mount();
+    const v = view({});
+    const box = commandsBox();
+    box.lines = [
+      {
+        line: "row",
+        text: "<b>x</b>",
+        desc: "",
+        hostile: true,
+        positions: [0, 1, 99],
+      },
+    ];
+    v.goto = box;
+    screen.paint(v);
+    const text = document.querySelector(".goto .palette-text");
+    expect(text?.querySelector("b")).toBeNull();
+    expect(text?.textContent).toBe("<b>x</b>");
+    expect(
+      [...document.querySelectorAll(".goto mark")].map((m) => m.textContent),
+    ).toEqual(["<b"]);
+  });
+
+  it("keeps a decomposed accent in the mark of its base char", () => {
+    // The matcher marks the `e` of an NFD "Café" and not its U+0301; a bare
+    // accent in a node of its own is what the TUI dropped.
+    const { screen } = mount();
+    const v = view({});
+    const box = commandsBox();
+    const nfd = "Cafe\u{301}";
+    box.lines = [{ line: "row", text: nfd, desc: "", hostile: false, positions: [3] }];
+    v.goto = box;
+    screen.paint(v);
+    expect(
+      [...document.querySelectorAll(".goto mark")].map((m) => m.textContent),
+    ).toEqual(["e\u{301}"]);
+    expect(document.querySelector(".goto .palette-text")?.textContent).toBe(nfd);
+  });
+
+  it("shows category, chord and recent, and dims what cannot run with its reason", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.goto = commandsBox();
+    screen.paint(v);
+    const [first, second] = [...document.querySelectorAll(".goto .palette-row")];
+    expect(first?.querySelector(".goto-category")?.textContent).toBe("Panel");
+    expect(first?.querySelector(".palette-chord")?.textContent).toBe("F5");
+    expect(first?.getAttribute("data-recent")).toBe("true");
+    expect(second?.getAttribute("data-unavailable")).toBe("true");
+    expect(second?.getAttribute("aria-disabled")).toBe("true");
+    expect(second?.getAttribute("title")).toBe("solo lectura");
+    expect(document.querySelector(".goto")?.getAttribute("aria-label")).toBe(
+      realCatalog()["palette-title"],
+    );
+  });
+
+  it("hovering points once per row and a click activates; a cursor move repaints in place", () => {
+    const { screen, sent } = mount();
+    const v = view({});
+    v.goto = commandsBox();
+    screen.paint(v);
+    const rows = () =>
+      [...document.querySelectorAll(".goto .palette-row")] as HTMLElement[];
+    const firstPaint = rows()[1];
+    rows()[1]?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    rows()[1]?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    expect(sent.filter((a) => a.action === "goto_point_row")).toEqual([
+      { action: "goto_point_row", row: 1 },
+    ]);
+    v.goto = { ...commandsBox(), cursor: 1 };
+    screen.paint(v);
+    expect(rows()[1]).toBe(firstPaint);
+    expect(rows()[1]?.getAttribute("aria-selected")).toBe("true");
+    rows()[1]?.click();
+    expect(sent.at(-1)).toEqual({ action: "goto_activate_row", row: 1 });
+  });
+
+  it("a paste while the box is open crosses to the host; closed, it does not", () => {
+    const { screen, sent } = mount();
+    const v = view({});
+    v.goto = commandsBox();
+    screen.paint(v);
+    const paste = (text: string) => {
+      const e = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(e, "clipboardData", {
+        value: { getData: (t: string) => (t === "text/plain" ? text : "") },
+      });
+      document.body.dispatchEvent(e);
+      return e;
+    };
+    expect(paste("copy\ntail").defaultPrevented).toBe(true);
+    expect(sent.at(-1)).toEqual({ action: "goto_paste", text: "copy\ntail" });
+    v.goto = null;
+    screen.paint(v);
+    const before = sent.length;
+    paste("x");
+    expect(sent.length).toBe(before);
+  });
+
+  it("cancels `beforepaste` only while the box is open, so WebKit enables Paste", () => {
+    const { screen } = mount();
+    const v = view({});
+    const beforepaste = (): Event => {
+      const e = new Event("beforepaste", { bubbles: true, cancelable: true });
+      document.body.dispatchEvent(e);
+      return e;
+    };
+    expect(beforepaste().defaultPrevented).toBe(false);
+    v.goto = commandsBox();
+    screen.paint(v);
+    expect(beforepaste().defaultPrevented).toBe(true);
+    v.goto = null;
+    screen.paint(v);
+    expect(beforepaste().defaultPrevented).toBe(false);
+  });
+
+  it("an empty places box shows the hint", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.goto = {
+      query: "",
+      mode: "places",
+      hint: "> comandos · ? ayuda",
+      lines: [],
+      cursor: null,
+      empty: "nada",
+    };
+    screen.paint(v);
+    expect(document.querySelector(".goto .goto-hint")?.textContent).toBe(
+      "> comandos · ? ayuda",
+    );
   });
 
   it("with no lines says nothing matches, and closed leaves nothing", () => {
@@ -438,7 +617,6 @@ function mount(
   const menu = document.createElement("div");
   const panelBar = document.createElement("div");
   const profiles = document.createElement("div");
-  const palette = document.createElement("div");
   const whichkey = document.createElement("div");
   const help = document.createElement("div");
   const settings = document.createElement("div");
@@ -464,7 +642,6 @@ function mount(
     root,
     panelBar,
     menu,
-    palette,
     whichkey,
     help,
     settings,
@@ -488,7 +665,6 @@ function mount(
     root,
     menu,
     panelBar,
-    palette,
     whichkey,
     help,
     settings,
@@ -2807,6 +2983,51 @@ describe("the menu bar", () => {
     expect(document.querySelector(".menu-items")).toBeNull();
   });
 
+  it("with the native title bar the search box sits in the menu bar, with its key", () => {
+    const { screen, sent } = mount();
+    const v = withMenu(null);
+    v.menu.goto_chord = "ctrl+g";
+    v.layout_buttons = [{ id: "terminal", label: "Terminal", chord: "ctrl+`" }];
+    screen.paint(v);
+    const bar = document.querySelector(".menubar") as HTMLElement;
+    const center = bar.querySelector(".command-center") as HTMLButtonElement;
+    expect(center).not.toBeNull();
+    expect(center.querySelector(".command-center-label")?.textContent).toBe(
+      realCatalog()["goto-box-label"],
+    );
+    expect(center.querySelector(".command-center-chord")?.textContent).toBe("ctrl+g");
+    // Between the last title and the layout buttons.
+    const kids = [...bar.children];
+    const titles = kids.filter((k) => k.classList.contains("menubar-title"));
+    const lastTitle = titles[titles.length - 1] as Element;
+    expect(kids.indexOf(center)).toBe(kids.indexOf(lastTitle) + 1);
+    const actions = bar.querySelector(".menubar-actions") as Element;
+    expect(kids.indexOf(actions)).toBe(kids.indexOf(center) + 1);
+    center.click();
+    expect(sent).toEqual([{ action: "activity_activate", id: "goto" }]);
+  });
+
+  it("below 900px only the custom title bar's box disappears", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+    const media = /@media \(width <= 900px\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? "";
+    expect(media).toContain('.menubar[data-titlebar="true"] .command-center {');
+    expect(media).not.toMatch(/(^|\n)\s*\.command-center\s*\{/);
+  });
+
+  it("a preset without an app.goto chord shows the box without a key", () => {
+    const { screen } = mount();
+    screen.paint(withMenu(null));
+    expect(document.querySelector(".command-center-chord")).toBeNull();
+  });
+
+  it("with the menu bar off and the native title bar there is no box", () => {
+    const { screen } = mount();
+    const v = withMenu(null);
+    v.menu.bar = false;
+    screen.paint(v);
+    expect(document.querySelector(".command-center")).toBeNull();
+  });
+
   describe("with its own title bar (ADR 0136)", () => {
     beforeEach(() => {
       document.documentElement.dataset["titlebar"] = "custom";
@@ -2845,7 +3066,10 @@ describe("the menu bar", () => {
       const center = document.querySelector(
         ".menubar .command-center",
       ) as HTMLButtonElement;
-      expect(center.textContent).toBe("Ir a…");
+      expect(document.querySelectorAll(".command-center")).toHaveLength(1);
+      expect(center.querySelector(".command-center-label")?.textContent).toBe(
+        realCatalog()["goto-box-label"],
+      );
       center.click();
       expect(sent).toEqual([{ action: "activity_activate", id: "goto" }]);
     });
@@ -3358,72 +3582,6 @@ describe("the menu bar", () => {
     expect(css).toMatch(
       /\.menu-items:not\(\[data-emerge="true"\]\)\s*\{[^}]*animation:\s*none/,
     );
-  });
-});
-
-describe("the palette", () => {
-  function withPalette(cursor: number | null) {
-    const v = view({});
-    v.palette = {
-      query: "cur",
-      rows: [
-        {
-          text: "cursor.up",
-          desc: "subir el cursor",
-          chord: "Up",
-          enabled: true,
-          hostile: false,
-        },
-        {
-          text: "cursor.down",
-          desc: "bajar el cursor",
-          chord: "Down",
-          enabled: true,
-          hostile: false,
-        },
-      ],
-      cursor,
-      total: 24,
-    };
-    return v;
-  }
-
-  it("is modal, says how much it narrows down, and marks the selection", () => {
-    const { screen } = mount();
-    screen.paint(withPalette(1));
-    const box = document.querySelector(".palette") as HTMLElement;
-    expect(box.getAttribute("aria-modal")).toBe("true");
-    expect(document.querySelector(".palette-count")?.textContent).toBe("2/24");
-    const list = document.querySelector(".palette-rows") as HTMLElement;
-    expect(list.getAttribute("aria-activedescendant")).toBe("palette-row-1");
-    const sel = document.querySelectorAll('.palette-row[aria-selected="true"]');
-    expect(sel).toHaveLength(1);
-    expect(sel[0]?.textContent).toContain("cursor.down");
-  });
-
-  it("every row shows its real shortcut", () => {
-    const { screen } = mount();
-    screen.paint(withPalette(0));
-    const chords = [...document.querySelectorAll(".palette-chord")].map(
-      (c) => c.textContent,
-    );
-    expect(chords).toEqual(["Up", "Down"]);
-  });
-
-  it("with no matches it says so instead of staying blank", () => {
-    const { screen } = mount();
-    const v = withPalette(null);
-    if (v.palette !== null) {
-      v.palette.rows = [];
-    }
-    screen.paint(v);
-    expect(document.querySelector(".palette-rows .empty")).not.toBeNull();
-  });
-
-  it("closed, it covers nothing", () => {
-    const { screen } = mount();
-    screen.paint(view({}));
-    expect(document.querySelector(".palette")).toBeNull();
   });
 });
 

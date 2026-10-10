@@ -579,7 +579,7 @@ async fn keys_walk_and_run_the_menu_and_escape_closes() {
         Some(browser(&s).rows[0].key),
         "Escape did not leave the panel"
     );
-    assert!(s.dialogs.is_empty() && s.palette.is_none());
+    assert!(s.dialogs.is_empty() && s.goto.is_none());
 }
 
 #[tokio::test]

@@ -23,7 +23,6 @@ mod modal;
 mod nav;
 mod nav_popup;
 mod ops;
-mod palette;
 mod pane;
 mod pickers;
 mod plugins;
@@ -37,7 +36,6 @@ pub use errors::*;
 pub use help_view::*;
 pub use modal::*;
 pub use nav_popup::*;
-pub use palette::*;
 pub use pane::*;
 pub use plugins::*;
 pub use trail::*;
@@ -1239,9 +1237,7 @@ pub struct App {
     /// `help_lines` — a rebind must change the prose, and it does because the
     /// page is drawn through this.
     pub help_chords: std::sync::Arc<crate::help::TuiChords>,
-    /// Open command palette (`Ctrl+P`/vim `:`, H1 T4): `None` = closed.
-    pub palette: Option<Palette>,
-    /// The last commands launched from the palette, most recent first (spec
+    /// The last commands launched from the search box, most recent first (spec
     /// 2026-09-10). Live in the UI session: read on restore and written back
     /// with it.
     pub palette_recent: Vec<String>,
@@ -1252,8 +1248,8 @@ pub struct App {
     /// Palette rows PRECOMPUTED from the current keymap
     /// ([`crate::palette::build_rows`]) — same criterion as `help_lines`/
     /// `dialog_hints`: rebuilt at startup and on every OK hot reload, BEFORE
-    /// the effective maps move into the `Resolver`. Opening the palette
-    /// (`dispatch`, `app.palette` arm) only clones this snapshot.
+    /// the effective maps move into the `Resolver`. Opening the search box
+    /// (`crate::goto::sources`) only clones this snapshot.
     pub palette_rows: Vec<crate::palette::Row>,
     /// The first-run wizard (spec 2026-09-10), while open. Just another
     /// overlay: it keeps the keys, and the model is the one shared with the
@@ -1512,7 +1508,6 @@ impl App {
             typed_ahead: std::collections::VecDeque::new(),
             version_line: "",
             help_chords: default_help_chords(),
-            palette: None,
             palette_recent: Vec::new(),
             popular: norte_frontend::history::Popular::default(),
             palette_rows: Vec::new(),

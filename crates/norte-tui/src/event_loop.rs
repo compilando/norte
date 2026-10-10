@@ -1505,6 +1505,11 @@ pub async fn run(
                     // dispatch above, not a second one — see `route_paste`.
                     app.message = None;
                     route_paste(app, &text);
+                    // A paste into the box is typing: the index is asked as
+                    // after a key.
+                    if app.goto.is_some() {
+                        crate::jobs::goto::ask_the_index(app, backend, &mut work);
+                    }
                 }
             }
         }

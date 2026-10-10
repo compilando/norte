@@ -79,8 +79,6 @@ pub struct ViewSnapshot {
     pub row_stripes: bool,
     /// The profile picker, if open.
     pub profiles: Option<ProfilePickerView>,
-    /// The command palette, if open.
-    pub palette: Option<PaletteView>,
     /// "Go to anywhere", if open (#357). Bridge 77.
     #[serde(default)]
     pub goto: Option<GotoView>,
@@ -218,6 +216,10 @@ pub struct MenuView {
     pub items: Vec<MenuItemView>,
     /// Which entry is highlighted inside the open menu.
     pub cursor: u64,
+    /// The first chord of `app.goto` (the box's key), or empty if the preset
+    /// does not bind it. Bridge 108.
+    #[serde(default)]
+    pub goto_chord: String,
 }
 
 /// An entry of a menu.
@@ -435,27 +437,10 @@ pub enum PanelButtonState {
     Focused,
 }
 
-/// The open command palette.
-///
-/// Filtering, the cursor and what is selected are decided by
-/// `norte_frontend::palette_state`, the same model as the TUI: typing to
-/// narrow a list is a presentation rule, and two copies are two palettes
-/// that behave differently without anyone noticing.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PaletteView {
-    /// What was typed, already sanitized for painting.
-    pub query: String,
-    /// The rows that MATCH, in order.
-    pub rows: Vec<PaletteRowView>,
-    /// Which one is selected, if any.
-    pub cursor: Option<u64>,
-    /// How many rows there are in total, to say how much is being narrowed.
-    pub total: u64,
-}
-
 /// "Go to anywhere" open (#357, bridge 77): the typed path, the pane's
-/// history, the popular ones, the favorites, the connections, the commands
-/// and what the semantic index found, in SECTIONS.
+/// history, the popular ones, the favorites, the connections and what the
+/// semantic index found, in SECTIONS. `mode` says which list; `>` commands
+/// and `?` help are flat (no headers).
 ///
 /// The sections, their order, the filtering and the cursor are decided by
 /// `norte_frontend::goto`, the same model as the TUI; the renderer paints
@@ -471,6 +456,27 @@ pub struct GotoView {
     /// What is painted when `lines` is empty, already translated: "nothing
     /// matches that" is not the same as a blank screen.
     pub empty: String,
+    /// Which list the query asks for. Bridge 108.
+    #[serde(default)]
+    pub mode: GotoModeView,
+    /// What the empty places box says about its prefixes, already translated,
+    /// or empty. Bridge 108.
+    #[serde(default)]
+    pub hint: String,
+}
+
+/// What the "go to" box is listing, chosen by the query's first character
+/// (bridge 108).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GotoModeView {
+    /// Where to go: the sections.
+    #[default]
+    Places,
+    /// What to do (`>`): one flat list of commands.
+    Commands,
+    /// What to read (`?`): one flat list of help rows.
+    Help,
 }
 
 /// A "go to" line.
@@ -492,6 +498,23 @@ pub enum GotoLineView {
         /// What is painted DIFFERS from the source bytes. Travels with the
         /// row: this is a screen where you choose where to go.
         hostile: bool,
+        /// The key that runs it, or empty. Bridge 108.
+        #[serde(default)]
+        chord: String,
+        /// The command's category, or empty. Bridge 108.
+        #[serde(default)]
+        category: String,
+        /// Why it cannot run here, or empty if it can. Bridge 108.
+        #[serde(default)]
+        unavailable: String,
+        /// Was run recently. Bridge 108.
+        #[serde(default)]
+        recent: bool,
+        /// Which chars of `text` the query matched. `text` may have been
+        /// shortened, so the renderer ignores positions past its end.
+        /// Bridge 108.
+        #[serde(default)]
+        positions: Vec<u32>,
     },
 }
 
@@ -512,32 +535,6 @@ pub struct WizardView {
     pub cursor: u64,
     /// The keys line.
     pub hint: String,
-}
-
-/// A command offered by the palette.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PaletteRowView {
-    /// What is shown (the command's name, or a plugin command's already
-    /// masked title). NEVER the dispatch key.
-    pub text: String,
-    /// What it does, in the user's language.
-    pub desc: String,
-    /// The shortcut that runs it, or `—` if it has none in this preset.
-    pub chord: String,
-    /// This frontend can run it.
-    pub enabled: bool,
-    /// What is painted DIFFERS from what the row's contributor declares.
-    ///
-    /// Can only be true on a PLUGIN row: its title and description are
-    /// written by a manifest, and this is the screen where you choose what
-    /// third-party code to run. A masked text that travels without its flag
-    /// reads as faithful.
-    pub hostile: bool,
-    /// Goes to the top for being among the last launched (spec 2026-09-10).
-    /// Only with an empty query; with a query, the order is by what
-    /// matches.
-    #[serde(default)]
-    pub recent: bool,
 }
 
 /// What can follow a half-typed prefix.
@@ -4088,11 +4085,6 @@ pub enum ViewChange {
     PanelBar {
         /// The whole bar.
         panel_bar: PanelBarView,
-    },
-    /// The palette opened, filtered, moved, or closed.
-    Palette {
-        /// The palette, or `None` if it closed.
-        palette: Option<PaletteView>,
     },
     /// "Go to anywhere" opened, filtered, moved, received a late section
     /// (connections, index) or closed (#357, bridge 77).

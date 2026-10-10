@@ -1,6 +1,6 @@
 ---
 source: crates/norte-tui/tests/snapshots_ui.rs
-expression: text
+expression: render(&app)
 ---
 " Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        "
 "   ┌/casa───────────────────────────────┐┌/otro────────────────────────────────┐"
@@ -8,10 +8,10 @@ expression: text
 "   │  /docs                             ││   cosa               1 B            │"
 "   │  /src                              ││                                     │"
 "   │  @enlace                           ││                                     │"
-"   │┌ Paleta de comandos ──────────────────────────────────────────────────┐   │"
-"   ││!  [extensión] abc�gpj.exe                                            │   │"
-"   │└ ❯>_  [enter] ejecutar · [esc] cerrar · [f1] ayuda ───────────────────┘   │"
-"   │                                    ││                                     │"
+"   │┌ Ir a ────────────────────────────────────────────────────────────────┐   │"
+"   ││Historia                                                              │   │"
+"   ││   /casa/docs                                                         │   │"
+"   │└ ❯_  > comandos · ? ayuda ────────────────────────────────────────────┘   │"
 "   │                                    ││                                     │"
 "   │                                    ││                                     │"
 "   │                                    ││                                     │"

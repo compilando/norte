@@ -160,11 +160,11 @@ pub async fn reload_config(
                 app.help = None;
                 // Palette rows (H1 T4): rebuilt from the CURRENT keymap,
                 // BEFORE it moves into the resolver below — same criterion as
-                // help_lines. An open palette is closed (like help): its
-                // frozen rows could point at descriptions/chords already
-                // stale.
+                // help_lines.
                 app.palette_rows = crate::palette::build_rows(&browse, &viewer);
-                app.palette = None;
+                // An open box is closed (like help): its chords and facts are
+                // stale.
+                app.goto = None;
                 // Overlay hints (H1 T3, #24): rebuilt from the CURRENT
                 // effective `dialog`, BEFORE it moves into the resolver
                 // below — same criterion as help_lines.
@@ -180,7 +180,7 @@ pub async fn reload_config(
                 app.subshell_chord = norte_frontend::subshell::detach_chord(&browse);
                 app.terminal_chord = browse.lone_chord(crate::termpanel::COMMAND);
                 // K3c: the shortcuts editor, if open, is REFRESHED (not
-                // closed like `help`/`palette`): this reload is usually its
+                // closed like `help`/`goto`): this reload is usually its
                 // own write coming back through the watcher, and an editor
                 // that closed on every rebind would not serve for the second
                 // one. Its rows come from the CURRENT effectives, before they
@@ -214,7 +214,7 @@ pub async fn reload_config(
                     ));
                 }
                 // S3: the settings overlay, if open, is REFRESHED (not closed
-                // like `help`/`palette` above) — its rows are just
+                // like `help`/`goto` above) — its rows are just
                 // `(name, description, value)` read from `cfg`, safe to
                 // recompute without discarding the user's current
                 // filter/edit (`Settings::refresh`).
@@ -240,5 +240,61 @@ pub async fn reload_config(
             ));
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reload_config;
+    use crate::app::{App, HelpView, Pane};
+    use crate::config::{self, Layer, Layers};
+    use crate::keymap::Resolver;
+    use crate::shortcuts_editor::build_keymaps;
+    use norte_core::backend::Backend;
+    use std::sync::Arc;
+
+    /// A reload that applies closes the overlays whose rows were frozen
+    /// against the old keymap: the help and the box.
+    #[tokio::test]
+    async fn a_reload_closes_the_help_and_the_box() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let mut cfg = config::load(&layers).expect("an empty layer loads");
+        let (browse, viewer, dialog) = build_keymaps(&cfg, None).expect("keymaps");
+        let (mut resolver, mut viewer_resolver, mut dialog_resolver) = (
+            Resolver::new(browse),
+            Resolver::new(viewer),
+            Resolver::new(dialog),
+        );
+        let d = norte_proto::VPath::parse("file:///x").expect("test wire");
+        let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
+        app.help = Some(HelpView::new(norte_i18n::Lang::En, Vec::new()));
+        crate::goto::open(&mut app, &[], &[], ">");
+        let backend = Backend::Embedded(Arc::new(norte_core::Engine::new()));
+        let (mut quick_mode, mut confirm_quit) =
+            (cfg.quick_search_mode, cfg.common.ui_confirm_quit);
+        let applied = reload_config(
+            &mut app,
+            &backend,
+            &mut resolver,
+            &mut viewer_resolver,
+            &mut dialog_resolver,
+            &mut Vec::new(),
+            norte_i18n::Lang::En,
+            &layers,
+            None,
+            &mut quick_mode,
+            &mut confirm_quit,
+            &mut cfg,
+        )
+        .await;
+        assert!(applied, "an empty layer reloads");
+        assert!(app.help.is_none(), "a reload closes the help");
+        assert!(
+            app.goto.is_none(),
+            "a reload closes the box: its chords are stale"
+        );
     }
 }
