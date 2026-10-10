@@ -134,8 +134,11 @@ pub const SECTION_PLUGINS: GotoSection = GotoSection {
     title_key: "goto-section-commands",
 };
 
-/// The help rows' section id, until the help source exists.
-const SECTION_HELP_ID: &str = "help";
+/// The `?` list: prefixes, then help topics.
+pub const SECTION_HELP: GotoSection = GotoSection {
+    id: "help",
+    title_key: "goto-title-help",
+};
 
 /// What the semantic index found. Arrives LATE (it is a question to the
 /// core, not a list in memory) and that is why it goes last: a section
@@ -413,7 +416,7 @@ impl Goto {
             Mode::Commands => {
                 self.refresh_flat(&[SECTION_COMMANDS.id, SECTION_PLUGINS.id], &needle, true);
             }
-            Mode::Help => self.refresh_flat(&[SECTION_HELP_ID], &needle, false),
+            Mode::Help => self.refresh_flat(&[SECTION_HELP.id], &needle, false),
         }
         self.cursor = self.first_row().unwrap_or(0);
     }
@@ -788,6 +791,10 @@ pub const K_CMD: &str = "cmd:";
 /// Prefix of the TYPED PATH row, which still needs resolving. Set by
 /// [`PathSource`].
 pub const K_PATH: &str = "path:";
+/// Prefix of a row that types something into the box (a mode prefix).
+pub const K_SET: &str = "set:";
+/// Prefix of a row that opens a help topic.
+pub const K_HELP: &str = "help:";
 
 /// How many rows are pulled from each long list BEFORE filtering.
 ///
@@ -952,6 +959,10 @@ pub enum Action {
     /// A command that cannot run here: the reason, already translated (the
     /// row's `unavailable`).
     Unavailable(String),
+    /// Type this into the box and stay open (a prefix row).
+    SetQuery(String),
+    /// Open this help topic.
+    Help(String),
 }
 
 /// What to do with the row the reader just confirmed.
@@ -979,7 +990,62 @@ pub fn action(key: &str) -> Action {
     if let Some(content) = key.strip_prefix(K_PATH) {
         return resolver_typed(content);
     }
+    if let Some(q) = key.strip_prefix(K_SET) {
+        return Action::SetQuery(q.to_owned());
+    }
+    if let Some(id) = key.strip_prefix(K_HELP) {
+        return Action::Help(id.to_owned());
+    }
     Action::Nothing("msg-goto-bad-path")
+}
+
+/// The `?` list: the prefixes first (what typing each one does), then every
+/// help topic, matched on its title and, with nothing typed, in corpus order
+/// (the corpus is written in reading order; see `norte_help::topic_ids`).
+/// Never dimmed: only command rows are.
+#[must_use]
+pub fn help_rows(lang: norte_i18n::Lang) -> Vec<GotoRow> {
+    let prefix = |p: &str, label_key: &str| GotoRow {
+        section: SECTION_HELP.id,
+        key: format!("{K_SET}{p}"),
+        text: if p.is_empty() {
+            norte_i18n::t_in(lang, label_key)
+        } else {
+            format!("{p} {}", norte_i18n::t_in(lang, label_key))
+        },
+        ..GotoRow::default()
+    };
+    let mut out = vec![
+        prefix(PREFIX_COMMANDS, "goto-prefix-commands"),
+        prefix("", "goto-prefix-places"),
+    ];
+    out.extend(norte_help::topics(lang).iter().map(|t| GotoRow {
+        section: SECTION_HELP.id,
+        key: format!("{K_HELP}{}", t.id.as_str()),
+        // The corpus is this project's own text: nothing to mask.
+        text: t.title.clone(),
+        ..GotoRow::default()
+    }));
+    out
+}
+
+/// The help page a row leads to (`F1`): a topic row's own, or a built-in
+/// command's. `None` for anything else.
+#[must_use]
+pub fn help_topic(key: &str, lang: norte_i18n::Lang) -> Option<&'static norte_help::Topic> {
+    if let Some(id) = key.strip_prefix(K_HELP) {
+        return norte_help::topic(lang, id);
+    }
+    let cmd = key.strip_prefix(K_CMD)?;
+    // A plugin's id half comes from a manifest with no charset: never a page
+    // (`palette_help_target`'s reason).
+    if crate::palette::parse_plugin_key(cmd).is_some()
+        || crate::palette::parse_renamer_key(cmd).is_some()
+        || crate::palette::parse_organizer_key(cmd).is_some()
+    {
+        return None;
+    }
+    norte_help::topic_for_command(lang, cmd)
 }
 
 /// Resolves the path the reader typed.
@@ -1671,5 +1737,51 @@ mod command_row_tests {
             None,
             "no namespace, no category"
         );
+    }
+}
+
+#[cfg(test)]
+mod help_row_tests {
+    use super::{Action, Goto, SECTION_HELP, action, help_rows, help_topic};
+    use norte_i18n::Lang;
+
+    /// `?` lists the prefixes first, then every topic; choosing a prefix
+    /// types it, choosing a topic opens it.
+    #[test]
+    fn the_help_list_is_prefixes_then_topics() {
+        let rows = help_rows(Lang::En);
+        assert_eq!(rows[0].key, "set:>");
+        assert_eq!(rows[1].key, "set:");
+        let topics = norte_help::topics(Lang::En);
+        assert_eq!(rows.len(), 2 + topics.len());
+        assert_eq!(rows[2].key, format!("help:{}", topics[0].id.as_str()));
+        assert_eq!(rows[2].text, topics[0].title);
+        assert!(rows.iter().all(|r| r.section == SECTION_HELP.id));
+        assert_eq!(action("set:>"), Action::SetQuery(">".to_owned()));
+        assert_eq!(action("help:copying"), Action::Help("copying".to_owned()));
+
+        let mut goto = Goto::new(vec![Box::new(super::FixedSource::new(SECTION_HELP, rows))]);
+        goto.set_query("?");
+        assert_eq!(goto.confirm(), Some(Action::SetQuery(">".to_owned())));
+        goto.set_query("?copying");
+        assert!(goto.rows().iter().any(|r| r.key == "help:copying"));
+    }
+
+    /// `F1`'s target: a built-in command's page, a topic row's page, never a
+    /// plugin's (its id half comes from a manifest with no charset).
+    #[test]
+    fn the_help_topic_of_a_row() {
+        assert_eq!(
+            help_topic("cmd:pane.copy", Lang::En).map(|t| t.id.as_str()),
+            norte_help::topic_for_command(Lang::En, "pane.copy").map(|t| t.id.as_str())
+        );
+        assert!(help_topic("cmd:pane.copy", Lang::En).is_some());
+        assert_eq!(
+            help_topic("help:copying", Lang::En).map(|t| t.id.as_str()),
+            Some("copying")
+        );
+        assert!(help_topic("cmd:plugin:org.x:greet", Lang::En).is_none());
+        assert!(help_topic("cmd:renamer:org.x:r", Lang::En).is_none());
+        assert!(help_topic("go:file:///tmp", Lang::En).is_none());
     }
 }

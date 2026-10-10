@@ -15,8 +15,8 @@ use super::*;
 
 use norte_frontend::goto::{
     Action, BROUGHT_BY_LIST, FixedSource, Goto, GotoLine, GotoRow, GotoSource, INDEX_CAP,
-    PathSource, SECTION_COMMANDS, SECTION_CONNECTIONS, SECTION_FAVORITES, SECTION_HISTORY,
-    SECTION_INDEX, SECTION_POPULAR,
+    PathSource, SECTION_COMMANDS, SECTION_CONNECTIONS, SECTION_FAVORITES, SECTION_HELP,
+    SECTION_HISTORY, SECTION_INDEX, SECTION_POPULAR,
 };
 
 impl State {
@@ -116,6 +116,10 @@ impl State {
         let commands =
             norte_frontend::goto::command_rows(self.palette_rows(), Some(&self.facts()), self.lang);
         out.push(Box::new(FixedSource::new(SECTION_COMMANDS, commands)));
+        out.push(Box::new(FixedSource::new(
+            SECTION_HELP,
+            norte_frontend::goto::help_rows(self.lang),
+        )));
         out
     }
 
@@ -254,7 +258,13 @@ impl State {
             "Escape" | "esc" => self.close_go_to(),
             "Enter" | "enter" => {
                 let act = g.confirm();
-                return self.confirm_go_to(act, backend, mailbox);
+                // A prefix row types itself and the box stays open.
+                if let Some(Action::SetQuery(q)) = &act {
+                    g.set_query(q);
+                    self.request_goto_from_index(backend, mailbox);
+                } else {
+                    return self.confirm_go_to(act, backend, mailbox);
+                }
             }
             "ArrowDown" | "down" => g.down(),
             "ArrowUp" | "up" => g.up(),
@@ -308,6 +318,9 @@ impl State {
                 None => self.no_implemented(&cmd),
             },
             Action::Nothing(reason) => (self.applied(), self.say(reason)),
+            Action::Help(id) => self.open_help_on(Some(&id), backend, mailbox),
+            // Handled by the caller, before closing.
+            Action::SetQuery(_) => (self.applied(), Vec::new()),
             Action::Unavailable(why) => {
                 self.status.message = Some(clamp_display(why));
                 (

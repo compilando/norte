@@ -174,3 +174,23 @@ async fn escape_closes_without_going_anywhere() {
     assert!(snap.goto.is_none(), "closes");
     assert_eq!(listing(&snap).path_display, before, "and did not navigate");
 }
+
+/// `?` lists help; Enter on a topic opens help AT that page, and the box
+/// closes in a patch of its own.
+#[tokio::test]
+async fn a_help_row_opens_that_page() {
+    let (h, _snap) = host_tree(fake_tree()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    let _ = next_goto(&mut sub).await;
+    // The window's language in tests is Spanish: type its title's first word.
+    for c in "?Copiar".chars() {
+        h.dispatch(press(&c.to_string())).await.expect("host alive");
+    }
+    h.dispatch(press("Enter")).await.expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = next_snapshot(&mut sub).await;
+    assert!(snap.goto.is_none(), "the box closed");
+    let help = snap.help.expect("help is open");
+    assert_eq!(help.topic_id, "copying");
+}

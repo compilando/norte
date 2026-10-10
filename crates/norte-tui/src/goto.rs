@@ -15,8 +15,8 @@
 
 use norte_frontend::goto::{
     BROUGHT_BY_LIST, FixedSource, Goto, GotoRow, GotoSource, PathSource, SECTION_COMMANDS,
-    SECTION_CONNECTIONS, SECTION_FAVORITES, SECTION_HISTORY, SECTION_INDEX, SECTION_POPULAR,
-    command_rows, row_connection, row_path,
+    SECTION_CONNECTIONS, SECTION_FAVORITES, SECTION_HELP, SECTION_HISTORY, SECTION_INDEX,
+    SECTION_POPULAR, command_rows, row_connection, row_path,
 };
 use norte_i18n::t;
 
@@ -91,6 +91,11 @@ pub fn sources(app: &App, connections: &[(String, String)]) -> Vec<Box<dyn GotoS
         norte_i18n::active(),
     );
     out.push(Box::new(FixedSource::new(SECTION_COMMANDS, commands)));
+
+    out.push(Box::new(FixedSource::new(
+        SECTION_HELP,
+        norte_frontend::goto::help_rows(norte_i18n::active()),
+    )));
 
     out
 }

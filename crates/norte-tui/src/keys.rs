@@ -491,6 +491,14 @@ pub async fn on_key(
                     .goto
                     .as_ref()
                     .and_then(norte_frontend::goto::Goto::confirm);
+                // A prefix row types itself and the box stays open.
+                if let Some(crate::goto::Action::SetQuery(q)) = &act {
+                    if let Some(g) = &mut app.goto {
+                        g.set_query(q);
+                    }
+                    crate::jobs::goto::ask_the_index(app, backend, work);
+                    return;
+                }
                 // The screen closes BEFORE acting, and the request to the
                 // index is abandoned: whatever comes next —a cd, a command,
                 // a modal— rules the screen, and a late response no longer
@@ -547,6 +555,11 @@ pub async fn on_key(
                         app.message = Some(norte_i18n::t(msg_id));
                     }
                     crate::goto::Action::Unavailable(why) => app.message = Some(why),
+                    crate::goto::Action::Help(id) => {
+                        crate::overlays::open_help_topic(app, lang, help_lines, &id);
+                    }
+                    // Handled above, before closing.
+                    crate::goto::Action::SetQuery(_) => {}
                 }
             }
             _ => {}

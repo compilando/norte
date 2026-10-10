@@ -24,6 +24,18 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.open_help_on(None, backend, mailbox)
+    }
+
+    /// [`Self::open_help`], at the page `topic` when it names one (a row of
+    /// "go anywhere"'s `?` list); an id the corpus does not know opens the
+    /// context page, as `None` does.
+    pub(super) fn open_help_on(
+        &mut self,
+        topic: Option<&str>,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // Not over a dialog that is being TYPED into. Help keeps the
         // keyboard while it is open, so opening it over a text field turns
         // the `⌫` that fixes a typo into a step back in help, and the
@@ -45,6 +57,13 @@ impl State {
             &self.effective_visor,
             self.facts(),
         ));
+        if let (Some(h), Some(t)) = (
+            self.help.as_mut(),
+            topic.and_then(|id| norte_help::topic(self.lang, id)),
+        ) {
+            // As root, like the context page: one `Esc` leaves it.
+            h.state.open_as_root(&t.id);
+        }
         // The extension catalog is requested and NOT awaited: help is
         // painted right away. The documentation is cosmetic, and a blank
         // window until the daemon answers is worse than a side panel that
