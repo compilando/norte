@@ -396,6 +396,10 @@ pub struct Fake {
     /// be written as a test, which is why the view kept saying "searching…"
     /// forever.
     pub search_error: Option<Error>,
+    /// When set, the NEXT `search` call waits on it before answering (the
+    /// gate is taken, so later calls are not held): the window where the
+    /// forwarder has not yet learned the task's id.
+    pub search_ack_gate: std::sync::Mutex<Option<Arc<tokio::sync::Notify>>>,
     /// How many times the volumes have been enumerated.
     ///
     /// It counts this so a NEGATIVE test can anchor on it: "the dialog says
@@ -1031,7 +1035,11 @@ impl HostBackend for Fake {
             .clone()
             .unwrap_or(norte_proto::TaskState::Completed);
         let cancellations = Arc::clone(&self.cancellations);
+        let gate = self.search_ack_gate.lock().expect("gate mutex").take();
         Box::pin(async move {
+            if let Some(gate) = gate {
+                gate.notified().await;
+            }
             let id = norte_proto::TaskId::new(77);
             let (tx, rx) = tokio::sync::mpsc::channel(8);
             let (ptx, prx) = tokio::sync::watch::channel(norte_proto::TaskProgress {

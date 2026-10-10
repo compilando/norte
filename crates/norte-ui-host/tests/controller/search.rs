@@ -356,6 +356,45 @@ async fn closing_a_search_with_no_hits_cancels_it_anyway() {
     );
 }
 
+/// Waits until the fake has seen `n` search cancellations.
+async fn cancellations_reach(backend: &Fake, n: usize) {
+    for _ in 0..200 {
+        if backend.cancellations.load(Ordering::SeqCst) >= n {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    // A little more, so an EXTRA cancellation would also show.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(backend.cancellations.load(Ordering::SeqCst), n);
+}
+
+/// Letting go of a search before the daemon has acknowledged it still
+/// cancels it, as soon as it lands (`abandoned`): the forwarder is the only
+/// one who knows the id by then.
+///
+/// (Relaunching over an open search view is not reachable through the
+/// window's dialog today — the view keeps the keys — so this exercises the
+/// same `abandon_search` path through `Escape`.)
+#[tokio::test]
+async fn closing_a_search_before_the_id_is_known_still_cancels() {
+    let backend = tree_with_findings("*.txt", &["mem:///casa/notas.txt"]);
+    let gate = Arc::new(tokio::sync::Notify::new());
+    *backend.search_ack_gate.lock().expect("gate mutex") = Some(Arc::clone(&gate));
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    let _ = search(&h, &mut sub, "*.txt").await;
+    h.dispatch(press("Escape")).await.expect("host alive");
+    assert_eq!(
+        backend.cancellations.load(Ordering::SeqCst),
+        0,
+        "the first search has not been acknowledged yet"
+    );
+    gate.notify_one();
+    cancellations_reach(&backend, 1).await;
+}
+
 /// A stray batch from the PREVIOUS search does not fill the new one's list.
 ///
 /// The old search's forwarder is not aborted — its `tokio::spawn` keeps no

@@ -306,6 +306,9 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        // A new search replaces the old one: its walk stops in the daemon
+        // too, not just in the epoch's eyes.
+        self.abandon_search();
         // The root is copied BEFORE: `params` moves into the backend, and the
         // results view needs it to say where the search happened.
         let root = params.root.clone();
@@ -398,6 +401,17 @@ impl State {
             search: self.vista_search(),
         };
         vec![self.parche(vec![change])]
+    }
+
+    /// Lets go of the current file search, if any: the forwarder stops
+    /// (`abandoned`) and the task is cancelled in the daemon once its id is
+    /// known — before that, the forwarder cancels it as soon as it lands.
+    pub(super) fn abandon_search(&mut self) {
+        let Some(b) = self.search.take() else { return };
+        b.abandoned.store(true, std::sync::atomic::Ordering::SeqCst);
+        if b.task.get() != 0 {
+            let _ = self.cancel(b.task.get());
+        }
     }
 
     /// A batch of results.
@@ -525,12 +539,7 @@ impl State {
                 // Closing the search CANCELS the Task: continuing to walk a
                 // tree for nobody is spending the daemon on a result that no
                 // longer has anywhere to appear.
-                b.abandoned.store(true, std::sync::atomic::Ordering::SeqCst);
-                let task = b.task;
-                self.search = None;
-                if task.get() != 0 {
-                    self.cancel(task.get());
-                }
+                self.abandon_search();
                 // And if it was a SEMANTIC query, it is aborted: it has no
                 // Task to cancel — it is a direct call — and what stops it is
                 // dropping it, which makes the SDK send `rpc.cancel`.
@@ -594,11 +603,7 @@ impl State {
                 None => (hit.path.clone(), None),
             }
         };
-        let task = b.task;
-        self.search = None;
-        if task.get() != 0 {
-            self.cancel(task.get());
-        }
+        self.abandon_search();
         if let Some(child) = focus {
             self.slot_mut().pane.set_pending_focus(child);
         }
