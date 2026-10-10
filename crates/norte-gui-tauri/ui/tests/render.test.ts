@@ -279,13 +279,14 @@ describe("go to anywhere (#357)", () => {
     const { screen } = mount();
     const v = view({});
     const box = commandsBox();
-    box.lines = [{ line: "row", text: "Café", desc: "", hostile: false, positions: [3] }];
+    const nfd = "Cafe\u{301}";
+    box.lines = [{ line: "row", text: nfd, desc: "", hostile: false, positions: [3] }];
     v.goto = box;
     screen.paint(v);
     expect(
       [...document.querySelectorAll(".goto mark")].map((m) => m.textContent),
-    ).toEqual(["é"]);
-    expect(document.querySelector(".goto .palette-text")?.textContent).toBe("Café");
+    ).toEqual(["e\u{301}"]);
+    expect(document.querySelector(".goto .palette-text")?.textContent).toBe(nfd);
   });
 
   it("shows category, chord and recent, and dims what cannot run with its reason", () => {

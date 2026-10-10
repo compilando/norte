@@ -550,7 +550,7 @@ function markGotoCursor(painted: PaintedGoto, cursor: number | null): void {
 }
 
 /** A combining mark (variation selectors are marks too) or a ZWJ: no width. */
-const ZERO_WIDTH = /^(?:\p{M}|‍)$/u;
+const ZERO_WIDTH = /^(?:\p{M}|\u{200D})$/u;
 
 /**
  * `text` with the characters at `positions` (code-point indices, as the
