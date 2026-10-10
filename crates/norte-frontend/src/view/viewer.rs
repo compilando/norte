@@ -412,6 +412,19 @@ pub struct PluginPreviewView {
     styled: Vec<crate::ansi::StyledLine>,
 }
 
+/// Where to open a file and what to light up (spec 2026-10-09 §5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewerTarget {
+    /// 1-based line.
+    pub line: u64,
+    /// Byte offset of the line's start, when the daemon knew it.
+    pub offset: Option<u64>,
+    /// The preview the ranges index (C7: how the viewer finds them in the line).
+    pub preview: String,
+    /// `[start, end)` in chars of `preview`.
+    pub ranges: Vec<(u32, u32)>,
+}
+
 /// The viewer open over a file.
 #[expect(
     clippy::struct_excessive_bools,

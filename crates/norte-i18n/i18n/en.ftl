@@ -1773,6 +1773,23 @@ search-status-done = search: { $n } hits
 search-status-truncated = search: { $n } hits (truncated)
 search-status-cancelled = search: { $n } hits (cancelled)
 search-status-failed = search failed: { $error }
+# The search panel (2026-10-09-search-panel): searches as you type, results
+# grouped by folder and file with their matching lines.
+search-panel-title = Search
+search-panel-idle = Type a name or some text to search
+search-panel-unreadable = { $field } cannot be read
+search-panel-running = { $n } files in { $folders } folders · searching…
+search-panel-done = { $n } files in { $folders } folders
+search-panel-truncated = stopped at { $n } results
+search-panel-cancelled = { $n } files · stopped
+search-panel-failed = search failed: { $error }
+search-panel-more = +{ $n } more
+search-panel-filters = filters ({ $n })
+search-panel-root = in { $root }
+search-panel-reroot = Search here
+# The viewer opened at a search result's line.
+viewer-lines-from = lines from { $n }
+viewer-target-past-cap = the line is past what the viewer reads
 
 # --- Directory comparison (2026-08-11-directory-comparison.md, `Shift+F2`) ---
 # The diff pane. Every row says WHAT was decided, WHICH criterion decided it

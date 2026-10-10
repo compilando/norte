@@ -1709,6 +1709,23 @@ search-status-done = búsqueda: { $n } hits
 search-status-truncated = búsqueda: { $n } hits (truncada)
 search-status-cancelled = búsqueda: { $n } hits (cancelada)
 search-status-failed = búsqueda fallida: { $error }
+# El panel de búsqueda (2026-10-09-search-panel): busca mientras escribes y
+# agrupa los resultados por carpeta y fichero, con sus líneas coincidentes.
+search-panel-title = Buscar
+search-panel-idle = Escribe un nombre o un texto para buscar
+search-panel-unreadable = { $field } no se puede leer
+search-panel-running = { $n } ficheros en { $folders } carpetas · buscando…
+search-panel-done = { $n } ficheros en { $folders } carpetas
+search-panel-truncated = detenida en { $n } resultados
+search-panel-cancelled = { $n } ficheros · detenida
+search-panel-failed = búsqueda fallida: { $error }
+search-panel-more = +{ $n } más
+search-panel-filters = filtros ({ $n })
+search-panel-root = en { $root }
+search-panel-reroot = Buscar aquí
+# El visor abierto en la línea de un resultado de búsqueda.
+viewer-lines-from = líneas desde { $n }
+viewer-target-past-cap = la línea está más allá de lo que lee el visor
 
 # --- Comparación de directorios (2026-08-11-directory-comparison.md, `Shift+F2`) ---
 # El panel de diferencias. Cada fila dice QUÉ se decidió, QUÉ criterio lo
