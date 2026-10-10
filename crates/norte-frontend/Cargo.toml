@@ -80,7 +80,12 @@ base64.workspace = true
 # and `tokio` was already in this crate's graph via `norte-vfs-local`: both
 # are a new EDGE, not new code entering the tree (rule 8).
 notify.workspace = true
-tokio = { workspace = true, features = ["fs", "macros", "rt", "sync", "time"] }
+# Both frontends run user commands through one runner (ADR 0077/0177):
+# `process` is std's spawn behind tokio and `io-util` its line readers;
+# nothing new enters the graph. `tracing` (already a workspace dependency)
+# carries the command's output to the log panel.
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
+tracing.workspace = true
 
 [dev-dependencies]
 norte-testkit.workspace = true

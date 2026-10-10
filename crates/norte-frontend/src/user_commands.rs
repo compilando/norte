@@ -437,6 +437,143 @@ pub fn resolve_in(launch: &Launch, path_var: Option<&OsStr>) -> Result<PathBuf, 
     })
 }
 
+/// How a background command ended. `key`/`args`/`message` feed Fluent like
+/// [`Refusal`]'s, and every interpolated value is masked.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Finished {
+    /// Exit code 0.
+    Ok,
+    /// A non-zero exit code.
+    Failed {
+        /// The exit code.
+        code: i32,
+    },
+    /// Ended by a signal.
+    Signalled,
+    /// The program is not on `PATH`.
+    Missing {
+        /// The program as written.
+        program: String,
+    },
+    /// It never started.
+    NotStarted {
+        /// Why, as the OS said it.
+        error: String,
+    },
+}
+
+impl Finished {
+    /// Its Fluent key.
+    #[must_use]
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::Ok => "user-cmd-ok",
+            Self::Failed { .. } => "user-cmd-failed",
+            Self::Signalled => "user-cmd-signalled",
+            Self::Missing { .. } => "user-cmd-missing",
+            Self::NotStarted { .. } => "user-cmd-not-started",
+        }
+    }
+
+    /// Its Fluent arguments, masked for a terminal.
+    #[must_use]
+    pub fn args(&self, label: &str) -> Vec<(&'static str, String)> {
+        let m = |s: &str| norte_encoding::mask_terminal_hazards(s);
+        match self {
+            Self::Ok | Self::Signalled => vec![("label", m(label))],
+            Self::Failed { code } => vec![("label", m(label)), ("code", code.to_string())],
+            Self::Missing { program } => vec![("label", m(label)), ("program", m(program))],
+            Self::NotStarted { error } => vec![("label", m(label)), ("error", m(error))],
+        }
+    }
+
+    /// The status-bar line.
+    #[must_use]
+    pub fn message(&self, label: &str, lang: Lang) -> String {
+        let args = self.args(label);
+        let refs: Vec<(&str, &str)> = args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        norte_i18n::ta_in(lang, self.key(), &refs)
+    }
+
+    /// Whether the program actually ran (so the pane may have changed).
+    #[must_use]
+    pub fn ran(&self) -> bool {
+        matches!(self, Self::Ok | Self::Failed { .. } | Self::Signalled)
+    }
+}
+
+/// Where background output goes: the log panel shows `tracing` events.
+pub const LOG_TARGET: &str = "norte::user_command";
+
+/// Runs a [`RunIn::Background`] launch to the end: resolves the program off
+/// the async thread, spawns it with stdin closed, forwards each stdout line
+/// as an INFO and each stderr line as a WARN event under [`LOG_TARGET`],
+/// and reports how it ended. Not killed on drop: quitting norte leaves it
+/// running (its output is then lost) — ADR 0177.
+pub async fn run_background(launch: Launch) -> Finished {
+    let probe = launch.clone();
+    let program = match tokio::task::spawn_blocking(move || resolve(&probe)).await {
+        Ok(Ok(p)) => p,
+        Ok(Err(Refusal::Missing { program })) => return Finished::Missing { program },
+        Ok(Err(other)) => {
+            return Finished::NotStarted {
+                error: other.key().to_owned(),
+            };
+        }
+        Err(e) => {
+            return Finished::NotStarted {
+                error: e.to_string(),
+            };
+        }
+    };
+    let spawned = tokio::process::Command::new(&program)
+        .args(&launch.args)
+        .current_dir(&launch.cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+    let mut child = match spawned {
+        Ok(c) => c,
+        Err(e) => {
+            return Finished::NotStarted {
+                error: e.to_string(),
+            };
+        }
+    };
+    tracing::info!(target: LOG_TARGET, command = %launch.id, "started");
+    let out = forward(child.stdout.take(), launch.id.clone(), false);
+    let err = forward(child.stderr.take(), launch.id.clone(), true);
+    // Both pipes drain WHILE waiting: waiting first deadlocks a program
+    // whose output fills the pipe.
+    let (status, (), ()) = tokio::join!(child.wait(), out, err);
+    match status {
+        Ok(s) => match s.code() {
+            Some(0) => Finished::Ok,
+            Some(code) => Finished::Failed { code },
+            None => Finished::Signalled,
+        },
+        Err(e) => Finished::NotStarted {
+            error: e.to_string(),
+        },
+    }
+}
+
+async fn forward(pipe: Option<impl tokio::io::AsyncRead + Unpin>, id: String, stderr: bool) {
+    use tokio::io::AsyncBufReadExt;
+    let Some(pipe) = pipe else { return };
+    let mut lines = tokio::io::BufReader::new(pipe).split(b'\n');
+    while let Ok(Some(line)) = lines.next_segment().await {
+        let text = String::from_utf8_lossy(&line);
+        if stderr {
+            tracing::warn!(target: LOG_TARGET, command = %id, "{text}");
+        } else {
+            tracing::info!(target: LOG_TARGET, command = %id, "{text}");
+        }
+    }
+}
+
 /// The ids of `user:` bindings in `eff` that `cmds` does not define —
 /// sorted, once each. Reported at load (status bar) and by `norte doctor`.
 #[must_use]
@@ -775,6 +912,109 @@ refresh = false
                 program: "sh".into()
             })
         );
+    }
+
+    #[cfg(unix)]
+    fn sh(script: &str, dir: &std::path::Path) -> Launch {
+        Launch {
+            id: "t".into(),
+            label: "T".into(),
+            program: "sh".into(),
+            args: vec!["-c".into(), script.into()],
+            cwd: dir.to_path_buf(),
+            run_in: RunIn::Background,
+            refresh: true,
+            confirm: false,
+            count: 0,
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exit_codes_are_reported() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(run_background(sh("exit 0", d.path())).await, Finished::Ok);
+        assert_eq!(
+            run_background(sh("exit 3", d.path())).await,
+            Finished::Failed { code: 3 }
+        );
+        assert_eq!(
+            run_background(sh("kill -9 $$", d.path())).await,
+            Finished::Signalled
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn runs_in_its_cwd() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(
+            run_background(sh("touch made-here", d.path())).await,
+            Finished::Ok
+        );
+        assert!(d.path().join("made-here").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn large_output_does_not_block() {
+        let d = tempfile::tempdir().unwrap();
+        let f = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            run_background(sh(
+                "yes out | head -c 300000; yes err | head -c 300000 >&2",
+                d.path(),
+            )),
+        )
+        .await
+        .expect("both pipes are drained");
+        assert_eq!(f, Finished::Ok);
+    }
+
+    #[tokio::test]
+    async fn a_missing_program_is_named() {
+        let l = Launch {
+            id: "t".into(),
+            label: "T".into(),
+            program: "norte-no-such-program-xyz".into(),
+            args: vec![],
+            cwd: std::path::PathBuf::from("/"),
+            run_in: RunIn::Background,
+            refresh: true,
+            confirm: false,
+            count: 0,
+        };
+        assert_eq!(
+            run_background(l).await,
+            Finished::Missing {
+                program: "norte-no-such-program-xyz".into()
+            }
+        );
+    }
+
+    #[test]
+    fn finished_keys_and_ran() {
+        assert_eq!(Finished::Failed { code: 2 }.key(), "user-cmd-failed");
+        assert!(
+            Finished::Signalled.ran()
+                && !Finished::Missing {
+                    program: "x".into()
+                }
+                .ran()
+        );
+    }
+
+    #[test]
+    fn finished_messages_exist_in_both_languages() {
+        for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+            let f = Finished::Failed { code: 2 }.message("Build", lang);
+            assert!(f.contains("Build") && f.contains('2'), "{f}");
+            let m = Finished::Missing {
+                program: "zz".into(),
+            }
+            .message("Build", lang);
+            assert!(m.contains("zz"), "{m}");
+        }
     }
 
     #[test]
