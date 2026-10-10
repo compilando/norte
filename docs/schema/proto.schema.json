@@ -5358,7 +5358,7 @@
       "description": "A batch of [`SEARCH_HITS`] results. `matches` aligned 1:1 with `entries`\nwhen the search is content-based (None if name-only).",
       "properties": {
         "all_matches": {
-          "description": "Every matching line kept per file, aligned with `entries` (0.86.0).\nOnly when the search asked for [`FsSearchParams::max_matches_per_file`];\n`matches` keeps carrying the first line so a reader that ignores\nthis field sees 0.85's batch.",
+          "description": "Every matching line kept per file, aligned with `entries` (0.86.0).\nOnly on a content search that asked for\n[`FsSearchParams::max_matches_per_file`];\n`matches` keeps carrying the first line so a reader that ignores\nthis field sees 0.85's batch.",
           "items": {
             "items": {
               "$ref": "#/$defs/MatchInfo"
@@ -5388,7 +5388,7 @@
           ]
         },
         "more": {
-          "description": "Matching lines past the cap per file, counted and not sent; aligned\nwith `entries`, `0` = none (0.86.0). Present with `all_matches`.",
+          "description": "Matching lines past the cap per file, counted and not sent; aligned\nwith `entries`, `0` = none (0.86.0). Present with `all_matches`.\nSaturates at `u32::MAX`.",
           "items": {
             "format": "uint32",
             "minimum": 0,

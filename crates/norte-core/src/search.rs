@@ -29,7 +29,9 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use norte_encoding::{Detection, Encoding, encode_lossless, needle_cycle};
-use norte_proto::methods::{FsSearchParams, MatchInfo, SEARCH_HITS_MAX_BATCH, SearchHits};
+use norte_proto::methods::{
+    FsSearchParams, MatchInfo, SEARCH_HITS_MAX_BATCH, SEARCH_HITS_MAX_LINES, SearchHits,
+};
 use norte_proto::{Entry, EntryKind, Error, Segment, TaskId, VPath};
 use norte_vfs::{ByteStream, Provider};
 use tokio::sync::mpsc;
@@ -759,6 +761,8 @@ struct Batch {
     matches: Vec<MatchInfo>,
     all: Vec<Vec<MatchInfo>>,
     more: Vec<u32>,
+    /// `MatchInfo`s held in `all`, against [`SEARCH_HITS_MAX_LINES`].
+    lines: usize,
 }
 
 impl Batch {
@@ -771,7 +775,23 @@ impl Batch {
             matches: Vec::new(),
             all: Vec::new(),
             more: Vec::new(),
+            lines: 0,
         }
+    }
+
+    /// Would adding this hit take the batch past one notification's bounds
+    /// ([`SEARCH_HITS_MAX_BATCH`] entries, [`SEARCH_HITS_MAX_LINES`] kept
+    /// lines)? Then what is held goes out first. An empty batch always takes
+    /// it: one file's lines fit by construction.
+    fn would_overflow(&self, found: Option<&FileMatches>) -> bool {
+        let incoming = if self.content && self.per_file {
+            found.map_or(0, |f| f.lines.len())
+        } else {
+            0
+        };
+        !self.is_empty()
+            && (self.len() >= SEARCH_HITS_MAX_BATCH
+                || self.lines + incoming > SEARCH_HITS_MAX_LINES)
     }
 
     fn push(&mut self, entry: Entry, found: Option<FileMatches>) {
@@ -781,6 +801,7 @@ impl Batch {
             if self.per_file {
                 self.matches
                     .push(found.lines.first().cloned().unwrap_or_default());
+                self.lines += found.lines.len();
                 self.all.push(found.lines);
                 self.more.push(found.more);
             } else {
@@ -800,6 +821,7 @@ impl Batch {
 
     /// Extracts the accumulated batch as [`SearchHits`], leaving the buffer empty.
     fn take(&mut self) -> SearchHits {
+        self.lines = 0;
         SearchHits {
             task_id: self.task_id,
             entries: std::mem::take(&mut self.entries),
@@ -875,8 +897,9 @@ async fn flush(
 ///   skipped on error); `bytes_done` = number of accumulated hits (reuses
 ///   the field, there are no real bytes in a search); `current` = last
 ///   entry seen.
-/// - **Coalescing**: hits accumulate up to [`SEARCH_HITS_MAX_BATCH`] or
-///   drain every `FLUSH_INTERVAL` (whichever comes first).
+/// - **Coalescing**: hits accumulate up to [`SEARCH_HITS_MAX_BATCH`] entries
+///   or [`SEARCH_HITS_MAX_LINES`] kept lines, or drain every
+///   `FLUSH_INTERVAL` (whichever comes first).
 ///
 /// # Errors
 /// [`Error::Cancelled`] if cancelled; it never propagates per-entry errors
@@ -925,9 +948,23 @@ pub async fn run_walk(
     // A result goes in the batch; at the cap, what is pending is drained
     // and the search COMPLETES (the cap was reached), dropping the reads
     // still in flight.
+    // A hit that would take the batch past a notification's bounds sends
+    // what is held first: dense files at many lines each would otherwise
+    // build a frame over `MAX_FRAME_BYTES`, and the client cuts the
+    // connection. Here and not in the loop's flush check, because the
+    // reads in flight settle without passing through it.
     macro_rules! hit {
         ($entry:expr, $info:expr) => {{
-            batch.push($entry, $info);
+            let info: Option<FileMatches> = $info;
+            if batch.would_overflow(info.as_ref()) {
+                match flush(&tx, &mut batch, &ctx.cancel).await {
+                    FlushOutcome::Continue => last_flush = Instant::now(),
+                    FlushOutcome::ReceiverGone | FlushOutcome::Cancelled => {
+                        return Err(Error::Cancelled);
+                    }
+                }
+            }
+            batch.push($entry, info);
             hits += 1;
             ctx.progress.update(|p| p.bytes_done = hits as u64);
             if matchers.max_hits.is_some_and(|max| hits >= max) {
@@ -1333,6 +1370,7 @@ async fn scan_bytes(
                 // Stopping at the first hit: nothing was filed before, so
                 // the earliest hit is the one, and the rest of the buffer
                 // is never searched (#391).
+                debug_assert_eq!(want.keep, 1, "stop-at-first keeps exactly one line");
                 finders
                     .iter()
                     .filter_map(|f| f.find(&buf).map(|p| (p, f.needle().len())))
@@ -1763,6 +1801,11 @@ mod tests {
         let mem = Arc::new(MemProvider::new());
         mem.mkdir(&vp("mem:///t")).await.expect("mkdir");
         for (name, body) in files {
+            // `dir/file`: the folder first (once is enough; again is an error
+            // nobody needs to read).
+            if let Some((dir, _)) = name.rsplit_once('/') {
+                let _ = mem.mkdir(&vp(&format!("mem:///t/{dir}"))).await;
+            }
             let mut sink = mem
                 .write(&vp(&format!("mem:///t/{name}")))
                 .await
@@ -1825,6 +1868,105 @@ mod tests {
             (b[0].all_matches.is_none(), b[0].more.is_none()),
             (true, true)
         );
+    }
+
+    /// `entries`, `matches`, `all_matches` and `more` all line up, batch by batch.
+    fn assert_aligned(b: &SearchHits) {
+        let n = b.entries.len();
+        assert_eq!(b.matches.as_ref().map(Vec::len), Some(n));
+        assert_eq!(b.all_matches.as_ref().map(Vec::len), Some(n));
+        assert_eq!(b.more.as_ref().map(Vec::len), Some(n));
+    }
+
+    /// Dense files at the per-file cap do not pile into one frame: a batch
+    /// closes at [`SEARCH_HITS_MAX_LINES`] kept lines (a 256-entry batch of
+    /// them would pass `MAX_FRAME_BYTES` and the client would cut the
+    /// connection), every line still arrives, and the arrays stay aligned.
+    #[tokio::test]
+    async fn dense_files_split_into_batches_within_the_line_budget() {
+        let cap = norte_proto::methods::SEARCH_MATCHES_PER_FILE_MAX;
+        let body = "aguja\n".repeat(cap as usize + 5);
+        let names: Vec<String> = (0..5).map(|i| format!("f{i}.txt")).collect();
+        let files: Vec<(&str, &[u8])> = names
+            .iter()
+            .map(|n| (n.as_str(), body.as_bytes()))
+            .collect();
+        let b = batches(&files, content_in_t("aguja", Some(cap))).await;
+        assert!(b.len() > 1, "{} batch(es)", b.len());
+        let mut total = 0;
+        for batch in &b {
+            assert_aligned(batch);
+            let lines: usize = batch
+                .all_matches
+                .as_ref()
+                .expect("asked for")
+                .iter()
+                .map(Vec::len)
+                .sum();
+            assert!(lines <= SEARCH_HITS_MAX_LINES, "{lines} lines in one batch");
+            assert!(
+                batch
+                    .more
+                    .as_ref()
+                    .expect("asked for")
+                    .iter()
+                    .all(|m| *m == 5)
+            );
+            total += lines;
+        }
+        assert_eq!(total, 5 * cap as usize);
+    }
+
+    /// Under the per-file request, only files whose content matched become
+    /// hits — a non-matching file and a folder do not — and the arrays stay
+    /// aligned with the entries.
+    #[tokio::test]
+    async fn per_file_batches_stay_aligned_with_misses_around() {
+        let b = batches(
+            &[
+                ("a.txt", b"aguja\nnada\naguja\n"),
+                ("b.txt", b"nada\n"),
+                ("sub/c.txt", b"aguja\n"),
+            ],
+            content_in_t("aguja", Some(10)),
+        )
+        .await;
+        let mut seen = Vec::new();
+        for batch in &b {
+            assert_aligned(batch);
+            for (e, lines) in batch
+                .entries
+                .iter()
+                .zip(batch.all_matches.as_ref().expect("asked for"))
+            {
+                seen.push((e.path.to_wire(), lines.len()));
+            }
+        }
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![
+                ("mem:///t/a.txt".to_owned(), 2),
+                ("mem:///t/sub/c.txt".to_owned(), 1)
+            ]
+        );
+    }
+
+    /// A NAME-only search ignores the per-file request: no content, so no
+    /// `matches`, `all_matches` nor `more` — folders and files alike.
+    #[tokio::test]
+    async fn a_name_search_sends_no_lines_even_when_asked() {
+        let p = FsSearchParams {
+            name_glob: Some("*".to_owned()),
+            max_matches_per_file: Some(10),
+            ..FsSearchParams::new(vp("mem:///t"))
+        };
+        let b = batches(&[("a.txt", b"aguja\n"), ("sub/c.txt", b"aguja\n")], p).await;
+        let entries: usize = b.iter().map(|x| x.entries.len()).sum();
+        assert_eq!(entries, 3, "a.txt, sub and sub/c.txt");
+        for batch in &b {
+            assert!(batch.matches.is_none() && batch.all_matches.is_none() && batch.more.is_none());
+        }
     }
 
     /// The daemon clamps what it is asked: 0 means one, and nobody gets

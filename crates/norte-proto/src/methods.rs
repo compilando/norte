@@ -1443,7 +1443,9 @@ use crate::{
 /// the batch answers in [`SearchHits::all_matches`] plus
 /// [`SearchHits::more`], the count of lines past the cap. `matches` keeps
 /// the first line, so a reader that ignores the new fields sees 0.85's
-/// batch. A 0.85 daemon would ignore the request and send first lines only;
+/// batch. A batch also closes at [`SEARCH_HITS_MAX_LINES`] kept lines, so
+/// dense files do not build a frame the client refuses; a reader sees only
+/// more, smaller batches. A 0.85 daemon would ignore the request and send first lines only;
 /// it cannot be reached, because a 0.86 client does not negotiate with it.
 ///
 /// The cost is the reader's to know: asking makes the daemon read every
@@ -1885,6 +1887,21 @@ pub const SEARCH_HITS: &str = "search.hits";
 /// Limit of entries per [`SEARCH_HITS`] notification (server-side
 /// coalescing, same spirit as [`FS_LIST_MAX_PAGE`]).
 pub const SEARCH_HITS_MAX_BATCH: usize = 256;
+/// Limit of matching lines held in [`SearchHits::all_matches`] per
+/// [`SEARCH_HITS`] notification, summed over its files (0.86.0).
+///
+/// [`SEARCH_HITS_MAX_BATCH`] counts entries, and with
+/// [`FsSearchParams::max_matches_per_file`] an entry can carry up to
+/// [`SEARCH_MATCHES_PER_FILE_MAX`] lines: 256 dense files would build a
+/// frame past [`crate::wire::MAX_FRAME_BYTES`] and the client cuts
+/// the connection. One [`MatchInfo`] is at worst about 2.5 KB of JSON (a
+/// 160-char preview at 4 bytes a char, up to 160 `[start,end]` pairs, the
+/// line and offset), so this budget is about 5 MiB of lines, leaving the
+/// rest of the 16 MiB frame for the entries and the first lines in
+/// `matches`. At least [`SEARCH_MATCHES_PER_FILE_MAX`], so one file at the
+/// cap always fits in a batch of its own.
+pub const SEARCH_HITS_MAX_LINES: usize = 2048;
+const _: () = assert!(SEARCH_HITS_MAX_LINES >= SEARCH_MATCHES_PER_FILE_MAX as usize);
 
 /// `fs.compare` — compares TWO directory trees and emits one row per pair
 /// (0.39.0, ADR 0048). Returns a Task; rows arrive via [`COMPARE_ROWS`]
@@ -3306,13 +3323,15 @@ pub struct SearchHits {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matches: Option<Vec<MatchInfo>>,
     /// Every matching line kept per file, aligned with `entries` (0.86.0).
-    /// Only when the search asked for [`FsSearchParams::max_matches_per_file`];
+    /// Only on a content search that asked for
+    /// [`FsSearchParams::max_matches_per_file`];
     /// `matches` keeps carrying the first line so a reader that ignores
     /// this field sees 0.85's batch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub all_matches: Option<Vec<Vec<MatchInfo>>>,
     /// Matching lines past the cap per file, counted and not sent; aligned
     /// with `entries`, `0` = none (0.86.0). Present with `all_matches`.
+    /// Saturates at `u32::MAX`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub more: Option<Vec<u32>>,
 }
