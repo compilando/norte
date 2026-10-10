@@ -355,6 +355,10 @@ impl State {
             open: self.menu.as_ref().map(|m| m.menu() as u64),
             cursor: self.menu.as_ref().map_or(0, |m| m.item() as u64),
             items,
+            goto_chord: clamp_display(
+                norte_frontend::palette::first_chord("app.goto", &self.effective)
+                    .unwrap_or_default(),
+            ),
         }
     }
 

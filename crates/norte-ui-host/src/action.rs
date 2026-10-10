@@ -891,6 +891,28 @@ pub enum UiAction {
         /// Which entry, in the order they traveled.
         row: u32,
     },
+    /// Moves the cursor within the open "go to" box (the mouse hovering).
+    ///
+    /// `row` indexes `GotoView.lines`; a header or a stale index moves
+    /// nothing.
+    GotoPointRow {
+        /// Which line, in the order they traveled.
+        row: u32,
+    },
+    /// Runs a line of the open "go to" box (a click): the same as Enter on it.
+    ///
+    /// Carries the row and not what it does: the host resolves it against
+    /// the box IT has open.
+    GotoActivateRow {
+        /// Which line, in the order they traveled.
+        row: u32,
+    },
+    /// A paste into the open "go to" box. The host keeps the first line,
+    /// capped: a clipboard is untrusted and a newline must never confirm.
+    GotoPaste {
+        /// What was pasted.
+        text: String,
+    },
     /// Closes the context menu without running anything (a click outside,
     /// `Escape`). The marks it dropped on opening stay dropped.
     ContextMenuClose,

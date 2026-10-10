@@ -194,3 +194,108 @@ async fn a_help_row_opens_that_page() {
     let help = snap.help.expect("help is open");
     assert_eq!(help.topic_id, "copying");
 }
+
+/// A hover moves the cursor (a header is not a row and is ignored); a click
+/// runs the line the host has open — the same as Enter on it.
+#[tokio::test]
+async fn hovering_points_and_clicking_runs_a_line() {
+    let (h, snap) = host_tree(fake_tree()).await;
+    let before = listing(&snap).cursor;
+    let mut sub = h.subscribe();
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    for c in ">cursor.down".chars() {
+        h.dispatch(press(&c.to_string())).await.expect("host alive");
+    }
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let g = next_snapshot(&mut sub).await.goto.expect("open");
+    assert_eq!(g.mode, norte_ui_host::dto::GotoModeView::Commands);
+    let norte_ui_host::dto::GotoLineView::Row {
+        category,
+        chord,
+        positions,
+        ..
+    } = &g.lines[0]
+    else {
+        panic!("commands mode has no headers");
+    };
+    assert!(!category.is_empty() && !chord.is_empty());
+    assert!(
+        positions.is_empty(),
+        "matched by the id (desc), nothing marked in the label"
+    );
+    h.dispatch(UiAction::GotoPointRow { row: 0 })
+        .await
+        .expect("host alive");
+    h.dispatch(UiAction::GotoActivateRow { row: 0 })
+        .await
+        .expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = next_snapshot(&mut sub).await;
+    assert!(snap.goto.is_none(), "running closes the box");
+    assert_ne!(listing(&snap).cursor, before, "cursor.down ran");
+}
+
+/// A click on a row the host does not have is ignored; with no box open it
+/// is stale.
+#[tokio::test]
+async fn a_click_on_a_row_the_host_lacks_is_ignored() {
+    let (h, _snap) = host_tree(fake_tree()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    h.dispatch(UiAction::GotoActivateRow { row: 99_999 })
+        .await
+        .expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    assert!(next_snapshot(&mut sub).await.goto.is_some(), "still open");
+    h.dispatch(press("Escape")).await.expect("host alive");
+    let ack = h
+        .dispatch(UiAction::GotoActivateRow { row: 0 })
+        .await
+        .expect("host alive");
+    assert!(
+        matches!(ack, norte_ui_host::ActionAck::Stale { .. }),
+        "{ack:?}"
+    );
+}
+
+/// The empty places box carries its hint; the menu carries the box's key.
+#[tokio::test]
+async fn the_places_box_says_its_prefixes_and_the_menu_its_key() {
+    let (h, snap) = host_tree(fake_tree()).await;
+    assert!(!snap.menu.goto_chord.is_empty(), "orthodox binds app.goto");
+    let mut sub = h.subscribe();
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let g = next_snapshot(&mut sub).await.goto.expect("open");
+    assert_eq!(g.mode, norte_ui_host::dto::GotoModeView::Places);
+    assert_eq!(g.hint, norte_i18n::t_in(norte_i18n::Lang::Es, "goto-hint"));
+}
+
+/// A paste lands in the query — its first line only: a newline must never
+/// confirm, and the rest of a multi-line paste is not a query.
+#[tokio::test]
+async fn a_paste_lands_in_the_query_first_line_only() {
+    let (h, _snap) = host_tree(fake_tree()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    h.dispatch(UiAction::GotoPaste {
+        text: ">copy\nrm -rf".to_owned(),
+    })
+    .await
+    .expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let g = next_snapshot(&mut sub).await.goto.expect("still open");
+    assert_eq!(g.query, ">copy");
+    // Without the box open, a paste is stale and changes nothing.
+    h.dispatch(press("Escape")).await.expect("host alive");
+    let ack = h
+        .dispatch(UiAction::GotoPaste {
+            text: "x".to_owned(),
+        })
+        .await
+        .expect("host alive");
+    assert!(
+        matches!(ack, norte_ui_host::ActionAck::Stale { .. }),
+        "{ack:?}"
+    );
+}

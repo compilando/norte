@@ -603,7 +603,11 @@ use serde::{Deserialize, Serialize};
 ///   `context_menu_place`, `context_menu_branch`, `context_menu_point_row`,
 ///   `context_menu_activate_row` and `context_menu_close`;
 ///   `ViewChange::ContextMenu` and `ViewSnapshot.context_menu`.
-pub const BRIDGE_VERSION: u32 = 107;
+/// - **108**: the one search box (spec 2026-10-09): `GotoView.mode` and
+///   `.hint`; `GotoLineView::Row` `chord`, `category`, `unavailable`,
+///   `recent`, `positions`; `MenuView.goto_chord`; the actions
+///   `goto_point_row`, `goto_activate_row` and `goto_paste`.
+pub const BRIDGE_VERSION: u32 = 108;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

@@ -14,7 +14,7 @@
 use super::*;
 
 use norte_frontend::goto::{
-    Action, BROUGHT_BY_LIST, FixedSource, Goto, GotoLine, GotoRow, GotoSource, INDEX_CAP,
+    Action, BROUGHT_BY_LIST, FixedSource, Goto, GotoLine, GotoRow, GotoSource, INDEX_CAP, Mode,
     PathSource, SECTION_COMMANDS, SECTION_CONNECTIONS, SECTION_FAVORITES, SECTION_HELP,
     SECTION_HISTORY, SECTION_INDEX, SECTION_POPULAR,
 };
@@ -256,16 +256,7 @@ impl State {
         };
         match k.key.as_str() {
             "Escape" | "esc" => self.close_go_to(),
-            "Enter" | "enter" => {
-                let act = g.confirm();
-                // A prefix row types itself and the box stays open.
-                if let Some(Action::SetQuery(q)) = &act {
-                    g.set_query(q);
-                    self.request_goto_from_index(backend, mailbox);
-                } else {
-                    return self.confirm_go_to(act, backend, mailbox);
-                }
-            }
+            "Enter" | "enter" => return self.enter_in_goto(backend, mailbox),
             "ArrowDown" | "down" => g.down(),
             "ArrowUp" | "up" => g.up(),
             "Backspace" | "backspace" => {
@@ -285,6 +276,86 @@ impl State {
                 }
             }
         }
+        let change = ViewChange::Goto {
+            goto: self.vista_ir_a(),
+        };
+        (self.applied(), vec![self.parche(vec![change])])
+    }
+
+    /// Enter on the chosen row: a prefix row types itself and the box stays
+    /// open; anything else is confirmed.
+    fn enter_in_goto(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(g) = self.ir_a.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
+        };
+        let act = g.confirm();
+        if let Some(Action::SetQuery(q)) = &act {
+            g.set_query(q);
+            self.request_goto_from_index(backend, mailbox);
+            let change = ViewChange::Goto {
+                goto: self.vista_ir_a(),
+            };
+            return (self.applied(), vec![self.parche(vec![change])]);
+        }
+        self.confirm_go_to(act, backend, mailbox)
+    }
+
+    /// A hover: moves the cursor to a row. A header or a stale index moves
+    /// nothing, and says nothing.
+    pub(super) fn point_in_goto(&mut self, row: u32) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(g) = self.ir_a.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
+        };
+        if !g.point(usize::try_from(row).unwrap_or(usize::MAX)) {
+            return (self.applied(), Vec::new());
+        }
+        let change = ViewChange::Goto {
+            goto: self.vista_ir_a(),
+        };
+        (self.applied(), vec![self.parche(vec![change])])
+    }
+
+    /// A click: runs the line the host has open, the same as Enter on it.
+    pub(super) fn activate_in_goto(
+        &mut self,
+        row: u32,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(g) = self.ir_a.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
+        };
+        if !g.point(usize::try_from(row).unwrap_or(usize::MAX)) {
+            return (self.applied(), Vec::new());
+        }
+        self.enter_in_goto(backend, mailbox)
+    }
+
+    /// A paste into the query: its first line only (a newline must never
+    /// confirm), capped (a clipboard is untrusted and unbounded).
+    pub(super) fn paste_in_goto(
+        &mut self,
+        text: &str,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        const MAX_PASTE_CHARS: usize = 1024;
+        let Some(g) = self.ir_a.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
+        };
+        let line: String = text
+            .lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(MAX_PASTE_CHARS)
+            .collect();
+        g.push_str(&line);
+        self.request_goto_from_index(backend, mailbox);
         let change = ViewChange::Goto {
             goto: self.vista_ir_a(),
         };
@@ -353,19 +424,37 @@ impl State {
                 },
                 GotoLine::Row(i) => {
                     let r = rows.get(*i);
+                    let shown = |f: fn(&GotoRow) -> Option<&String>| {
+                        clamp_display(r.and_then(f).cloned().unwrap_or_default())
+                    };
                     crate::dto::GotoLineView::Row {
                         text: clamp_display(r.map(|r| r.text.clone()).unwrap_or_default()),
                         desc: clamp_display(r.map(|r| r.desc.clone()).unwrap_or_default()),
                         hostile: r.is_some_and(|r| r.hostile),
+                        chord: shown(|r| r.chord.as_ref()),
+                        category: shown(|r| r.category.as_ref()),
+                        unavailable: shown(|r| r.unavailable.as_ref()),
+                        recent: r.is_some_and(|r| r.recent),
+                        positions: r.map(|r| r.positions.clone()).unwrap_or_default(),
                     }
                 }
             })
+            .take(crate::bridge::MAX_ROWS_PER_BATCH)
             .collect();
         Some(crate::dto::GotoView {
             query: clamp_display(g.query().to_owned()),
             cursor: (!lines.is_empty() && !g.is_empty()).then_some(g.cursor() as u64),
             lines,
             empty: norte_i18n::t_in(self.lang, "goto-empty"),
+            mode: match g.mode() {
+                Mode::Places => crate::dto::GotoModeView::Places,
+                Mode::Commands => crate::dto::GotoModeView::Commands,
+                Mode::Help => crate::dto::GotoModeView::Help,
+            },
+            hint: g
+                .hint()
+                .map(|k| norte_i18n::t_in(self.lang, k))
+                .unwrap_or_default(),
         })
     }
 }

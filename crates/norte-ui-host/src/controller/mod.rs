@@ -4055,6 +4055,9 @@ impl State {
                 y,
             } => self.open_header_menu(*slot_id, column, Some((*x, *y))),
             UiAction::ContextMenuPointRow { row } => self.point_in_context_menu(*row),
+            UiAction::GotoPointRow { row } => self.point_in_goto(*row),
+            UiAction::GotoActivateRow { row } => self.activate_in_goto(*row, backend, mailbox),
+            UiAction::GotoPaste { text } => self.paste_in_goto(text, backend, mailbox),
             UiAction::ContextMenuClose => self.close_context_menu(),
             UiAction::ContextMenuActivateRow { row } => {
                 self.activate_context_menu(*row, backend, mailbox)

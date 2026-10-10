@@ -218,6 +218,10 @@ pub struct MenuView {
     pub items: Vec<MenuItemView>,
     /// Which entry is highlighted inside the open menu.
     pub cursor: u64,
+    /// The first chord of `app.goto` (the box's key), or empty if the preset
+    /// does not bind it. Bridge 108.
+    #[serde(default)]
+    pub goto_chord: String,
 }
 
 /// An entry of a menu.
@@ -454,8 +458,9 @@ pub struct PaletteView {
 }
 
 /// "Go to anywhere" open (#357, bridge 77): the typed path, the pane's
-/// history, the popular ones, the favorites, the connections, the commands
-/// and what the semantic index found, in SECTIONS.
+/// history, the popular ones, the favorites, the connections and what the
+/// semantic index found, in SECTIONS. `mode` says which list; `>` commands
+/// and `?` help are flat (no headers).
 ///
 /// The sections, their order, the filtering and the cursor are decided by
 /// `norte_frontend::goto`, the same model as the TUI; the renderer paints
@@ -471,6 +476,27 @@ pub struct GotoView {
     /// What is painted when `lines` is empty, already translated: "nothing
     /// matches that" is not the same as a blank screen.
     pub empty: String,
+    /// Which list the query asks for. Bridge 108.
+    #[serde(default)]
+    pub mode: GotoModeView,
+    /// What the empty places box says about its prefixes, already translated,
+    /// or empty. Bridge 108.
+    #[serde(default)]
+    pub hint: String,
+}
+
+/// What the "go to" box is listing, chosen by the query's first character
+/// (bridge 108).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GotoModeView {
+    /// Where to go: the sections.
+    #[default]
+    Places,
+    /// What to do (`>`): one flat list of commands.
+    Commands,
+    /// What to read (`?`): one flat list of help rows.
+    Help,
 }
 
 /// A "go to" line.
@@ -492,6 +518,23 @@ pub enum GotoLineView {
         /// What is painted DIFFERS from the source bytes. Travels with the
         /// row: this is a screen where you choose where to go.
         hostile: bool,
+        /// The key that runs it, or empty. Bridge 108.
+        #[serde(default)]
+        chord: String,
+        /// The command's category, or empty. Bridge 108.
+        #[serde(default)]
+        category: String,
+        /// Why it cannot run here, or empty if it can. Bridge 108.
+        #[serde(default)]
+        unavailable: String,
+        /// Was run recently. Bridge 108.
+        #[serde(default)]
+        recent: bool,
+        /// Which chars of `text` the query matched. `text` may have been
+        /// shortened, so the renderer ignores positions past its end.
+        /// Bridge 108.
+        #[serde(default)]
+        positions: Vec<u32>,
     },
 }
 

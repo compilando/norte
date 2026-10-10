@@ -145,6 +145,18 @@
     "action": "focus_slot",
     "slot_id": 2
   },
+  "goto_activate_row": {
+    "action": "goto_activate_row",
+    "row": 2
+  },
+  "goto_paste": {
+    "action": "goto_paste",
+    "text": ">copia"
+  },
+  "goto_point_row": {
+    "action": "goto_point_row",
+    "row": 2
+  },
   "handoff_failed": {
     "action": "handoff_failed",
     "no_terminal": true
