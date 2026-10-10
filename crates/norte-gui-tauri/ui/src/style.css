@@ -1662,6 +1662,29 @@ button.status-item:hover {
   letter-spacing: 0.04em;
 }
 
+/* What the query matched, in the row's own text. */
+.goto mark {
+  background: none;
+  color: var(--border-focus);
+  font-weight: 600;
+}
+
+.goto-category {
+  flex: 0 0 auto;
+  opacity: 0.6;
+}
+
+.goto-category::after {
+  content: ":";
+}
+
+/* The empty box's way in: which prefix asks for what. */
+.goto-hint {
+  padding: 0.35em 0.75em;
+  opacity: 0.6;
+  font-size: 0.9em;
+}
+
 .palette {
   width: min(80ch, 90vw);
   max-height: 70vh;
@@ -1756,7 +1779,7 @@ button.status-item:hover {
   color: var(--selection-fg);
 }
 
-.palette-row[data-enabled="false"] {
+.palette-row[data-unavailable="true"] {
   opacity: 0.55;
 }
 
@@ -1777,7 +1800,7 @@ button.status-item:hover {
 
 /* A recent one goes up top for being recent, and says so with a dot in
    front. */
-.palette-row[data-recent="true"]::before {
+.goto .palette-row[data-recent="true"]::before {
   content: "• ";
   color: var(--info-fg);
 }

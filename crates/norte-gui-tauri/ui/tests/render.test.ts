@@ -18,6 +18,7 @@ import { BRIDGE_VERSION } from "../src/types";
 import type {
   BrowserSlotView,
   ContextMenuView,
+  GotoView,
   HostCatalog,
   LogSlotView,
   PanelSlotView,
@@ -201,6 +202,152 @@ describe("go to anywhere (#357)", () => {
     expect(text).toMatch(/flex:\s*1 1 auto/);
     const desc = /\.goto \.palette-desc\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
     expect(desc).toMatch(/flex:\s*0 1 auto/);
+  });
+
+  function commandsBox(): GotoView {
+    return {
+      query: ">co",
+      mode: "commands",
+      hint: "",
+      lines: [
+        {
+          line: "row",
+          text: "copy 🦀 now",
+          desc: "pane.copy",
+          hostile: false,
+          chord: "F5",
+          category: "Panel",
+          unavailable: "",
+          recent: true,
+          positions: [0, 5],
+        },
+        {
+          line: "row",
+          text: "delete",
+          desc: "pane.delete",
+          hostile: false,
+          chord: "F8",
+          category: "Panel",
+          unavailable: "solo lectura",
+          recent: false,
+          positions: [],
+        },
+      ],
+      cursor: 0,
+      empty: "nada",
+    };
+  }
+
+  it("marks the matched characters by code point, not UTF-16 unit", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.goto = commandsBox();
+    screen.paint(v);
+    const marks = [...document.querySelectorAll(".goto .palette-row mark")].map(
+      (m) => m.textContent,
+    );
+    // Position 5 is the crab (one code point, two UTF-16 units).
+    expect(marks).toEqual(["c", "🦀"]);
+  });
+
+  it("ignores positions past the end and never reads the text as markup", () => {
+    const { screen } = mount();
+    const v = view({});
+    const box = commandsBox();
+    box.lines = [
+      {
+        line: "row",
+        text: "<b>x</b>",
+        desc: "",
+        hostile: true,
+        positions: [0, 1, 99],
+      },
+    ];
+    v.goto = box;
+    screen.paint(v);
+    const text = document.querySelector(".goto .palette-text");
+    expect(text?.querySelector("b")).toBeNull();
+    expect(text?.textContent).toBe("<b>x</b>");
+    expect(
+      [...document.querySelectorAll(".goto mark")].map((m) => m.textContent),
+    ).toEqual(["<b"]);
+  });
+
+  it("shows category, chord and recent, and dims what cannot run with its reason", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.goto = commandsBox();
+    screen.paint(v);
+    const [first, second] = [...document.querySelectorAll(".goto .palette-row")];
+    expect(first?.querySelector(".goto-category")?.textContent).toBe("Panel");
+    expect(first?.querySelector(".palette-chord")?.textContent).toBe("F5");
+    expect(first?.getAttribute("data-recent")).toBe("true");
+    expect(second?.getAttribute("data-unavailable")).toBe("true");
+    expect(second?.getAttribute("aria-disabled")).toBe("true");
+    expect(second?.getAttribute("title")).toBe("solo lectura");
+    expect(document.querySelector(".goto")?.getAttribute("aria-label")).toBe(
+      realCatalog()["palette-title"],
+    );
+  });
+
+  it("hovering points once per row and a click activates; a cursor move repaints in place", () => {
+    const { screen, sent } = mount();
+    const v = view({});
+    v.goto = commandsBox();
+    screen.paint(v);
+    const rows = () =>
+      [...document.querySelectorAll(".goto .palette-row")] as HTMLElement[];
+    const firstPaint = rows()[1];
+    rows()[1]?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    rows()[1]?.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+    expect(sent.filter((a) => a.action === "goto_point_row")).toEqual([
+      { action: "goto_point_row", row: 1 },
+    ]);
+    v.goto = { ...commandsBox(), cursor: 1 };
+    screen.paint(v);
+    expect(rows()[1]).toBe(firstPaint);
+    expect(rows()[1]?.getAttribute("aria-selected")).toBe("true");
+    rows()[1]?.click();
+    expect(sent.at(-1)).toEqual({ action: "goto_activate_row", row: 1 });
+  });
+
+  it("a paste while the box is open crosses to the host; closed, it does not", () => {
+    const { screen, sent } = mount();
+    const v = view({});
+    v.goto = commandsBox();
+    screen.paint(v);
+    const paste = (text: string) => {
+      const e = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(e, "clipboardData", {
+        value: { getData: (t: string) => (t === "text/plain" ? text : "") },
+      });
+      document.body.dispatchEvent(e);
+      return e;
+    };
+    expect(paste("copy\ntail").defaultPrevented).toBe(true);
+    expect(sent.at(-1)).toEqual({ action: "goto_paste", text: "copy\ntail" });
+    v.goto = null;
+    screen.paint(v);
+    const before = sent.length;
+    paste("x");
+    expect(sent.length).toBe(before);
+  });
+
+  it("an empty places box shows the hint", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.goto = {
+      query: "",
+      mode: "places",
+      hint: "> comandos · ? ayuda",
+      lines: [],
+      cursor: null,
+      empty: "nada",
+    };
+    screen.paint(v);
+    expect(document.querySelector(".goto .goto-hint")?.textContent).toBe(
+      "> comandos · ? ayuda",
+    );
   });
 
   it("with no lines says nothing matches, and closed leaves nothing", () => {
