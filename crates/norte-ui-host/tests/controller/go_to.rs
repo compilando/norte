@@ -277,3 +277,20 @@ async fn a_paste_lands_in_the_query_first_line_only() {
         "{ack:?}"
     );
 }
+
+/// The query the window paints is MASKED, as the TUI paints it: a bidi
+/// control pasted into the box would otherwise reorder the line it is in.
+#[tokio::test]
+async fn the_painted_query_masks_a_pasted_bidi_control() {
+    let (h, _snap) = host_tree(fake_tree()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    h.dispatch(UiAction::GotoPaste {
+        text: "a\u{202E}b".to_owned(),
+    })
+    .await
+    .expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let g = next_snapshot(&mut sub).await.goto.expect("still open");
+    assert_eq!(g.query, "a\u{FFFD}b");
+}

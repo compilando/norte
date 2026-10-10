@@ -517,7 +517,9 @@ impl State {
             .take(crate::bridge::MAX_ROWS_PER_BATCH)
             .collect();
         Some(crate::dto::GotoView {
-            query: clamp_display(g.query().to_owned()),
+            // Masked, as the TUI paints it: a pasted bidi control must not
+            // reorder the line.
+            query: clamp_display(g.query_display()),
             cursor: (!lines.is_empty() && !g.is_empty()).then_some(g.cursor() as u64),
             lines,
             empty: norte_i18n::t_in(self.lang, "goto-empty"),
