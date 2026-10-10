@@ -2950,6 +2950,42 @@ describe("the menu bar", () => {
     expect(document.querySelector(".menu-items")).toBeNull();
   });
 
+  it("with the native title bar the search box sits in the menu bar, with its key", () => {
+    const { screen, sent } = mount();
+    const v = withMenu(null);
+    v.menu.goto_chord = "ctrl+g";
+    v.layout_buttons = v.layout_buttons ?? [];
+    screen.paint(v);
+    const bar = document.querySelector(".menubar") as HTMLElement;
+    const center = bar.querySelector(".command-center") as HTMLButtonElement;
+    expect(center).not.toBeNull();
+    expect(center.querySelector(".command-center-label")?.textContent).toBe(
+      realCatalog()["goto-box-label"],
+    );
+    expect(center.querySelector(".command-center-chord")?.textContent).toBe("ctrl+g");
+    // Between the last title and the layout buttons.
+    const kids = [...bar.children];
+    const titles = kids.filter((k) => k.classList.contains("menubar-title"));
+    const lastTitle = titles[titles.length - 1] as Element;
+    expect(kids.indexOf(center)).toBe(kids.indexOf(lastTitle) + 1);
+    center.click();
+    expect(sent).toEqual([{ action: "activity_activate", id: "goto" }]);
+  });
+
+  it("a preset without an app.goto chord shows the box without a key", () => {
+    const { screen } = mount();
+    screen.paint(withMenu(null));
+    expect(document.querySelector(".command-center-chord")).toBeNull();
+  });
+
+  it("with the menu bar off and the native title bar there is no box", () => {
+    const { screen } = mount();
+    const v = withMenu(null);
+    v.menu.bar = false;
+    screen.paint(v);
+    expect(document.querySelector(".command-center")).toBeNull();
+  });
+
   describe("with its own title bar (ADR 0136)", () => {
     beforeEach(() => {
       document.documentElement.dataset["titlebar"] = "custom";
@@ -2988,7 +3024,10 @@ describe("the menu bar", () => {
       const center = document.querySelector(
         ".menubar .command-center",
       ) as HTMLButtonElement;
-      expect(center.textContent).toBe("Ir a…");
+      expect(document.querySelectorAll(".command-center")).toHaveLength(1);
+      expect(center.querySelector(".command-center-label")?.textContent).toBe(
+        realCatalog()["goto-box-label"],
+      );
       center.click();
       expect(sent).toEqual([{ action: "activity_activate", id: "goto" }]);
     });

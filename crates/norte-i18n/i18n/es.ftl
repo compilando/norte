@@ -836,6 +836,7 @@ goto-empty = nada casa con eso
 goto-index-off = el índice semántico no está encendido
 goto-path-desc = ir a esta ruta
 goto-hint = > comandos · ? ayuda
+goto-box-label = Buscar sitios y comandos (>)
 # La categoría bajo la que se archiva una fila de comando: el espacio de nombres de su id.
 cmd-ns-app = Aplicación
 cmd-ns-cursor = Cursor

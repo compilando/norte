@@ -831,6 +831,7 @@ goto-empty = nothing matches that
 goto-index-off = the semantic index is not switched on
 goto-path-desc = go to this path
 goto-hint = > commands · ? help
+goto-box-label = Search places and commands (>)
 # The category a command row is filed under: its id's namespace.
 cmd-ns-app = App
 cmd-ns-cursor = Cursor

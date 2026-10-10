@@ -298,6 +298,37 @@ function markMenuCursor(painted: PaintedMenu, cursor: number): void {
 }
 
 /**
+ * The COMMAND CENTRE (ADR 0172): VS Code's box, which in norte is the "go
+ * anywhere" box. Between the menus and the buttons, in the flow. It names a
+ * button, not a command: the host maps `goto` (ADR 0069). The chord is the
+ * `app.goto` one, empty when the preset binds none.
+ */
+function commandCenter(this: Screen, label: string, chord: string): HTMLButtonElement {
+  const center = document.createElement("button");
+  center.type = "button";
+  center.className = "command-center";
+  center.setAttribute("aria-label", label);
+  const glass = panelIcon(document, "ui:search");
+  if (glass !== null) {
+    center.append(glass);
+  }
+  const text = document.createElement("span");
+  text.className = "command-center-label";
+  text.textContent = label;
+  center.append(text);
+  if (chord !== "") {
+    const key = document.createElement("span");
+    key.className = "command-center-chord";
+    key.textContent = chord;
+    center.append(key);
+  }
+  center.addEventListener("click", () => {
+    this.send({ action: "activity_activate", id: "goto" });
+  });
+  return center;
+}
+
+/**
  * The menu bar, and the dropdown if one is open.
  *
  * The same commands as the keyboard, sorted by topic. It adds no
@@ -365,25 +396,10 @@ export function paintMenu(
     });
     bar.append(button);
   }
-  if (custom) {
-    // The COMMAND CENTRE (ADR 0172): VS Code's box in the middle of its
-    // title bar, which in norte is "go anywhere". Between the menus and the
-    // buttons, in the flow. It names a button, not a command: the host maps
-    // `goto` (ADR 0069).
-    const center = document.createElement("button");
-    center.type = "button";
-    center.className = "command-center";
-    const glass = panelIcon(document, "ui:search");
-    if (glass !== null) {
-      center.append(glass);
-    }
-    const label = document.createElement("span");
-    label.textContent = this.t("menu-item-app-goto");
-    center.append(label);
-    center.addEventListener("click", () => {
-      this.send({ action: "activity_activate", id: "goto" });
-    });
-    bar.append(center);
+  // With the native title bar the box lives in the menu bar, so with the bar
+  // hidden there is no box.
+  if (custom || menu.bar) {
+    bar.append(commandCenter.call(this, this.t("goto-box-label"), menu.goto_chord ?? ""));
   }
   // The layout buttons (ADR 0133), on the right edge: one icon per command,
   // with its name and its shortcut on hover. A click comes back as the id;

@@ -507,6 +507,29 @@ body {
   cursor: pointer;
 }
 
+/* In the native menu bar the box shrinks its label first, then to the icon. */
+.menubar:not([data-titlebar="true"]) .command-center {
+  flex: 0 1 32ch;
+  min-width: calc(var(--cell-h) + 8px);
+  overflow: hidden;
+}
+
+.command-center-label {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-center-chord {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  opacity: 0.6;
+  margin-left: 8px;
+}
+
 /* With the centre taking the free space, the buttons sit right after it. */
 .command-center + .menubar-actions {
   margin-left: 0;
