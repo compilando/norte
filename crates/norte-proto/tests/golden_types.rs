@@ -3767,6 +3767,8 @@ fn check_methods_search(fixtures: &BTreeMap<String, Value>) {
             matches: Some(vec![MatchInfo {
                 line: Some(3),
                 preview: Some("hay un año aquí".to_owned()),
+                offset: Some(41),
+                ranges: Some(vec![(7, 10)]),
             }]),
         },
     );
@@ -3776,6 +3778,8 @@ fn check_methods_search(fixtures: &BTreeMap<String, Value>) {
         &MatchInfo {
             line: Some(3),
             preview: Some("hay un año aquí".to_owned()),
+            offset: Some(41),
+            ranges: Some(vec![(7, 10)]),
         },
     );
 }
@@ -4968,7 +4972,8 @@ fn method_names_frozen() {
     // `unusable` in `connection.list`, for the entries the daemon failed to
     // read (#365).
     // 0.85.0: no new method. An error category, `Error::Busy` (#221).
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.85.0");
+    // 0.86.0: no new method. fs.search says where it matched.
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.86.0");
 }
 
 /// An [`Entry`] for a comparison row: the four fields the panel paints,

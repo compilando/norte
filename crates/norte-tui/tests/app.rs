@@ -206,6 +206,7 @@ fn begin_search_clears_previous_previews() {
         norte_proto::methods::MatchInfo {
             line: Some(7),
             preview: Some("vieja".into()),
+            ..Default::default()
         },
     );
     p.begin_search(root);

@@ -3436,10 +3436,43 @@
             "null"
           ]
         },
+        "offset": {
+          "description": "Byte offset in the file of the START of the matching line (0.86.0):\nwhat a viewer needs to load the window holding a line past what it\nreads from the top.\n\nExact on the literal path. On the decoded path (regex, UTF-16) it is\ncounted over the decoded text: exact for UTF-8, UTF-16 and\nsingle-byte encodings, absent for multi-byte legacy ones (`Shift_JIS`,\nGBK…), and shifted by two bytes per invalid UTF-8 byte before the\nmatch (each decodes to a three-byte `U+FFFD`).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "preview": {
           "description": "The match's line, lossy-decoded and sanitized AT THE SOURCE\n(control/bidi/invisible chars masked to `U+FFFD`, then trimmed to a\nfixed char limit). The consumer can paint it directly — raw ANSI or\nbidi overrides never arrive over the wire — though the TUI still\npasses it through `detail_for_bar` as a belt.",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "ranges": {
+          "description": "Where the match is inside [`Self::preview`] (0.86.0): `[start, end)`\nin CHARS of the preview as sent — after masking and after the\ncentring that may have put a `…` in front. Every occurrence on the\nline that falls inside the preview; empty when the line matched but\nthe text could not be located in it (a literal found as bytes of\nanother encoding).",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            ],
+            "type": "array"
+          },
+          "type": [
+            "array",
             "null"
           ]
         }

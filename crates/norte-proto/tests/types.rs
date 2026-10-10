@@ -1435,12 +1435,23 @@ fn current_version_window() {
     // know that is what happened.
     // 0.85.0: `Error::Busy`. A 0.84 client reads "unknown error" for a
     // file another program holds; the daemon already retried it.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.85.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.84.0"), "N-1");
+    // 0.86.0: `MatchInfo::offset` and `ranges`, optional. A 0.85 client
+    // ignores them and reads a preview centred on the match.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.86.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.85.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.83.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.84.9"),
         "N-2 outside the window"
     );
+}
+
+/// A 0.85 batch — no offset, no ranges — still reads, with both absent:
+/// that is the shape a panel shows unhighlighted.
+#[test]
+fn a_085_match_info_reads_without_offset_or_ranges() {
+    let m: norte_proto::methods::MatchInfo =
+        serde_json::from_str(r#"{"line":3,"preview":"hay"}"#).expect("0.85 shape");
+    assert_eq!((m.offset, m.ranges), (None, None));
 }
 
 #[test]

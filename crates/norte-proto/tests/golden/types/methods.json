@@ -899,7 +899,14 @@
   },
   "match_info": {
     "line": 3,
-    "preview": "hay un año aquí"
+    "offset": 41,
+    "preview": "hay un año aquí",
+    "ranges": [
+      [
+        7,
+        10
+      ]
+    ]
   },
   "pending_approval": {
     "approval_id": 7,
@@ -1486,7 +1493,14 @@
     "matches": [
       {
         "line": 3,
-        "preview": "hay un año aquí"
+        "offset": 41,
+        "preview": "hay un año aquí",
+        "ranges": [
+          [
+            7,
+            10
+          ]
+        ]
       }
     ],
     "task_id": 7

@@ -1425,7 +1425,19 @@ use crate::{
 /// A **0.85 client against a 0.84 daemon** does not negotiate
 /// ([`version_compatible`]). That daemon answered a held file with
 /// `Io { retryable: false }` on the first attempt, without retrying.
-pub const PROTOCOL_VERSION: &str = "0.85.0";
+/// # 0.86.0 — a search says WHERE it matched
+///
+/// [`MatchInfo::offset`] and [`MatchInfo::ranges`], optional, and the
+/// preview is now a window CENTRED on the first match (`…` at a cut end)
+/// instead of the line's first 160 chars, so a match at column 200 is
+/// visible. Old clients read the same field with better content.
+///
+/// A **0.85 client against a 0.86 daemon** ignores the two fields (ADR
+/// 0004). A **0.86 client against a 0.85 daemon** does not negotiate
+/// ([`version_compatible`] never accepts a client ahead of the daemon), so
+/// no client has to degrade on the wire; a frontend that gets a batch
+/// without them shows the lines unhighlighted.
+pub const PROTOCOL_VERSION: &str = "0.86.0";
 
 /// `initialize` — MANDATORY handshake before any other method
 /// (ADR 0011). Rejects incompatible versions (see
@@ -3269,7 +3281,7 @@ pub struct SearchHits {
 
 /// Context of ONE content match.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatchInfo {
     /// Line (1-based) of the first match, if it was computed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3281,6 +3293,25 @@ pub struct MatchInfo {
     /// passes it through `detail_for_bar` as a belt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
+    /// Byte offset in the file of the START of the matching line (0.86.0):
+    /// what a viewer needs to load the window holding a line past what it
+    /// reads from the top.
+    ///
+    /// Exact on the literal path. On the decoded path (regex, UTF-16) it is
+    /// counted over the decoded text: exact for UTF-8, UTF-16 and
+    /// single-byte encodings, absent for multi-byte legacy ones (`Shift_JIS`,
+    /// GBK…), and shifted by two bytes per invalid UTF-8 byte before the
+    /// match (each decodes to a three-byte `U+FFFD`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u64>,
+    /// Where the match is inside [`Self::preview`] (0.86.0): `[start, end)`
+    /// in CHARS of the preview as sent — after masking and after the
+    /// centring that may have put a `…` in front. Every occurrence on the
+    /// line that falls inside the preview; empty when the line matched but
+    /// the text could not be located in it (a literal found as bytes of
+    /// another encoding).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ranges: Option<Vec<(u32, u32)>>,
 }
 
 /// Params of [`INDEX_BUILD`] (M4): root to index.
