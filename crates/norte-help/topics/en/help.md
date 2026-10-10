@@ -47,7 +47,7 @@ The last entry in the list, *keys*, is the other direction: the whole effective
 keymap, generated, including the `dialog.*` verbs that overlay footers leave out
 for want of width.
 
-> 💡 {{cmd:app.palette}} is the fast version of the same model: type, Enter, gone. This help is the version that explains.
+> 💡 {{cmd:app.palette}} is the fast version of the same model: type, Enter, gone — and `?` in that box lists these pages. This help is the version that explains.
 
 {{cmd:app.menu}} opens a menu bar with the same commands arranged by topic. It
 adds nothing the keyboard cannot do; it adds a way to FIND it — the palette

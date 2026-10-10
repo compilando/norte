@@ -9,6 +9,16 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **One search box for places, commands and help** (bridge 108).
+  `app.goto` opens it empty, to search places; `app.palette` opens it with
+  `>`, to run a command; `?` lists the help pages. Deleting the prefix
+  switches without closing, and pressing either key while it is open
+  switches too. Results are ranked by a fuzzy match with the matched
+  letters highlighted. A command row shows its category and its key, and
+  one that cannot run here is dimmed with the reason (Enter says it
+  instead of running). F1 on a command opens its help page, in the window
+  too. In the window, rows answer the mouse, and with
+  `[ui] titlebar = "native"` the box sits in the menu bar.
 - **Context menu in the window** (bridge 107). Right-click opens a menu on a
   listing row, the empty part of a listing and its `..` row, a column
   header, a Places row and a tree branch; Shift+F10 or the Menu key
@@ -82,6 +92,10 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **The command palette is the search box with `>`.** Its keys are the
+  same; go-to no longer mixes commands into its places list — type `>` for
+  them. Krusader, Far, Norton and Total Commander still have no
+  `app.goto` key: open the box with their palette key and delete the `>`.
 - **In the Krusader keymap, Ctrl+← and Ctrl+→ follow the arrow.** Ctrl+→
   sends the location rightwards: the pane on the right goes where the
   left one is, whichever has the focus; Ctrl+← does the opposite. Both

@@ -115,12 +115,20 @@ terminal no recibe esos botones.
 
 # Ir a cualquier sitio
 
-{{cmd:app.goto}} abre una sola pantalla con todo lo que puede ser un
-destino, en secciones: la ruta que estás tecleando, la historia de este
-panel, los sitios a los que más vuelves, tus favoritos, tus conexiones, los
-comandos, y —si tienes índice semántico— lo que el índice encuentre. Escribe
-y se va quedando lo que casa; las flechas se mueven fila a fila, saltándose
-los títulos, e Intro te lleva.
+{{cmd:app.goto}} abre una sola caja de búsqueda. Vacía, lista todo lo que
+puede ser un destino, en secciones: la ruta que estás tecleando, la historia
+de este panel, los sitios a los que más vuelves, tus favoritos, tus
+conexiones y —si tienes índice semántico— lo que el índice encuentre.
+Escribe y suben las mejores coincidencias, con las letras que casaron
+resaltadas; las flechas se mueven fila a fila, saltándose los títulos, e
+Intro te lleva.
+
+El primer carácter cambia lo que lista la caja. `>` lista las órdenes —es lo
+que abre {{cmd:app.palette}}— con su categoría, su tecla y, atenuadas y con
+el motivo, las que aquí no se pueden ejecutar; si no hay nada tras el `>`,
+salen primero las últimas que ejecutaste. `?` lista las páginas de ayuda.
+Borra el prefijo y vuelves a los sitios, sin cerrar. `F1` sobre una orden
+abre su página.
 
 No sustituye a ninguna de las listas de arriba: cada una sigue teniendo su
 tecla y su pantalla, donde se ven enteras y se pueden borrar entradas. Ésta
@@ -138,4 +146,5 @@ simplemente no sale.
 En los presets `orthodox`, `cua` y `vim` está en `ctrl+g`. Los cuatro
 importados no lo atan, porque ninguno de los gestores que transcriben tiene
 una tecla equivalente: en ésos se llega por el menú Ir, donde está el
-primero.
+primero. En esos cuatro, {{cmd:app.palette}} abre la caja con `>`; bórralo
+para buscar sitios.

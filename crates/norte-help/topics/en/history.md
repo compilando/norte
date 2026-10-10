@@ -115,12 +115,18 @@ not receive those buttons.
 
 # Go anywhere
 
-{{cmd:app.goto}} opens one screen holding everything that can be a
-destination, in sections: the path you are typing, this panel's history, the
-places you come back to most, your bookmarks, your connections, the
-commands, and — if you have a semantic index — whatever the index finds.
-Type and what does not match drops away; the arrows move row by row,
+{{cmd:app.goto}} opens one search box. Empty, it lists everything that can be
+a destination, in sections: the path you are typing, this panel's history, the
+places you come back to most, your bookmarks, your connections and — if you
+have a semantic index — whatever the index finds. Type and the best matches
+rise, with the letters that matched highlighted; the arrows move row by row,
 skipping the titles, and Enter takes you there.
+
+The first character changes what the box lists. `>` lists the commands — it is
+what {{cmd:app.palette}} opens — with their category, their key and, dimmed
+with the reason, the ones that cannot run here; with nothing after the `>`,
+the ones you ran last come first. `?` lists the help pages. Delete the prefix
+and you are back to places, without closing. `F1` on a command opens its page.
 
 It replaces none of the lists above: each keeps its own key and its own
 screen, where you see them whole and can delete entries. This is the one for
@@ -136,4 +142,5 @@ have it switched on, it simply never appears.
 
 In the `orthodox`, `cua` and `vim` presets it is `ctrl+g`. The four imported
 ones do not bind it, because none of the managers they transcribe has an
-equivalent key: there, you reach it from the Go menu, where it sits first.
+equivalent key: there, you reach it from the Go menu, where it sits first. In those four,
+{{cmd:app.palette}} opens the box with `>`; delete it to search places.
