@@ -518,7 +518,9 @@ pub async fn run_background(launch: Launch) -> Finished {
         Ok(Err(Refusal::Missing { program })) => return Finished::Missing { program },
         Ok(Err(other)) => {
             return Finished::NotStarted {
-                error: other.key().to_owned(),
+                // The status line wraps this in "could not start: …", so it
+                // takes the rendered refusal, never a Fluent key.
+                error: other.message(Lang::En),
             };
         }
         Err(e) => {
@@ -560,12 +562,18 @@ pub async fn run_background(launch: Launch) -> Finished {
     }
 }
 
+/// One line of a program's output as it goes to the log panel. The output is
+/// untrusted and nothing downstream masks it, so ESC/OSC are neutralised here.
+fn log_line(raw: &[u8]) -> String {
+    norte_encoding::mask_terminal_hazards(&String::from_utf8_lossy(raw))
+}
+
 async fn forward(pipe: Option<impl tokio::io::AsyncRead + Unpin>, id: String, stderr: bool) {
     use tokio::io::AsyncBufReadExt;
     let Some(pipe) = pipe else { return };
     let mut lines = tokio::io::BufReader::new(pipe).split(b'\n');
     while let Ok(Some(line)) = lines.next_segment().await {
-        let text = String::from_utf8_lossy(&line);
+        let text = log_line(&line);
         if stderr {
             tracing::warn!(target: LOG_TARGET, command = %id, "{text}");
         } else {
@@ -627,6 +635,14 @@ cwd = "/tmp"
 confirm = true
 refresh = false
 "#;
+
+    #[test]
+    fn output_lines_reach_the_log_masked() {
+        let line = log_line(b"a\x1b[31mred\x1b]0;x\x07 b");
+        assert!(!line.contains('\x1b') && !line.contains('\x07'), "{line:?}");
+        assert!(line.contains("red"));
+        assert_eq!(log_line(b"plain"), "plain");
+    }
 
     #[test]
     fn parses_defaults_and_overrides() {
