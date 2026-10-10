@@ -852,11 +852,11 @@ user-cmd-no-targets = { $label }: nothing selected
 user-cmd-too-long = { $label }: { $count } items do not fit on one command line
 user-cmd-missing = { $program } not found
 user-cmd-confirm-title = Run command
-user-cmd-confirm = { $count ->
-    [0] Run { $label }?
-    [one] Run { $label } on 1 item?
-   *[other] Run { $label } on { $count } items?
-}
+# Three ids, not a plural selector: args travel as STRINGS, so `[0]`/`[one]`
+# never match (see `modal-chmod-one`). `confirm_text` picks by the count.
+user-cmd-confirm-none = Run { $label }?
+user-cmd-confirm-one = Run { $label } on 1 item?
+user-cmd-confirm = Run { $label } on { $count } items?
 user-cmd-started = { $label } started
 user-cmd-ok = { $label } finished
 user-cmd-failed = { $label } exited with code { $code }

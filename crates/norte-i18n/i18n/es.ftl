@@ -854,14 +854,14 @@ cmd-ns-user = Usuario
 user-cmd-unknown = no hay ningún comando de usuario { $id } en commands.toml
 user-cmd-remote = los comandos de usuario se ejecutan en carpetas locales
 user-cmd-no-targets = { $label }: no hay nada seleccionado
-user-cmd-too-long = { $label }: { $count } elementos no caben en una línea de órdenes
+user-cmd-too-long = { $label }: { $count } elementos no caben en una línea de comandos
 user-cmd-missing = no se encuentra { $program }
 user-cmd-confirm-title = Ejecutar comando
-user-cmd-confirm = { $count ->
-    [0] ¿Ejecutar { $label }?
-    [one] ¿Ejecutar { $label } sobre 1 elemento?
-   *[other] ¿Ejecutar { $label } sobre { $count } elementos?
-}
+# Tres ids, no un selector plural: los args viajan como TEXTO y `[0]`/`[one]`
+# nunca coinciden (ver `modal-chmod-one`). `confirm_text` elige por la cuenta.
+user-cmd-confirm-none = ¿Ejecutar { $label }?
+user-cmd-confirm-one = ¿Ejecutar { $label } sobre 1 elemento?
+user-cmd-confirm = ¿Ejecutar { $label } sobre { $count } elementos?
 user-cmd-started = { $label } en marcha
 user-cmd-ok = { $label } terminó
 user-cmd-failed = { $label } salió con código { $code }

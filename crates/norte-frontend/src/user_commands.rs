@@ -456,9 +456,16 @@ pub fn undefined_bindings(eff: &crate::keymap::Effective, cmds: &UserCommands) -
 #[must_use]
 pub fn confirm_text(launch: &Launch, lang: Lang) -> String {
     let label = norte_encoding::mask_terminal_hazards(&launch.label);
+    // The code picks the id: args travel as strings, so a Fluent plural
+    // selector on `$count` would always take the `other` branch.
+    let key = match launch.count {
+        0 => "user-cmd-confirm-none",
+        1 => "user-cmd-confirm-one",
+        _ => "user-cmd-confirm",
+    };
     norte_i18n::ta_in(
         lang,
-        "user-cmd-confirm",
+        key,
         &[("label", &label), ("count", &launch.count.to_string())],
     )
 }
@@ -621,6 +628,40 @@ refresh = false
     const PNG: &str = "[[command]]\nid = \"png\"\nlabel = \"Optimize\"\nargv = [\"oxipng\", \"-o\", \"4\", \"%F\"]\n";
 
     #[test]
+    fn the_confirm_question_counts_in_both_languages() {
+        let launch = |count| Launch {
+            id: "png".to_owned(),
+            label: "Optimize".to_owned(),
+            program: OsString::from("oxipng"),
+            args: Vec::new(),
+            cwd: PathBuf::from("/"),
+            run_in: RunIn::Background,
+            refresh: false,
+            confirm: true,
+            count,
+        };
+        let cases = [
+            (0, "Run Optimize?", "¿Ejecutar Optimize?"),
+            (
+                1,
+                "Run Optimize on 1 item?",
+                "¿Ejecutar Optimize sobre 1 elemento?",
+            ),
+            (
+                3,
+                "Run Optimize on 3 items?",
+                "¿Ejecutar Optimize sobre 3 elementos?",
+            ),
+        ];
+        for (count, en, es) in cases {
+            // Fluent wraps interpolations in isolation marks; compare without.
+            let strip = |s: String| s.replace(['\u{2068}', '\u{2069}'], "");
+            assert_eq!(strip(confirm_text(&launch(count), Lang::En)), en);
+            assert_eq!(strip(confirm_text(&launch(count), Lang::Es)), es);
+        }
+    }
+
+    #[test]
     fn unknown_user_id_loads_and_is_listed() {
         let kf = crate::keymap::parse_keymap(
             "[pane]\nkeymap = [{ on = [\"x\"], run = \"user:png\" }, { on = [\"y\"], run = \"user:gone\" }, { on = [\"z\"], run = \"user:gone\" }]\n",
@@ -747,6 +788,8 @@ refresh = false
                 "user-cmd-too-long",
                 "user-cmd-missing",
                 "user-cmd-confirm",
+                "user-cmd-confirm-none",
+                "user-cmd-confirm-one",
                 "user-cmd-confirm-title",
                 "user-cmd-started",
                 "user-cmd-ok",
