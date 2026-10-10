@@ -522,7 +522,13 @@ pub(crate) fn draw_disk_map(
                 // the theme's background.
                 let fill = tile_at(x, y).and_then(|t| app.theme.class_fill(t.class, t.shade));
                 span.style = match fill {
-                    Some((bg, fg)) => Style::default().bg(bg).fg(fg),
+                    // The role's modifiers (bold…) stay; its colours and
+                    // any REVERSED go: the fill is already the colour.
+                    Some((bg, fg)) => span
+                        .style
+                        .bg(bg)
+                        .fg(fg)
+                        .remove_modifier(ratatui::style::Modifier::REVERSED),
                     // A monochrome theme has no colour to fill with: the
                     // role's own style, reversed, as it always was.
                     None => span.style.add_modifier(ratatui::style::Modifier::REVERSED),

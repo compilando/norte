@@ -114,12 +114,29 @@ impl TuiTheme {
                     Ground::Bg => style.bg,
                 }
             })?;
-        let toned = tone(colour, shade);
+        // The tone asked for, as the terminal will show it. In 16 colours
+        // (and in 256 for a dark panel) a dark tone quantises to the very
+        // index of the panel and the rectangle vanishes: then the next tone
+        // that does not, the class colour untoned first.
+        let panels: Vec<RColor> = [Role::Background, Role::PaneBackground]
+            .into_iter()
+            .filter_map(|r| self.role(r).bg)
+            .collect();
+        let shown = [shade, 0, 2, 1]
+            .into_iter()
+            .map(|s| self.color(tone(colour, s)))
+            .find(|c| !panels.contains(c))
+            .unwrap_or_else(|| self.color(tone(colour, shade)));
         // Dark text on a light fill and the other way round: the class
         // colour is what the theme chose for ITS text or fill, so what
-        // reads on it is decided from the colour, not from the theme.
-        let luma =
-            (299 * u32::from(toned.r) + 587 * u32::from(toned.g) + 114 * u32::from(toned.b)) / 1000;
+        // reads on it is decided from the colour as SHOWN (an index is
+        // xterm's palette), not from the theme nor the unquantised tone.
+        let [r, g, b] = match shown {
+            RColor::Rgb(r, g, b) => [r, g, b],
+            RColor::Indexed(i) => xterm_rgb(i),
+            _ => [0, 0, 0],
+        };
+        let luma = (299 * u32::from(r) + 587 * u32::from(g) + 114 * u32::from(b)) / 1000;
         let label = if luma > 140 {
             Color {
                 r: 16,
@@ -133,7 +150,7 @@ impl TuiTheme {
                 b: 245,
             }
         };
-        Some((self.color(toned), self.color(label)))
+        Some((shown, self.color(label)))
     }
 
     fn convert(&self, s: norte_theme::Style) -> RStyle {
@@ -296,6 +313,100 @@ mod rgb_tests {
         // In 16 colours it is ANSI black.
         let ansi16 = TuiTheme::new(theme(), ColorDepth::Ansi16);
         assert_eq!(ansi16.role_bg_shown(Role::Background), Some([0, 0, 0]));
+    }
+}
+
+#[cfg(test)]
+mod class_fill_tests {
+    use super::{Color, TuiTheme, xterm_rgb};
+    use norte_frontend::treemap::ChildClass;
+    use norte_theme::{ColorDepth, Role};
+    use ratatui::style::Color as RColor;
+
+    const CLASSES: [ChildClass; 7] = [
+        ChildClass::Directory,
+        ChildClass::Code,
+        ChildClass::Archive,
+        ChildClass::Image,
+        ChildClass::Media,
+        ChildClass::Document,
+        ChildClass::Other,
+    ];
+
+    const DEPTHS: [ColorDepth; 3] = [
+        ColorDepth::Truecolor,
+        ColorDepth::Ansi256,
+        ColorDepth::Ansi16,
+    ];
+
+    fn shown(c: RColor) -> [u8; 3] {
+        match c {
+            RColor::Rgb(r, g, b) => [r, g, b],
+            RColor::Indexed(i) => xterm_rgb(i),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The fill is never the panel's own colour, at any depth: tone 1
+    /// (30 % toward black) quantised to 16 colours landed on the same index
+    /// as a dark panel and the rectangle vanished (#423).
+    #[test]
+    fn a_fill_is_never_the_panel_at_any_depth() {
+        for name in norte_theme::preset_names() {
+            for depth in DEPTHS {
+                let t = TuiTheme::new(norte_theme::Theme::preset(name).unwrap().unwrap(), depth);
+                let panel: Vec<RColor> = [Role::Background, Role::PaneBackground]
+                    .into_iter()
+                    .filter_map(|r| t.role(r).bg)
+                    .collect();
+                for class in CLASSES {
+                    for shade in 0..3 {
+                        let Some((bg, _)) = t.class_fill(class, shade) else {
+                            continue;
+                        };
+                        assert!(
+                            !panel.contains(&bg),
+                            "{name} {depth:?} {class:?} shade {shade}: {bg:?} is the panel"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The label reads on the colour the terminal SHOWS, not on the
+    /// unquantised one: luma is taken from the degraded fill.
+    #[test]
+    fn the_label_reads_on_the_degraded_fill() {
+        for name in norte_theme::preset_names() {
+            for depth in DEPTHS {
+                let t = TuiTheme::new(norte_theme::Theme::preset(name).unwrap().unwrap(), depth);
+                for class in CLASSES {
+                    for shade in 0..3 {
+                        let Some((bg, fg)) = t.class_fill(class, shade) else {
+                            continue;
+                        };
+                        let [r, g, b] = shown(bg);
+                        let luma =
+                            (299 * u32::from(r) + 587 * u32::from(g) + 114 * u32::from(b)) / 1000;
+                        let want = if luma > 140 {
+                            t.color(Color {
+                                r: 16,
+                                g: 16,
+                                b: 16,
+                            })
+                        } else {
+                            t.color(Color {
+                                r: 245,
+                                g: 245,
+                                b: 245,
+                            })
+                        };
+                        assert_eq!(fg, want, "{name} {depth:?} {class:?} {shade}: {bg:?}");
+                    }
+                }
+            }
+        }
     }
 }
 

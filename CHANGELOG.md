@@ -59,7 +59,9 @@ independently through `PROTOCOL_VERSION`.
   (#423): rectangles came out in the text colour, and audio, video and
   code as holes in the panel. They are filled with the class colour the
   window already used, toned per ADR 0175, with a label that reads on
-  it; a rectangle too narrow for "name size" shows the name alone.
+  it; a rectangle too narrow for "name size" shows the name alone. In
+  16 and 256 colours a darker tone no longer lands on the panel's own
+  colour and vanishes.
 - **A plain copy, move, delete or quit question no longer offers
   "y approve · n deny"** in the terminal: those read as an agent's
   approval. The footer says Enter and Esc; `y` and `n` still answer.

@@ -1083,6 +1083,28 @@ mod tests {
         );
     }
 
+    /// The candidates are the window's `--tile` table in `style.css`, in
+    /// the same order: the first one a theme defines wins in both.
+    #[test]
+    fn colour_candidates_follow_the_css_order() {
+        use Ground::{Bg, Fg};
+        let want: [(ChildClass, &[(Role, Ground)]); 7] = [
+            (ChildClass::Directory, &[(Role::Info, Fg)]),
+            (ChildClass::Code, &[(Role::BorderFocus, Fg)]),
+            (ChildClass::Archive, &[(Role::Warning, Fg)]),
+            (ChildClass::Image, &[(Role::Badge, Bg), (Role::Info, Fg)]),
+            (ChildClass::Media, &[(Role::Selection, Bg)]),
+            (ChildClass::Document, &[(Role::Title, Fg)]),
+            (
+                ChildClass::Other,
+                &[(Role::Muted, Fg), (Role::BorderUnfocused, Fg)],
+            ),
+        ];
+        for (class, roles) in want {
+            assert_eq!(class.colour_candidates(), roles, "{class:?}");
+        }
+    }
+
     /// A rectangle too narrow for "name size" still says WHOSE it is: the
     /// name alone is drawn when it fits whole (#423). Narrower than the
     /// name, nothing is drawn: half a name names a file that is not there.
