@@ -548,9 +548,18 @@ body {
   stroke-width: 1.6;
 }
 
-/* A window too narrow for the menus AND the box: the menus win. */
+.command-center svg {
+  flex-shrink: 0;
+}
+
+/* The custom title bar, too narrow for the menus AND the box: the menus win.
+   The native menu bar's box does not vanish: it shrinks to its icon. */
 @media (width <= 900px) {
-  .command-center {
+  .menubar[data-titlebar="true"] .command-center {
+    display: none;
+  }
+
+  .menubar:not([data-titlebar="true"]) .command-center-chord {
     display: none;
   }
 }

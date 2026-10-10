@@ -2954,7 +2954,7 @@ describe("the menu bar", () => {
     const { screen, sent } = mount();
     const v = withMenu(null);
     v.menu.goto_chord = "ctrl+g";
-    v.layout_buttons = v.layout_buttons ?? [];
+    v.layout_buttons = [{ id: "terminal", label: "Terminal", chord: "ctrl+`" }];
     screen.paint(v);
     const bar = document.querySelector(".menubar") as HTMLElement;
     const center = bar.querySelector(".command-center") as HTMLButtonElement;
@@ -2968,8 +2968,17 @@ describe("the menu bar", () => {
     const titles = kids.filter((k) => k.classList.contains("menubar-title"));
     const lastTitle = titles[titles.length - 1] as Element;
     expect(kids.indexOf(center)).toBe(kids.indexOf(lastTitle) + 1);
+    const actions = bar.querySelector(".menubar-actions") as Element;
+    expect(kids.indexOf(actions)).toBe(kids.indexOf(center) + 1);
     center.click();
     expect(sent).toEqual([{ action: "activity_activate", id: "goto" }]);
+  });
+
+  it("below 900px only the custom title bar's box disappears", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+    const media = /@media \(width <= 900px\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? "";
+    expect(media).toContain('.menubar[data-titlebar="true"] .command-center {');
+    expect(media).not.toMatch(/(^|\n)\s*\.command-center\s*\{/);
   });
 
   it("a preset without an app.goto chord shows the box without a key", () => {
