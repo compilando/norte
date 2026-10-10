@@ -105,6 +105,39 @@ async fn polling_detects_changes_in_openers_toml() {
     drop(watch);
 }
 
+/// Same pin as above, for `commands.toml` (ADR 0177).
+#[tokio::test]
+async fn polling_detects_changes_in_commands_toml() {
+    let d = dir_with(&[(
+        "commands.toml",
+        "[[command]]\nid = \"a\"\nlabel = \"A\"\nargv = [\"true\"]\n",
+    )]);
+    let layers = Layers {
+        dirs: vec![(d.path().to_path_buf(), Layer::User)],
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let watch = watch_polling(&layers, tx, std::time::Duration::from_millis(20));
+
+    let mut seen = None;
+    for i in 0..15u32 {
+        let mut content =
+            String::from("[[command]]\nid = \"a\"\nlabel = \"B\"\nargv = [\"true\"]\n");
+        for _ in 0..i {
+            content.push_str("# round\n");
+        }
+        std::fs::write(d.path().join("commands.toml"), content).unwrap();
+        if let Ok(Some(())) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await
+        {
+            seen = Some(());
+            break;
+        }
+    }
+    assert!(seen.is_some(), "the poll sees the commands.toml change");
+
+    drop(watch);
+}
+
 /// The NATIVE watcher watches the WHOLE DIRECTORY (`RecursiveMode::
 /// NonRecursive`), so any neighboring file triggered a full hot-reload. The
 /// user's config dir does not hold only TOMLs: `index.db` (semantic index)
