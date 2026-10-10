@@ -134,6 +134,12 @@ pub const SECTION_PLUGINS: GotoSection = GotoSection {
     title_key: "goto-section-commands",
 };
 
+/// The user's own commands (`commands.toml`, ADR 0177): under `>` only.
+pub const SECTION_USER: GotoSection = GotoSection {
+    id: "user",
+    title_key: "goto-section-commands",
+};
+
 /// The `?` list: prefixes, then help topics.
 pub const SECTION_HELP: GotoSection = GotoSection {
     id: "help",
@@ -414,7 +420,11 @@ impl Goto {
         match self.mode() {
             Mode::Places => self.refresh_places(&needle),
             Mode::Commands => {
-                self.refresh_flat(&[SECTION_COMMANDS.id, SECTION_PLUGINS.id], &needle, true);
+                self.refresh_flat(
+                    &[SECTION_COMMANDS.id, SECTION_PLUGINS.id, SECTION_USER.id],
+                    &needle,
+                    true,
+                );
             }
             Mode::Help => self.refresh_flat(&[SECTION_HELP.id], &needle, false),
         }
@@ -931,6 +941,72 @@ pub fn plugin_command_rows(rows: Vec<crate::palette::Row>) -> Vec<GotoRow> {
             ..GotoRow::default()
         })
         .collect()
+}
+
+/// The chord each user command is bound to, keyed `user:<id>`.
+#[must_use]
+pub fn user_command_chords(
+    cmds: &crate::user_commands::UserCommands,
+    eff: &crate::keymap::Effective,
+) -> std::collections::HashMap<String, String> {
+    cmds.iter()
+        .filter_map(|c| {
+            let key = format!("user:{}", c.id);
+            crate::palette::first_chord(&key, eff).map(|chord| (key, chord))
+        })
+        .collect()
+}
+
+/// The USER command rows. Not built through [`command_rows`]: they are not in
+/// the catalogue, so its category lookup would paint a literal Fluent key.
+/// Only a remote pane dims them (they run on local folders).
+#[must_use]
+#[allow(clippy::implicit_hasher)] // the one map is `user_command_chords`'s
+pub fn user_command_rows(
+    cmds: &crate::user_commands::UserCommands,
+    chords: &std::collections::HashMap<String, String>,
+    local: bool,
+    lang: norte_i18n::Lang,
+) -> Vec<GotoRow> {
+    cmds.iter()
+        .map(|c| {
+            let id = format!("user:{}", c.id);
+            GotoRow {
+                section: SECTION_USER.id,
+                key: format!("{K_CMD}{id}"),
+                text: c.label.clone(),
+                chord: chords.get(&id).cloned(),
+                category: Some(norte_i18n::t_in(lang, "cmd-ns-user")),
+                unavailable: (!local).then(|| norte_i18n::t_in(lang, "user-cmd-remote")),
+                // The label is file text; masking clean text changes nothing.
+                hostile: true,
+                desc: id,
+                ..GotoRow::default()
+            }
+        })
+        .collect()
+}
+
+/// What `F1` says on a user row: its description, or why there is none.
+/// `None` for any other row.
+#[must_use]
+pub fn user_command_f1(
+    key: &str,
+    cmds: &crate::user_commands::UserCommands,
+    lang: norte_i18n::Lang,
+) -> Option<String> {
+    let id = key.strip_prefix(K_CMD)?.strip_prefix("user:")?;
+    let Some(c) = cmds.get(id) else {
+        return Some(crate::user_commands::Refusal::Unknown { id: id.to_owned() }.message(lang));
+    };
+    Some(match &c.description {
+        Some(d) => norte_encoding::mask_terminal_hazards(d),
+        None => norte_i18n::ta_in(
+            lang,
+            "user-cmd-no-description",
+            &[("label", &norte_encoding::mask_terminal_hazards(&c.label))],
+        ),
+    })
 }
 
 /// The rows for a batch of results from the semantic index.
@@ -1741,6 +1817,84 @@ mod command_row_tests {
             category("nothing", Lang::En),
             None,
             "no namespace, no category"
+        );
+        for lang in [Lang::En, Lang::Es] {
+            assert!(
+                norte_i18n::message_ids(lang).contains(&"cmd-ns-user".to_owned()),
+                "cmd-ns-user missing in {lang:?}"
+            );
+        }
+    }
+
+    fn user_cmds() -> crate::user_commands::UserCommands {
+        crate::user_commands::UserCommands::parse(
+            "[[command]]\nid = \"png\"\nlabel = \"Optimize PNGs\"\ndescription = \"oxipng -o 4\"\nargv = [\"oxipng\", \"%F\"]\n\
+             [[command]]\nid = \"bare\"\nlabel = \"Bare\"\nargv = [\"true\"]\n",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn user_rows_carry_label_id_category_and_key() {
+        let mut chords = std::collections::HashMap::new();
+        chords.insert("user:png".to_owned(), "ctrl+alt+o".to_owned());
+        let rows = super::user_command_rows(&user_cmds(), &chords, true, Lang::En);
+        let png = &rows[0];
+        assert_eq!(png.section, super::SECTION_USER.id);
+        assert_eq!(png.key, "cmd:user:png");
+        assert_eq!(png.text, "Optimize PNGs");
+        assert_eq!(png.desc, "user:png");
+        assert_eq!(png.category.as_deref(), Some("User"));
+        assert_eq!(png.chord.as_deref(), Some("ctrl+alt+o"));
+        assert!(png.unavailable.is_none());
+        assert_eq!(super::action(&png.key), Action::Command("user:png".into()));
+        let remote = super::user_command_rows(&user_cmds(), &chords, false, Lang::Es);
+        assert_eq!(remote[0].category.as_deref(), Some("Usuario"));
+        assert!(
+            remote[0].unavailable.is_some(),
+            "dimmed on a remote pane, with the reason"
+        );
+    }
+
+    #[test]
+    fn user_rows_show_under_the_command_prefix_only() {
+        let rows = super::user_command_rows(
+            &user_cmds(),
+            &std::collections::HashMap::new(),
+            true,
+            Lang::En,
+        );
+        let mut goto = Goto::new(vec![Box::new(super::FixedSource::new(
+            super::SECTION_USER,
+            rows,
+        ))]);
+        goto.set_query(">optim");
+        assert_eq!(goto.len(), 1);
+        assert_eq!(
+            goto.selected().map(|r| r.key.as_str()),
+            Some("cmd:user:png")
+        );
+        goto.set_query("optim");
+        assert!(
+            goto.selected()
+                .is_none_or(|r| r.section != super::SECTION_USER.id),
+            "places mode shows no user row"
+        );
+    }
+
+    #[test]
+    fn f1_on_a_user_row_says_its_description() {
+        let c = user_cmds();
+        let f1 = |k: &str| super::user_command_f1(k, &c, Lang::En);
+        assert_eq!(f1("cmd:user:png").as_deref(), Some("oxipng -o 4"));
+        assert_eq!(
+            f1("cmd:user:bare").as_deref(),
+            Some("Bare has no description")
+        );
+        assert!(f1("cmd:pane.copy").is_none());
+        assert_eq!(
+            f1("cmd:user:gone").as_deref(),
+            Some("no user command named gone in commands.toml"),
         );
     }
 }
