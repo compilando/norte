@@ -546,9 +546,6 @@ body {
   fill: none;
   stroke: currentcolor;
   stroke-width: 1.6;
-}
-
-.command-center svg {
   flex-shrink: 0;
 }
 
@@ -1667,19 +1664,24 @@ button.status-item:hover {
   display: none;
 }
 
-/* In "go to" the PLACE is the row: it takes the room and is cut (from the
-   left, `cutStart`) only when it really does not fit. The palette's 22ch
-   id column cut "/home/ada/Photos/2026-01 Tromsø" in a box with room to
-   spare (landing shots, 2026-10-08). What comes after is the aside. */
+/* The row's text — a place, or a command's human label — is the row: it
+   takes the room and is cut (from the left, `cutStart`) only when it really
+   does not fit. A fixed-width text column cut
+   "/home/ada/Photos/2026-01 Tromsø" in a box with room to spare (landing
+   shots, 2026-10-08). The desc after it (a command's id, for one) is the
+   aside, dimmed. */
 .goto .palette-text {
   flex: 1 1 auto;
   min-width: 0;
-  opacity: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .goto .palette-desc {
   flex: 0 1 auto;
   max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   opacity: 0.6;
 }
 
@@ -1771,13 +1773,6 @@ button.status-item:hover {
   font-weight: 600;
 }
 
-.palette-count {
-  margin-left: auto;
-  padding-left: 12px;
-  opacity: 0.6;
-  font-size: 0.9em;
-}
-
 .palette-rows {
   margin: 0;
   padding: 0;
@@ -1813,21 +1808,6 @@ button.status-item:hover {
 
 .palette-row[data-unavailable="true"] {
   opacity: 0.55;
-}
-
-/* The human label grows and reads whole; the id comes after, dimmed and at
-   a fixed width. Same layout as the terminal's. */
-.palette-desc {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.palette-text {
-  flex: 0 0 22ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  opacity: 0.6;
 }
 
 /* A recent one goes up top for being recent, and says so with a dot in

@@ -878,11 +878,11 @@ window-maximize = Maximizar o restaurar
 window-close = Cerrar
 # La marca de novedad de un botón de la barra, para un lector de pantalla.
 panelbar-attention = Novedades
-# H3c, y clave SEPARADA a propósito: `palette-hint` lo pintan los DOS
-# frontends, y solo la TUI tiene overlay de ayuda que F1 pueda abrir (el de la
-# GUI es la fase H3f). Metido en la cadena de arriba, el pie de la GUI
-# anunciaría una tecla que allí no hace nada. Cuando llegue H3f, la GUI une
-# también este grupo.
+# El pie de la caja de búsqueda en modo comandos (`>`), tras `palette-hint`:
+# F1 sobre una fila abre su ayuda, en el terminal y en la ventana por igual.
+# Solo la caja de la TUI pinta este pie; la de la ventana no muestra pie de
+# teclas, así que un pie en la ventana tomaría las dos teclas de aquí, no una
+# redacción propia.
 palette-hint-help = [f1] ayuda
 # H3c: F1 sobre una fila abre la página que documenta ese comando. Si ninguna
 # lo documenta, la palette se queda abierta y lo dice — abrir el índice
@@ -2020,7 +2020,7 @@ listing-empty = vacío
 # redacción, sin el ⚠ que la hace leerse como aviso, y era la que pintaba la
 # ventana: dos claves para un hecho es cómo dos superficies acaban diciendo
 # cosas distintas de lo mismo.
-palette-empty = nada casa con lo que has tecleado
+
 gui-menu-acts-on = actúa sobre { $target }
 gui-menu-target-marks = { $n } elementos marcados
 gui-menu-entry-disabled = { $label } — { $reason }

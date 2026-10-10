@@ -1,5 +1,5 @@
 //! "Go to anywhere" (phase 6 of the WOW program): a single screen that
-//! brings together what used to live in five — the `>` commands list and
+//! brings together what used to live in six — the `>` commands list and
 //! the `?` help list, history, popular places, favorites and connections —
 //! and adds what had no home: a TYPED path and, once it arrives, what the
 //! semantic index found.

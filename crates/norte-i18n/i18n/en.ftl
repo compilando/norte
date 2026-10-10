@@ -872,10 +872,11 @@ window-maximize = Maximize or restore
 window-close = Close
 # A bar button's attention mark, for a screen reader.
 panelbar-attention = Something new
-# H3c, and a SEPARATE key on purpose: `palette-hint` is painted by both
-# frontends, and only the TUI has a help overlay for F1 to open (the GUI's is
-# phase H3f). Folded into the string above, the GUI's footer would advertise a
-# key that does nothing there. When H3f lands, the GUI joins this group too.
+# The footer of the search box in commands mode (`>`), after `palette-hint`:
+# F1 on a row opens its help, in the terminal and in the window alike. Only
+# the TUI's box paints this footer; the window's box shows no key footer, so
+# a window-side footer would take both keys from here, not a wording of its
+# own.
 palette-hint-help = [f1] help
 # H3c: F1 on a row opens the page that documents that command. When no page
 # does, the palette stays open and says so — opening the index instead would
@@ -2079,7 +2080,7 @@ listing-empty = empty
 # without the ⚠ that makes it read as a warning, and it was the one the window
 # painted: two keys for one fact is how two surfaces end up saying different
 # things about the same thing.
-palette-empty = nothing matches what you typed
+
 gui-menu-acts-on = acts on { $target }
 gui-menu-target-marks = { $n } marked items
 gui-menu-entry-disabled = { $label } — { $reason }

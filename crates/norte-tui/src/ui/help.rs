@@ -201,7 +201,7 @@ pub fn help_body_size(base: Rect, lang: norte_help::Lang) -> (usize, usize) {
 /// Masked: the corpus's titles come from the binary (built-in) or are
 /// already masked by `norte_help::parse_untrusted` (plugin), and the body's
 /// lines were produced by [`crate::help_render`] over that same input — this
-/// draw does not filter them again, same as `draw_palette` with its rows.
+/// draw does not filter them again, same as `draw_goto` with its rows.
 /// The ONLY free input is the filter the user typed, which goes through the
 /// same double filter as the quick search bar (`filter_display` — never
 /// `filter_raw` — plus [`display_name`]).

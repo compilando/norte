@@ -2629,7 +2629,7 @@ struct State {
     /// The key resolver, with ITS effective keymap inside (same type and same
     /// contract as the TUI's).
     resolver: Resolver,
-    /// The VIEWER's effective keymap, so the palette can say a command's
+    /// The VIEWER's effective keymap, so the search box can say a command's
     /// shortcut for that screen.
     effective_visor: Effective,
     /// The search box ("go to anywhere", #357, and the commands with `>`),

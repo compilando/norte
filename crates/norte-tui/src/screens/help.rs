@@ -511,7 +511,8 @@ mod help_key_tests {
     /// Two panes…," froze its verbs, replaced its footer and let the reader
     /// walk from the index to `copying` to read ANOTHER dialog's `y`/`n`
     /// prose while the approval waited behind it. It is the same decision
-    /// [`palette_help`] had already made for an undocumented row, applied
+    /// [`crate::overlays::goto_help`] had already made for an undocumented
+    /// command row of the search box, applied
     /// where it matters most.
     #[test]
     fn f1_over_a_modal_with_no_page_does_not_cover_the_question() {

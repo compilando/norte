@@ -17,17 +17,17 @@ use crate::app::{App, HelpView, Modal};
 
 /// MINOR-4 (H1 close): a modal can arrive ASYNCHRONOUSLY (e.g.
 /// `Modal::ApproveAgentOp`, via `ConnEvent` — an agent can ask for approval
-/// at any moment) while the palette is open. Without this guard, the run
-/// loop resolved the key against the palette FIRST (`app.palette.is_some()`
-/// was checked before `app.modal.is_some()`): an Enter pressed to answer the
-/// modal actually dispatched the palette's highlighted row IN SILENCE, and
-/// the security modal kept waiting for an answer that never arrived through
-/// that key. The modal ALWAYS wins: the run loop's palette arm excludes this
-/// case from its condition (it stops consuming the key) and the modal arm
-/// closes the palette, now stale, the moment it enters — the SAME key falls
-/// through to the modal in the same iteration.
+/// at any moment) while the search box is open. Without this guard, the run
+/// loop resolved the key against the box FIRST (`app.goto.is_some()` was
+/// checked before `app.modal.is_some()`): an Enter pressed to answer the
+/// modal actually ran the box's highlighted row IN SILENCE, and the security
+/// modal kept waiting for an answer that never arrived through that key. The
+/// modal ALWAYS wins: the run loop's box arm excludes this case from its
+/// condition (it stops consuming the key) and the modal arm closes the box,
+/// now stale, the moment it enters — the SAME key falls through to the modal
+/// in the same iteration.
 ///
-/// GENERALIZED to ALL overlays: the guard only used to hold for the palette
+/// GENERALIZED to ALL overlays: the guard only used to hold for the box
 /// and the settings overlay, but the modal is painted LAST — over ANY
 /// overlay ([`crate::ui::draw`]) — while the run loop's key chain resolved
 /// BEFORE it against the theme selector, the column picker, the extension
@@ -52,7 +52,7 @@ pub fn modal_wins(app: &App) -> bool {
 ///   an overlay the reader asked for and cannot use.
 /// * a modal that ARRIVED over an already-open help does NOT lose the key. The
 ///   help is the stale one there, and [`close_stale_overlays`] is what retires
-///   it — same treatment the palette and the settings overlay already get.
+///   it — same treatment the search box and the settings overlay already get.
 ///
 /// While the help owns the keys the modal's own verbs are unreachable, which is
 /// the point: nothing gets approved through a page covering it. The modal is
@@ -523,7 +523,7 @@ mod palette_modal_guard_tests {
         assert!(a.goto.is_none());
     }
 
-    /// The guard holds for ANY overlay, not just palette/settings: the modal
+    /// The guard holds for ANY overlay, not just box/settings: the modal
     /// is painted last (over everything), so the key the user aims at what
     /// they SEE has to reach it. Before, the theme selector, the column
     /// picker, the extension manager, the nav popup, the search dialog and
