@@ -3689,6 +3689,38 @@ fn a_real_listing_ends_a_results_tab_and_restores_hidden() {
     assert!(!p.show_hidden(), "the preference comes back");
 }
 
+/// A new results tab must not start on a stale row (`pending_focus` is a
+/// folder-navigation hint), and must not restore the root's remembered
+/// cursor; a refresh keeps the cursor on the same hit, else clamps.
+#[test]
+fn results_ignore_folder_cursor_hints_and_refresh_keeps_the_hit() {
+    use crate::results::{MAX_HITS, ResultSet};
+    let hits = |names: &[&str]| -> Vec<Entry> { names.iter().map(|n| file(n)).collect() };
+    let mut p = PaneState::new(vp("mem:///casa"), vec![]);
+    p.set_pending_focus(vp("mem:///casa/b/2"));
+    p.set_listing(vp("mem:///casa"), hits(&["mem:///casa/a", "mem:///casa/b"]));
+    p.set_cursor(1);
+    p.set_pending_focus(vp("mem:///casa/c/3"));
+    p.remember_cursor();
+    let abc = ["mem:///casa/a/1", "mem:///casa/b/2", "mem:///casa/c/3"];
+    p.begin_results(
+        ResultSet::new(saved_search("mem:///casa"), MAX_HITS),
+        hits(&abc),
+    );
+    assert_eq!(p.cursor(), 0, "no stale hint, no remembered root cursor");
+    // Refresh: the cursor stays on the same hit, wherever it moved to.
+    p.set_cursor(2);
+    let set = p.results().expect("results").clone();
+    p.begin_results(
+        set.clone(),
+        hits(&["mem:///casa/z/0", abc[0], abc[1], abc[2]]),
+    );
+    assert_eq!(p.selected().map(|e| e.path.clone()), Some(vp(abc[2])));
+    // The hit is gone: clamp.
+    p.begin_results(set, hits(&[abc[0]]));
+    assert_eq!(p.cursor(), 0);
+}
+
 /// `forget` takes hits and their marks out and keeps the cursor on the
 /// next row (orthodox), without ending the result set.
 #[test]

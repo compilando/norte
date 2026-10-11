@@ -803,16 +803,23 @@ impl PaneState {
         // with hiding on loses the focus (falls back to memory/0). Fixing it
         // would require searching the stash and picking a visible neighbour;
         // a cost not paid until it actually becomes a nuisance.
-        let restored = self
-            .pending_focus
-            .take()
-            .and_then(|child| self.entries.iter().position(|e| e.path == child))
-            .or_else(|| {
-                self.cursor_memory
-                    .iter()
-                    .find(|(d, _)| *d == self.dir)
-                    .map(|&(_, c)| c)
-            });
+        //
+        // A results tab skips both: its cursor is a row among hits, not a
+        // place in `dir`, so a folder hint or the root's remembered cursor
+        // would start it on a stale row (`begin_results` restores its own).
+        let restored = if self.results.is_some() {
+            None
+        } else {
+            self.pending_focus
+                .take()
+                .and_then(|child| self.entries.iter().position(|e| e.path == child))
+                .or_else(|| {
+                    self.cursor_memory
+                        .iter()
+                        .find(|(d, _)| *d == self.dir)
+                        .map(|&(_, c)| c)
+                })
+        };
         if let Some(i) = restored {
             self.set_cursor(i);
         }
@@ -872,9 +879,21 @@ impl PaneState {
         }
         self.set_show_hidden(true);
         let root = set.root().clone();
+        // A refresh (already a results tab) keeps the cursor on the same hit
+        // if it is still there, else where it was, clamped.
+        let before = self
+            .results
+            .is_some()
+            .then(|| (self.selected().map(|e| e.path.clone()), self.cursor));
         // Before the listing is replaced: the `..` row checks it.
         self.results = Some(set);
         self.replace_listing(root, entries);
+        if let Some((path, idx)) = before {
+            let at = path
+                .and_then(|p| self.entries.iter().position(|e| e.path == p))
+                .unwrap_or(idx);
+            self.set_cursor(at);
+        }
     }
 
     /// The result set, if this pane is a results tab.

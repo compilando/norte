@@ -175,10 +175,11 @@ impl SavedSearch {
     /// reads `name · content`; with neither, `*`.
     #[must_use]
     pub fn label(&self) -> (String, bool) {
-        let raw = match (self.name.trim().is_empty(), self.content.is_empty()) {
-            (false, false) => format!("{} · {}", self.name.trim(), self.content),
-            (true, false) => self.content.clone(),
-            (false, true) => self.name.trim().to_owned(),
+        let (name, content) = (self.name.trim(), self.content.trim());
+        let raw = match (name.is_empty(), content.is_empty()) {
+            (false, false) => format!("{name} · {content}"),
+            (true, false) => content.to_owned(),
+            (false, true) => name.to_owned(),
             (true, true) => "*".to_owned(),
         };
         let (shown, hostile) = crate::display_name(raw.as_bytes());
@@ -353,6 +354,15 @@ pub fn folder_text(entry: &Entry, root: &VPath, enc: Option<NameEncoding>) -> St
     let Some(parent) = entry.path.parent() else {
         return ".".to_owned();
     };
+    // Not under the root (other scheme, authority or prefix): the relative
+    // form would be wrong, so say where the hit really is.
+    let under = parent.scheme() == root.scheme()
+        && parent.authority() == root.authority()
+        && parent.segments().count() >= root.segments().count()
+        && root.segments().zip(parent.segments()).all(|(r, p)| r == p);
+    if !under {
+        return crate::path_display_with(&parent, enc).0;
+    }
     let skip = root.segments().count();
     let parts: Vec<String> = parent
         .segments()
@@ -436,6 +446,33 @@ mod tests {
         let s: SavedSearch = serde_json::from_str(r#"{"root":"mem:///casa"}"#).expect("de");
         assert!(s.recursive);
         assert_eq!(s.kinds, SavedKinds::All);
+    }
+
+    /// Whitespace-only content must not give a blank label.
+    #[test]
+    fn a_blank_content_does_not_blank_the_label() {
+        assert_eq!(saved("*.rs", "  \t").label().0, "*.rs");
+        assert_eq!(saved("", "  ").label().0, "*");
+        assert_eq!(saved("*.rs", " aguja ").label().0, "*.rs · aguja");
+    }
+
+    /// A hit not under the root shows its full parent path, not a wrong
+    /// relative folder (a sibling with the same depth, say).
+    #[test]
+    fn folder_text_outside_the_root_is_the_full_parent() {
+        let root = vp("file:///casa/uno");
+        assert_eq!(
+            folder_text(&file("file:///otra/dos/a.rs"), &root, None),
+            "/otra/dos"
+        );
+        assert_eq!(
+            folder_text(&file("file:///casa/dos/a.rs"), &root, None),
+            "/casa/dos"
+        );
+        assert_eq!(
+            folder_text(&file("file:///casa/uno/x/a.rs"), &root, None),
+            "x"
+        );
     }
 
     /// The label: content wins over the name; both are masked; long ones
