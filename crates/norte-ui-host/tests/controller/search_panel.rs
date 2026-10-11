@@ -453,6 +453,77 @@ async fn a_run_replaced_before_its_id_is_known_is_cancelled_when_it_lands() {
     assert_eq!(search_rows(&h.snapshot().await), 1, "only the live run");
 }
 
+/// A batch of `n` files in one folder, one matching line each.
+fn many_files(n: usize) -> norte_proto::methods::SearchHits {
+    let m = norte_proto::methods::MatchInfo {
+        line: Some(1),
+        preview: Some("aguja".to_owned()),
+        offset: Some(0),
+        ranges: Some(vec![(0, 5)]),
+    };
+    norte_proto::methods::SearchHits {
+        task_id: norte_proto::TaskId::new(1),
+        entries: (0..n)
+            .map(|i| norte_proto::Entry {
+                path: VPath::parse(&format!("mem:///casa/f{i:05}.txt")).expect("vpath"),
+                kind: norte_proto::EntryKind::File,
+                size: Some(1),
+                mtime_ms: Some(0),
+                attrs: std::collections::BTreeMap::new(),
+            })
+            .collect(),
+        matches: Some(vec![m.clone(); n]),
+        all_matches: Some(vec![vec![m]; n]),
+        more: Some(vec![0; n]),
+    }
+}
+
+/// Searches `aguja` with `hits` answering, and lets them land.
+async fn search_answered(
+    h: &mut Harness,
+    fake: &Fake,
+    slot: u32,
+    hits: norte_proto::methods::SearchHits,
+) {
+    fake.answer_search_with(hits);
+    h.act(UiAction::SearchPanelEdit {
+        slot_id: slot,
+        field: "content".into(),
+        value: text("aguja"),
+    })
+    .await;
+    h.act(UiAction::SearchPanelGo { slot_id: slot }).await;
+    h.settle().await;
+}
+
+/// The wheel scrolled the results far from the cursor: the rows sent are
+/// the ones scrolled to, not the cursor's — or the renderer paints blanks.
+/// A keyboard move brings the view back around the cursor.
+#[tokio::test(start_paused = true)]
+async fn the_view_carries_the_rows_scrolled_to_and_a_key_brings_the_cursor_back() {
+    let (mut h, fake) = harness_with_fake().await;
+    let slot = h.open_slot("layout.search").await;
+    // One folder, 2000 files, a line each: 4001 rows.
+    search_answered(&mut h, &fake, slot, many_files(2000)).await;
+    let ack = h
+        .act(UiAction::SearchPanelVisibleRange {
+            slot_id: slot,
+            first: 3000,
+            count: 60,
+        })
+        .await;
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    let s = h.panel(slot).await;
+    assert_eq!(s.cursor, Some(0));
+    assert_eq!((s.first_row, s.rows.len()), (3000, 60));
+
+    h.act(UiAction::FocusSlot { slot_id: slot }).await;
+    h.act(super::base::press("ArrowDown")).await;
+    let s = h.panel(slot).await;
+    assert_eq!(s.cursor, Some(1));
+    assert_eq!(s.first_row, 0, "around the cursor again");
+}
+
 /// Enter in an empty form clears: nothing launches, and the status says
 /// what to type.
 #[tokio::test(start_paused = true)]

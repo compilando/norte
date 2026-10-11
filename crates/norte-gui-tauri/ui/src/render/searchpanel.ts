@@ -90,6 +90,9 @@ export function paintSearchPanel(
   }
   if (slot.cursor !== c.lastCursor && revealCursor(c, slot.cursor, h)) {
     c.lastCursor = slot.cursor;
+    // A cursor that moved made the host forget the window (it carries the
+    // rows around the cursor until told): say it again, even unmoved.
+    c.lastRange = null;
   }
   scheduleRange(this, c);
 }

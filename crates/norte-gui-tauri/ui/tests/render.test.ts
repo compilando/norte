@@ -7147,6 +7147,24 @@ describe("the search panel", () => {
     });
   });
 
+  it("a cursor that moved says the visible range again, even unscrolled", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPanel(panelSlot({ total_rows: 1000 })));
+    const scroller = document.querySelector<HTMLElement>(".searchpanel-scroll")!;
+    Object.defineProperty(scroller, "clientHeight", {
+      value: 10 * CELL_H,
+      configurable: true,
+    });
+    const ranges = (): UiAction[] =>
+      sent.filter((a) => a.action === "search_panel_visible_range");
+    screen.paint(withPanel(panelSlot({ total_rows: 1000 })));
+    expect(ranges()).toHaveLength(1);
+    // The host forgot the window on that key: it must hear it again.
+    screen.paint(withPanel(panelSlot({ total_rows: 1000, cursor: 3 })));
+    expect(ranges()).toHaveLength(2);
+    expect(ranges()[1]).toEqual(ranges()[0]);
+  });
+
   it("scrolling sends the visible range only when it changes", () => {
     const { screen, sent } = mount();
     screen.paint(withPanel(panelSlot({ total_rows: 1000 })));

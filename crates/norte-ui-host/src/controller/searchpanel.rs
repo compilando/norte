@@ -245,19 +245,20 @@ fn row_view(
 }
 
 /// The rows a view carries: the renderer's window, or one around the
-/// cursor; always with the cursor inside, never more than [`WINDOW_MAX`].
+/// cursor until it says; never more than [`WINDOW_MAX`].
+///
+/// The renderer's window is honoured even when the cursor is outside it:
+/// the wheel scrolled away from the cursor, and dragging the window back
+/// to it sent rows the renderer does not have in view, so it painted
+/// blanks. A keyboard move forgets the window (`window = None`), and the
+/// renderer scrolls to the cursor and says again.
 fn window_of(window: Option<(u64, u32)>, cursor: u64, total: u64) -> (u64, u64) {
     let count = u64::from(
         window
             .map_or(WINDOW_DEFAULT, |(_, c)| c)
             .clamp(1, WINDOW_MAX),
     );
-    let mut first = window.map_or_else(|| cursor.saturating_sub(count / 2), |(f, _)| f);
-    if cursor < first {
-        first = cursor;
-    } else if cursor >= first.saturating_add(count) {
-        first = cursor + 1 - count;
-    }
+    let first = window.map_or_else(|| cursor.saturating_sub(count / 2), |(f, _)| f);
     let first = first.min(total.saturating_sub(count));
     (first, first.saturating_add(count).min(total))
 }
@@ -808,6 +809,8 @@ impl State {
             Effect::End { al_final: true } => s.model.end(),
             _ => return None,
         }
+        // The view goes back around the cursor (see `window_of`).
+        s.window = None;
         Some((self.applied(), self.repaint_search_panel()))
     }
 
@@ -817,10 +820,10 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let activation = self
-            .search_panel
-            .as_mut()
-            .and_then(|(_, s)| s.model.activate());
+        let activation = self.search_panel.as_mut().and_then(|(_, s)| {
+            s.window = None;
+            s.model.activate()
+        });
         self.search_panel_activation(activation, backend, mailbox)
     }
 
@@ -840,6 +843,7 @@ impl State {
         };
         let (_, s) = self.search_panel.as_mut()?;
         s.model.fold(open);
+        s.window = None;
         Some((self.applied(), self.repaint_search_panel()))
     }
 }
@@ -848,9 +852,11 @@ impl State {
 mod tests {
     use super::window_of;
 
-    /// The window follows the cursor and never carries more than 500 rows.
+    /// With no window from the renderer the view goes around the cursor;
+    /// the renderer's window is honoured even with the cursor outside it
+    /// (a wheel scrolled away from it); never more than 500 rows.
     #[test]
-    fn the_window_keeps_the_cursor_and_its_cap() {
+    fn the_window_is_the_renderers_and_has_a_cap() {
         // Around the cursor by default.
         assert_eq!(window_of(None, 1000, 5000), (900, 1100));
         // Near the top and the end, clamped.
@@ -858,9 +864,13 @@ mod tests {
         assert_eq!(window_of(None, 4999, 5000), (4800, 5000));
         // The renderer's window, capped.
         assert_eq!(window_of(Some((40, 9999)), 40, 5000), (40, 540));
-        // A cursor outside it drags it along.
-        assert_eq!(window_of(Some((40, 30)), 100, 5000), (71, 101));
-        assert_eq!(window_of(Some((40, 30)), 10, 5000), (10, 40));
+        // A cursor outside it does NOT drag it back: the rows scrolled to
+        // are the ones sent, or the renderer paints blanks.
+        assert_eq!(window_of(Some((40, 30)), 100, 5000), (40, 70));
+        assert_eq!(window_of(Some((40, 30)), 10, 5000), (40, 70));
+        assert_eq!(window_of(Some((3000, 60)), 0, 5000), (3000, 3060));
+        // A window past a tree that shrank is pulled back inside it.
+        assert_eq!(window_of(Some((4990, 60)), 0, 5000), (4940, 5000));
         // Fewer rows than the window.
         assert_eq!(window_of(None, 2, 3), (0, 3));
         assert_eq!(window_of(None, 0, 0), (0, 0));
