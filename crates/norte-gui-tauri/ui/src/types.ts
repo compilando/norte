@@ -469,7 +469,7 @@ export interface SearchPanelSlotView {
   first_row: number;
   total_rows: number;
   /** The rows' numbering: a batch, a fold or a new run moves it. A click
-   *  echoes it back, and the host refuses an index from another one. */
+   *  echoes it back, and the host refuses an index renumbered since. */
   generation: number;
   rows: SearchPanelRowView[];
   /** In the numbering of `total_rows`; null with no rows. */

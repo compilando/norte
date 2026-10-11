@@ -2378,9 +2378,9 @@ pub struct SearchPanelSlotView {
     /// Rows the tree has, folded folders' contents left out.
     pub total_rows: u64,
     /// The generation of the rows' numbering: it moves when a batch, a
-    /// fold or a new run renumbers them. A click echoes it back
-    /// (`search_panel_activate`, `_fold`), and the host refuses an index
-    /// from another generation as stale.
+    /// fold or a new run renumbers rows (a batch that only appends does
+    /// not). A click echoes it back (`search_panel_activate`, `_fold`), and
+    /// the host refuses as stale an index renumbered since.
     pub generation: u64,
     /// The rows of the window, never more than 500.
     pub rows: Vec<SearchPanelRowView>,

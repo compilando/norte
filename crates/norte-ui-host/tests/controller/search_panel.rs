@@ -714,6 +714,68 @@ async fn a_click_from_an_older_numbering_is_refused() {
     );
 }
 
+/// A click painted before a renumbering that began BELOW its row still
+/// names the same row (a live walk mostly inserts under what is read): it
+/// is acted on. One at or after where the renumbering began is refused.
+#[tokio::test(start_paused = true)]
+async fn an_older_click_above_the_renumbering_is_accepted() {
+    let (mut h, fake) = harness_with_fake().await;
+    let slot = h.open_slot("layout.search").await;
+    let mut hits = one_file_one_line("mem:///casa/a/x.txt", 1, Some(0), "aguja", (0, 5));
+    let other = one_file_one_line("mem:///casa/b/y.txt", 1, Some(0), "aguja", (0, 5));
+    hits.entries.extend(other.entries);
+    hits.matches
+        .as_mut()
+        .expect("m")
+        .extend(other.matches.expect("m"));
+    hits.all_matches
+        .as_mut()
+        .expect("a")
+        .extend(other.all_matches.expect("a"));
+    hits.more
+        .as_mut()
+        .expect("n")
+        .extend(other.more.expect("n"));
+    search_answered(&mut h, &fake, slot, hits).await;
+    // Folder a, x, line, folder b, y, line.
+    let painted = h.panel(slot).await.generation;
+    // Folding folder b renumbers from row 4 on.
+    let ack = h
+        .act(UiAction::SearchPanelFold {
+            slot_id: slot,
+            row: 3,
+            open: false,
+            generation: painted,
+        })
+        .await;
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    assert_ne!(h.panel(slot).await.generation, painted);
+    let ack = h
+        .act(UiAction::SearchPanelActivate {
+            slot_id: slot,
+            row: 4,
+            generation: painted,
+        })
+        .await;
+    assert!(
+        matches!(ack, ActionAck::Stale { .. }),
+        "row 4 moved: {ack:?}"
+    );
+    let ack = h
+        .act(UiAction::SearchPanelFold {
+            slot_id: slot,
+            row: 0,
+            open: false,
+            generation: painted,
+        })
+        .await;
+    assert!(
+        matches!(ack, ActionAck::Applied { .. }),
+        "row 0 did not: {ack:?}"
+    );
+    assert_eq!(h.panel(slot).await.total_rows, 2, "both folders folded");
+}
+
 /// An action naming another slot, or a row that is not there, is a race:
 /// stale, and nothing happens.
 #[tokio::test(start_paused = true)]

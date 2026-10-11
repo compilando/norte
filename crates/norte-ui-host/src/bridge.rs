@@ -619,8 +619,8 @@ use serde::{Deserialize, Serialize};
 ///   the actions `search_panel_edit`, `_go`, `_reroot`, `_filters`,
 ///   `_activate`, `_fold` and `_visible_range`: the search panel (spec
 ///   2026-10-09). `SearchPanelSlotView.generation` numbers the rows'
-///   indexing, and `_activate` and `_fold` echo it back: one from another
-///   generation is refused as `StaleAction::Generation`.
+///   indexing, and `_activate` and `_fold` echo it back: a row renumbered
+///   since that generation is refused as `StaleAction::Generation`.
 pub const BRIDGE_VERSION: u32 = 111;
 
 /// Cap on a string that crosses to the renderer, in bytes.

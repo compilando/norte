@@ -707,16 +707,18 @@ impl State {
         }
     }
 
-    /// Row `row` of the panel, if it was painted in this `generation` of
-    /// the numbering and the tree has it. Another generation means a batch
-    /// or a fold renumbered the rows under the click: the index now names
-    /// another row, and acting on it would open the wrong file.
+    /// Row `row` of the panel, if the index painted in `generation` still
+    /// names the same row and the tree has it. A batch or a fold that
+    /// renumbered the rows at or above it since means the index now names
+    /// another row, and acting on it would open the wrong file; one that
+    /// only renumbered below it (a walk inserting into its last folder)
+    /// leaves the click good (`SearchPanel::same_row_since`).
     fn search_panel_row(&self, row: u64, generation: u64) -> Option<usize> {
         let (_, s) = self.search_panel.as_ref()?;
-        if generation != s.model.generation() {
+        let i = usize::try_from(row).ok()?;
+        if !s.model.same_row_since(generation, i) {
             return None;
         }
-        let i = usize::try_from(row).ok()?;
         (i < s.model.rows().len()).then_some(i)
     }
 

@@ -7,7 +7,7 @@
 //! [`SearchPanel::apply_hits`], and each frontend paints [`SearchPanel::rows`]
 //! with the Fluent keys this hands it.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use norte_proto::methods::{FsSearchParams, MatchInfo, SearchHits};
@@ -78,6 +78,8 @@ pub struct FileNode {
     pub more: u32,
     /// The first line past the shown ones: what `+N more` opens.
     next: Option<MatchLine>,
+    /// Its identity in this panel, whatever index it sorts to.
+    serial: u64,
 }
 
 /// A folder and the files found directly in it.
@@ -212,17 +214,22 @@ pub struct SearchPanel {
     cursor: usize,
     /// Moves whenever the rows are renumbered (see [`Self::generation`]).
     generation: u64,
+    /// The last renumberings: `(generation, first row whose index changed)`
+    /// — see [`Self::same_row_since`]. At most [`RENUMBERINGS_KEPT`].
+    renumberings: VecDeque<(u64, usize)>,
+    /// The next [`FileNode`] serial.
+    next_serial: u64,
     filters_open: bool,
 }
 
-/// A row by what it shows, not by its index: what the cursor holds on to
-/// while a batch renumbers the rows.
-enum Anchor {
-    Folder(usize),
-    File(usize, VPath),
-    Line(usize, VPath, usize),
-    More(usize, VPath),
-}
+/// Renumberings remembered: a click older than this many is refused.
+const RENUMBERINGS_KEPT: usize = 64;
+
+/// A row by what it shows, not by its index: `(kind, folder, file serial,
+/// line)`. Folders are appended and never move; files sort in by name, so
+/// they are named by serial. What the cursor holds on to, and how a batch
+/// tells which rows it renumbered.
+type Anchor = (u8, usize, u64, usize);
 
 impl SearchPanel {
     /// An empty panel searching under `root`.
@@ -242,18 +249,54 @@ impl SearchPanel {
             collapsed: BTreeSet::new(),
             cursor: 0,
             generation: 0,
+            renumberings: VecDeque::new(),
+            next_serial: 0,
             filters_open: false,
         }
     }
 
     /// The generation of the rows' numbering. It moves whenever an index
-    /// could name another row than before — a batch, a fold, a new run —
-    /// and not when only the cursor moves. A frontend that acts on a row
+    /// could name another row than before — a batch that sorts a file in
+    /// above existing rows, a fold, a new run — and not when only the
+    /// cursor moves or a batch only appends. A frontend that acts on a row
     /// by index across a round trip (the window's click) echoes it back,
-    /// and an index from another generation is refused, not acted on.
+    /// and the host checks it with [`Self::same_row_since`].
     #[must_use]
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Does row `row`, painted in `generation`, still name the same row?
+    /// Yes in the current generation, and in an older one when every
+    /// renumbering since began BELOW it (a walk mostly inserts into its
+    /// last folder, under what is being read). No for a generation from
+    /// the future or older than the history kept.
+    #[must_use]
+    pub fn same_row_since(&self, generation: u64, row: usize) -> bool {
+        if generation == self.generation {
+            return true;
+        }
+        if generation > self.generation
+            || self
+                .renumberings
+                .front()
+                .is_none_or(|(g, _)| *g > generation + 1)
+        {
+            return false;
+        }
+        self.renumberings
+            .iter()
+            .filter(|(g, _)| *g > generation)
+            .all(|(_, from)| *from > row)
+    }
+
+    /// The rows from `from` on were renumbered: a new generation.
+    fn renumbered(&mut self, from: usize) {
+        self.generation += 1;
+        self.renumberings.push_back((self.generation, from));
+        if self.renumberings.len() > RENUMBERINGS_KEPT {
+            self.renumberings.pop_front();
+        }
     }
 
     /// The form, to paint it.
@@ -331,7 +374,7 @@ impl SearchPanel {
         self.folders.clear();
         self.collapsed.clear();
         self.cursor = 0;
-        self.generation += 1;
+        self.renumbered(0);
     }
 
     /// What to do once the pause is over; `None` before, and after it was
@@ -399,9 +442,11 @@ impl SearchPanel {
             return false;
         }
         self.replace_if_due();
-        // Files sort in by name, so a batch can land ABOVE the cursor: it
-        // holds on to its row, not to its index.
-        let anchor = self.rows().get(self.cursor).map(|r| self.anchor(*r));
+        // Files sort in by name, so a batch can land ABOVE existing rows:
+        // the cursor holds on to its row, not to its index, and the rows
+        // from the first one that moved are renumbered.
+        let before: Vec<Anchor> = self.rows().into_iter().map(|r| self.anchor(r)).collect();
+        let anchor = before.get(self.cursor).copied();
         let mut files = self.run.as_ref().map_or(0, |r| r.files);
         for (i, entry) in hits.entries.iter().enumerate() {
             if files >= MAX_FILES as usize {
@@ -430,22 +475,27 @@ impl SearchPanel {
                 Vec::new()
             };
             let more = wire_more.saturating_add(u32::try_from(past.len()).unwrap_or(u32::MAX));
+            self.next_serial += 1;
             self.insert(FileNode {
                 entry: entry.clone(),
                 matches,
                 more,
                 next: past.into_iter().next(),
+                serial: self.next_serial,
             });
             files += 1;
         }
         if let Some(run) = self.run.as_mut() {
-            if files != run.files {
-                self.generation += 1;
-            }
             run.files = files;
         }
+        let after: Vec<Anchor> = self.rows().into_iter().map(|r| self.anchor(r)).collect();
+        // A batch that only appended renumbers nothing: a click painted
+        // before it still names the same row.
+        if let Some(from) = before.iter().zip(&after).position(|(b, a)| b != a) {
+            self.renumbered(from);
+        }
         if let Some(anchor) = anchor
-            && let Some(i) = self.rows().iter().position(|r| self.shows(*r, &anchor))
+            && let Some(i) = after.iter().position(|a| *a == anchor)
         {
             self.cursor = i;
         }
@@ -455,28 +505,12 @@ impl SearchPanel {
 
     /// What row `r` shows, independent of where it is.
     fn anchor(&self, r: Row) -> Anchor {
-        let path = |folder: usize, file: usize| self.tree[folder].files[file].entry.path.clone();
+        let serial = |folder: usize, file: usize| self.tree[folder].files[file].serial;
         match r {
-            Row::Folder { folder } => Anchor::Folder(folder),
-            Row::File { folder, file } => Anchor::File(folder, path(folder, file)),
-            Row::Line { folder, file, line } => Anchor::Line(folder, path(folder, file), line),
-            Row::More { folder, file } => Anchor::More(folder, path(folder, file)),
-        }
-    }
-
-    /// Does row `r` show `a`? Without cloning a path per row.
-    fn shows(&self, row: Row, anchor: &Anchor) -> bool {
-        let path = |folder: usize, file: usize| &self.tree[folder].files[file].entry.path;
-        match (row, anchor) {
-            (Row::Folder { folder }, Anchor::Folder(at)) => folder == *at,
-            (Row::File { folder, file }, Anchor::File(at, held))
-            | (Row::More { folder, file }, Anchor::More(at, held)) => {
-                folder == *at && path(folder, file) == held
-            }
-            (Row::Line { folder, file, line }, Anchor::Line(at, held, nth)) => {
-                folder == *at && line == *nth && path(folder, file) == held
-            }
-            _ => false,
+            Row::Folder { folder } => (0, folder, 0, 0),
+            Row::File { folder, file } => (1, folder, serial(folder, file), 0),
+            Row::Line { folder, file, line } => (2, folder, serial(folder, file), line),
+            Row::More { folder, file } => (3, folder, serial(folder, file), 0),
         }
     }
 
@@ -642,7 +676,9 @@ impl SearchPanel {
                 } else {
                     self.collapsed.insert(dir)
                 };
-                self.generation += u64::from(changed);
+                if changed {
+                    self.renumbered(self.cursor + 1);
+                }
                 self.clamp();
             }
             Some(
@@ -665,7 +701,7 @@ impl SearchPanel {
                 if !self.collapsed.remove(dir) {
                     self.collapsed.insert(dir.clone());
                 }
-                self.generation += 1;
+                self.renumbered(self.cursor + 1);
                 self.clamp();
                 Some(Activation::Toggled)
             }
@@ -969,6 +1005,59 @@ mod tests {
         let e2 = launched(&mut p, t0 + DEBOUNCE * 2);
         p.apply_hits(e2, &batch(&[("mem:///r/z.txt", vec![mi(1)], 0)]));
         assert_ne!(p.generation(), g3, "a new run");
+    }
+
+    /// A batch that only appends rows renumbers none: a new folder at the
+    /// end, or a file that sorts last in the last folder. A live walk does
+    /// this most of the time, and a click painted before it still names
+    /// the same row.
+    #[test]
+    fn an_append_only_batch_keeps_the_generation() {
+        let (mut p, e, _) = searching("ag");
+        p.apply_hits(e, &batch(&[("mem:///r/a/m.txt", vec![mi(1)], 0)]));
+        let g = p.generation();
+        p.apply_hits(e, &batch(&[("mem:///r/a/z.txt", vec![mi(1)], 0)]));
+        p.apply_hits(e, &batch(&[("mem:///r/b/x.txt", vec![mi(1)], 0)]));
+        assert_eq!(p.generation(), g);
+        assert_eq!(p.rows().len(), 8, "a, m, line, z, line, b, x, line");
+    }
+
+    /// An older generation still names the same row ABOVE where every
+    /// renumbering since began, and no longer names one at or below it.
+    #[test]
+    fn an_older_generation_names_the_rows_above_the_change() {
+        let (mut p, e, _) = searching("ag");
+        p.apply_hits(e, &batch(&[("mem:///r/a/m.txt", vec![mi(1)], 0)]));
+        let g = p.generation();
+        // Folder a, File m, Line → Folder a, File b, Line, File m, Line.
+        p.apply_hits(e, &batch(&[("mem:///r/a/b.txt", vec![mi(1)], 0)]));
+        assert_ne!(p.generation(), g);
+        assert!(p.same_row_since(g, 0), "the folder header did not move");
+        assert!(!p.same_row_since(g, 1), "row 1 is another file now");
+        assert!(!p.same_row_since(g, 2));
+        assert!(p.same_row_since(p.generation(), 4), "the current one");
+        assert!(!p.same_row_since(p.generation() + 1, 0), "a future one");
+        // A fold of folder `a` (row 0) renumbers from row 1 on.
+        let g2 = p.generation();
+        p.set_cursor(0);
+        p.fold(false);
+        assert!(p.same_row_since(g2, 0));
+        assert!(!p.same_row_since(g2, 1));
+        assert!(p.same_row_since(g, 0), "row 0 never moved since g");
+    }
+
+    /// A generation older than the history kept is not trusted.
+    #[test]
+    fn a_generation_past_the_history_is_refused() {
+        let (mut p, e, _) = searching("ag");
+        p.apply_hits(e, &batch(&[("mem:///r/a/m.txt", vec![mi(1)], 0)]));
+        let g = p.generation();
+        for _ in 0..200 {
+            p.set_cursor(0);
+            p.fold(false);
+            p.fold(true);
+        }
+        assert!(!p.same_row_since(g, 0));
     }
 
     /// A new query starts unfolded: the folds were the previous results'.

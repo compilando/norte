@@ -777,9 +777,10 @@ pub enum UiAction {
     },
     /// A click on a result row: a folder folds, a file is gone to in the
     /// listing, a line opens in the viewer at it. An INDEX into the rows,
-    /// never a path — so it carries the numbering's `generation`, and one
-    /// from another (a batch landed between the paint and the click) is
-    /// refused as stale instead of acting on whatever row moved there.
+    /// never a path — so it carries the numbering's `generation`. A row
+    /// that a batch or a fold renumbered since (at or above where that
+    /// renumbering began) is refused as stale instead of acting on
+    /// whatever row moved there; one above every such change is acted on.
     SearchPanelActivate {
         /// The panel's slot.
         slot_id: u32,
@@ -790,7 +791,7 @@ pub enum UiAction {
     },
     /// A click on a folder's ▸/▾: unfolds (`open`) or folds it; from a row
     /// inside a folder, folding climbs to its header. Refused as stale like
-    /// `SearchPanelActivate` when `generation` is not the tree's.
+    /// `SearchPanelActivate` when its row was renumbered since `generation`.
     SearchPanelFold {
         /// The panel's slot.
         slot_id: u32,
