@@ -9,6 +9,20 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Search panel** (protocol 0.86, bridge 111). `Alt+Shift+F`
+  (`layout.search`, in all seven presets), its rail button or Find →
+  Search panel opens it in both frontends. It searches 300 ms after you
+  stop typing, cancelling the previous run, and shows folder → file →
+  every matching line with the match highlighted and centred, up to 50
+  lines per file and then "+N more". Switches for case, whole word and
+  regex, and a fold of filters; in the terminal `F7` searches from the
+  current folder. Enter or a click on a line opens the viewer at it with
+  the match lit; on a file, the pane goes to its folder. Past 256 KiB the
+  viewer reads a window around the line ("lines from N"); UTF-16 and
+  multi-byte legacy encodings that large open at the top. The protocol
+  returns every matching line with its offset and ranges
+  (`max_matches_per_file`), in batches bounded by the lines kept. The
+  `Alt+F7` dialog is unchanged.
 - **Your own commands on a key** (ADR 0177, bridge 110).
   `~/.config/norte/commands.toml` declares programs to run on the marked
   files or the cursor file, with `%f`, `%F` and `%d`. Bind one with
@@ -65,6 +79,8 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- In the window, starting a search stops the one it replaces; before, the
+  old one kept walking the disk.
 - **The terminal's disk map paints every class in a colour of its own**
   (#423): rectangles came out in the text colour, and audio, video and
   code as holes in the panel. They are filled with the class colour the
@@ -109,6 +125,8 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- In Spanish, the processes panel is called "Tareas" and the log panel
+  "Log".
 - **The command palette is the search box with `>`.** Its keys are the
   same; go-to no longer mixes commands into its places list — type `>` for
   them. Krusader, Far, Norton and Total Commander still have no
