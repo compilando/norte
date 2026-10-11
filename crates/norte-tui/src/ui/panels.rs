@@ -360,11 +360,14 @@ fn text_lines<'a>(
             if ranges.is_empty() {
                 return Line::raw(row);
             }
-            let positions: Vec<u32> = ranges
+            let mut positions: Vec<u32> = ranges
                 .iter()
                 .flat_map(|&(s, e)| s..e)
                 .filter_map(|c| u32::try_from(c).ok())
                 .collect();
+            // `marked_spans` binary-searches them.
+            positions.sort_unstable();
+            positions.dedup();
             Line::from(super::overlays::marked_spans(
                 &row,
                 &positions,
@@ -2037,6 +2040,38 @@ pub(crate) fn draw_search_panel(
     state.select(panel.cursor().checked_sub(window.start));
     *state.offset_mut() = 0;
     frame.render_stateful_widget(list, tree_area, &mut state);
+}
+
+#[cfg(test)]
+mod text_lines_tests {
+    use super::*;
+
+    /// Ranges out of order (the daemon's, or a viewer that found the text
+    /// twice) still light every span: `marked_spans` binary-searches its
+    /// positions, so they are fed sorted.
+    #[test]
+    fn unordered_ranges_light_every_span() {
+        let mut v = crate::viewer::Viewer::new(
+            norte_proto::VPath::parse("mem:///a.txt").expect("wire"),
+            b"aguja x aguja\n".to_vec(),
+            false,
+        );
+        v.aim(&norte_frontend::viewer::ViewerTarget {
+            line: 1,
+            offset: Some(0),
+            preview: "aguja x aguja".to_owned(),
+            ranges: vec![(8, 13), (0, 5)],
+        });
+        let theme = TuiTheme::default();
+        let lines = text_lines(&v, 1, &theme);
+        let lit: Vec<String> = lines[0]
+            .spans
+            .iter()
+            .filter(|s| s.style == theme.role(Role::Match))
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(lit, vec!["aguja", "aguja"]);
+    }
 }
 
 #[cfg(test)]

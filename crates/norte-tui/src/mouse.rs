@@ -2418,17 +2418,7 @@ pub async fn on_mouse(
         self::After::PlacesActivate => {
             app.abandon_pending(resolver);
             if let Some(path) = app.places_activate() {
-                let pane = app.focus();
-                let outcome = cd_in(app, backend, events, pane, path, Trail::Record).await;
-                settle_cd(
-                    app,
-                    backend,
-                    &mut work.fill,
-                    &mut work.decorate,
-                    &mut work.probed,
-                    &mut work.search,
-                    outcome,
-                );
+                focused_to(app, backend, events, work, path).await;
             }
         }
         // And the tree branch, through the SAME `cd` flow as its `Enter`
@@ -2437,17 +2427,7 @@ pub async fn on_mouse(
         self::After::TreeActivate => {
             app.abandon_pending(resolver);
             if let Some(path) = app.tree_activate() {
-                let pane = app.focus();
-                let outcome = cd_in(app, backend, events, pane, path, Trail::Record).await;
-                settle_cd(
-                    app,
-                    backend,
-                    &mut work.fill,
-                    &mut work.decorate,
-                    &mut work.probed,
-                    &mut work.search,
-                    outcome,
-                );
+                focused_to(app, backend, events, work, path).await;
             }
         }
         // A search result pressed twice: the SAME path as `Enter` in the
@@ -2457,4 +2437,26 @@ pub async fn on_mouse(
             crate::searchpanel::activate(app, backend, events, work).await;
         }
     }
+}
+
+/// Takes the focused listing to `path` through the usual `cd` flow, as a
+/// sidebar or tree row's `Enter` does.
+async fn focused_to(
+    app: &mut crate::app::App,
+    backend: &norte_core::backend::Backend,
+    events: &mut crate::console::Console<'_>,
+    work: &mut crate::jobs::InFlight,
+    path: norte_proto::VPath,
+) {
+    let pane = app.focus();
+    let outcome = cd_in(app, backend, events, pane, path, Trail::Record).await;
+    settle_cd(
+        app,
+        backend,
+        &mut work.fill,
+        &mut work.decorate,
+        &mut work.probed,
+        &mut work.search,
+        outcome,
+    );
 }

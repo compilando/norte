@@ -611,8 +611,8 @@ use serde::{Deserialize, Serialize};
 ///   `ViewChange::Palette`: `app.palette` opens the go-to box with `>`.
 /// - **110**: the action `user_command_finished { label, finished, refresh }`
 ///   (ADR 0177): how a user command run in the background ended. Sent by the
-///   shell, never the renderer, like `program_finished`. (109 is another
-///   branch's.)
+///   shell, never the renderer, like `program_finished`. (109 was never
+///   used.)
 /// - **111**: `ViewerView.highlight` and `lines_from`; `SlotView::Search`
 ///   (`SearchPanelSlotView`, with a window of `SearchPanelRowView` rows —
 ///   `folder`, `file`, `line`, `more` — that travels as a `slot` change) and

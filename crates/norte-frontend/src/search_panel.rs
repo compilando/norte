@@ -323,9 +323,13 @@ impl SearchPanel {
         self.deadline = Some(now);
     }
 
+    /// Empties the results. The folds go with them: a new query starts
+    /// unfolded (when its first answer replaces the old results, which stay
+    /// as they were, dimmed, until then).
     fn clear_tree(&mut self) {
         self.tree.clear();
         self.folders.clear();
+        self.collapsed.clear();
         self.cursor = 0;
         self.generation += 1;
     }
@@ -461,16 +465,16 @@ impl SearchPanel {
     }
 
     /// Does row `r` show `a`? Without cloning a path per row.
-    fn shows(&self, r: Row, a: &Anchor) -> bool {
+    fn shows(&self, row: Row, anchor: &Anchor) -> bool {
         let path = |folder: usize, file: usize| &self.tree[folder].files[file].entry.path;
-        match (r, a) {
-            (Row::Folder { folder }, Anchor::Folder(f)) => folder == *f,
-            (Row::File { folder, file }, Anchor::File(f, p))
-            | (Row::More { folder, file }, Anchor::More(f, p)) => {
-                folder == *f && path(folder, file) == p
+        match (row, anchor) {
+            (Row::Folder { folder }, Anchor::Folder(at)) => folder == *at,
+            (Row::File { folder, file }, Anchor::File(at, held))
+            | (Row::More { folder, file }, Anchor::More(at, held)) => {
+                folder == *at && path(folder, file) == held
             }
-            (Row::Line { folder, file, line }, Anchor::Line(f, p, l)) => {
-                folder == *f && line == *l && path(folder, file) == p
+            (Row::Line { folder, file, line }, Anchor::Line(at, held, nth)) => {
+                folder == *at && line == *nth && path(folder, file) == held
             }
             _ => false,
         }
@@ -514,6 +518,17 @@ impl SearchPanel {
             run.outcome = outcome;
         }
         self.clamp();
+    }
+
+    /// The run in flight was cancelled by the frontend ("search here"
+    /// stops it at once, before the pause decides whether anything
+    /// relaunches): it reads as cancelled, and what it found stays.
+    pub fn stop(&mut self) {
+        if let Some(run) = self.run.as_mut()
+            && run.outcome == Outcome::Running
+        {
+            run.outcome = Outcome::Cancelled;
+        }
     }
 
     /// Is a run still going?
@@ -954,6 +969,39 @@ mod tests {
         let e2 = launched(&mut p, t0 + DEBOUNCE * 2);
         p.apply_hits(e2, &batch(&[("mem:///r/z.txt", vec![mi(1)], 0)]));
         assert_ne!(p.generation(), g3, "a new run");
+    }
+
+    /// A new query starts unfolded: the folds were the previous results'.
+    #[test]
+    fn a_new_launch_starts_unfolded() {
+        let (mut p, e, t0) = searching("ag");
+        p.apply_hits(e, &batch(&[("mem:///r/a/m.txt", vec![mi(1)], 0)]));
+        p.fold(false);
+        assert_eq!(p.rows().len(), 1);
+        typed(&mut p, "agu", t0 + DEBOUNCE);
+        let e2 = launched(&mut p, t0 + DEBOUNCE * 2);
+        p.apply_hits(e2, &batch(&[("mem:///r/a/m.txt", vec![mi(1)], 0)]));
+        assert_eq!(p.rows().len(), 3, "folder, file, line");
+    }
+
+    /// The run was cancelled from outside ("search here") and nothing may
+    /// relaunch (an unreadable form): it is not still running.
+    #[test]
+    fn a_stopped_run_is_not_running() {
+        let (mut p, e, _) = searching("ag");
+        p.apply_hits(e, &batch(&[("mem:///r/a/m.txt", vec![mi(1)], 0)]));
+        assert!(p.is_running());
+        p.stop();
+        assert!(!p.is_running());
+        assert!(matches!(
+            p.status(),
+            PanelStatus::Run {
+                key: "search-panel-cancelled",
+                files: 1,
+                ..
+            }
+        ));
+        assert_eq!(p.tree()[0].files.len(), 1, "what it found stays");
     }
 
     #[test]

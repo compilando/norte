@@ -1205,14 +1205,16 @@ enum Background {
     /// about a search that does not exist, while the error passed through
     /// the status bar and the next key swept it away.
     SearchBroken(u64, Box<Error>),
-    /// A batch of the search panel's run `epoch`.
+    /// A batch of the search panel's run `run` — the HOST-WIDE run id
+    /// (`searchpanel::PanelRunHost::run`), not the model's epoch, which
+    /// starts over with every panel.
     SearchPanelHits(u64, Box<norte_proto::methods::SearchHits>),
-    /// The search panel's run `epoch` has a Task: this is its id. Arrives
+    /// The search panel's run `run` has a Task: this is its id. Arrives
     /// right after its `TaskNew`, so the row is on the board by then.
     SearchPanelLive(u64, norte_proto::TaskId),
-    /// The search panel's run `epoch` never got queued, and why.
+    /// The search panel's run `run` never got queued, and why.
     SearchPanelBroken(u64, Box<Error>),
-    /// The search panel's run `epoch` sent its last batch: how its Task
+    /// The search panel's run `run` sent its last batch: how its Task
     /// stood when the channel closed. Through the forwarder and not the
     /// board's progress, so it lands AFTER the run's last batch.
     SearchPanelEnded(u64, Box<norte_proto::TaskState>),

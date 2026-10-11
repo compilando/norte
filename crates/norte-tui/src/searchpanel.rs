@@ -270,6 +270,7 @@ fn on_input_key(
         // Search here: the panel moves to the listing's folder, and what
         // runs under the old one stops.
         KeyCode::F(7) if plain => {
+            p.stop();
             p.set_root(root, now());
             cancel(&mut work.search_panel);
         }

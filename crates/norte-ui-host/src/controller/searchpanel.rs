@@ -653,9 +653,12 @@ impl State {
             }
             UiAction::SearchPanelReroot { .. } => {
                 let root = self.slot().pane.dir().clone();
-                // What runs under the old root stops now, not at the tic.
+                // What runs under the old root stops now, not at the tic;
+                // the model hears it, or an unreadable form (nothing
+                // relaunches) left it "running" with no walk.
                 self.abandon_panel_run();
                 if let Some((_, s)) = self.search_panel.as_mut() {
+                    s.model.stop();
                     s.model.set_root(root, now());
                 }
                 Self::schedule_search_panel_tic(mailbox);

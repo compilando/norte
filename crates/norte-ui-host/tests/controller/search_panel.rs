@@ -157,7 +157,7 @@ async fn opening_the_panel_makes_it_the_active_slot() {
         .placements
         .iter()
         .find(|p| p.slot_id == slot)
-        .and_then(|p| p.role.clone());
+        .and_then(|p| p.role);
     assert_eq!(role, Some(norte_ui_host::dto::SlotRole::Active));
 }
 
@@ -370,6 +370,86 @@ async fn a_line_not_held_without_an_offset_opens_at_the_top_and_says_so() {
         snap.status.message.as_deref(),
         Some(norte_i18n::t_in(norte_i18n::Lang::Es, "viewer-target-past-cap").as_str())
     );
+}
+
+/// Activating a FILE row takes the listing to its folder with the cursor
+/// on it, byte for byte, and the keys back to the listing.
+#[tokio::test(start_paused = true)]
+async fn activating_a_file_goes_to_it_in_the_listing() {
+    let (mut h, fake) = harness_with_fake().await;
+    let slot = h.open_slot("layout.search").await;
+    search_answered(
+        &mut h,
+        &fake,
+        slot,
+        one_file_one_line("mem:///casa/docs/b.md", 1, Some(0), "aguja", (0, 5)),
+    )
+    .await;
+    // Folder `docs`, then its file.
+    activate_row(&mut h, slot, 1).await;
+    for _ in 0..3 {
+        h.settle().await;
+    }
+    let snap = h.snapshot().await;
+    // The panel docks on the left: the listing is not the first slot.
+    let l = snap
+        .slots
+        .iter()
+        .find_map(|s| match s {
+            SlotView::Browser(b) => Some(b),
+            _ => None,
+        })
+        .expect("a listing");
+    assert!(l.path_display.contains("docs"), "{}", l.path_display);
+    let under_cursor = l
+        .rows
+        .iter()
+        .find(|r| Some(r.key) == l.cursor)
+        .map(|r| r.display_name.clone());
+    assert_eq!(under_cursor.as_deref(), Some("b.md"));
+    let active = snap
+        .layout
+        .placements
+        .iter()
+        .find(|p| p.role == Some(norte_ui_host::dto::SlotRole::Active))
+        .map(|p| p.slot_id);
+    assert_eq!(active, Some(l.slot_id), "the keys are the listing's");
+    assert!(snap.viewer.is_none());
+}
+
+/// "Search here" stops the run at once; if the form then cannot be read
+/// nothing relaunches, and the panel must not keep saying it is searching.
+#[tokio::test(start_paused = true)]
+async fn rerooting_with_an_unreadable_form_ends_the_run() {
+    let (mut h, _fake) = harness_with_fake().await;
+    let slot = h.open_slot("layout.search").await;
+    h.act(UiAction::SearchPanelEdit {
+        slot_id: slot,
+        field: "content".into(),
+        value: text("aguja"),
+    })
+    .await;
+    h.act(UiAction::SearchPanelGo { slot_id: slot }).await;
+    h.settle().await;
+    assert!(h.panel(slot).await.running);
+    h.act(UiAction::SearchPanelEdit {
+        slot_id: slot,
+        field: "regex".into(),
+        value: DialogFieldValue::Toggled,
+    })
+    .await;
+    h.act(UiAction::SearchPanelEdit {
+        slot_id: slot,
+        field: "content".into(),
+        value: text("(agu"),
+    })
+    .await;
+    h.act(UiAction::SearchPanelReroot { slot_id: slot }).await;
+    tokio::time::advance(DEBOUNCE).await;
+    h.settle().await;
+    let s = h.panel(slot).await;
+    assert_eq!(s.unreadable.as_deref(), Some("content"));
+    assert!(!s.running, "no walk is left, so nothing is running");
 }
 
 /// Review Focus 5: closing the panel cancels the run and forgets its row.

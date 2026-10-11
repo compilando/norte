@@ -368,6 +368,25 @@ async fn a_second_query_cancels_the_first_run() {
     );
 }
 
+/// F7 ("search here") cancels the run at once; the panel stops saying it
+/// is searching even if nothing relaunches after the pause.
+#[tokio::test]
+async fn f7_ends_the_run_it_cancels() {
+    tokio::time::pause();
+    let (mut app, backend, mut work, mut resolver, mem) =
+        harness_with_tree(&[("a.txt", "aguja\n")]).await;
+    mem.faults()
+        .set_latency_per_op(Some(std::time::Duration::from_mins(1)));
+    app.toggle_search_panel();
+    type_in(&mut app, &backend, &mut work, &mut resolver, "ag").await;
+    tokio::time::sleep(DEBOUNCE).await;
+    searchpanel::tick(&mut app, &backend, &mut work).await;
+    assert!(panel(&app).is_running());
+    key(&mut app, &backend, &mut work, &mut resolver, KeyCode::F(7)).await;
+    assert!(work.search_panel.is_none(), "cancelled");
+    assert!(!panel(&app).is_running());
+}
+
 /// Review Focus 5: closing the panel cancels the run.
 #[tokio::test]
 async fn closing_the_panel_cancels_its_run() {
