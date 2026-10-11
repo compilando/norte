@@ -6923,6 +6923,7 @@ const panelSlot = (over: Partial<SearchPanelSlotView> = {}): SearchPanelSlotView
   dimmed: false,
   first_row: 0,
   total_rows: 3,
+  generation: 4,
   cursor: 2,
   rows: [
     { row: "folder", path: "/casa", hostile: false, count: 1, open: true },
@@ -7110,7 +7111,25 @@ describe("the search panel", () => {
     const { screen, sent } = mount();
     screen.paint(withPanel(panelSlot()));
     (document.querySelectorAll(".searchpanel-row")[2] as HTMLElement).click();
-    expect(sent.at(-1)).toEqual({ action: "search_panel_activate", slot_id: 9, row: 2 });
+    expect(sent.at(-1)).toEqual({
+      action: "search_panel_activate",
+      slot_id: 9,
+      row: 2,
+      generation: 4,
+    });
+  });
+
+  it("a click echoes the generation of the paint it was made on", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPanel(panelSlot()));
+    screen.paint(withPanel(panelSlot({ generation: 5 })));
+    (document.querySelectorAll(".searchpanel-row")[1] as HTMLElement).click();
+    expect(sent.at(-1)).toEqual({
+      action: "search_panel_activate",
+      slot_id: 9,
+      row: 1,
+      generation: 5,
+    });
   });
 
   it("a click on a folder's chevron folds it, not activates it", () => {
@@ -7122,6 +7141,7 @@ describe("the search panel", () => {
       slot_id: 9,
       row: 0,
       open: false,
+      generation: 4,
     });
   });
 
@@ -7144,6 +7164,7 @@ describe("the search panel", () => {
       action: "search_panel_activate",
       slot_id: 9,
       row: 101,
+      generation: 4,
     });
   });
 

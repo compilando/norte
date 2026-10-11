@@ -299,6 +299,7 @@ impl State {
             dimmed: model.is_dimmed(),
             first_row: first,
             total_rows: total,
+            generation: model.generation(),
             rows: (first..end)
                 .map(|i| {
                     row_view(
@@ -666,8 +667,10 @@ impl State {
                 }
                 (self.applied(), self.repaint_search_panel())
             }
-            UiAction::SearchPanelActivate { row, .. } => {
-                let Some(i) = self.search_panel_row(*row) else {
+            UiAction::SearchPanelActivate {
+                row, generation, ..
+            } => {
+                let Some(i) = self.search_panel_row(*row, *generation) else {
                     return (Self::stale(StaleAction::Generation), Vec::new());
                 };
                 let activation = self.search_panel.as_mut().and_then(|(_, s)| {
@@ -676,8 +679,13 @@ impl State {
                 });
                 self.search_panel_activation(activation, backend, mailbox)
             }
-            UiAction::SearchPanelFold { row, open, .. } => {
-                let Some(i) = self.search_panel_row(*row) else {
+            UiAction::SearchPanelFold {
+                row,
+                open,
+                generation,
+                ..
+            } => {
+                let Some(i) = self.search_panel_row(*row, *generation) else {
                     return (Self::stale(StaleAction::Generation), Vec::new());
                 };
                 if let Some((_, s)) = self.search_panel.as_mut() {
@@ -696,10 +704,15 @@ impl State {
         }
     }
 
-    /// Row `row` of the panel, if the tree has it: one past the end means
-    /// the tree changed under the click, and it is not clamped.
-    fn search_panel_row(&self, row: u64) -> Option<usize> {
+    /// Row `row` of the panel, if it was painted in this `generation` of
+    /// the numbering and the tree has it. Another generation means a batch
+    /// or a fold renumbered the rows under the click: the index now names
+    /// another row, and acting on it would open the wrong file.
+    fn search_panel_row(&self, row: u64, generation: u64) -> Option<usize> {
         let (_, s) = self.search_panel.as_ref()?;
+        if generation != s.model.generation() {
+            return None;
+        }
         let i = usize::try_from(row).ok()?;
         (i < s.model.rows().len()).then_some(i)
     }

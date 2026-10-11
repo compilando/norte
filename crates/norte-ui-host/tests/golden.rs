@@ -599,6 +599,7 @@ fn overlay_actions() -> Vec<(&'static str, UiAction)> {
             UiAction::SearchPanelActivate {
                 slot_id: 15,
                 row: 2,
+                generation: 7,
             },
         ),
         (
@@ -607,6 +608,7 @@ fn overlay_actions() -> Vec<(&'static str, UiAction)> {
                 slot_id: 15,
                 row: 0,
                 open: false,
+                generation: 7,
             },
         ),
         (
@@ -1657,6 +1659,7 @@ fn reference_slots() -> Vec<SlotView> {
             dimmed: true,
             first_row: 1,
             total_rows: 5,
+            generation: 7,
             rows: vec![
                 norte_ui_host::dto::SearchPanelRowView::Folder {
                     path: "docs".to_owned(),

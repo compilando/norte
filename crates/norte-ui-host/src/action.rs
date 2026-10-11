@@ -777,15 +777,20 @@ pub enum UiAction {
     },
     /// A click on a result row: a folder folds, a file is gone to in the
     /// listing, a line opens in the viewer at it. An INDEX into the rows,
-    /// never a path.
+    /// never a path — so it carries the numbering's `generation`, and one
+    /// from another (a batch landed between the paint and the click) is
+    /// refused as stale instead of acting on whatever row moved there.
     SearchPanelActivate {
         /// The panel's slot.
         slot_id: u32,
         /// The row, in the numbering of `total_rows`.
         row: u64,
+        /// The view's `generation` the row was painted in.
+        generation: u64,
     },
     /// A click on a folder's ▸/▾: unfolds (`open`) or folds it; from a row
-    /// inside a folder, folding climbs to its header.
+    /// inside a folder, folding climbs to its header. Refused as stale like
+    /// `SearchPanelActivate` when `generation` is not the tree's.
     SearchPanelFold {
         /// The panel's slot.
         slot_id: u32,
@@ -793,6 +798,8 @@ pub enum UiAction {
         row: u64,
         /// Unfold.
         open: bool,
+        /// The view's `generation` the row was painted in.
+        generation: u64,
     },
     /// The rows the renderer has in view (virtual scroll): the window the
     /// panel's view carries. Capped at 500 rows.

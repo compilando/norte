@@ -269,10 +269,17 @@ async fn activate_the_line(h: &mut Harness, fake: &Fake, slot: u32, line: u64, o
     .await;
     h.act(UiAction::SearchPanelGo { slot_id: slot }).await;
     h.settle().await;
+    activate_row(h, slot, 2).await;
+}
+
+/// Activates row `row` as a click on the panel's current paint does.
+async fn activate_row(h: &mut Harness, slot: u32, row: u64) {
+    let generation = h.panel(slot).await.generation;
     let ack = h
         .act(UiAction::SearchPanelActivate {
             slot_id: slot,
-            row: 2,
+            row,
+            generation,
         })
         .await;
     assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
@@ -541,6 +548,49 @@ async fn an_empty_form_launches_nothing() {
     assert!(s.rows.is_empty() && s.cursor.is_none());
 }
 
+/// A click painted before a batch renumbered the rows names a row by an
+/// index that now holds another: refused as stale, and nothing opens.
+#[tokio::test(start_paused = true)]
+async fn a_click_from_an_older_numbering_is_refused() {
+    let (mut h, fake) = harness_with_fake().await;
+    let slot = h.open_slot("layout.search").await;
+    search_answered(&mut h, &fake, slot, many_files(3)).await;
+    let s = h.panel(slot).await;
+    let ack = h
+        .act(UiAction::SearchPanelActivate {
+            slot_id: slot,
+            row: 2,
+            generation: s.generation.wrapping_sub(1),
+        })
+        .await;
+    assert!(
+        matches!(
+            ack,
+            ActionAck::Stale {
+                reason: StaleAction::Generation,
+                ..
+            }
+        ),
+        "{ack:?}"
+    );
+    h.settle().await;
+    assert!(h.snapshot().await.viewer.is_none(), "nothing opened");
+    let ack = h
+        .act(UiAction::SearchPanelFold {
+            slot_id: slot,
+            row: 0,
+            open: false,
+            generation: s.generation.wrapping_add(1),
+        })
+        .await;
+    assert!(matches!(ack, ActionAck::Stale { .. }), "{ack:?}");
+    assert_eq!(
+        h.panel(slot).await.total_rows,
+        s.total_rows,
+        "nothing folded"
+    );
+}
+
 /// An action naming another slot, or a row that is not there, is a race:
 /// stale, and nothing happens.
 #[tokio::test(start_paused = true)]
@@ -553,10 +603,12 @@ async fn a_stale_slot_or_row_is_refused() {
         })
         .await;
     assert!(matches!(ack, ActionAck::Stale { .. }), "{ack:?}");
+    let generation = h.panel(slot).await.generation;
     let ack = h
         .act(UiAction::SearchPanelActivate {
             slot_id: slot,
             row: 9,
+            generation,
         })
         .await;
     assert!(matches!(ack, ActionAck::Stale { .. }), "{ack:?}");

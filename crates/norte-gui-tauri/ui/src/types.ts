@@ -468,6 +468,9 @@ export interface SearchPanelSlotView {
   /** `rows[i]` is row `first_row + i` of `total_rows`; 500 at most. */
   first_row: number;
   total_rows: number;
+  /** The rows' numbering: a batch, a fold or a new run moves it. A click
+   *  echoes it back, and the host refuses an index from another one. */
+  generation: number;
   rows: SearchPanelRowView[];
   /** In the numbering of `total_rows`; null with no rows. */
   cursor: number | null;
@@ -2019,9 +2022,21 @@ export type UiAction =
   /** "Search here": the focused listing's folder. */
   | { action: "search_panel_reroot"; slot_id: number }
   | { action: "search_panel_filters"; slot_id: number }
-  /** A click on a row, by its index in `total_rows`. */
-  | { action: "search_panel_activate"; slot_id: number; row: number }
-  | { action: "search_panel_fold"; slot_id: number; row: number; open: boolean }
+  /** A click on a row, by its index in `total_rows` and the `generation`
+   *  of the view it was painted from. */
+  | {
+      action: "search_panel_activate";
+      slot_id: number;
+      row: number;
+      generation: number;
+    }
+  | {
+      action: "search_panel_fold";
+      slot_id: number;
+      row: number;
+      open: boolean;
+      generation: number;
+    }
   /** The rows in view (virtual scroll); 500 at most travel. */
   | {
       action: "search_panel_visible_range";

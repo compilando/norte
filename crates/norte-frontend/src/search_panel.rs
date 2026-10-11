@@ -210,7 +210,18 @@ pub struct SearchPanel {
     folders: BTreeMap<VPath, usize>,
     collapsed: BTreeSet<VPath>,
     cursor: usize,
+    /// Moves whenever the rows are renumbered (see [`Self::generation`]).
+    generation: u64,
     filters_open: bool,
+}
+
+/// A row by what it shows, not by its index: what the cursor holds on to
+/// while a batch renumbers the rows.
+enum Anchor {
+    Folder(usize),
+    File(usize, VPath),
+    Line(usize, VPath, usize),
+    More(usize, VPath),
 }
 
 impl SearchPanel {
@@ -230,8 +241,19 @@ impl SearchPanel {
             folders: BTreeMap::new(),
             collapsed: BTreeSet::new(),
             cursor: 0,
+            generation: 0,
             filters_open: false,
         }
+    }
+
+    /// The generation of the rows' numbering. It moves whenever an index
+    /// could name another row than before — a batch, a fold, a new run —
+    /// and not when only the cursor moves. A frontend that acts on a row
+    /// by index across a round trip (the window's click) echoes it back,
+    /// and an index from another generation is refused, not acted on.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// The form, to paint it.
@@ -305,6 +327,7 @@ impl SearchPanel {
         self.tree.clear();
         self.folders.clear();
         self.cursor = 0;
+        self.generation += 1;
     }
 
     /// What to do once the pause is over; `None` before, and after it was
@@ -372,6 +395,9 @@ impl SearchPanel {
             return false;
         }
         self.replace_if_due();
+        // Files sort in by name, so a batch can land ABOVE the cursor: it
+        // holds on to its row, not to its index.
+        let anchor = self.rows().get(self.cursor).map(|r| self.anchor(*r));
         let mut files = self.run.as_ref().map_or(0, |r| r.files);
         for (i, entry) in hits.entries.iter().enumerate() {
             if files >= MAX_FILES as usize {
@@ -409,10 +435,45 @@ impl SearchPanel {
             files += 1;
         }
         if let Some(run) = self.run.as_mut() {
+            if files != run.files {
+                self.generation += 1;
+            }
             run.files = files;
+        }
+        if let Some(anchor) = anchor
+            && let Some(i) = self.rows().iter().position(|r| self.shows(*r, &anchor))
+        {
+            self.cursor = i;
         }
         self.clamp();
         true
+    }
+
+    /// What row `r` shows, independent of where it is.
+    fn anchor(&self, r: Row) -> Anchor {
+        let path = |folder: usize, file: usize| self.tree[folder].files[file].entry.path.clone();
+        match r {
+            Row::Folder { folder } => Anchor::Folder(folder),
+            Row::File { folder, file } => Anchor::File(folder, path(folder, file)),
+            Row::Line { folder, file, line } => Anchor::Line(folder, path(folder, file), line),
+            Row::More { folder, file } => Anchor::More(folder, path(folder, file)),
+        }
+    }
+
+    /// Does row `r` show `a`? Without cloning a path per row.
+    fn shows(&self, r: Row, a: &Anchor) -> bool {
+        let path = |folder: usize, file: usize| &self.tree[folder].files[file].entry.path;
+        match (r, a) {
+            (Row::Folder { folder }, Anchor::Folder(f)) => folder == *f,
+            (Row::File { folder, file }, Anchor::File(f, p))
+            | (Row::More { folder, file }, Anchor::More(f, p)) => {
+                folder == *f && path(folder, file) == p
+            }
+            (Row::Line { folder, file, line }, Anchor::Line(f, p, l)) => {
+                folder == *f && line == *l && path(folder, file) == p
+            }
+            _ => false,
+        }
     }
 
     /// Into its folder (made on first sight, in arrival order), sorted by name.
@@ -561,11 +622,12 @@ impl SearchPanel {
         match rows.get(self.cursor) {
             Some(Row::Folder { folder }) => {
                 let dir = self.tree[*folder].dir.clone();
-                if open {
-                    self.collapsed.remove(&dir);
+                let changed = if open {
+                    self.collapsed.remove(&dir)
                 } else {
-                    self.collapsed.insert(dir);
-                }
+                    self.collapsed.insert(dir)
+                };
+                self.generation += u64::from(changed);
                 self.clamp();
             }
             Some(
@@ -588,6 +650,7 @@ impl SearchPanel {
                 if !self.collapsed.remove(dir) {
                     self.collapsed.insert(dir.clone());
                 }
+                self.generation += 1;
                 self.clamp();
                 Some(Activation::Toggled)
             }
@@ -849,6 +912,48 @@ mod tests {
             panic!("view")
         };
         assert_eq!(target.line, 51);
+    }
+
+    /// A batch that sorts a file in ABOVE the cursor's row does not move
+    /// the cursor to another row: it stays on the same line of the same
+    /// file, at its new index.
+    #[test]
+    fn the_cursor_stays_on_its_row_when_a_batch_lands_above_it() {
+        let (mut p, e, _) = searching("ag");
+        p.apply_hits(e, &batch(&[("mem:///r/a/m.txt", vec![mi(1), mi(2)], 0)]));
+        p.set_cursor(3); // Folder, File m, Line 1, Line 2
+        p.apply_hits(e, &batch(&[("mem:///r/a/b.txt", vec![mi(5)], 0)]));
+        // Folder, File b, Line 5, File m, Line 1, Line 2
+        assert_eq!(p.cursor(), 5);
+        let Some(Activation::View { path, target }) = p.activate() else {
+            panic!("view")
+        };
+        assert_eq!((path, target.line), (vp("mem:///r/a/m.txt"), 2));
+    }
+
+    /// The rows' numbering has a generation: whatever renumbers them (a
+    /// batch, a fold, a new run) moves it, and an index from an older one
+    /// is not this tree's.
+    #[test]
+    fn the_generation_moves_with_the_rows() {
+        let (mut p, e, t0) = searching("ag");
+        let g0 = p.generation();
+        p.apply_hits(e, &batch(&[("mem:///r/a/m.txt", vec![mi(1)], 0)]));
+        let g1 = p.generation();
+        assert_ne!(g1, g0, "a batch");
+        p.down(1);
+        assert_eq!(p.generation(), g1, "a cursor move renumbers nothing");
+        p.set_cursor(0);
+        p.fold(false);
+        let g2 = p.generation();
+        assert_ne!(g2, g1, "a fold");
+        assert!(matches!(p.activate(), Some(Activation::Toggled)));
+        assert_ne!(p.generation(), g2, "a fold by Enter");
+        let g3 = p.generation();
+        typed(&mut p, "agu", t0 + DEBOUNCE);
+        let e2 = launched(&mut p, t0 + DEBOUNCE * 2);
+        p.apply_hits(e2, &batch(&[("mem:///r/z.txt", vec![mi(1)], 0)]));
+        assert_ne!(p.generation(), g3, "a new run");
     }
 
     #[test]

@@ -347,6 +347,7 @@
   },
   "search_panel_activate": {
     "action": "search_panel_activate",
+    "generation": 7,
     "row": 2,
     "slot_id": 15
   },
@@ -365,6 +366,7 @@
   },
   "search_panel_fold": {
     "action": "search_panel_fold",
+    "generation": 7,
     "open": false,
     "row": 0,
     "slot_id": 15

@@ -49,6 +49,8 @@ interface Controls {
   /** The row elements of the window, in order; `first` is the first one's index. */
   rows: HTMLElement[];
   first: number;
+  /** The numbering the rows were painted in: a click echoes it back. */
+  generation: number;
   /** The window last asked of the host: it is only asked again if it moves. */
   lastRange: { first: number; count: number } | null;
   lastCursor: number | null;
@@ -75,6 +77,7 @@ export function paintSearchPanel(
     controlsOf.set(dom, c);
   }
   c.slotId = slot.slot_id;
+  c.generation = slot.generation;
   if (dom.scroller.firstChild !== c.body || dom.scroller.childNodes.length !== 1) {
     // The node is reused by whatever slot kind comes next: put the panel back.
     dom.scroller.replaceChildren(c.body);
@@ -239,10 +242,16 @@ function createControls(
         slot_id: current().slotId,
         row,
         open: li.dataset["open"] !== "true",
+        generation: current().generation,
       });
       return;
     }
-    screen.send({ action: "search_panel_activate", slot_id: current().slotId, row });
+    screen.send({
+      action: "search_panel_activate",
+      slot_id: current().slotId,
+      row,
+      generation: current().generation,
+    });
   });
   scroll.addEventListener("scroll", () => {
     measureRange(screen, current());
@@ -266,6 +275,7 @@ function createControls(
     tree,
     rows: [],
     first: 0,
+    generation: slot.generation,
     lastRange: null,
     lastCursor: null,
     measuring: false,

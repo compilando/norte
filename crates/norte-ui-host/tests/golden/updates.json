@@ -1519,6 +1519,7 @@
         "filters_open": true,
         "filters_set": 1,
         "first_row": 1,
+        "generation": 7,
         "kind": "search",
         "root": "/casa",
         "root_hostile": false,
