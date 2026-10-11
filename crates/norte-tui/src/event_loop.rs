@@ -16,7 +16,9 @@
 //! not interface strings but the diagnostic `anyhow` prints when the process
 //! dies, which is exactly the use the previous `.context` gave them.
 
-use crate::app::{App, CompareState, SearchState, detail_for_bar, error_category};
+use norte_frontend::search_status::Outcome;
+
+use crate::app::{App, CompareState, detail_for_bar, error_category};
 use crate::config::{self, Layers};
 use crate::config_reload::reload_config;
 use crate::console::Console;
@@ -1157,7 +1159,7 @@ pub async fn run(
                 // reading the `None` it moves to terminal and this arm is
                 // left pending.
                 match &mut work.search {
-                    Some(s) if s.state == SearchState::Running => s.rx.recv().await,
+                    Some(s) if s.outcome == Outcome::Running => s.rx.recv().await,
                     _ => std::future::pending().await,
                 }
             } => {
@@ -1728,7 +1730,7 @@ async fn switches_profile(
 pub fn watch_targets(app: &App) -> [Option<std::path::PathBuf>; 2] {
     std::array::from_fn(|i| {
         let p = &app.panes[i];
-        if p.virtual_search {
+        if p.is_results() {
             return None;
         }
         norte_vfs_local::vpath_to_native(p.dir()).ok()

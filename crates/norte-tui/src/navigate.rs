@@ -378,7 +378,7 @@ pub fn reconcile_swap(
     // The LIVE search stores its virtual pane the way the fill stored its
     // own, and this is where it HAS to flip: the same call site harvests
     // with `reap_search_run` right after `apply_cd`, and that harvest looks
-    // at `panes[s.pane].virtual_search` — with the index not flipped it sees
+    // at `panes[s.pane].is_results()` — with the index not flipped it sees
     // the ordinary listing that just arrived from the other side and
     // silently cancels the Task, leaving the other pane with half-done hits
     // stuck in `Running` forever. There is at most ONE run (there is one
@@ -642,7 +642,7 @@ pub async fn cd_in(
         && let Some(dest) = norte_frontend::nav::mirrored_destination(
             app.panes[pane].dir(),
             app.panes[other].dir(),
-            app.panes[other].virtual_search,
+            app.panes[other].is_results(),
         )
     {
         // `Box::pin` because it is recursion in an `async fn`. A single

@@ -325,7 +325,10 @@ pub(crate) fn pane_columns(
     norte_frontend::columns::fitted_columns(
         settings,
         pane.dir().scheme(),
-        pane.state().is_results(),
+        // Task 3 is behaviour-preserving: the Alt+F7 takeover has never
+        // painted a Folder column, so it stays off until Task 4 turns the
+        // takeover into a results tab (then this is `pane.is_results()`).
+        false,
         inner_w,
         wants,
         catalog,

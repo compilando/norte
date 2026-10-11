@@ -440,7 +440,7 @@ pub async fn refresh_panes_where(
         // and `reap` would cancel the Task without the user leaving (review
         // MINOR-1). Its hits live outside the FS: there is no real dir to
         // reload.
-        if app.panes[i].virtual_search {
+        if app.panes[i].is_results() {
             continue;
         }
         let dir = app.panes[i].dir().clone();
@@ -559,7 +559,7 @@ pub fn after_panes_refresh(
 /// if it is still alive (rule 3).
 pub fn reap_search_run(app: &App, search_run: &mut Option<SearchRun>) {
     if let Some(s) = search_run.as_ref()
-        && !app.panes[s.pane].virtual_search
+        && !app.panes[s.pane].is_results()
     {
         s.task.cancel();
         *search_run = None;

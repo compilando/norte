@@ -197,21 +197,24 @@ fn tab_toggles_focus_between_the_two_panes() {
 /// not drag previews from the earlier one — a name-only hit from query B
 /// would paint query A's :line.
 #[test]
-fn begin_search_clears_previous_previews() {
+fn a_new_result_set_starts_without_previews() {
+    use norte_frontend::results::{MAX_HITS, ResultSet, SavedSearch};
     let mut p = pane_with(&[(b"a.rs", EntryKind::File)]);
     let root = vp("file:///casa");
-    p.begin_search(root.clone());
-    p.search_matches.insert(
-        root.join(norte_proto::Segment::new(b"a.rs".to_vec()).unwrap()),
+    let hit = root.join(norte_proto::Segment::new(b"a.rs".to_vec()).unwrap());
+    let saved = SavedSearch::from_form(&norte_frontend::search::SearchForm::new(), root);
+    p.begin_results(ResultSet::new(saved.clone(), MAX_HITS));
+    p.results_mut().expect("results").seed_matches(vec![(
+        hit.clone(),
         norte_proto::methods::MatchInfo {
             line: Some(7),
             preview: Some("vieja".into()),
             ..Default::default()
         },
-    );
-    p.begin_search(root);
+    )]);
+    p.begin_results(ResultSet::new(saved, MAX_HITS));
     assert!(
-        p.search_matches.is_empty(),
-        "the map clears when the search restarts"
+        p.results().expect("results").match_of(&hit).is_none(),
+        "the previews are the old set's: a new set starts without them"
     );
 }

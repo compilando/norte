@@ -491,7 +491,14 @@ fn snapshot_search_pane_virtual() {
     let mut app = app_base();
     let root = vp("file:///casa");
     let pane = app.focused_mut();
-    pane.begin_search(root.clone());
+    let saved = norte_frontend::results::SavedSearch::from_form(
+        &norte_frontend::search::SearchForm::new(),
+        root.clone(),
+    );
+    pane.begin_results(norte_frontend::results::ResultSet::new(
+        saved,
+        norte_frontend::results::MAX_HITS,
+    ));
     pane.extend_listing(vec![
         entry(
             &vp("file:///casa/src"),

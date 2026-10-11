@@ -533,7 +533,14 @@ mod compare_tests {
     #[test]
     fn a_virtual_pane_cannot_be_compared() {
         let mut app = app_at("file:///a", "file:///b");
-        app.panes[1].begin_search(vp("file:///b"));
+        let saved = norte_frontend::results::SavedSearch::from_form(
+            &norte_frontend::search::SearchForm::new(),
+            vp("file:///b"),
+        );
+        app.panes[1].begin_results(norte_frontend::results::ResultSet::new(
+            saved,
+            norte_frontend::results::MAX_HITS,
+        ));
         app.request_compare();
         assert!(app.pending_compare.is_none());
         assert_eq!(app.message, Some(norte_i18n::t("msg-pane-not-a-location")));

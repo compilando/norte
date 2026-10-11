@@ -77,7 +77,7 @@ pub fn spawn_organize_plan(
 ) {
     use crate::jobs::OrganizeRun;
 
-    if app.focused().virtual_search {
+    if app.focused().is_results() {
         app.message = Some(t("msg-ai-rename-in-search"));
         return;
     }

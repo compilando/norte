@@ -11,7 +11,10 @@ use norte_i18n::{t, ta};
 use norte_proto::VPath;
 use norte_proto::methods::{FsSearchParams, SearchHits};
 
-use crate::app::{App, SearchDialog, SearchState, detail_for_bar, error_category, error_message};
+use norte_frontend::results::{MAX_HITS, ResultSet, SavedSearch};
+use norte_frontend::search_status::{Outcome, outcome_of};
+
+use crate::app::{App, SearchDialog, detail_for_bar, error_category, error_message};
 use crate::fill::Fill;
 use crate::navigate::{cd, settle_cd};
 use crate::probes::{DecorateFetch, Probed};
@@ -34,17 +37,10 @@ pub struct SearchRun {
     /// Accumulated hits (== `panes[pane].entries().len()`, its own counter so
     /// it doesn't depend on the pane's re-sort).
     pub hits: usize,
-    /// The run's state: `Running` while the walker emits; terminal once the
-    /// channel closes (read from `TaskProgress`).
-    pub state: SearchState,
+    /// The run's outcome: `Running` while the walker emits; terminal once
+    /// the channel closes (read from `TaskProgress`).
+    pub outcome: Outcome,
 }
-
-/// Default cap of hits for a live search (`Alt+F7`, liveSearch T6): the v1
-/// dialog doesn't expose the field, so a reasonable cap is fixed — it bounds
-/// the virtual pane's memory (hits accumulate in `entries`) and makes the
-/// `Truncated` state reachable. On reaching it, the Task completes and the
-/// status bar shows "truncated".
-pub const SEARCH_MAX_HITS: u32 = 10_000;
 
 /// Translates a search dialog key (`Alt+F7`, liveSearch T6) into an effect
 /// on `App::search_dialog`. Fixed keys like the rest of the overlays (#24);
@@ -111,14 +107,14 @@ pub fn on_search_dialog_key(
 /// and a mapping that asked for the time on its own couldn't be tested
 /// without waiting.
 ///
-/// `max_hits` is fixed to the default cap ([`SEARCH_MAX_HITS`]) — the v1
+/// `max_hits` is fixed to the default cap ([`MAX_HITS`]) — the v1
 /// dialog doesn't expose it.
 #[must_use]
 pub fn search_params(dialog: &SearchDialog, root: VPath) -> FsSearchParams {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0_i64, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-    norte_frontend::search::params(dialog, root, now_ms, SEARCH_MAX_HITS)
+    norte_frontend::search::params(dialog, root, now_ms, MAX_HITS)
 }
 
 /// Launches the search: `backend.search` → Err leaves the dialog open and
@@ -143,9 +139,15 @@ pub async fn launch_search(
             // it's the place the reader was. If the root can ever be typed
             // in, the trail needs `prev_dir`, not `dir()`.
             let prev_dir = app.panes[pane].dir().clone();
+            // The query the dialog still holds travels with the results (a
+            // missing dialog, in tests, saves an empty one).
+            let saved = app.search_dialog.as_ref().map_or_else(
+                || SavedSearch::from_form(&SearchDialog::new(), root.clone()),
+                |d| SavedSearch::from_form(d, root.clone()),
+            );
             app.search_dialog = None;
             app.message = None;
-            app.panes[pane].begin_search(root);
+            app.panes[pane].begin_results(ResultSet::new(saved, MAX_HITS));
             // The pane becomes virtual: a paginated fill in flight for THIS
             // pane (dir still loading) would feed the real listing as hits
             // (review MAJOR T6) — it's dropped right away (belt-and-braces;
@@ -159,7 +161,7 @@ pub async fn launch_search(
                 pane,
                 prev_dir,
                 hits: 0,
-                state: SearchState::Running,
+                outcome: Outcome::Running,
             }) {
                 old.task.cancel();
             }
@@ -186,21 +188,20 @@ pub fn drain_search(app: &mut App, search_run: &mut Option<SearchRun>, hits: Opt
         return;
     };
     if let Some(batch) = hits {
-        if app.panes[s.pane].virtual_search {
+        if let Some(results) = app.panes[s.pane].results_mut() {
             // #81: the match's context (line + preview, sanitized AT THE
-            // SOURCE by the core) is saved by path — the status bar paints
-            // it for the hit under the cursor. The pane's view stays flat
-            // (v1).
-            if let Some(infos) = batch.matches {
-                // Wire contract: aligned 1:1. A server bug sending fewer
-                // matches would truncate the zip SILENTLY — noisy in dev.
-                debug_assert_eq!(batch.entries.len(), infos.len(), "matches out of alignment");
-                for (e, info) in batch.entries.iter().zip(infos) {
-                    app.panes[s.pane]
-                        .search_matches
-                        .insert(e.path.clone(), info);
-                }
-            }
+            // SOURCE by the core) is saved by path in the result set — the
+            // status bar paints it for the hit under the cursor.
+            // Wire contract: aligned 1:1. A server bug sending fewer
+            // matches would truncate the zip SILENTLY — noisy in dev.
+            debug_assert!(
+                batch
+                    .matches
+                    .as_ref()
+                    .is_none_or(|m| m.len() == batch.entries.len()),
+                "matches out of alignment"
+            );
+            results.note_hits(&batch);
             let n = batch.entries.len();
             app.panes[s.pane].extend_listing(batch.entries);
             s.hits += n;
@@ -210,37 +211,32 @@ pub fn drain_search(app: &mut App, search_run: &mut Option<SearchRun>, hits: Opt
         }
     } else {
         // Channel closed: the walker finished. Non-blocking terminal state.
-        let state = finalize_search_state(s);
-        s.state = state;
-        app.panes[s.pane].search_state = state;
+        let outcome = finalize_outcome(s);
+        s.outcome = outcome.clone();
         // The concrete detail goes to the status bar ONCE (error_message);
-        // the pane keeps the CATEGORY to paint `search-status-failed`
-        // persistently after the message clears (review MINOR-2).
-        if state == SearchState::Failed {
+        // the result set keeps the CATEGORY (inside `Outcome::Failed`) to
+        // paint `search-status-failed` persistently after the message
+        // clears (review MINOR-2).
+        if matches!(outcome, Outcome::Failed(_)) {
             let mut rx = s.task.progress();
             if let norte_proto::TaskState::Failed { error } = rx.borrow_and_update().state.clone() {
-                app.panes[s.pane].search_error = Some(error_category(&error));
                 app.message = Some(error_message(&error));
             }
+        }
+        if let Some(results) = app.panes[s.pane].results_mut() {
+            results.set_outcome(outcome);
         }
     }
 }
 
 /// Reads a [`SearchRun`]'s terminal state from `TaskProgress` (non-blocking)
-/// and maps it to [`SearchState`]. `Completed` with hits at the cap =
-/// `Truncated`; without the cap = `Done`. A channel closed without a
-/// terminal state published yet (a race) is treated as `Done` (the walker no
-/// longer emits).
-pub fn finalize_search_state(s: &SearchRun) -> SearchState {
+/// and maps it to an [`Outcome`] (the cap, `Truncated` in the old terms, is
+/// the result set's `at_cap`, read when the status is painted). A channel
+/// closed without a terminal state published yet (a race) is treated as
+/// `Done` (the walker no longer emits).
+pub fn finalize_outcome(s: &SearchRun) -> Outcome {
     let mut rx = s.task.progress();
-    match rx.borrow_and_update().state.clone() {
-        norte_proto::TaskState::Cancelled => SearchState::Cancelled,
-        norte_proto::TaskState::Failed { .. } => SearchState::Failed,
-        norte_proto::TaskState::Completed if s.hits >= SEARCH_MAX_HITS as usize => {
-            SearchState::Truncated
-        }
-        _ => SearchState::Done,
-    }
+    outcome_of(&rx.borrow_and_update().state, error_category).unwrap_or(Outcome::Done)
 }
 
 /// Esc in the search virtual pane (liveSearch T6): with the Task alive, asks
@@ -259,7 +255,7 @@ pub async fn on_search_escape(
     let Some(s) = search_run.as_ref() else {
         return;
     };
-    if s.state == SearchState::Running {
+    if s.outcome == Outcome::Running {
         s.task.cancel();
         return;
     }
@@ -296,7 +292,7 @@ pub async fn on_search_enter(
         return;
     };
     if let Some(s) = search_run.as_ref()
-        && s.state == SearchState::Running
+        && s.outcome == Outcome::Running
     {
         s.task.cancel();
     }

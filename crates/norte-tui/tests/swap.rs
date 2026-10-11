@@ -3,9 +3,10 @@
 //! does not do is harvest anything along the way.
 
 use norte_core::backend::TaskRef;
+use norte_frontend::search_status::Outcome;
 use norte_proto::VPath;
 use norte_proto::methods::SearchHits;
-use norte_tui::app::{App, Pane, SearchState};
+use norte_tui::app::{App, Pane};
 use norte_tui::event_loop::watch_targets;
 use norte_tui::fill::{Fill, FillMsg};
 use norte_tui::jobs::SearchRun;
@@ -41,7 +42,7 @@ fn search_run(pane: usize) -> SearchRun {
         pane,
         prev_dir: vp("file:///antes"),
         hits: 0,
-        state: SearchState::Running,
+        outcome: Outcome::Running,
     }
 }
 
@@ -215,7 +216,14 @@ fn a_swap_does_not_harvest_the_live_search() {
         Pane::new(vp("file:///der"), Vec::new()),
     );
     // Live search on pane 0 (`Alt+F7` left it virtual).
-    app.panes[0].begin_search(vp("file:///izq"));
+    let saved = norte_frontend::results::SavedSearch::from_form(
+        &norte_frontend::search::SearchForm::new(),
+        vp("file:///izq"),
+    );
+    app.panes[0].begin_results(norte_frontend::results::ResultSet::new(
+        saved,
+        norte_frontend::results::MAX_HITS,
+    ));
     let mut sr = Some(search_run(0));
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     let mut df: norte_frontend::layout::BySlot<DecorateFetch> =
@@ -237,7 +245,7 @@ fn a_swap_does_not_harvest_the_live_search() {
         .expect("the search in progress is NOT cancelled");
     assert_eq!(s.pane, 1, "the hits follow to their new side");
     assert!(
-        app.panes[s.pane].virtual_search,
+        app.panes[s.pane].is_results(),
         "and that side is the one in search mode"
     );
 }

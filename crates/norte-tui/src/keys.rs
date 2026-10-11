@@ -1157,7 +1157,7 @@ pub async fn on_key(
         if app.viewer.is_none()
             && key.modifiers.is_empty()
             && app.focused().quick().is_none()
-            && app.focused().virtual_search
+            && app.focused().is_results()
             && work.search.as_ref().is_some_and(|s| s.pane == app.focus())
         {
             match key.code {

@@ -633,7 +633,7 @@ pub async fn dispatch(
         // VIRTUAL pane there is no visible destination directory (review
         // MINOR-2: `dir()` is the walk's root, not what is painted).
         Command::PaneMkdir => {
-            if app.focused().virtual_search {
+            if app.focused().is_results() {
                 app.message = Some(t("msg-mkdir-in-search"));
             } else {
                 app.open_mkdir();
@@ -644,7 +644,7 @@ pub async fn dispatch(
         // as `PaneMkdir`). The prompt's keys and the request live in the
         // run loop (Tier-A interception + `AiRenameRun`).
         Command::PaneAiRename => {
-            if app.focused().virtual_search {
+            if app.focused().is_results() {
                 app.message = Some(t("msg-ai-rename-in-search"));
             } else {
                 app.open_ai_rename();
@@ -657,7 +657,7 @@ pub async fn dispatch(
         // same place as an `organizer` plugin's, and is reviewed the same
         // way.
         Command::PaneOrganize => {
-            if app.focused().virtual_search {
+            if app.focused().is_results() {
                 app.message = Some(t("msg-ai-rename-in-search"));
             } else {
                 app.pending_organize = true;
@@ -669,7 +669,7 @@ pub async fn dispatch(
         // prompt's keys and the request live in the run loop (Tier-A
         // interception + `SemanticRun`).
         Command::PaneSemanticSearch => {
-            if app.focused().virtual_search {
+            if app.focused().is_results() {
                 app.message = Some(t("msg-semantic-in-search"));
             } else {
                 app.open_semantic_search();

@@ -46,8 +46,8 @@ pub use inflight::{
     Published, RenameBatchRun, SemanticRun,
 };
 pub use search::{
-    SEARCH_MAX_HITS, SearchRun, drain_search, finalize_search_state, launch_search,
-    on_search_dialog_key, on_search_enter, on_search_escape, search_params,
+    SearchRun, drain_search, finalize_outcome, launch_search, on_search_dialog_key,
+    on_search_enter, on_search_escape, search_params,
 };
 pub use sync::{
     SyncKey, SyncRun, SyncTick, approve_sync, drain_sync_plan, harvest_sync_apply,

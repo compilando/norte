@@ -951,16 +951,23 @@ fn preview_of_the_match_under_the_cursor_in_the_bar() {
         mtime_ms: None,
     };
     let pane = app.focused_mut();
-    pane.begin_search(dir);
+    let saved = norte_frontend::results::SavedSearch::from_form(
+        &norte_frontend::search::SearchForm::new(),
+        dir,
+    );
+    pane.begin_results(norte_frontend::results::ResultSet::new(
+        saved,
+        norte_frontend::results::MAX_HITS,
+    ));
     pane.extend_listing(vec![hit.clone()]);
-    pane.search_matches.insert(
+    pane.results_mut().expect("results").seed_matches(vec![(
         hit.path,
         norte_proto::methods::MatchInfo {
             line: Some(42),
             preview: Some("fn main() { hola }\u{1b}[31m\u{202e}".into()),
             ..Default::default()
         },
-    );
+    )]);
     let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let content = terminal.backend().to_string();
