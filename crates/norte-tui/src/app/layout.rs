@@ -921,6 +921,8 @@ impl App {
         let id = self.mint_slot();
         self.panes
             .insert_search_panel(id, norte_frontend::search_panel::SearchPanel::new(root));
+        // A new panel is typed into: the caret starts in the name.
+        self.search_panel_focus = crate::searchpanel::SearchFocus::default();
         let d = self.dock_for(crate::searchpanel::KIND);
         self.layout = self.layout.dock_grouped(
             self.focused_slot(),
@@ -929,6 +931,20 @@ impl App {
             &Node::slot(id, KindId::new(crate::searchpanel::KIND)),
         );
         self.panes.refresh_visible(&self.layout);
+        self.key_owner = KeyOwner::Search;
+    }
+
+    /// A click on row `index` of the search panel's results: the cursor goes
+    /// there, and the keyboard to the results.
+    pub fn search_panel_click(&mut self, index: usize) {
+        let Some(p) = self
+            .search_panel_slot()
+            .and_then(|s| self.panes.search_panel_mut(s))
+        else {
+            return;
+        };
+        p.set_cursor(index);
+        self.search_panel_focus = crate::searchpanel::SearchFocus::Tree;
         self.key_owner = KeyOwner::Search;
     }
 

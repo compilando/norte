@@ -905,6 +905,13 @@ fn side_panel_click(app: &mut App, col: u16, row: u16) -> Option<After> {
             crate::app::TreeClick::Activate => After::TreeActivate,
         });
     }
+    // A search result: the cursor and the keyboard go to it.
+    if let Some(index) = search_row_at(app, col, row) {
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        app.search_panel_click(index);
+        return Some(After::Nothing);
+    }
     // A timeline row: selected, and its details open (2026-10-08).
     let index = timeline_row_at(app, col, row)?;
     app.mouse.drag.cancel();
@@ -925,6 +932,25 @@ fn timeline_row_at(app: &App, col: u16, row: u16) -> Option<usize> {
         .filter(|y| *y < rect.height.saturating_sub(2))?;
     let t = app.panes.timeline(slot)?;
     let window = crate::ui::timeline_window(t, rect.height.saturating_sub(2));
+    let index = window.start.checked_add(usize::from(y))?;
+    window.contains(&index).then_some(index)
+}
+
+/// The search panel's result row under `(col, row)`, inside its border and
+/// below its form, against the window `draw_search_panel` paints.
+fn search_row_at(app: &App, col: u16, row: u16) -> Option<usize> {
+    let slot = app.search_panel_slot()?;
+    let rect = app.mouse.slots.iter().find(|s| s.slot == slot)?;
+    let width = rect.width.saturating_sub(2);
+    col.checked_sub(rect.x.saturating_add(1))
+        .filter(|x| *x < width)?;
+    let p = app.panes.search_panel(slot)?;
+    let header = crate::ui::search_panel_header(p, width);
+    let height = rect.height.saturating_sub(2).saturating_sub(header);
+    let y = row
+        .checked_sub(rect.y.saturating_add(1).saturating_add(header))
+        .filter(|y| *y < height)?;
+    let window = crate::ui::search_panel_window(p, height);
     let index = window.start.checked_add(usize::from(y))?;
     window.contains(&index).then_some(index)
 }

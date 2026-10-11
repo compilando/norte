@@ -224,6 +224,10 @@ pub async fn on_key(
     } else if !modal_wins(app)
         // Typing the log's filter is a text field: its keys are its own.
         && app.log_filter_input.is_none()
+        // Nor the search panel's inputs — but only for the keys that type:
+        // a chord with ctrl/alt writes nothing, and `alt+F` has to close
+        // the panel it opened with the caret already in it.
+        && !crate::searchpanel::types_text(app, key.modifiers)
         && matches!(
             app.key_owner(),
             crate::app::KeyOwner::Tree
@@ -232,6 +236,7 @@ pub async fn on_key(
                 | crate::app::KeyOwner::Log
                 | crate::app::KeyOwner::DiskMap
                 | crate::app::KeyOwner::Timeline
+                | crate::app::KeyOwner::Search
                 | crate::app::KeyOwner::Panel
                 // The terminal too, as in the window, but with its OWN short
                 // list: the ring and `terminal.*`. The panels' list would
@@ -339,6 +344,11 @@ pub async fn on_key(
         // It is async because reaching the bottom asks for the next page and
         // because Enter opens the undo question, which needs the backend.
         on_timeline_key(app, backend, dialog_resolver, key.modifiers, key.code).await;
+    } else if app.key_owner() == crate::app::KeyOwner::Search && !modal_wins(app) {
+        // The search panel, for the same reason as its neighbors: what is
+        // typed into it must not reach the listing behind it.
+        crate::searchpanel::on_key(app, backend, work, dialog_resolver, key.modifiers, key.code)
+            .await;
     } else if app.key_owner() == crate::app::KeyOwner::Terminal && !modal_wins(app) {
         // The terminal panel (#362), and this arm does NOT look like its
         // neighbors: the others translate keys into commands, and here the

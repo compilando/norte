@@ -48,8 +48,8 @@ pub use overlays::{
 };
 pub use pane::painted_len_and_selection;
 pub(crate) use pane::pane_columns;
-pub(crate) use panels::timeline_window;
 pub use panels::{PlaceZone, TreeZone, places_zones, tree_zones};
+pub(crate) use panels::{search_panel_header, search_panel_window, timeline_window};
 pub use pickers::draw_theme_picker;
 pub use status::{SessionZone, StatusItemZone, session_zone, status_item_zones, status_zones};
 pub use text::fit_hint_groups;
@@ -363,6 +363,7 @@ fn draw_side_panels(
             frame,
             rect,
             sp,
+            app.search_panel_focus,
             app,
             app.key_owner() == crate::app::KeyOwner::Search,
         );
