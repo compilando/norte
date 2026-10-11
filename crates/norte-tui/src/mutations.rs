@@ -465,6 +465,12 @@ pub async fn unpack(app: &mut App, backend: &Backend) {
     // gate was left inert exactly where there are more spots to point at by
     // mistake.
     let other = app.split_dest_pane();
+    // A results tab is not a location (C5): unpacking "into" it would write
+    // into its search root.
+    if app.panes[other].is_results() {
+        app.message = Some(t("msg-pane-not-a-location"));
+        return;
+    }
     if app.pane_read_only(other) {
         app.message = Some(t("msg-pack-read-only"));
         return;
@@ -685,7 +691,14 @@ pub async fn combine_pieces(app: &mut App, backend: &Backend) {
         app.message = Some(t("msg-combine-needs-first"));
         return;
     };
-    let dest = app.focused().dir().join(seg);
+    // Next to the pieces: in a folder that is the pane's directory, in a
+    // results tab the hit's own folder (the tab's `dir()` is only the
+    // search root).
+    let dest = entry
+        .path
+        .parent()
+        .unwrap_or_else(|| app.focused().dir().clone())
+        .join(seg);
     match backend
         .combine_files(norte_proto::methods::FileCombineParams {
             first: entry.path,

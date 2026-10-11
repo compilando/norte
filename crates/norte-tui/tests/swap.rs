@@ -12,16 +12,16 @@ use norte_tui::fill::{Fill, FillMsg};
 use norte_tui::jobs::SearchRun;
 use norte_tui::navigate::{Cd, apply_cd, reconcile_swap};
 use norte_tui::probes::{DecorateFetch, Probed};
-use norte_tui::refresh::reap_search_run;
+use norte_tui::refresh::reap_search_runs;
 
 fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("test wire")
 }
 
-/// A live search RUNNING over `pane`. The Task is synthetic (the core's
-/// test `TaskRef`): what is exercised here is not the walker, but the pane
-/// index the run loop keeps beside it.
-fn search_run(pane: usize) -> SearchRun {
+/// A results run still RUNNING. The Task is synthetic (the core's test
+/// `TaskRef`): what is exercised here is not the walker, but the slot the
+/// run loop files it under.
+fn search_run() -> SearchRun {
     let (_tx, rx) = tokio::sync::mpsc::channel::<SearchHits>(1);
     let id = norte_proto::TaskId::new(1);
     let (_progress, prx) = tokio::sync::watch::channel(norte_proto::TaskProgress {
@@ -39,10 +39,8 @@ fn search_run(pane: usize) -> SearchRun {
     SearchRun {
         task: TaskRef::synthetic_for_tests(id, prx),
         rx,
-        pane,
-        prev_dir: vp("file:///antes"),
-        hits: 0,
         outcome: Outcome::Running,
+        panel_epoch: None,
     }
 }
 
@@ -75,7 +73,7 @@ fn the_swap_crosses_the_in_flight_filler_slots() {
         decorate(norte_tui::panel::SLOT_LEFT),
     );
     let mut lp = Probed::from([(0, vp("mem:///d/x"))]);
-    let mut sr: Option<SearchRun> = None;
+    let mut sr: norte_frontend::layout::BySlot<SearchRun> = norte_frontend::layout::BySlot::new();
 
     reconcile_swap(
         norte_tui::panel::SLOT_LEFT,
@@ -116,7 +114,7 @@ fn the_swap_with_nothing_in_flight_invents_nothing() {
     let mut df: norte_frontend::layout::BySlot<DecorateFetch> =
         norte_frontend::layout::BySlot::new();
     let mut lp = Probed::new();
-    let mut sr: Option<SearchRun> = None;
+    let mut sr: norte_frontend::layout::BySlot<SearchRun> = norte_frontend::layout::BySlot::new();
     reconcile_swap(
         norte_tui::panel::SLOT_LEFT,
         norte_tui::panel::SLOT_RIGHT,
@@ -151,7 +149,7 @@ fn apply_cd_swapped_reconciles_run_loop_state() {
         decorate(norte_tui::panel::SLOT_RIGHT),
     );
     let mut lp = Probed::from([(1, vp("mem:///d/x"))]);
-    let mut sr: Option<SearchRun> = None;
+    let mut sr: norte_frontend::layout::BySlot<SearchRun> = norte_frontend::layout::BySlot::new();
     let panes = norte_tui::panel::PaneSlots::new(
         Pane::new(vp("mem:///d"), Vec::new()),
         Pane::new(vp("mem:///d"), Vec::new()),
@@ -168,54 +166,22 @@ fn apply_cd_swapped_reconciles_run_loop_state() {
     assert!(lp.is_empty());
 }
 
-/// A LIVE search is also indexed per pane: `SearchRun` keeps the virtual
-/// pane that shows the hits, exactly as a fill keeps its own. If the swap
-/// does not flip it, the hits keep arriving at the neighboring pane.
-#[test]
-fn the_swap_flips_the_pane_with_the_live_search() {
-    let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
-    let mut df: norte_frontend::layout::BySlot<DecorateFetch> =
-        norte_frontend::layout::BySlot::new();
-    let mut lp = Probed::new();
-    let mut sr = Some(search_run(0));
-
-    reconcile_swap(
-        norte_tui::panel::SLOT_LEFT,
-        norte_tui::panel::SLOT_RIGHT,
-        &mut f,
-        &mut df,
-        &mut lp,
-        &mut sr,
-    );
-
-    assert_eq!(
-        sr.as_ref().expect("the run is still alive").pane,
-        1,
-        "the search's virtual pane switched sides with its pane"
-    );
-}
-
-/// And the swap cannot HARVEST the search along the way.
+/// A results tab's run is filed by SLOT, and a swap moves the tab's content
+/// to the other slot: the run has to travel with it, or the harvest that
+/// the same call site does right after (`reap_search_runs`) finds a folder
+/// under the run's slot and cancels a search the reader is still watching —
+/// and the hits that were still coming would have nowhere to land.
 ///
-/// The virtual pane's `Esc`/`Enter` are the ONLY keys that mode
-/// intercepts, so a `Ctrl+U` falls through to the resolver and swaps the
-/// panes with a search running. Right after, the same call site goes
-/// through [`reap_search_run`], which drops the run when its pane is no
-/// longer virtual: with `pane` unflipped it looks at pane 0 — which now has
-/// the ordinary listing that came from the other side — and CANCELS the
-/// Task silently, leaving pane 1 with half-finished hits stuck at
-/// `Running` forever and with no `Esc` handler (which requires a live run
-/// FOR THAT pane).
-///
-/// That is why the flip has to happen INSIDE `reconcile_swap`: once the
-/// harvest has passed there is nothing left to save.
+/// After `swap_panes` + `Cd::Swapped` + the harvest, the run is still alive,
+/// filed under the slot that now shows the results tab, and nothing is filed
+/// under the slot that now shows a folder.
 #[test]
-fn a_swap_does_not_harvest_the_live_search() {
+fn the_run_follows_its_results_tab_through_a_swap() {
+    use norte_tui::panel::{SLOT_LEFT, SLOT_RIGHT};
     let mut app = App::new(
         Pane::new(vp("file:///izq"), Vec::new()),
         Pane::new(vp("file:///der"), Vec::new()),
     );
-    // Live search on pane 0 (`Alt+F7` left it virtual).
     let saved = norte_frontend::results::SavedSearch::from_form(
         &norte_frontend::search::SearchForm::new(),
         vp("file:///izq"),
@@ -224,7 +190,10 @@ fn a_swap_does_not_harvest_the_live_search() {
         saved,
         norte_frontend::results::MAX_HITS,
     ));
-    let mut sr = Some(search_run(0));
+    assert_eq!(app.panes.slot_of(0), SLOT_LEFT);
+    let mut sr: norte_frontend::layout::BySlot<SearchRun> = norte_frontend::layout::BySlot::new();
+    sr.insert(SLOT_LEFT, search_run());
+    let task_id = sr.get(SLOT_LEFT).expect("run").task.id();
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     let mut df: norte_frontend::layout::BySlot<DecorateFetch> =
         norte_frontend::layout::BySlot::new();
@@ -232,22 +201,17 @@ fn a_swap_does_not_harvest_the_live_search() {
 
     // `Ctrl+U`: `dispatch` swaps the panes and the run loop reconciles…
     app.swap_panes();
-    let panes = norte_tui::panel::PaneSlots::new(
-        Pane::new(vp("mem:///d"), Vec::new()),
-        Pane::new(vp("mem:///d"), Vec::new()),
-    );
-    apply_cd(&panes, &mut f, &mut df, &mut lp, &mut sr, Cd::Swapped);
+    apply_cd(&app.panes, &mut f, &mut df, &mut lp, &mut sr, Cd::Swapped);
     // …and the SAME call site harvests right after.
-    reap_search_run(&app, &mut sr);
+    reap_search_runs(&app, &mut sr);
 
+    let tab = app.panes.browser(SLOT_RIGHT).expect("tab");
+    assert!(tab.is_results(), "the results tab moved to the right slot");
     let s = sr
-        .as_ref()
-        .expect("the search in progress is NOT cancelled");
-    assert_eq!(s.pane, 1, "the hits follow to their new side");
-    assert!(
-        app.panes[s.pane].is_results(),
-        "and that side is the one in search mode"
-    );
+        .get(SLOT_RIGHT)
+        .expect("the run is filed under the slot that shows the results");
+    assert_eq!(s.task.id(), task_id, "the same run");
+    assert!(sr.get(SLOT_LEFT).is_none(), "the folder has no run");
 }
 
 /// The watcher does NOT need its own reconciliation, and this is what makes

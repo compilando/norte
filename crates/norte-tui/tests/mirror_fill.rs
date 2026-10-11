@@ -50,7 +50,7 @@ fn a_mirror_to_the_other_pane_does_not_strangle_the_mirrored_panes_fill() {
     // `pane.mirror`: pane 1 travels, and its listing is also paginated.
     let (_tx1, rx1) = tokio::sync::mpsc::channel::<FillMsg>(1);
     app.panes[1].begin_listing(dir.clone(), Vec::new(), true, None);
-    let mut sr: Option<SearchRun> = None;
+    let mut sr = norte_frontend::layout::BySlot::<SearchRun>::new();
     apply_cd(
         &app.panes,
         &mut fill,

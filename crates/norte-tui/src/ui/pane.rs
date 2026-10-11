@@ -325,10 +325,9 @@ pub(crate) fn pane_columns(
     norte_frontend::columns::fitted_columns(
         settings,
         pane.dir().scheme(),
-        // Task 3 is behaviour-preserving: the Alt+F7 takeover has never
-        // painted a Folder column, so it stays off until Task 4 turns the
-        // takeover into a results tab (then this is `pane.is_results()`).
-        false,
+        // A results tab lists hits from many folders: the Folder column
+        // says which one, relative to the search root.
+        pane.is_results(),
         inner_w,
         wants,
         catalog,
@@ -357,7 +356,12 @@ fn pane_title(
     busy: Option<&norte_frontend::busy::Busy>,
     width: u16,
 ) -> String {
-    let (path, title_hostile) = norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
+    // A results tab has no folder of its own (C1): its location is what was
+    // searched where, masked like a path and marked the same way.
+    let (path, title_hostile) = match pane.results() {
+        Some(set) => norte_frontend::results::location(set, norte_i18n::active()),
+        None => norte_frontend::path_display_with(pane.dir(), pane.name_encoding()),
+    };
     // The marks around the path are collected apart so that the PATH is
     // what gets cut — from the left, keeping the folder you are in.
     let mut marks = String::new();

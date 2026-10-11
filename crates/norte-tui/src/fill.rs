@@ -89,12 +89,13 @@ pub fn release_refreshed_fill(
 }
 
 /// Applies a pagination drainer's message (ADR 0017) to the pane. If the pane
-/// switched to virtual search mode (Alt+F7 over a dir still paginating,
-/// review MAJOR T6), the fill became STALE — `begin_results` emptied the
-/// entries — and its drainer would feed the REAL listing as if they were hits
-/// (the search's own root sneaking in among the results): the fill is
-/// released and the batch is DISCARDED. A belt symmetric to `drain_search`'s
-/// drain-guard; the suspender is releasing the fill in `launch_search`.
+/// became a results listing (a re-run into a slot that was still
+/// paginating, review MAJOR T6), the fill became STALE — `begin_results`
+/// emptied the entries — and its drainer would feed the REAL listing as if
+/// they were hits (the search's own root sneaking in among the results): the
+/// fill is released and the batch is DISCARDED. A belt symmetric to
+/// `drain_search`'s drain-guard (a results tab opened by `Alt+F7` is a new
+/// slot, so it never had a fill of its own).
 pub fn apply_fill_msg(app: &mut App, fill: &mut BySlot<Fill>, slot: SlotId, msg: Option<FillMsg>) {
     // The batch goes to ITS slot, not to a position. If that slot no longer
     // exists — the pane was closed, the tab was closed — the batch is

@@ -39,7 +39,7 @@ use crate::overlays::watch_refresh_allowed;
 use crate::paste::route_paste;
 use crate::probes::{DecorateFetch, Probed};
 use crate::refresh::{
-    after_panes_refresh, on_tick, reap_search_run, refresh_panes, refresh_panes_where,
+    after_panes_refresh, on_tick, reap_search_runs, refresh_panes, refresh_panes_where,
 };
 use crate::screens::pane_attr_ids;
 use crate::session_push::{
@@ -96,8 +96,9 @@ fn journal_warning_i18n(why: &norte_core::embedded::NoJournal) -> String {
 }
 
 /// Runs a command and settles its outcome: the `cd` it may carry
-/// ([`settle_cd`]) and the live search's harvest —rule 3: a cd turns off the
-/// virtual pane and its Task has to die with it, not on the next key.
+/// ([`settle_cd`]) and the results runs' harvest —rule 3: a cd that turns a
+/// results tab into a folder, or a closed tab, takes its Task with it, not
+/// on the next key.
 ///
 /// What it does NOT do, on purpose, is launch the external command
 /// `pane.open` might have left resolved: only the sites that are the user's
@@ -118,7 +119,7 @@ pub(crate) async fn run_command(
     fill: &mut BySlot<Fill>,
     decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,
-    search_run: &mut Option<SearchRun>,
+    search_runs: &mut BySlot<SearchRun>,
     cmd: Command,
 ) {
     let outcome = dispatch(
@@ -139,10 +140,10 @@ pub(crate) async fn run_command(
         fill,
         decorate_fetch,
         last_probed,
-        search_run,
+        search_runs,
         outcome,
     );
-    reap_search_run(app, search_run);
+    reap_search_runs(app, search_runs);
 }
 
 /// Launches the external command `pane.open` (#28) may have left resolved.
@@ -283,9 +284,8 @@ pub async fn run(
     // PANE — both panes can be paginating at once, and with a global slot one
     // pane's cd killed the other's drainer (see [`Fill`]).
     // Where `work.fill`'s sweep continues (see the `select!`'s arm).
-    // Live search in progress (liveSearch T6): at most one (there is one
-    // virtual pane). `Fill` shape: drained in the select and released on
-    // exit.
+    // Results runs (`Alt+F7`): one per results tab, by slot. `Fill` shape:
+    // drained in the select and released when their tab stops being one.
     // Directory comparison in progress (`Shift+F2`): at most one — there is
     // one compare panel. Same shape as `work.search`.
     // Sync in progress (`Ctrl+Y`): at most one — there is one panel, and
@@ -1153,17 +1153,30 @@ pub async fn run(
                 // draining).
                 apply_fill_msg(app, &mut work.fill, pane, msg);
             }
-            hits = async {
-                // Only drained while the run is still alive (`Running`): a
-                // closed channel would return `None` in a loop (spin) — on
-                // reading the `None` it moves to terminal and this arm is
-                // left pending.
-                match &mut work.search {
-                    Some(s) if s.outcome == Outcome::Running => s.rx.recv().await,
-                    _ => std::future::pending().await,
+            (slot, hits) = std::future::poll_fn(|cx| {
+                // The results runs, one PER TAB, polled by hand like the
+                // fills above and with the same rotating start, so one fast
+                // walker cannot starve another tab's. Only the runs still
+                // alive (`Running`): a closed channel would return `None` in
+                // a loop (spin) — on reading the `None` the run moves to
+                // terminal and is skipped from then on.
+                let n = work.search.len();
+                for k in 0..n {
+                    let Some((id, s)) = work.search.iter_mut().nth((work.search_cursor + k) % n)
+                    else {
+                        break;
+                    };
+                    if s.outcome != Outcome::Running {
+                        continue;
+                    }
+                    if let std::task::Poll::Ready(m) = s.rx.poll_recv(cx) {
+                        work.search_cursor = (work.search_cursor + k + 1) % n;
+                        return std::task::Poll::Ready((id, m));
+                    }
                 }
-            } => {
-                drain_search(app, &mut work.search, hits);
+                std::task::Poll::Pending
+            }) => {
+                drain_search(app, &mut work.search, slot, hits);
             }
             hits = async {
                 // The search panel's run. `drain` drops it on the `None`

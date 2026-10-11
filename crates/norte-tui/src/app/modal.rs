@@ -678,7 +678,7 @@ pub enum Modal {
     },
     /// Semantic search hits (M4-IA-2): a DECISION surface with a cursor.
     /// Confirming NAVIGATES to the hit under the cursor (cd to the parent +
-    /// re-anchor, `on_search_enter`'s mold); Esc/cancel closes.
+    /// re-anchor); Esc/cancel closes.
     SemanticHits {
         /// Index hits, best first (proto, score always finite).
         hits: Vec<norte_proto::methods::SemanticHit>,

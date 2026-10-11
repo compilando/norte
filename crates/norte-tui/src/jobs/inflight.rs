@@ -197,9 +197,14 @@ pub struct InFlight {
     pub fill: BySlot<Fill>,
     /// Where [`Self::fill`]'s sweep is up to (see the `select!` arm).
     pub fill_cursor: usize,
-    /// Live search in progress (liveSearch T6): at most one, the virtual
-    /// pane is one. Drained in the select and dropped on exit.
-    pub search: Option<SearchRun>,
+    /// Results runs (`Alt+F7`, search phase B): one PER RESULTS TAB, filed
+    /// under the tab's slot — a tab hidden behind another keeps streaming.
+    /// Drained in the select, and harvested (`reap_search_runs`) once their
+    /// slot no longer shows results.
+    pub search: BySlot<SearchRun>,
+    /// Where [`Self::search`]'s sweep is up to: the same fairness as
+    /// [`Self::fill_cursor`], so one fast walker cannot starve the others.
+    pub search_cursor: usize,
     /// The search panel's run: at most one — a new query cancels the one it
     /// replaces. Drained in the select; NOT on the task board (the panel
     /// says how it goes).

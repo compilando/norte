@@ -1281,8 +1281,7 @@ mod pane_gestures_tests {
     /// What makes the test above honest, poked at the seam that could break
     /// it: the search's root IS the `dir()` of the pane that launches it. If
     /// the dialog let you type another root, `back_target` would start
-    /// pointing at a place the reader has never been and would have to read
-    /// `SearchRun::prev_dir` instead.
+    /// pointing at a place the reader has never been.
     #[test]
     fn the_search_root_is_the_dir_of_the_pane_that_launches_it() {
         use crossterm::event::{KeyCode, KeyModifiers};
@@ -1293,13 +1292,31 @@ mod pane_gestures_tests {
         dialog.push_char('x'); // with no criteria, Enter does not launch
         app.search_dialog = Some(dialog);
 
-        let params = on_search_dialog_key(&mut app, KeyModifiers::NONE, KeyCode::Enter)
+        let search = on_search_dialog_key(&mut app, KeyModifiers::NONE, KeyCode::Enter)
             .expect("Enter with criteria launches the search");
         assert_eq!(
-            params.root,
+            search.root,
             *app.panes[0].dir(),
             "the walk's root is the focused pane's dir"
         );
+    }
+
+    /// From a results tab, a new `Alt+F7` searches the SAME root again: the
+    /// tab's set says where, not a folder of its own (it has none).
+    #[test]
+    fn from_a_results_tab_the_search_root_is_its_root() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = app_en("mem:///raiz", "mem:///otro");
+        app.set_focus(0);
+        app.panes[0].begin_results(results_over(&vp("mem:///buscado")));
+        let mut dialog = crate::app::SearchDialog::new();
+        dialog.push_char('x');
+        app.search_dialog = Some(dialog);
+
+        let search = on_search_dialog_key(&mut app, KeyModifiers::NONE, KeyCode::Enter)
+            .expect("Enter with criteria launches the search");
+        assert_eq!(search.root, vp("mem:///buscado"));
     }
 
     /// The trail is PER PANE: `back_target` follows focus, not pane 0.

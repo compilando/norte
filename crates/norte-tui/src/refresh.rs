@@ -518,8 +518,8 @@ pub async fn refresh_panes_where(
 /// half-done Esc would leave the pane hanging in `loading` forever, #78 —
 /// its fill is still valid); probe #52's dedup is invalidated (a new listing
 /// re-lazifies the entries and a re-probe of the SAME selection is
-/// legitimate, MAJOR-1); and the search run is harvested ([`reap_search_run`]
-/// is already a no-op if its pane is still in virtual mode).
+/// legitimate, MAJOR-1); and the search runs are harvested
+/// ([`reap_search_runs`] keeps every run whose slot still shows results).
 ///
 /// And, if the help is open, its facts are RE-FROZEN (review MAJOR-2). The
 /// freeze exists so a verdict does not change because the reader moves
@@ -537,7 +537,7 @@ pub fn after_panes_refresh(
     fill: &mut BySlot<Fill>,
     decorate_fetch: &mut BySlot<crate::probes::DecorateFetch>,
     last_probed: &mut Probed,
-    search_run: &mut Option<SearchRun>,
+    search_runs: &mut BySlot<SearchRun>,
 ) {
     if refreshed == [false; 2] {
         return;
@@ -548,21 +548,35 @@ pub fn after_panes_refresh(
     app.listings_refreshed(refreshed);
     crate::navigate::request_refreshed_decorations(app, backend, decorate_fetch, &refreshed);
     release_refreshed_fill(&app.panes, &refreshed, fill, last_probed);
-    reap_search_run(app, search_run);
+    reap_search_runs(app, search_runs);
     if app.help.is_some() {
         app.freeze_help_facts();
     }
 }
 
-/// Releases the [`SearchRun`] if its pane LEFT virtual mode (a `cd`/refresh
-/// turned it off): its drainer would feed a real listing. Cancels the Task
-/// if it is still alive (rule 3).
-pub fn reap_search_run(app: &App, search_run: &mut Option<SearchRun>) {
-    if let Some(s) = search_run.as_ref()
-        && !app.panes[s.pane].is_results()
-    {
-        s.task.cancel();
-        *search_run = None;
+/// Releases every [`SearchRun`] whose slot no longer shows results: the tab
+/// was closed (its slot left the layout tree — the store may still keep the
+/// listing as an orphan for a while, so asking the store alone is not
+/// enough) or a `cd`/refresh turned it into a folder, and its drainer would
+/// feed a real listing. Cancels the Task if it is still alive (rule 3). A
+/// results tab merely HIDDEN behind another tab keeps its run: it is still
+/// in the tree, and still the listing of its slot.
+pub fn reap_search_runs(app: &App, runs: &mut BySlot<SearchRun>) {
+    let gone: Vec<norte_frontend::layout::SlotId> = runs
+        .iter()
+        .filter(|(slot, _)| {
+            app.layout.kind_of(*slot).is_none()
+                || !app
+                    .panes
+                    .browser(*slot)
+                    .is_some_and(crate::app::Pane::is_results)
+        })
+        .map(|(slot, _)| slot)
+        .collect();
+    for slot in gone {
+        if let Some(run) = runs.remove(slot) {
+            run.task.cancel();
+        }
     }
 }
 

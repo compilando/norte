@@ -269,7 +269,7 @@ pub async fn on_compare_key(
     fill: &mut BySlot<Fill>,
     decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,
-    search_run: &mut Option<SearchRun>,
+    search_runs: &mut BySlot<SearchRun>,
     compare_run: &mut Option<CompareRun>,
     mods: crossterm::event::KeyModifiers,
     code: KeyCode,
@@ -316,7 +316,7 @@ pub async fn on_compare_key(
                 fill,
                 decorate_fetch,
                 last_probed,
-                search_run,
+                search_runs,
                 compare_run,
             )
             .await;
@@ -368,7 +368,7 @@ pub async fn on_compare_enter(
     fill: &mut BySlot<Fill>,
     decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,
-    search_run: &mut Option<SearchRun>,
+    search_runs: &mut BySlot<SearchRun>,
     compare_run: &mut Option<CompareRun>,
 ) {
     let Some(view) = app.compare.as_ref() else {
@@ -421,9 +421,11 @@ pub async fn on_compare_enter(
         fill,
         decorate_fetch,
         last_probed,
-        search_run,
+        search_runs,
         outcome,
     );
+    // The pane it landed in may have been a results tab: its run goes now.
+    crate::refresh::reap_search_runs(app, search_runs);
 }
 
 /// The diff pane's run-loop wiring (`Shift+F2`,

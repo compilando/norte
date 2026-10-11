@@ -55,7 +55,7 @@ async fn a_refresh_through_settle_cd_requests_decorations() {
     let mut fill = norte_frontend::layout::BySlot::<Fill>::new();
     let mut decorate = norte_frontend::layout::BySlot::<DecorateFetch>::new();
     let mut probed = Probed::new();
-    let mut search: Option<SearchRun> = None;
+    let mut search = norte_frontend::layout::BySlot::<SearchRun>::new();
     settle_cd(
         &mut app,
         &backend(),
@@ -83,7 +83,7 @@ async fn a_refresh_through_the_ritual_requests_decorations() {
     let mut fill = norte_frontend::layout::BySlot::<Fill>::new();
     let mut decorate = norte_frontend::layout::BySlot::<DecorateFetch>::new();
     let mut probed = Probed::new();
-    let mut search: Option<SearchRun> = None;
+    let mut search = norte_frontend::layout::BySlot::<SearchRun>::new();
     norte_tui::refresh::after_panes_refresh(
         &mut app,
         &backend(),

@@ -760,8 +760,25 @@ impl App {
         // Only the WIRE form gets read: a text that looks like a local path
         // (`/home/…`) isn't a norte address, and guessing a scheme for it is
         // how a copy ends up in another backend than the reader thought.
+        // From a results tab the prefilled root is NOT the hits' folder
+        // (C4): it is a fine destination unless some hit already lives in
+        // the typed one, and that refusal stays in the dialog too.
+        let from_results = self.focused().is_results();
+        let refusal = VPath::parse(&input).ok().and_then(|dir| {
+            from_results
+                .then(|| {
+                    norte_frontend::results::transfer_refusal(&self.focused().marked_paths(), &dir)
+                })
+                .flatten()
+        });
+        if let Some(key) = refusal {
+            if let Some(Modal::TransferDest { error, .. }) = &mut self.modal {
+                *error = Some(t(key));
+            }
+            return false;
+        }
         match VPath::parse(&input) {
-            Ok(dir) if dir == *self.focused().dir() => {
+            Ok(dir) if dir == *self.focused().dir() && !from_results => {
                 // The prompt is PRE-FILLED with the source directory, so an
                 // unedited `Enter` asked to copy every mark onto itself:
                 // `ops::copy_task` rejects it, but one at a time, and the

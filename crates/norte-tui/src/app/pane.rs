@@ -317,6 +317,16 @@ impl Pane {
         self.state.begin_results(set, Vec::new());
     }
 
+    /// Like [`Self::begin_results`], with the hits that already arrived
+    /// (a tab opened over a run that was already delivering).
+    pub fn begin_results_with(
+        &mut self,
+        set: norte_frontend::results::ResultSet,
+        entries: Vec<Entry>,
+    ) {
+        self.state.begin_results(set, entries);
+    }
+
     /// The result set, if this pane shows a search's hits.
     #[must_use]
     pub fn results(&self) -> Option<&norte_frontend::results::ResultSet> {
