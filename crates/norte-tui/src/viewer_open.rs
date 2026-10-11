@@ -665,8 +665,8 @@ pub async fn open_viewer(
 
 /// [`open_viewer`] at a search result: reads what [`read_for`] says (the
 /// head, or a window past the cap), scrolls to the line and lights the
-/// match. A plugin's preview is not aimed. A target with no byte offset
-/// whose line the head does not hold opens at the top and says so.
+/// match, always in the raw view (no previewer). A target with no byte
+/// offset whose line the head does not hold opens at the top and says so.
 pub async fn open_viewer_at(
     app: &mut App,
     backend: &Backend,
@@ -678,29 +678,25 @@ pub async fn open_viewer_at(
 }
 
 /// The viewer for `path` aimed at `target`: from the head when the line is
-/// inside the cap, else a window around it.
+/// inside the cap, else a window around it. ALWAYS the raw view, as in the
+/// window: a previewer's styled view has no lit line (and, past the cap,
+/// shows another region), so the plugin chain is skipped.
 async fn viewer_at(
     backend: &Backend,
     path: &VPath,
     target: &ViewerTarget,
-    modo: Modo,
 ) -> Result<(Viewer, Thumbnail), Error> {
     let range = read_for(target, VIEW_CAP);
-    if range.offset == 0 {
-        let (mut viewer, thumbnail) = viewer_for(backend, path, modo).await?;
-        viewer.aim(target);
-        return Ok((viewer, thumbnail));
-    }
     let start = range.offset;
     let mut bytes = backend.read(path, Some(range)).await?;
     let truncated = bytes.len() as u64 > VIEW_CAP;
     if truncated {
         bytes.truncate(usize::try_from(VIEW_CAP).unwrap_or(usize::MAX));
     }
-    Ok((
-        Viewer::window(path.clone(), bytes, truncated, start, target),
-        Thumbnail::Ninguna,
-    ))
+    let es_imagen = norte_frontend::viewer::image_format(&bytes).is_some();
+    let mut viewer = Viewer::window(path.clone(), bytes, truncated, start, target);
+    viewer.set_image_by_bytes(es_imagen);
+    Ok((viewer, Thumbnail::Ninguna))
 }
 
 async fn open(
@@ -724,7 +720,7 @@ async fn open(
     let read = async {
         match &target {
             None => viewer_for(backend, &path, modo).await,
-            Some(t) => viewer_at(backend, &path, t, modo).await,
+            Some(t) => viewer_at(backend, &path, t).await,
         }
     };
     let waited = crate::console::wait_painting(events, app, started, read).await;

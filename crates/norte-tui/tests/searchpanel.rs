@@ -544,8 +544,6 @@ async fn search_for(
 /// Enter on a matching line opens the viewer on that line, lit.
 #[tokio::test]
 async fn enter_on_a_line_opens_the_viewer_at_it() {
-    // No extension: a syntax-highlighting previewer would claim `.txt`, and
-    // a plugin preview is not aimed.
     let (mut app, backend, mut work, mut resolver, _mem) =
         harness_with_tree(&[("notes", "uno\ndos\naguja aqui\ncuatro\n")]).await;
     let content = SearchField::Content;
@@ -722,6 +720,30 @@ async fn a_match_past_the_cap_opens_a_window() {
     let lit = v.highlight_line().expect("the target line is lit");
     assert_eq!(v.first_line() + lit as u64, 3001);
     assert_eq!(v.highlight_chars(lit), vec![(0, 5)]);
+}
+
+/// A file an approved previewer claims (`.txt`, syntax highlighting) still
+/// opens aimed from a result: the raw view, lit, as in the window — a
+/// styled preview has no lit line.
+#[tokio::test]
+async fn a_result_skips_the_previewer_and_opens_lit() {
+    let (mut app, backend, mut work, mut resolver, _mem) =
+        harness_with_tree(&[("notes.txt", "uno\ndos\naguja aqui\ncuatro\n")]).await;
+    search_for(
+        &mut app,
+        &backend,
+        &mut work,
+        &mut resolver,
+        SearchField::Content,
+        "aguja",
+    )
+    .await;
+    for code in [KeyCode::Down, KeyCode::Down, KeyCode::Enter] {
+        key(&mut app, &backend, &mut work, &mut resolver, code).await;
+    }
+    let v = app.viewer.as_ref().expect("the viewer opened");
+    assert_eq!(v.preview_plugin(), None, "the raw view");
+    assert_eq!(v.highlight_line(), Some(2));
 }
 
 /// A target with no byte offset on a line the head does not hold opens at
