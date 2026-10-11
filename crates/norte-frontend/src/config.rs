@@ -1,5 +1,6 @@
 //! Frontend configuration: the shared scalar merge (`norte-config`) plus the
-//! frontend-only passes — `keymap.toml` layers and `openers.toml` (#28).
+//! frontend-only passes — `keymap.toml` layers, `openers.toml` (#28),
+//! `terminal.toml` and `commands.toml`.
 
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,7 @@ use crate::keymap::{KeymapFile, parse_keymap_layer};
 use crate::nav;
 use crate::openers::OpenersConfig;
 use crate::shell_profiles::{ShellProfiles, ShellProfilesFile};
+use crate::user_commands::UserCommands;
 
 /// Everything a frontend needs, flat (same shape the TUI historically used).
 #[derive(Debug, Clone)]
@@ -17,7 +19,8 @@ pub struct FrontendConfig {
     /// The merged scalars (preset, ui, daemon, hotlist, archive, ai, sources).
     /// `common.sources` is NOT grouped by layer: `norte-config::load` fills
     /// it with every layer's `norte.toml` first, and this module's `load`
-    /// then appends each layer's `keymap.toml`/`openers.toml` afterwards —
+    /// then appends each layer's `keymap.toml`/`openers.toml`/`terminal.toml`/
+    /// `commands.toml` afterwards —
     /// treat it as a set of files that participated, not an ordered log.
     pub common: CommonConfig,
     /// `keymap.toml` layers present, ascending precedence.
@@ -57,6 +60,9 @@ pub struct FrontendConfig {
     /// The terminal panel's shell profiles (`terminal.toml`): every layer
     /// but the project one, which may not choose programs norte runs.
     pub shell_profiles: ShellProfiles,
+    /// The user's commands (`commands.toml`, ADR 0177): every layer but the
+    /// project one, which may not choose programs norte runs.
+    pub user_commands: UserCommands,
     /// The USER's themes, `<config>/themes/*.toml`, already parsed
     /// ([`crate::theme::load_user_themes`]).
     ///
@@ -168,6 +174,32 @@ pub fn load_shell_profiles(
     Ok(Some(parsed))
 }
 
+/// Loads `commands.toml` for a layer; `None` if absent or the layer is
+/// PROJECT — a user command names a program norte runs (ADR 0177, same rule
+/// as [`load_openers`]).
+///
+/// # Errors
+/// [`ConfigError::Toml`] naming the culprit file if it is invalid.
+pub fn load_user_commands(
+    dir: &Path,
+    kind: Layer,
+    sources: &mut Vec<PathBuf>,
+) -> Result<Option<UserCommands>, ConfigError> {
+    if kind == Layer::Project {
+        return Ok(None);
+    }
+    let path = dir.join("commands.toml");
+    let Some(raw) = read_optional(&path)? else {
+        return Ok(None);
+    };
+    let parsed = UserCommands::parse(&raw).map_err(|e| ConfigError::Toml {
+        path: path.clone(),
+        message: e.to_string(),
+    })?;
+    sources.push(path);
+    Ok(Some(parsed))
+}
+
 /// Load and merge every layer (ADR 0007): common scalars + keymap + openers.
 ///
 /// # Errors
@@ -179,6 +211,7 @@ pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
     let mut keymap_layer_dirs = Vec::new();
     let mut openers = OpenersConfig::empty();
     let mut shell_files = Vec::new();
+    let mut user_commands = UserCommands::empty();
     for (dir, kind) in &layers.dirs {
         if let Some(parsed) = load_keymap_layer(dir, *kind, &mut common.sources)? {
             keymap_layers.push(parsed);
@@ -195,6 +228,9 @@ pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
         }
         if let Some(parsed) = load_shell_profiles(dir, *kind, &mut common.sources)? {
             shell_files.push((dir.join("terminal.toml"), parsed));
+        }
+        if let Some(parsed) = load_user_commands(dir, *kind, &mut common.sources)? {
+            user_commands.overlay(parsed);
         }
     }
     // The merge's only error is a `default` naming nobody: blamed on the
@@ -227,6 +263,7 @@ pub fn load(layers: &Layers) -> Result<FrontendConfig, ConfigError> {
         quick_search_mode,
         openers,
         shell_profiles,
+        user_commands,
         user_themes,
     })
 }
@@ -654,6 +691,52 @@ mod tests {
         let cfg = load(&layers).expect("loads");
         assert!(cfg.shell_profiles.get("evil").is_none());
         assert_eq!(cfg.shell_profiles.default_profile().name, "mine");
+    }
+
+    #[test]
+    fn commands_toml_is_read_from_the_user_layer_and_never_from_the_project() {
+        let user = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let body = "[[command]]\nid = \"a\"\nlabel = \"A\"\nargv = [\"true\"]\n";
+        std::fs::write(user.path().join("commands.toml"), body).unwrap();
+        std::fs::write(
+            project.path().join("commands.toml"),
+            "[[command]]\nid = \"pwn\"\nlabel = \"P\"\nargv = [\"rm\"]\n",
+        )
+        .unwrap();
+        let cfg = load(&Layers {
+            dirs: vec![
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
+            ],
+        })
+        .unwrap();
+        assert!(cfg.user_commands.get("a").is_some());
+        assert!(
+            cfg.user_commands.get("pwn").is_none(),
+            "a project may not choose programs"
+        );
+        assert!(
+            cfg.common
+                .sources
+                .iter()
+                .any(|p| p.ends_with("commands.toml"))
+        );
+    }
+
+    #[test]
+    fn a_broken_commands_toml_names_the_file() {
+        let user = tempfile::tempdir().unwrap();
+        std::fs::write(
+            user.path().join("commands.toml"),
+            "[[command]]\nid = \"X\"\n",
+        )
+        .unwrap();
+        let err = load(&Layers {
+            dirs: vec![(user.path().to_path_buf(), Layer::User)],
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("commands.toml"), "{err}");
     }
 
     /// A `default` naming nobody blames the file that SET it, not merely

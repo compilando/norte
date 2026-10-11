@@ -377,9 +377,9 @@ pub(super) enum Section {
 
 /// Merges a context (ADR 0006/0007): higher-layer prepends first (they
 /// win), then the preset, then the appends (higher ones first). A PROJECT
-/// layer's `lua:` bindings are DISCARDED here, counted in `discarded_lua`
-/// (security: see [`KeymapFile::mark_project`] — a foreign repo's keymap
-/// cannot direct the execution of Lua commands). Each binding is tagged
+/// layer's `lua:` and `user:` bindings are DISCARDED here, counted in
+/// `discarded_lua` (security: see [`KeymapFile::mark_project`] — a foreign
+/// repo's keymap cannot direct the execution of Lua or user commands). Each binding is tagged
 /// with its [`Origin`] (preset vs. layer) and its [`Section`] (screen-
 /// specific vs. `[global]`) — the CALLER fixes `section` once per call,
 /// because `get` already decides which list is being read.
@@ -394,7 +394,7 @@ fn merge_ctx<'a>(
     let mut push = |layer_project: bool,
                     b: &'a RawBinding,
                     out: &mut Vec<(&'a RawBinding, Origin, Section)>| {
-        if layer_project && b.run.starts_with("lua:") {
+        if layer_project && (b.run.starts_with("lua:") || b.run.starts_with("user:")) {
             *discarded_lua += 1;
         } else {
             out.push((b, Origin::Layer, section));

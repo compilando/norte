@@ -171,7 +171,7 @@ fn spawn_poll(
 /// hot-reload, both from the native watcher (which can only watch the whole
 /// dir) and from the polling snapshot. Any other file in the config dir —
 /// `index.db`, `journal.db`, lockfiles — is noise from the app itself.
-const CONFIG_FILES: [&str; 3] = ["norte.toml", "keymap.toml", "openers.toml"];
+const CONFIG_FILES: [&str; 4] = ["norte.toml", "keymap.toml", "openers.toml", "commands.toml"];
 
 /// Is `p` one of the [`CONFIG_FILES`] layers? By file NAME: the watcher hands
 /// back absolute paths from the watched dir, and a rename of
@@ -187,11 +187,9 @@ fn is_config_file(p: &Path) -> bool {
 fn snapshot(layers: &Layers) -> Vec<(PathBuf, std::time::SystemTime, u64)> {
     let mut out = Vec::new();
     for (dir, _kind) in &layers.dirs {
-        // "openers.toml" is added here (pre-existing debt closed when this
-        // module was copied to norte-config): the native watcher watches the
-        // WHOLE dir and already caught its edits, but the polling fallback
-        // only looked at norte.toml/keymap.toml — an openers.toml edited
-        // under pure polling (native watcher down) was missed.
+        // Every file in `CONFIG_FILES`: the native watcher watches the WHOLE
+        // dir, but the polling fallback only sees what is listed here, so a
+        // file missing from the list is missed under pure polling.
         for name in CONFIG_FILES {
             let p = dir.join(name);
             if let Ok(md) = std::fs::metadata(&p)

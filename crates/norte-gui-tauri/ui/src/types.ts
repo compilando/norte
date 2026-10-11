@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 108;
+export const BRIDGE_VERSION = 110;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */

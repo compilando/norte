@@ -1123,6 +1123,8 @@ impl State {
                         | Pending::InstructionIa { .. }
                         // And the template batch (#310) ends in a rename.
                         | Pending::TemplateBatch { .. }
+                        // A user command runs the reader's program (ADR 0177).
+                        | Pending::UserCommand { .. }
                         // Neither does this: the query leaves the process.
                         | Pending::QuerySemantic // `DeliverSecret` is NOT here, and it is deliberate
                                                  // (#327): delivering the password enables READING a

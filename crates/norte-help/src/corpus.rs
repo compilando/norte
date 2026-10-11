@@ -44,6 +44,10 @@ const EN: &[(&str, &str)] = &[
     ("viewer", include_str!("../topics/en/viewer.md")),
     ("ai", include_str!("../topics/en/ai.md")),
     ("shell", include_str!("../topics/en/shell.md")),
+    (
+        "user-commands",
+        include_str!("../topics/en/user-commands.md"),
+    ),
     ("remote", include_str!("../topics/en/remote.md")),
     ("archives", include_str!("../topics/en/archives.md")),
     ("agents", include_str!("../topics/en/agents.md")),
@@ -74,6 +78,10 @@ const ES: &[(&str, &str)] = &[
     ("viewer", include_str!("../topics/es/viewer.md")),
     ("ai", include_str!("../topics/es/ai.md")),
     ("shell", include_str!("../topics/es/shell.md")),
+    (
+        "user-commands",
+        include_str!("../topics/es/user-commands.md"),
+    ),
     ("remote", include_str!("../topics/es/remote.md")),
     ("archives", include_str!("../topics/es/archives.md")),
     ("agents", include_str!("../topics/es/agents.md")),

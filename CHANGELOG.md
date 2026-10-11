@@ -9,6 +9,16 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Your own commands on a key** (ADR 0177, bridge 110).
+  `~/.config/norte/commands.toml` declares programs to run on the marked
+  files or the cursor file, with `%f`, `%F` and `%d`. Bind one with
+  `run = "user:<id>"`, or find it in the search box under `>` in the User
+  category. They run in the background, with their output in the log panel
+  and the exit in the status bar, or as a new entry in the terminal panel,
+  which closes when the program succeeds and stays open when it fails. They
+  run only on local folders, ask first with
+  `confirm = true`, and are never offered to agents. A project's
+  `.norte/commands.toml` is ignored. In both frontends.
 - **One search box for places, commands and help** (bridge 108).
   `app.goto` opens it empty, to search places; `app.palette` opens it with
   `>`, to run a command; `?` lists the help pages. Deleting the prefix
@@ -59,7 +69,9 @@ independently through `PROTOCOL_VERSION`.
   (#423): rectangles came out in the text colour, and audio, video and
   code as holes in the panel. They are filled with the class colour the
   window already used, toned per ADR 0175, with a label that reads on
-  it; a rectangle too narrow for "name size" shows the name alone.
+  it; a rectangle too narrow for "name size" shows the name alone. In
+  16 and 256 colours a darker tone no longer lands on the panel's own
+  colour and vanishes.
 - **A plain copy, move, delete or quit question no longer offers
   "y approve · n deny"** in the terminal: those read as an agent's
   approval. The footer says Enter and Esc; `y` and `n` still answer.

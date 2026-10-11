@@ -411,6 +411,18 @@ async fn invalid_vpath_is_a_local_tool_error() {
     assert!(out.contains("unknown tool"), "{out}");
 }
 
+/// User commands run arbitrary programs with the user's rights (ADR 0177):
+/// an agent that names one gets the same answer as for any tool that does
+/// not exist.
+#[tokio::test]
+async fn calling_a_user_command_by_name_is_an_unknown_tool() {
+    let d = spawn_daemon_allow().await;
+    let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
+    let (out, err) = call_tool(&b, "user:png", serde_json::json!({})).await;
+    assert!(err);
+    assert!(out.contains("unknown tool"), "{out}");
+}
+
 #[tokio::test]
 async fn an_illegal_session_is_rejected_in_connect() {
     let d = spawn_daemon_allow().await;

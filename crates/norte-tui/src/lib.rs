@@ -66,5 +66,8 @@ pub use norte_frontend::tree;
 pub mod tty;
 pub mod turn;
 pub mod ui;
+/// User commands (ADR 0177): a key or the box runs one, in the background or
+/// in the terminal panel.
+pub mod user_cmd;
 pub mod viewer;
 pub mod viewer_open;

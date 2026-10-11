@@ -142,6 +142,14 @@ pub async fn pump(
                         .await;
                 });
             }
+            // A user command (ADR 0177): run to the end on the runtime, its
+            // output to the log ring, and how it ended back through `dispatch`.
+            Ok(NativeEffect::RunUserCommand { launch }) => {
+                let host = std::sync::Arc::clone(&host);
+                tokio::task::spawn(async move {
+                    let _ = host.dispatch(user_command_action(launch).await).await;
+                });
+            }
             Ok(effect) => {
                 // Without waiting for the result: an `xdg-open` can take
                 // seconds to return, and the next gesture from whoever is
@@ -153,6 +161,21 @@ pub async fn pump(
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
             Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
         }
+    }
+}
+
+/// What `pump` does with a `RunUserCommand`, minus the host: run, then build
+/// the action that reports how it ended.
+pub(crate) async fn user_command_action(
+    launch: norte_frontend::user_commands::Launch,
+) -> norte_ui_host::UiAction {
+    let label = launch.label.clone();
+    let refresh = launch.refresh;
+    let finished = norte_frontend::user_commands::run_background(launch).await;
+    norte_ui_host::UiAction::UserCommandFinished {
+        label,
+        finished,
+        refresh,
     }
 }
 
@@ -207,7 +230,10 @@ pub fn execute(effect: &NativeEffect) -> RunOutcome {
         NativeEffect::RunProgram { .. }
         | NativeEffect::PickDirectory { .. }
         | NativeEffect::ThemeChanged { .. }
-        | NativeEffect::CloseWindow => RunOutcome::NoProgram,
+        | NativeEffect::CloseWindow
+        // A user command's background run (ADR 0177): `pump` runs it;
+        // reached only by a hand call.
+        | NativeEffect::RunUserCommand { .. } => RunOutcome::NoProgram,
     }
 }
 
@@ -534,6 +560,32 @@ fn launch(
 mod tests {
     use super::{RunOutcome, execute};
     use norte_ui_host::dto::NativeEffect;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_user_command_runs_and_becomes_an_action() {
+        let d = tempfile::tempdir().unwrap();
+        let launch = norte_frontend::user_commands::Launch {
+            id: "t".into(),
+            label: "T".into(),
+            program: "sh".into(),
+            args: vec!["-c".into(), "exit 4".into()],
+            cwd: d.path().to_path_buf(),
+            run_in: norte_frontend::user_commands::RunIn::Background,
+            refresh: true,
+            confirm: false,
+            count: 0,
+        };
+        let a = super::user_command_action(launch).await;
+        assert!(matches!(
+            a,
+            norte_ui_host::UiAction::UserCommandFinished {
+                finished: norte_frontend::user_commands::Finished::Failed { code: 4 },
+                refresh: true,
+                ..
+            }
+        ));
+    }
 
     /// A location that is NOT on this disk is not handed to the desktop.
     ///

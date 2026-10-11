@@ -347,6 +347,11 @@ impl State {
                 // dumps the session and destroys the window.
                 self.native(crate::dto::NativeEffect::CloseWindow);
             }
+            Some(Pending::UserCommand { launch }) => {
+                let (result, parts) = self.start_user_launch(launch, backend, mailbox);
+                refused = result.err();
+                outputs.extend(parts);
+            }
             Some(Pending::QuerySemantic) => {
                 let query = dialog.typed.text().to_owned();
                 outputs.extend(self.launch_semantic(query, backend, mailbox));

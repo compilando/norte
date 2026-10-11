@@ -23,6 +23,10 @@ impl State {
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         norte_frontend::session::note_palette_recent(&mut self.palette_recent, cmd);
+        // A USER row (ADR 0177): commands.toml's, never the catalogue's.
+        if let Some(id) = cmd.strip_prefix("user:") {
+            return self.run_user_command(id, backend, mailbox);
+        }
         // Through the SAME path as a key: the box is another door into the
         // catalogue, not a second dispatcher.
         match effect_of(cmd, 1) {

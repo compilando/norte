@@ -609,7 +609,11 @@ use serde::{Deserialize, Serialize};
 ///   `goto_point_row`, `goto_activate_row` and `goto_paste`; and the
 ///   palette's own view is gone — `PaletteView`, `ViewSnapshot.palette` and
 ///   `ViewChange::Palette`: `app.palette` opens the go-to box with `>`.
-pub const BRIDGE_VERSION: u32 = 108;
+/// - **110**: the action `user_command_finished { label, finished, refresh }`
+///   (ADR 0177): how a user command run in the background ended. Sent by the
+///   shell, never the renderer, like `program_finished`. (109 is another
+///   branch's.)
+pub const BRIDGE_VERSION: u32 = 110;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

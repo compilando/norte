@@ -27,7 +27,7 @@ const LANGS: [Lang; 2] = [Lang::En, Lang::Es];
 /// the corpus so that DELETING a topic file is a test failure too: a check
 /// that reads the corpus to decide what the corpus should contain cannot see
 /// an absence.
-const EXPECTED: [&str; 23] = [
+const EXPECTED: [&str; 24] = [
     "index",
     "panes",
     "tabs",
@@ -47,6 +47,7 @@ const EXPECTED: [&str; 23] = [
     "viewer",
     "ai",
     "shell",
+    "user-commands",
     "remote",
     "archives",
     "agents",
@@ -728,7 +729,7 @@ const DOCUMENTED: [&str; 197] = [
 /// `tests/help_gate.rs`, which reads `help_context::CONTEXTS` directly; this
 /// is the pin that the corpus does not drift from it in the meantime, and a
 /// disagreement surfaces there as an `UnknownContext`.
-const CONTEXTS: [&str; 18] = [
+const CONTEXTS: [&str; 19] = [
     "browse",
     "viewer",
     "dialog.confirm",
@@ -747,6 +748,7 @@ const CONTEXTS: [&str; 18] = [
     "dialog.ai-rename",
     "dialog.semantic-search",
     "dialog.properties",
+    "dialog.user-command",
 ];
 
 #[test]

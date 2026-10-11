@@ -2,7 +2,7 @@
 id = "index"
 title = "Welcome to norte"
 tags = ["basics"]
-see_also = ["panes", "selection", "mouse", "help", "dialogs", "settings", "appearance", "copying", "finding", "columns", "viewer", "ai", "shell", "remote", "archives", "agents", "plugins"]
+see_also = ["panes", "selection", "mouse", "help", "dialogs", "settings", "appearance", "copying", "finding", "columns", "viewer", "ai", "shell", "user-commands", "remote", "archives", "agents", "plugins"]
 +++
 norte is an orthodox file manager. Two panes, the keyboard first, and one set
 of commands whether the files are on this machine, on an SSH host, in an
@@ -30,6 +30,7 @@ bucket is the same two keys as copying between two local directories.
 - [[viewer]] — reading a file in place, and handing one to another program
 - [[ai]] — a rename plan you approve, and searching by meaning
 - [[shell]] — dropping to a shell, running one command, and what suspension costs
+- [[user-commands]] — your own programs on a key, from `commands.toml`
 - [[finding]] — the quick filter, the subtree search, and hidden entries
 - [[columns]] — which columns the listing shows, and how it is sorted
 - [[remote]] — SFTP, FTP and S3-compatible object storage

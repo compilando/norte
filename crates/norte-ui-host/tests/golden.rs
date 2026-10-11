@@ -186,6 +186,7 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::LogSetFilter { .. } => "log_set_filter",
         UiAction::LogScroll { .. } => "log_scroll",
         UiAction::ProgramFinished { .. } => "program_finished",
+        UiAction::UserCommandFinished { .. } => "user_command_finished",
         UiAction::PreviewScroll { .. } => "preview_scroll",
         UiAction::ViewerScroll { .. } => "viewer_scroll",
         UiAction::LogFollow => "log_follow",
@@ -316,6 +317,14 @@ fn row_actions() -> Vec<(&'static str, UiAction)> {
                 output: b"--- a.txt\n+++ b.txt\n".to_vec(),
                 truncated: false,
                 failed: false,
+            },
+        ),
+        (
+            "user_command_finished",
+            UiAction::UserCommandFinished {
+                label: "Optimize".to_owned(),
+                finished: norte_frontend::user_commands::Finished::Failed { code: 2 },
+                refresh: true,
             },
         ),
         (

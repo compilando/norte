@@ -185,6 +185,10 @@ fn every_frontend_config_field_is_classified_for_the_window() {
         //     profile menu start these, same as the terminal.
         shell_profiles: _,
 
+        // ─── The host reads it: `user:<id>` keys and the box's User rows
+        //     run these (ADR 0177), same as the terminal.
+        user_commands: _,
+
         // ─── The host reads it: `pane.quick-search` starts in whichever
         //     mode the key says, same as the terminal.
         quick_search_mode: _,

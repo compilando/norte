@@ -302,6 +302,8 @@ pub async fn confirm_modal(
         // detects it in its `app.quit` check on every turn
         // (main.rs, top of the `loop`).
         Modal::ConfirmQuit => app.quit = true,
+        // ADR 0177: a yes queues the launch; the run loop starts it.
+        Modal::ConfirmUserCommand { launch } => app.pending_user = Some(launch),
         Modal::ApproveAgentOp { req } => {
             decide_approval(app, backend, req.approval_id, true).await;
         }

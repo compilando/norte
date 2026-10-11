@@ -474,10 +474,22 @@ fn a_landed_disk_map_paints_its_children() {
         .map(|b| line[..b].chars().count())
         .expect("x");
     let cell = &buf[(u16::try_from(x).unwrap(), u16::try_from(y).unwrap())];
-    assert!(
-        matches!(cell.bg, Color::Rgb(..)),
-        "a filled rectangle: {cell:?}"
-    );
+    // Not Rgb-ness (an unpainted panel cell is Rgb too): the fill is one of
+    // the document class's tones, and not the panel's own colour.
+    let fills: Vec<Color> = (0..3)
+        .filter_map(|shade| {
+            app.theme
+                .class_fill(norte_frontend::treemap::ChildClass::Document, shade)
+        })
+        .map(|(bg, _)| bg)
+        .collect();
+    assert!(fills.contains(&cell.bg), "a class tone {fills:?}: {cell:?}");
+    for role in [
+        norte_theme::Role::Background,
+        norte_theme::Role::PaneBackground,
+    ] {
+        assert_ne!(Some(cell.bg), app.theme.role(role).bg, "{role:?}: {cell:?}");
+    }
 }
 
 /// A home is all folders (landing shots, 2026-10-08): every rectangle the
@@ -526,15 +538,22 @@ fn a_map_of_folders_paints_more_than_one_tone() {
     assert!(fills.len() >= 2, "one tone for every folder: {fills:?}");
 }
 
-/// The first cell of the label `name` on the screen, if it is painted.
+/// The first cell of the label `name` inside a map, if it is painted. Not
+/// the title row, nor the footer, nor a path that merely ends in the name
+/// (`/tmp/d0`): only a match that starts a word counts.
 fn label_cell<'a>(
     buf: &'a ratatui::buffer::Buffer,
     name: &str,
 ) -> Option<&'a ratatui::buffer::Cell> {
-    for y in 0..buf.area.height {
-        let text: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
-        if let Some(b) = text.find(name) {
-            let x = text[..b].chars().count();
+    for y in 1..buf.area.height.saturating_sub(2) {
+        let text: Vec<&str> = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+        let joined: String = text.concat();
+        for (b, _) in joined.match_indices(name) {
+            let x = joined[..b].chars().count();
+            let before = x.checked_sub(1).map(|i| text[i]);
+            if before.is_some_and(|c| c == "/" || c.chars().all(char::is_alphanumeric)) {
+                continue;
+            }
             return Some(&buf[(u16::try_from(x).unwrap(), y)]);
         }
     }
@@ -542,10 +561,10 @@ fn label_cell<'a>(
 }
 
 /// One child per class, drawn under `theme`.
-fn class_map(theme: Theme) -> (TuiTheme, ratatui::buffer::Buffer) {
+fn class_map(theme: Theme, depth: ColorDepth) -> (TuiTheme, ratatui::buffer::Buffer) {
     use norte_proto::methods::{DirUsageChild, FsDirUsageReportResult};
-    let mut app = app_con_dir(ColorDepth::Truecolor);
-    app.theme = TuiTheme::new(theme, ColorDepth::Truecolor);
+    let mut app = app_con_dir(depth);
+    app.theme = TuiTheme::new(theme, depth);
     app.open_disk_map();
     let slot = app.disk_map_slot().expect("open");
     let dir = app.focused().dir().clone();
@@ -600,9 +619,17 @@ fn every_class_of_the_disk_map_has_its_own_fill_on_every_preset() {
         ("main.rs", ChildClass::Code),
         ("folder", ChildClass::Directory),
     ];
-    for name in norte_theme::preset_names() {
+    for (name, depth) in norte_theme::preset_names().into_iter().flat_map(|n| {
+        [
+            ColorDepth::Truecolor,
+            ColorDepth::Ansi256,
+            ColorDepth::Ansi16,
+        ]
+        .map(|d| (n, d))
+    }) {
         let theme = Theme::preset(name).unwrap().unwrap();
-        let (tt, buf) = class_map(theme.clone());
+        let (tt, buf) = class_map(theme.clone(), depth);
+        let name = &format!("{name} at {depth:?}");
         let mut panel = vec![Color::Reset];
         for role in [
             norte_theme::Role::Background,
@@ -632,7 +659,10 @@ fn every_class_of_the_disk_map_has_its_own_fill_on_every_preset() {
             // Some themes DO give a class the text colour (vscode's `title`
             // is its `regular`): that is the theme's choice and the window
             // paints it too; only a map that fell into it by accident fails.
-            let theme_says_text = theme.style(norte_theme::Role::Regular).fg == Some(resolved);
+            // In fewer colours a class and the text may quantise to one
+            // index: that is the palette's limit, not the map's fall.
+            let theme_says_text = theme.style(norte_theme::Role::Regular).fg == Some(resolved)
+                || depth != ColorDepth::Truecolor;
             assert!(
                 theme_says_text || Some(cell.bg) != text,
                 "{name}: {file} is painted in the text colour: {:?}",
@@ -653,8 +683,11 @@ fn every_class_of_the_disk_map_has_its_own_fill_on_every_preset() {
         // can, it must show: at least three different fills.
         let distinct: std::collections::BTreeSet<String> =
             seen.iter().map(|(_, c)| format!("{c:?}")).collect();
+        // In 16 colours a pale theme's classes can all land on the same two
+        // greys: two is what a palette that small can promise.
+        let least = if depth == ColorDepth::Truecolor { 3 } else { 2 };
         assert!(
-            distinct.len() >= 3,
+            distinct.len() >= least,
             "{name}: the classes are told apart: {seen:?}"
         );
     }
@@ -664,7 +697,10 @@ fn every_class_of_the_disk_map_has_its_own_fill_on_every_preset() {
 /// own style, reversed.
 #[test]
 fn a_monochrome_theme_still_reverses_the_map() {
-    let (_, buf) = class_map(Theme::from_toml("name = \"mono\"").unwrap());
+    let (_, buf) = class_map(
+        Theme::from_toml("name = \"mono\"").unwrap(),
+        ColorDepth::Truecolor,
+    );
     let cell = label_cell(&buf, "film.mp4").expect("labelled");
     assert!(
         cell.modifier.contains(ratatui::style::Modifier::REVERSED),

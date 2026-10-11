@@ -341,6 +341,41 @@ pub fn check_keymaps(layers: &Layers) -> Vec<Finding> {
     for (screen, label) in SCREENS {
         findings.extend(check_keymap_screen(&preset_kf, &layer_kfs, screen, label));
     }
+    // `user:<id>` bindings are checked against commands.toml (ADR 0177). Only
+    // the browse map: `[global]` merges into it, and user commands make no
+    // sense in the viewer or dialogs.
+    let mut cmds = norte_frontend::user_commands::UserCommands::empty();
+    for (dir, kind) in &layers.dirs {
+        match norte_frontend::config::load_user_commands(dir, *kind, &mut sources) {
+            Ok(Some(parsed)) => cmds.overlay(parsed),
+            Ok(None) => {}
+            Err(e) => {
+                findings.push(Finding {
+                    section: "keymap",
+                    severity: Severity::Error,
+                    code: "user-commands-parse",
+                    detail: norte_encoding::mask_terminal_hazards(&e.to_string()),
+                });
+                return findings;
+            }
+        }
+    }
+    // Structural errors are already reported above, so an `Err` adds nothing.
+    if let Ok(eff) = Effective::build_for(
+        &preset_kf,
+        &layer_kfs,
+        &[norte_frontend::keymap::USER_HOST],
+        Screen::Browse,
+    ) {
+        for id in norte_frontend::user_commands::undefined_bindings(&eff, &cmds) {
+            findings.push(Finding {
+                section: "keymap",
+                severity: Severity::Warn,
+                code: "keymap-unknown-user-cmd",
+                detail: sanitize_detail(&format!("user:{id}")),
+            });
+        }
+    }
     findings
 }
 
@@ -1279,6 +1314,31 @@ mod tests {
             .unwrap_or_else(|| panic!("expected an unknown-cmd finding: {findings:?}"));
         assert_eq!(warn.severity, Severity::Warn);
         assert!(warn.detail.contains("invented.command"), "{}", warn.detail);
+    }
+
+    #[test]
+    fn doctor_warns_on_undefined_user_command() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("keymap.toml"),
+            "[pane]\nprepend_keymap = [{ on = [\"ctrl+alt+o\"], run = \"user:gone\" }]\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let findings = check_keymaps(&layers);
+        assert!(
+            !findings.iter().any(|f| f.severity == Severity::Error),
+            "{findings:?}"
+        );
+        let warns: Vec<_> = findings
+            .iter()
+            .filter(|f| f.code == "keymap-unknown-user-cmd")
+            .collect();
+        assert_eq!(warns.len(), 1, "{findings:?}");
+        assert_eq!(warns[0].severity, Severity::Warn);
+        assert!(warns[0].detail.contains("gone"), "{}", warns[0].detail);
     }
 
     /// encoding-auditor MAJOR: `run` is untrusted config text — a cloned

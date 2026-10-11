@@ -347,6 +347,8 @@ pub async fn run(
     let mut quiet_tick = false;
     let mut last_area = ratatui::layout::Rect::default();
     loop {
+        // A user command a key, the box or a confirmation queued (ADR 0177).
+        crate::user_cmd::start_pending(app, &mut work);
         dir_watch.rewatch(&watch_targets(app));
         if dir_watch.take_degraded_notice() {
             app.message = Some(t("status-watch-degraded"));
@@ -1276,6 +1278,31 @@ pub async fn run(
                 }
             } => {
                 harvest_checksum(app, &mut work, res);
+            }
+            Some(res) = work.user_commands.join_next(), if !work.user_commands.is_empty() => {
+                // A user command ended, or its terminal launch is resolved
+                // (ADR 0177). Its refresh obeys the watcher's gate: with an
+                // overlay open, relisting would swallow the reader's keys.
+                let refresh = match res {
+                    Ok(out) => crate::user_cmd::harvest(app, out),
+                    Err(e) => {
+                        tracing::error!(error = %e, "a user command job did not finish");
+                        false
+                    }
+                };
+                if refresh && watch_refresh_allowed(app) {
+                    let refreshed =
+                        refresh_panes(app, backend, &mut Console::new(&mut events, terminal)).await;
+                    after_panes_refresh(
+                        app,
+                        backend,
+                        refreshed,
+                        &mut work.fill,
+                        &mut work.decorate,
+                        &mut work.probed,
+                        &mut work.search,
+                    );
+                }
             }
             res = async {
                 // A disk map's report (phase 4): same shape as the checksum

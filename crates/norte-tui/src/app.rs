@@ -1148,6 +1148,15 @@ pub struct App {
     /// Merged declarative openers (#28): cloned at startup and on every OK
     /// hot reload. Source for `pane.open` (F4). Empty = no openers.
     pub openers: norte_frontend::openers::OpenersConfig,
+    /// The user's commands from commands.toml (ADR 0177): copied at startup
+    /// and on every OK reload, same as [`Self::openers`].
+    pub user_commands: norte_frontend::user_commands::UserCommands,
+    /// A user command a key or the box asked for (or its confirmation
+    /// accepted), waiting for the run loop —owner of the jobs— to start it
+    /// (`user_cmd::start_pending`).
+    pub pending_user: Option<norte_frontend::user_commands::Launch>,
+    /// The chord bound to each user command id, for the box's User rows.
+    pub user_chords: std::collections::HashMap<String, String>,
     /// The `[ui] editor` editor, if the configuration names one.
     ///
     /// `None` = the usual one: `$VISUAL`, `$EDITOR`, and the POSIX fallback.
@@ -1499,6 +1508,9 @@ impl App {
             pending_handoff: false,
             redecorate: false,
             openers: norte_frontend::openers::OpenersConfig::empty(),
+            user_commands: norte_frontend::user_commands::UserCommands::empty(),
+            pending_user: None,
+            user_chords: std::collections::HashMap::new(),
             editor: None,
             diff: None,
             pending_open: None,

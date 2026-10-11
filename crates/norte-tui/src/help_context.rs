@@ -47,6 +47,9 @@ pub const CONTEXTS: &[&str] = &[
     // this", which is what the columns page is about — not a decision
     // dialog, so it shares no id with any of the ones that ask something.
     "dialog.properties",
+    // ADR 0177: a user command's `confirm = true` asks "run this program?",
+    // which is neither quitting nor a delete: the `user-commands` page.
+    "dialog.user-command",
 ];
 
 /// The context of `modal`.
@@ -76,6 +79,9 @@ fn modal_context(modal: &Modal) -> &'static str {
         | Modal::ConfirmUndoAfter { .. }
         | Modal::ConfirmTransfer { .. } => "dialog.confirm",
         Modal::ConfirmQuit => "dialog.quit",
+        // ADR 0177: its own page, the one that explains what runs and why it
+        // asks.
+        Modal::ConfirmUserCommand { .. } => "dialog.user-command",
         Modal::Collision { .. } => "dialog.collision",
         Modal::ApproveAgentOp { .. } => "dialog.approval",
         // Granting capabilities does NOT share a page with approving an
@@ -199,6 +205,7 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         | Modal::OrganizePlan { .. }
         | Modal::ConfirmTransfer { .. }
         | Modal::ConfirmQuit
+        | Modal::ConfirmUserCommand { .. }
         | Modal::Collision { .. }
         | Modal::ApproveAgentOp { .. }
         | Modal::ConfirmPluginApproval { .. }
@@ -341,6 +348,19 @@ mod tests {
                 hash_abbrev: "ab12cd34ef56ab78ab12cd34ef56ab78".into(),
             },
             Modal::ConfirmQuit,
+            Modal::ConfirmUserCommand {
+                launch: norte_frontend::user_commands::Launch {
+                    id: "optimize-png".into(),
+                    label: "Optimize PNGs".into(),
+                    program: "oxipng".into(),
+                    args: vec!["a.png".into()],
+                    cwd: "/x".into(),
+                    run_in: norte_frontend::user_commands::RunIn::Background,
+                    refresh: true,
+                    confirm: true,
+                    count: 1,
+                },
+            },
             Modal::Properties {
                 entry: Box::new(norte_proto::Entry {
                     path: norte_proto::VPath::parse("file:///d").expect("vpath"),

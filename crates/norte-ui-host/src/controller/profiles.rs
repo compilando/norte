@@ -129,7 +129,16 @@ impl State {
         for warning in &self.config.common.profile_warnings {
             tracing::warn!(motivo = %warning, "profile line ignored");
         }
-        if warnings > 0 {
+        // Keys the new keymap binds to `user:<id>` ids commands.toml does not
+        // define (ADR 0177): a key that will only say "not defined". Ranked
+        // as at boot (startup.rs): it overrides the profile's warnings.
+        if let Some(notice) = crate::keys::undefined_user_commands_notice(
+            &self.effective,
+            &self.config.user_commands,
+            self.lang,
+        ) {
+            self.status.message = Some(clamp_display(notice));
+        } else if warnings > 0 {
             self.status.message = Some(clamp_display(norte_i18n::ta_in(
                 self.lang,
                 "msg-profile-config-ignored",
