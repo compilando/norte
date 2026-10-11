@@ -3638,6 +3638,25 @@ fn the_marks_summary_matches_the_three_separate_passes() {
     assert!(p.marks_summary(10).dirs > 0 && p.marks_summary(10).bytes > 0);
 }
 
+/// The Folder sort only means something over hits: a real listing that
+/// replaces the result set must not inherit it.
+#[test]
+fn leaving_results_resets_a_folder_sort() {
+    use crate::results::{MAX_HITS, ResultSet};
+    use crate::sort::{SortColumn, SortSpec};
+    let mut p = PaneState::new(vp("mem:///casa"), vec![]);
+    p.begin_results(
+        ResultSet::new(saved_search("mem:///casa"), MAX_HITS),
+        vec![],
+    );
+    p.set_sort(SortSpec {
+        column: SortColumn::Folder,
+        ..SortSpec::default()
+    });
+    p.set_listing(vp("mem:///casa"), vec![]);
+    assert_eq!(p.sort(), SortSpec::default());
+}
+
 fn vp(s: &str) -> VPath {
     VPath::parse(s).expect("test wire")
 }

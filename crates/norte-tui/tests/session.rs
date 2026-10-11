@@ -692,6 +692,7 @@ fn the_session_wins_over_profile_start() {
             show_hidden: false,
             touched_ms: 0,
             marks: Vec::new(),
+            results: None,
         },
     );
     app.apply_session_value(norte_frontend::session::SCHEMA_VERSION, &body.to_value());

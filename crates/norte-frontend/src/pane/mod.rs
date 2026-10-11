@@ -749,12 +749,15 @@ impl PaneState {
 
     /// Ends a results tab, if this is one: drops the result set, gives back
     /// the hidden preference, and resets a sort by Folder (meaningless
-    /// outside results; that part lands with the column in Task 2).
+    /// outside results: only a results tab paints that column).
     fn end_results(&mut self) {
         if self.results.take().is_some() {
             // A results tab always saved the preference in `begin_results`.
             if let Some(hidden) = self.hidden_before_results.take() {
                 self.set_show_hidden(hidden);
+            }
+            if self.sort.column == crate::sort::SortColumn::Folder {
+                self.set_sort(crate::sort::SortSpec::default());
             }
         }
     }

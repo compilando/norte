@@ -571,6 +571,7 @@ col-header-name = Name
 col-header-size = Size
 col-header-mtime = Modified
 col-header-kind = Kind
+col-header-folder = Folder
 col-kind-dir = dir
 col-kind-file = file
 col-kind-symlink = symlink

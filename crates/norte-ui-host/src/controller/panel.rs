@@ -432,6 +432,8 @@ impl State {
     ) -> Vec<norte_frontend::columns::Fitted> {
         use norte_frontend::columns::fitted_columns;
         let scheme = target_slot.pane.dir().scheme();
+        // A results tab also paints the Folder column.
+        let folder = target_slot.pane.is_results();
         // This pane's catalogue: decides whether the permissions column the
         // listing sets is painted (spec 2026-09-20). The SAME one that feeds
         // the headers, so width and header do not disagree.
@@ -449,12 +451,13 @@ impl State {
                 fitted_columns(
                     &self.columns,
                     scheme,
+                    folder,
                     width.saturating_sub(4),
                     wants,
                     catalog,
                 )
             }
-            None => fitted_columns(&self.columns, scheme, u16::MAX / 2, 0, catalog),
+            None => fitted_columns(&self.columns, scheme, folder, u16::MAX / 2, 0, catalog),
         }
     }
 

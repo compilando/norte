@@ -571,6 +571,7 @@ col-header-name = Nombre
 col-header-size = Tamaño
 col-header-mtime = Fecha
 col-header-kind = Tipo
+col-header-folder = Carpeta
 col-kind-dir = dir
 col-kind-file = fichero
 col-kind-symlink = enlace

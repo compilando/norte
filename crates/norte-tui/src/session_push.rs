@@ -780,6 +780,7 @@ mod session_push_tests {
             show_hidden: false,
             touched_ms: 7,
             marks: Vec::new(),
+            results: None,
         }
     }
 

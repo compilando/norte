@@ -76,6 +76,7 @@ pub(crate) fn draw_columns_picker(
                 Some(Builtin::Size) => t("col-header-size"),
                 Some(Builtin::Mtime) => t("col-header-mtime"),
                 Some(Builtin::Kind) => t("col-header-kind"),
+                Some(Builtin::Folder) => t("col-header-folder"),
                 // #117: attr/plugin bring `label` (header_label, ALREADY
                 // masked on open); the ones that do not parse fall back to
                 // the id. The re-masking is a belt, not the choke point;

@@ -651,6 +651,9 @@ impl State {
                     } else {
                         Vec::new()
                     },
+                    // A window results tab saves its query once Task 7/8
+                    // gives the host one.
+                    results: None,
                 },
             );
         }

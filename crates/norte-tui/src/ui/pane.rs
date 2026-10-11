@@ -322,7 +322,14 @@ pub(crate) fn pane_columns(
     let wants = pane
         .name_width_p80()
         .saturating_add(u16::try_from(ahead).unwrap_or(u16::MAX));
-    norte_frontend::columns::fitted_columns(settings, pane.dir().scheme(), inner_w, wants, catalog)
+    norte_frontend::columns::fitted_columns(
+        settings,
+        pane.dir().scheme(),
+        pane.state().is_results(),
+        inner_w,
+        wants,
+        catalog,
+    )
 }
 
 /// The pane's border title: where it is, what is happening to it and where
@@ -848,6 +855,13 @@ pub(crate) fn entry_item<'a>(
             let cell = match col {
                 norte_frontend::columns::ColumnId::Plugin { .. } => plugin_cells
                     .and_then(|p| p.plugin_cell(&col.to_string(), &entry.path))
+                    .unwrap_or_default(),
+                // The hit's folder lives in the pane's result set, and is
+                // blank outside a results tab.
+                norte_frontend::columns::ColumnId::Builtin(
+                    norte_frontend::columns::Builtin::Folder,
+                ) => plugin_cells
+                    .and_then(|p| p.state().folder_text(entry))
                     .unwrap_or_default(),
                 _ => norte_frontend::columns::styled_cell(entry, col, now_ms, style)
                     .unwrap_or_default(),

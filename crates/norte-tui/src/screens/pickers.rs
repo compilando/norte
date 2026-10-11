@@ -391,7 +391,9 @@ async fn apply_picked_columns(
                 norte_frontend::SortColumn::Size => Some("size"),
                 norte_frontend::SortColumn::Mtime => Some("mtime"),
                 norte_frontend::SortColumn::Extension => Some("extension"),
-                norte_frontend::SortColumn::Attr(_) => None,
+                // Neither has a shape in `norte.toml`: Folder only exists
+                // over a results tab.
+                norte_frontend::SortColumn::Attr(_) | norte_frontend::SortColumn::Folder => None,
             }
             .map(|column| config::PersistSort {
                 column,

@@ -145,6 +145,9 @@ impl App {
                     } else {
                         Vec::new()
                     },
+                    // A TUI results tab saves its query once Task 5 gives
+                    // the pane a tab for it.
+                    results: None,
                 },
             );
         }
