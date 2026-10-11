@@ -53,6 +53,7 @@ import * as splash from "./render/splash";
 import * as log from "./render/log";
 import * as diskMap from "./render/diskmap";
 import * as terminal from "./render/terminal";
+import * as searchpanel from "./render/searchpanel";
 import * as timeline from "./render/timeline";
 import * as panelPlugin from "./render/panel";
 import * as search from "./render/search";
@@ -1065,6 +1066,10 @@ export class Screen {
       this.paintTimeline(dom, slot);
       return;
     }
+    if (slot.kind === "search") {
+      this.paintSearchPanel(dom, slot);
+      return;
+    }
     if (slot.kind === "terminal") {
       this.paintTerminal(dom, slot);
       return;
@@ -1156,6 +1161,8 @@ export class Screen {
   readonly paintDiskMap = diskMap.paintDiskMap;
   /** In `render/timeline.ts`. */
   readonly paintTimeline = timeline.paintTimeline;
+  /** In `render/searchpanel.ts`. */
+  readonly paintSearchPanel = searchpanel.paintSearchPanel;
 
   /** In `render/log.ts`. */
   readonly sourceSelector = log.sourceSelector;
