@@ -296,7 +296,12 @@ pub const MENUS: &[Menu] = &[
         sections: &[
             sec(
                 None,
-                &["pane.quick-search", "pane.search", "pane.semantic-search"],
+                &[
+                    "pane.quick-search",
+                    "pane.search",
+                    "layout.search",
+                    "pane.semantic-search",
+                ],
             ),
             sec(
                 Some("menu-section-compare"),
@@ -322,8 +327,7 @@ pub const MENUS: &[Menu] = &[
             // navigation column, like the sidebar. #323: the log goes
             // next to processes — both answer "what is this doing?" — and
             // the disk map with them (phase 4). The timeline (phase 7)
-            // has no shortcut in any preset: this is its only keyboard
-            // path.
+            // is `alt+T` in all seven.
             sec(
                 Some("menu-section-side-panels"),
                 &[

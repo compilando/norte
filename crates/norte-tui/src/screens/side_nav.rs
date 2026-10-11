@@ -123,6 +123,7 @@ pub async fn on_tree_key(
         "layout.metadata" => app.toggle_metadata(),
         "layout.log" => app.toggle_log(),
         "layout.disk-map" => app.toggle_disk_map(),
+        "layout.search" => app.toggle_search_panel(),
         "dialog.confirm" => {
             let dest = app.tree().and_then(crate::tree::Tree::selected);
             if let Some(dir) = dest {
@@ -427,6 +428,7 @@ pub async fn on_places_key(
         "layout.metadata" => app.toggle_metadata(),
         "layout.log" => app.toggle_log(),
         "layout.disk-map" => app.toggle_disk_map(),
+        "layout.search" => app.toggle_search_panel(),
         "pane.tree" => app.toggle_tree(),
         // `⏎` over a HEADER folds or unfolds its section, as in the tree
         // next to it. Before, it did nothing: `activate()` returns `None`

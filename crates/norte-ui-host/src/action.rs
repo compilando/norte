@@ -747,6 +747,71 @@ pub enum UiAction {
         /// Row, in the order they traveled.
         row: u32,
     },
+    /// Touches a field of the search PANEL's form (bridge 111): the ids are
+    /// `search_fields`', the same as the dialog's. A text is the field's
+    /// whole new text; a switch and the kinds cycle only say they were
+    /// touched. The search launches once typing pauses.
+    SearchPanelEdit {
+        /// The panel's slot.
+        slot_id: u32,
+        /// The field's stable id.
+        field: String,
+        /// What was done to it.
+        value: DialogFieldValue,
+    },
+    /// Enter in one of the panel's inputs: searches now, without the pause.
+    SearchPanelGo {
+        /// The panel's slot.
+        slot_id: u32,
+    },
+    /// "Search here": the panel moves to the focused listing's folder, and
+    /// what runs under the old one stops.
+    SearchPanelReroot {
+        /// The panel's slot.
+        slot_id: u32,
+    },
+    /// Folds or unfolds the filters section.
+    SearchPanelFilters {
+        /// The panel's slot.
+        slot_id: u32,
+    },
+    /// A click on a result row: a folder folds, a file is gone to in the
+    /// listing, a line opens in the viewer at it. An INDEX into the rows,
+    /// never a path — so it carries the numbering's `generation`. A row
+    /// that a batch or a fold renumbered since (at or above where that
+    /// renumbering began) is refused as stale instead of acting on
+    /// whatever row moved there; one above every such change is acted on.
+    SearchPanelActivate {
+        /// The panel's slot.
+        slot_id: u32,
+        /// The row, in the numbering of `total_rows`.
+        row: u64,
+        /// The view's `generation` the row was painted in.
+        generation: u64,
+    },
+    /// A click on a folder's ▸/▾: unfolds (`open`) or folds it; from a row
+    /// inside a folder, folding climbs to its header. Refused as stale like
+    /// `SearchPanelActivate` when its row was renumbered since `generation`.
+    SearchPanelFold {
+        /// The panel's slot.
+        slot_id: u32,
+        /// The row, in the numbering of `total_rows`.
+        row: u64,
+        /// Unfold.
+        open: bool,
+        /// The view's `generation` the row was painted in.
+        generation: u64,
+    },
+    /// The rows the renderer has in view (virtual scroll): the window the
+    /// panel's view carries. Capped at 500 rows.
+    SearchPanelVisibleRange {
+        /// The panel's slot.
+        slot_id: u32,
+        /// First row in view.
+        first: u64,
+        /// How many.
+        count: u32,
+    },
     /// Answers the review of a rename plan: apply it or discard it.
     ///
     /// Exists alongside the keys because the review opens ON ITS OWN and

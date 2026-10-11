@@ -345,6 +345,46 @@
     "action": "search_activate_row",
     "row": 2
   },
+  "search_panel_activate": {
+    "action": "search_panel_activate",
+    "generation": 7,
+    "row": 2,
+    "slot_id": 15
+  },
+  "search_panel_edit": {
+    "action": "search_panel_edit",
+    "field": "content",
+    "slot_id": 15,
+    "value": {
+      "set": "text",
+      "text": "aguja"
+    }
+  },
+  "search_panel_filters": {
+    "action": "search_panel_filters",
+    "slot_id": 15
+  },
+  "search_panel_fold": {
+    "action": "search_panel_fold",
+    "generation": 7,
+    "open": false,
+    "row": 0,
+    "slot_id": 15
+  },
+  "search_panel_go": {
+    "action": "search_panel_go",
+    "slot_id": 15
+  },
+  "search_panel_reroot": {
+    "action": "search_panel_reroot",
+    "slot_id": 15
+  },
+  "search_panel_visible_range": {
+    "action": "search_panel_visible_range",
+    "count": 30,
+    "first": 40,
+    "slot_id": 15
+  },
   "select_row": {
     "action": "select_row",
     "generation": 4,

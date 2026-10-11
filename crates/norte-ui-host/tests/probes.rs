@@ -64,9 +64,9 @@ const NO_WINDOW: &[(&str, u32)] = &[("timeline", 359)];
 const NO_PROBE: &[(&str, &str)] = &[(
     "terminal",
     "a shell sits in a filesystem directory, and this harness's panels are \
-     `mem:///`. The panel REFUSES to open there, which is the correct \
-     behavior and the same as `app.terminal`: probing it would require a \
-     backend with real local paths",
+         `mem:///`. The panel REFUSES to open there, which is the correct \
+         behavior and the same as `app.terminal`: probing it would require a \
+         backend with real local paths",
 )];
 
 const DO_NOT_FOLLOW: &[(&str, &str)] = &[
@@ -87,6 +87,11 @@ const DO_NOT_FOLLOW: &[(&str, &str)] = &[
         "disk-map",
         "describes the DIRECTORY being looked at, not the row: moving the \
          cursor does not change what is around it",
+    ),
+    (
+        "search",
+        "searches a ROOT, chosen when it opens or by \"Search here\", not \
+         the row under the cursor",
     ),
 ];
 
@@ -150,6 +155,7 @@ fn of_kind(slots: &[SlotView], kind: &str) -> Option<SlotView> {
             | ("viewer", SlotView::Preview(_))
             | ("disk-map", SlotView::DiskMap(_))
             | ("timeline", SlotView::Timeline(_))
+            | ("search", SlotView::Search(_))
             | ("terminal", SlotView::Terminal(_)) => true,
             (_, SlotView::Unsupported { kind_name, .. }) => kind_name == kind,
             _ => false,

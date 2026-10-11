@@ -471,6 +471,7 @@ fn kind_with_keyboard(app: &App) -> Option<&str> {
         crate::app::KeyOwner::Log => Some(crate::logview::KIND),
         crate::app::KeyOwner::DiskMap => Some(crate::diskmap::KIND),
         crate::app::KeyOwner::Timeline => Some(crate::timeline::KIND),
+        crate::app::KeyOwner::Search => Some(crate::searchpanel::KIND),
         crate::app::KeyOwner::Terminal => Some(crate::termpanel::KIND),
         // Which one it is is said by the layout, not the enum: there is at
         // most one visible.

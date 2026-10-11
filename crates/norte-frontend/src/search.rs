@@ -450,6 +450,23 @@ impl SearchForm {
         }
         None
     }
+
+    /// The pattern that does not compile as a regex, if the regex switch is
+    /// on. Separate from [`Self::field_unreadable`] so the dialog keeps its
+    /// behaviour; the daemon still has the last word (it adds a size limit).
+    #[must_use]
+    pub fn regex_unreadable(&self) -> Option<SearchField> {
+        if !self.regex {
+            return None;
+        }
+        [
+            (SearchField::Name, &self.name),
+            (SearchField::Content, &self.content),
+        ]
+        .into_iter()
+        .find(|(_, p)| !p.is_empty() && regex::Regex::new(p).is_err())
+        .map(|(f, _)| f)
+    }
 }
 
 /// A form's [`FsSearchParams`], with the clock TOLD.
@@ -554,6 +571,21 @@ mod tests {
         for bad in ["", "-1", "1.5", "36501", "ayer"] {
             assert_eq!(parse_days(bad), None, "{bad:?}");
         }
+    }
+
+    /// A regex that does not compile is named before launching (C3 of the
+    /// search-panel plan): the panel searches as you type, and a half-typed
+    /// `(` must flag the field, not send a request the daemon refuses.
+    #[test]
+    fn an_unfinished_regex_is_flagged_only_in_regex_mode() {
+        let mut f = SearchForm::new();
+        f.content = "(año".to_owned();
+        assert_eq!(f.regex_unreadable(), None, "a literal parenthesis is fine");
+        f.regex = true;
+        assert_eq!(f.regex_unreadable(), Some(SearchField::Content));
+        f.content = "a.o".to_owned();
+        f.name = "[".to_owned();
+        assert_eq!(f.regex_unreadable(), Some(SearchField::Name));
     }
 
     /// An unreadable field is named BEFORE launching, and says which one.

@@ -192,7 +192,7 @@ impl State {
                 Vec::new(),
             );
         }
-        self.request_viewer_of(entry.path, backend, mailbox)
+        self.request_viewer_of(entry.path, None, backend, mailbox)
     }
 
     /// The same, but for an EXPLICIT path instead of the cursor's row.
@@ -201,9 +201,14 @@ impl State {
     /// NOT the selected one — under a quick-search filter, "the selected one"
     /// is not even the cursor's row — so the path is brought by whoever chose
     /// it, and it is not resolved again here.
+    ///
+    /// With a `target` (a search result) the read is the one
+    /// [`norte_frontend::viewer::read_for`] says — the head, or a window
+    /// around a line past the cap — and the viewer opens aimed at it.
     pub(super) fn request_viewer_of(
         &mut self,
         path: VPath,
+        target: Option<norte_frontend::viewer::ViewerTarget>,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
@@ -215,13 +220,9 @@ impl State {
         tokio::spawn(async move {
             // One byte more than the budget: that is what gives away that the
             // file kept going. The rest is NOT read.
-            let reading = backend.read(
-                path.clone(),
-                Some(norte_proto::ByteRange {
-                    offset: 0,
-                    len: Some(VISOR_CAP + 1),
-                }),
-            );
+            let range = visor_read(target.as_ref());
+            let start = range.offset;
+            let reading = backend.read(path.clone(), Some(range));
             // With a deadline: a hung mount cannot leave the F3 key with no
             // outcome forever.
             let read_bytes = match tokio::time::timeout(DEADLINE_VISOR, reading).await {
@@ -236,7 +237,13 @@ impl State {
             // for the previewer to open, and a previewer takes however long
             // it takes — with compilation in the mix, seconds per F3.
             let _ = mailbox
-                .send(Message::Content(Box::new((token, path, read_bytes, None))))
+                .send(Message::Content(Box::new((
+                    token,
+                    path,
+                    read_bytes,
+                    None,
+                    target.map(|t| (start, t)),
+                ))))
                 .await;
         });
         (self.applied(), Vec::new())
@@ -300,7 +307,7 @@ impl State {
         // An earlier "no more" cannot survive a jump that DID happen.
         self.status.message = None;
         self.slot_mut().pane.point_at(row);
-        self.request_viewer_of(path, backend, mailbox)
+        self.request_viewer_of(path, None, backend, mailbox)
     }
 
     /// Requests the STYLED view of the viewer's file from plugins, without
@@ -384,12 +391,17 @@ impl State {
     }
 
     /// Opens the viewer with what was read.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arrival's own parts (`Content`) plus the two handles"
+    )]
     pub(super) fn open_visor(
         &mut self,
         token: RequestToken,
         path: VPath,
         read_bytes: Result<Vec<u8>, Error>,
         preview: Option<norte_proto::methods::PluginPreviewStyled>,
+        aim: Option<&(u64, norte_frontend::viewer::ViewerTarget)>,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
@@ -427,9 +439,18 @@ impl State {
                         &p.lines,
                         p.lossy,
                     ),
-                    None => norte_frontend::viewer::Viewer::new(path, bytes, truncated),
+                    None => aimed_viewer(path, bytes, truncated, aim),
                 };
                 opened.set_image_by_bytes(by_bytes);
+                // The result's line is not in what was read and nobody knew
+                // its offset: the viewer is at the top, and it is said, as
+                // in the terminal (C9).
+                if opened.target_past_cap() {
+                    self.status.message = Some(clamp_display(norte_i18n::t_in(
+                        self.lang,
+                        "viewer-target-past-cap",
+                    )));
+                }
                 self.visor = Some(opened);
                 // An image the window paints ON ITS OWN goes through no
                 // plugin (ADR 0141): neither the styled view — which turned
@@ -443,7 +464,12 @@ impl State {
                 self.request_imagen(&target_path, token, backend, mailbox);
                 if !own_image {
                     self.request_thumbnail(&target_path, token, backend, mailbox);
-                    self.request_style(&target_path, token, backend, mailbox);
+                    // A styled preview would replace the aimed buffer with
+                    // one that has no lit line (and, past the cap, of the
+                    // wrong region): a result opens raw.
+                    if aim.is_none() {
+                        self.request_style(&target_path, token, backend, mailbox);
+                    }
                 }
             }
             Err(e) => {
@@ -634,5 +660,132 @@ impl State {
             viewer: self.vista_visor(),
         };
         Some(self.parche(vec![change]))
+    }
+}
+
+/// The read that opens the viewer: the head, or — for a search result whose
+/// line starts past the cap — a window around it. One byte more than the
+/// budget, so the caller learns the file kept going.
+fn visor_read(target: Option<&norte_frontend::viewer::ViewerTarget>) -> norte_proto::ByteRange {
+    match target {
+        Some(t) => norte_frontend::viewer::read_for(t, VISOR_CAP),
+        None => norte_proto::ByteRange {
+            offset: 0,
+            len: Some(VISOR_CAP + 1),
+        },
+    }
+}
+
+/// The viewer over what was read: aimed at the result when there is one
+/// (`start` is where that read began; `0` is the head, which `window` treats
+/// as `new` plus `aim`), else the plain one.
+fn aimed_viewer(
+    path: VPath,
+    bytes: Vec<u8>,
+    truncated: bool,
+    aim: Option<&(u64, norte_frontend::viewer::ViewerTarget)>,
+) -> norte_frontend::viewer::Viewer {
+    match aim {
+        Some((start, t)) => {
+            norte_frontend::viewer::Viewer::window(path, bytes, truncated, *start, t)
+        }
+        None => norte_frontend::viewer::Viewer::new(path, bytes, truncated),
+    }
+}
+
+/// The lit line and its spans, for the renderer: the row in the viewer's
+/// numbering and the ranges in chars of that row as painted.
+pub(super) fn highlight_of(
+    v: &norte_frontend::viewer::Viewer,
+) -> Option<crate::dto::HighlightView> {
+    let row = v.highlight_line()?;
+    let to = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    Some(crate::dto::HighlightView {
+        row: row as u64,
+        ranges: v
+            .highlight_chars(row)
+            .into_iter()
+            .map(|(s, e)| (to(s), to(e)))
+            .collect(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use norte_frontend::viewer::{CONTEXT_BEFORE, ViewerTarget};
+
+    fn target(line: u64, offset: Option<u64>) -> ViewerTarget {
+        ViewerTarget {
+            line,
+            offset,
+            preview: "aguja aqui".to_owned(),
+            ranges: vec![(0, 5)],
+        }
+    }
+
+    fn path() -> VPath {
+        VPath::parse("mem:///notas").expect("valid wire")
+    }
+
+    /// A target inside the cap reads the head, like F3, and the viewer opens
+    /// scrolled to the line with it lit.
+    #[test]
+    fn a_target_inside_the_cap_reads_the_head_and_lights_the_line() {
+        let t = target(3, Some(8));
+        let range = visor_read(Some(&t));
+        assert_eq!((range.offset, range.len), (0, Some(VISOR_CAP + 1)));
+        let v = aimed_viewer(
+            path(),
+            b"uno\ndos\naguja aqui\ncuatro\n".to_vec(),
+            false,
+            Some(&(range.offset, t)),
+        );
+        assert_eq!(v.scroll, 2, "first_line on the wire: line - 1");
+        assert_eq!(v.first_line(), 1, "no `lines from`");
+        assert_eq!(
+            highlight_of(&v),
+            Some(crate::dto::HighlightView {
+                row: 2,
+                ranges: vec![(0, 5)]
+            })
+        );
+    }
+
+    /// With no target the viewer is the plain one: nothing lit.
+    #[test]
+    fn no_target_no_highlight() {
+        assert_eq!(visor_read(None).offset, 0);
+        let v = aimed_viewer(path(), b"uno\ndos\n".to_vec(), false, None);
+        assert_eq!(highlight_of(&v), None);
+    }
+
+    /// A target past the cap reads a window from `CONTEXT_BEFORE` bytes
+    /// before it, and the viewer numbers its lines from the true one.
+    #[test]
+    fn a_target_past_the_cap_reads_a_window_and_says_from_which_line() {
+        let line = "x".repeat(99);
+        let mut text = String::new();
+        for _ in 0..3000 {
+            text.push_str(&line);
+            text.push('\n');
+        }
+        let at = text.len() as u64;
+        text.push_str("aguja aqui\nfin\n");
+        assert!(at > VISOR_CAP);
+        let t = target(3001, Some(at));
+        let range = visor_read(Some(&t));
+        assert_eq!(range.offset, at - CONTEXT_BEFORE);
+        let from = usize::try_from(range.offset).expect("fits");
+        let v = aimed_viewer(
+            path(),
+            text.as_bytes()[from..].to_vec(),
+            false,
+            Some(&(range.offset, t)),
+        );
+        assert!(v.first_line() > 1, "lines_from > 1");
+        let lit = highlight_of(&v).expect("the line is lit");
+        assert_eq!(v.first_line() + lit.row, 3001);
+        assert_eq!(lit.ranges, vec![(0, 5)]);
     }
 }

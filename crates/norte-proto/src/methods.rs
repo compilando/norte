@@ -1425,7 +1425,32 @@ use crate::{
 /// A **0.85 client against a 0.84 daemon** does not negotiate
 /// ([`version_compatible`]). That daemon answered a held file with
 /// `Io { retryable: false }` on the first attempt, without retrying.
-pub const PROTOCOL_VERSION: &str = "0.85.0";
+/// # 0.86.0 — a search says WHERE it matched
+///
+/// [`MatchInfo::offset`] and [`MatchInfo::ranges`], optional, and the
+/// preview is now a window CENTRED on the first match (`…` at a cut end)
+/// instead of the line's first 160 chars, so a match at column 200 is
+/// visible. Old clients read the same field with better content.
+///
+/// A **0.85 client against a 0.86 daemon** ignores the two fields (ADR
+/// 0004). A **0.86 client against a 0.85 daemon** does not negotiate
+/// ([`version_compatible`] never accepts a client ahead of the daemon), so
+/// no client has to degrade on the wire; a frontend that gets a batch
+/// without them shows the lines unhighlighted.
+///
+/// [`FsSearchParams::max_matches_per_file`] asks for every matching line of
+/// each file (up to a cap, clamped to [`SEARCH_MATCHES_PER_FILE_MAX`]), and
+/// the batch answers in [`SearchHits::all_matches`] plus
+/// [`SearchHits::more`], the count of lines past the cap. `matches` keeps
+/// the first line, so a reader that ignores the new fields sees 0.85's
+/// batch. A batch also closes at [`SEARCH_HITS_MAX_LINES`] kept lines, so
+/// dense files do not build a frame the client refuses; a reader sees only
+/// more, smaller batches. A 0.85 daemon would ignore the request and send first lines only;
+/// it cannot be reached, because a 0.86 client does not negotiate with it.
+///
+/// The cost is the reader's to know: asking makes the daemon read every
+/// content file to the end instead of stopping at its first hit.
+pub const PROTOCOL_VERSION: &str = "0.86.0";
 
 /// `initialize` — MANDATORY handshake before any other method
 /// (ADR 0011). Rejects incompatible versions (see
@@ -1721,6 +1746,8 @@ pub const FS_SET_MODE_MAX_PATHS: usize = 4096;
 /// `max_hits` reached ⇒ the Task ends `Completed` (never `Failed`); the
 /// client infers "truncated" by comparing the total hits received with
 /// `max_hits`.
+///
+/// `max_matches_per_file` (0.86.0) turns stop-at-first into read-to-the-end.
 pub const FS_SEARCH: &str = "fs.search";
 /// Builds/updates a subtree's search index (M4, ADR 0034). It is a Task
 /// (progress + cancellation, like [`FS_COPY`]); its result on completion is
@@ -1860,6 +1887,21 @@ pub const SEARCH_HITS: &str = "search.hits";
 /// Limit of entries per [`SEARCH_HITS`] notification (server-side
 /// coalescing, same spirit as [`FS_LIST_MAX_PAGE`]).
 pub const SEARCH_HITS_MAX_BATCH: usize = 256;
+/// Limit of matching lines held in [`SearchHits::all_matches`] per
+/// [`SEARCH_HITS`] notification, summed over its files (0.86.0).
+///
+/// [`SEARCH_HITS_MAX_BATCH`] counts entries, and with
+/// [`FsSearchParams::max_matches_per_file`] an entry can carry up to
+/// [`SEARCH_MATCHES_PER_FILE_MAX`] lines: 256 dense files would build a
+/// frame past [`crate::wire::MAX_FRAME_BYTES`] and the client cuts
+/// the connection. One [`MatchInfo`] is at worst about 2.5 KB of JSON (a
+/// 160-char preview at 4 bytes a char, up to 160 `[start,end]` pairs, the
+/// line and offset), so this budget is about 5 MiB of lines, leaving the
+/// rest of the 16 MiB frame for the entries and the first lines in
+/// `matches`. At least [`SEARCH_MATCHES_PER_FILE_MAX`], so one file at the
+/// cap always fits in a batch of its own.
+pub const SEARCH_HITS_MAX_LINES: usize = 2048;
+const _: () = assert!(SEARCH_HITS_MAX_LINES >= SEARCH_MATCHES_PER_FILE_MAX as usize);
 
 /// `fs.compare` — compares TWO directory trees and emits one row per pair
 /// (0.39.0, ADR 0048). Returns a Task; rows arrive via [`COMPARE_ROWS`]
@@ -3167,7 +3209,21 @@ pub struct FsSearchParams {
     /// a search that stays silent and finds nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encoding: Option<String>,
+    /// How many matching LINES of each file to report (0.86.0). Absent = the
+    /// first one only, and the daemon stops reading the file there — 0.85's
+    /// search. With it the daemon reads every content file to the end: it
+    /// reports up to this many lines in [`SearchHits::all_matches`] and
+    /// COUNTS the rest in [`SearchHits::more`]. Clamped to
+    /// `1..=`[`SEARCH_MATCHES_PER_FILE_MAX`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_matches_per_file: Option<u32>,
 }
+
+/// The most matching lines of ONE file a search reports, whatever
+/// [`FsSearchParams::max_matches_per_file`] asks (0.86.0). A protocol
+/// bound, like [`SEARCH_EXCLUDES_MAX`]: a reader past a few hundred lines
+/// of one file wants the viewer, not the list.
+pub const SEARCH_MATCHES_PER_FILE_MAX: u32 = 1000;
 
 /// How many exclusions a search admits, counting
 /// [`FsSearchParams::exclude_roots`] and [`FsSearchParams::exclude_names`]
@@ -3233,6 +3289,7 @@ impl FsSearchParams {
             whole_word: false,
             recursive: true,
             encoding: None,
+            max_matches_per_file: None,
         }
     }
 }
@@ -3265,13 +3322,27 @@ pub struct SearchHits {
     /// Content match context, aligned with `entries`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matches: Option<Vec<MatchInfo>>,
+    /// Every matching line kept per file, aligned with `entries` (0.86.0).
+    /// Only on a content search that asked for
+    /// [`FsSearchParams::max_matches_per_file`];
+    /// `matches` keeps carrying the first line so a reader that ignores
+    /// this field sees 0.85's batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all_matches: Option<Vec<Vec<MatchInfo>>>,
+    /// Matching lines past the cap per file, counted and not sent; aligned
+    /// with `entries`, `0` = none (0.86.0). Present with `all_matches`.
+    /// Saturates at `u32::MAX`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub more: Option<Vec<u32>>,
 }
 
 /// Context of ONE content match.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatchInfo {
-    /// Line (1-based) of the first match, if it was computed.
+    /// Line (1-based) of this match, if it was computed. Each `MatchInfo` is
+    /// ONE matching line (several occurrences on it are one entry, see
+    /// [`Self::ranges`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u64>,
     /// The match's line, lossy-decoded and sanitized AT THE SOURCE
@@ -3281,6 +3352,26 @@ pub struct MatchInfo {
     /// passes it through `detail_for_bar` as a belt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
+    /// Byte offset in the file of the START of the matching line (0.86.0):
+    /// what a viewer needs to load the window holding a line past what it
+    /// reads from the top.
+    ///
+    /// Exact on the literal path. On the decoded path (regex, UTF-16) it is
+    /// counted over the decoded text: exact for UTF-8 and single-byte
+    /// encodings, absent for UTF-16 and for multi-byte legacy ones
+    /// (`Shift_JIS`, GBK…), and shifted by up to two bytes per invalid UTF-8 byte before the
+    /// match (each decodes to a three-byte `U+FFFD`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u64>,
+    /// Where the match is inside [`Self::preview`] (0.86.0): `[start, end)`
+    /// in CHARS of the preview as sent — after masking and after the
+    /// centring that may have put a `…` in front. Every occurrence on the
+    /// line that falls inside the preview; empty when the line matched but
+    /// the text could not be located in it (a literal found as bytes of
+    /// another encoding, or case variants of it that the locating pattern
+    /// does not find).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ranges: Option<Vec<(u32, u32)>>,
 }
 
 /// Params of [`INDEX_BUILD`] (M4): root to index.

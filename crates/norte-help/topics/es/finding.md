@@ -3,11 +3,13 @@ id = "finding"
 title = "Encontrar cosas"
 tags = ["doing"]
 see_also = ["selection", "panes", "viewer"]
-commands = ["pane.quick-search", "pane.search", "pane.toggle-hidden"]
+commands = ["pane.quick-search", "pane.search", "layout.search", "pane.toggle-hidden"]
 +++
 Dos preguntas distintas, dos teclas distintas. *¿Cuál de las filas que tengo
 delante es?* es {{cmd:pane.quick-search}}. *¿Está en algún sitio aquí debajo?*
 es {{cmd:pane.search}}.
+
+{{cmd:layout.search}} abre el panel de búsqueda junto al listado.
 
 # Estrechar lo que ya está listado
 
@@ -87,6 +89,48 @@ Lo que se transcodifica es la aguja, no el pajar: una búsqueda por contenido no
 decodifica ficheros enteros a texto para mirar dentro, que es lo que le permite
 correr sobre un directorio de codificaciones desconocidas sin inventar
 contenido que no está.
+
+# El panel de búsqueda
+
+{{cmd:layout.search}} (`Alt+Shift+F`), el botón Buscar de la barra lateral o
+Buscar → Panel de búsqueda abre un panel que hace la misma pregunta que
+{{cmd:pane.search}} pero deja la respuesta a la vista. El panel busca en la
+carpeta en la que estaba el listado cuando se abrió; esa carpeta es su raíz. Se
+abre con el teclado en el campo del nombre: Tab y abajo pasan al campo del texto
+y luego a los resultados, y Escape devuelve las teclas al listado.
+
+Busca mientras escribes: un momento después de que pares (cosa de un tercio de
+segundo) empieza, y si había una búsqueda en marcha se cancela antes, de modo
+que dos no corren nunca sobre el mismo árbol. Intro busca al instante. Hasta
+que llegan los primeros resultados nuevos, los anteriores siguen en pantalla,
+atenuados.
+
+Junto al texto hay tres interruptores: distinguir mayúsculas, palabra completa
+y expresión regular. Un desplegable debajo guarda el resto: carpetas que
+saltar, tamaño, antigüedad, subcarpetas, tipo de entrada y la codificación con
+la que leer el texto. El botón «Buscar aquí» mueve la raíz a la carpeta en la
+que está ahora el listado; en el terminal eso es `F7`, los interruptores son
+`F2` a `F6`, como en el diálogo, y `F8` abre o pliega los filtros. Una expresión
+regular que no se puede leer lo dice en el panel en vez de buscar.
+
+Los resultados son un árbol: carpeta, luego fichero, luego las líneas que
+casaron, cada una con lo encontrado resaltado y la línea centrada en ello. Un
+fichero enseña hasta 50 líneas; el resto se resume como «+N más». Izquierda y
+derecha pliegan y despliegan, y la línea de estado dice a cuántos ficheros y
+carpetas se ha llegado mientras el recorrido sigue en marcha.
+
+Intro sobre una línea abre el visor de norte en esa línea con lo encontrado
+encendido, desplazándose hacia el lado cuando la línea es larga. En la ventana
+basta un clic; en el terminal el primer clic selecciona la fila y un segundo clic
+sobre ella —o un doble clic— la abre. Un fichero muy grande (más de 256 KiB) se
+abre en una ventana alrededor de la línea, y el título dice «líneas desde N».
+Cuando norte no sabe dónde empieza esa línea —en UTF-16 y en algunas otras
+codificaciones— se abre por el principio y lo dice. En el terminal, cerrar el
+visor te devuelve al panel. Intro sobre un fichero lleva el panel de listado a
+su carpeta, con el cursor sobre él.
+
+El diálogo de {{cmd:pane.search}} sigue ahí, y rellena el panel con los
+resultados como antes.
 
 # Entradas ocultas
 

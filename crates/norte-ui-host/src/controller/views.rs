@@ -98,6 +98,9 @@ impl State {
                 Some(super::timeline::KIND) => {
                     slots.push(SlotView::Timeline(Box::new(self.timeline_view(id))));
                 }
+                Some(super::searchpanel::KIND) => {
+                    slots.push(SlotView::Search(Box::new(self.search_panel_view(id))));
+                }
                 Some(super::termpanel::KIND) => {
                     slots.push(SlotView::Terminal(Box::new(self.panel_de_terminal(id))));
                 }
@@ -698,6 +701,8 @@ impl State {
                         .collect()
                 })
                 .unwrap_or_default(),
+            highlight: super::viewer::highlight_of(v),
+            lines_from: v.first_line(),
         }
     }
 

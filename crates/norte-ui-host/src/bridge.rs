@@ -611,9 +611,17 @@ use serde::{Deserialize, Serialize};
 ///   `ViewChange::Palette`: `app.palette` opens the go-to box with `>`.
 /// - **110**: the action `user_command_finished { label, finished, refresh }`
 ///   (ADR 0177): how a user command run in the background ended. Sent by the
-///   shell, never the renderer, like `program_finished`. (109 is another
-///   branch's.)
-pub const BRIDGE_VERSION: u32 = 110;
+///   shell, never the renderer, like `program_finished`. (109 was never
+///   used.)
+/// - **111**: `ViewerView.highlight` and `lines_from`; `SlotView::Search`
+///   (`SearchPanelSlotView`, with a window of `SearchPanelRowView` rows —
+///   `folder`, `file`, `line`, `more` — that travels as a `slot` change) and
+///   the actions `search_panel_edit`, `_go`, `_reroot`, `_filters`,
+///   `_activate`, `_fold` and `_visible_range`: the search panel (spec
+///   2026-10-09). `SearchPanelSlotView.generation` numbers the rows'
+///   indexing, and `_activate` and `_fold` echo it back: a row renumbered
+///   since that generation is refused as `StaleAction::Generation`.
+pub const BRIDGE_VERSION: u32 = 111;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

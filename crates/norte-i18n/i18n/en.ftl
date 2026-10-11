@@ -1270,6 +1270,7 @@ panelbar-log = Log
 # columns, and the long one dropped it to letters (ADR 0171).
 panelbar-disk-map = Map
 panelbar-timeline = Timeline
+panelbar-search = Search
 # `Tree` and `Timeline` take the T first: `letter_of` gives this one another.
 panelbar-terminal = Terminal
 # The terminal panel's footer: the ONLY key the panel does not pass on to the
@@ -1344,6 +1345,7 @@ menu-item-layout-processes = Processes
 menu-item-layout-log = Log
 menu-item-layout-disk-map = Disk map
 menu-item-layout-timeline = Timeline
+menu-item-layout-search = Search panel
 menu-item-layout-terminal = Terminal
 menu-item-terminal-new = New terminal
 menu-item-terminal-new-profile = New terminal with…
@@ -1477,6 +1479,7 @@ help-cmd-layout-processes = show or hide the processes panel
 help-cmd-layout-log = show or hide this session's log
 help-cmd-layout-disk-map = show or hide the disk map
 help-cmd-layout-timeline = show or hide the timeline
+help-cmd-layout-search = show or hide the search panel
 # Not "show or hide" like its neighbours, and deliberately: the second press
 # hands the keyboard back and leaves the shell running, it does not close it.
 help-cmd-layout-terminal = open a terminal in a panel, or give it the keyboard
@@ -1793,6 +1796,29 @@ search-status-done = search: { $n } hits
 search-status-truncated = search: { $n } hits (truncated)
 search-status-cancelled = search: { $n } hits (cancelled)
 search-status-failed = search failed: { $error }
+# The search panel (2026-10-09-search-panel): searches as you type, results
+# grouped by folder and file with their matching lines.
+search-panel-title = Search
+search-panel-idle = Type a name or some text to search
+search-panel-unreadable = { $field } cannot be read
+# The counts are TWO ids each (see `modal-chmod-one`): string args never match
+# a plural selector, so the code picks `-one` or the plain one.
+search-panel-files-one = 1 file
+search-panel-files = { $n } files
+search-panel-folders-one = 1 folder
+search-panel-folders = { $n } folders
+search-panel-running = { $files } in { $folders } · searching…
+search-panel-done = { $files } in { $folders }
+search-panel-truncated = stopped at { $n } results
+search-panel-cancelled = { $files } · stopped
+search-panel-failed = search failed: { $error }
+search-panel-more = +{ $n } more
+search-panel-filters = filters ({ $n })
+search-panel-root = in { $root }
+search-panel-reroot = Search here
+# The viewer opened at a search result's line.
+viewer-lines-from = lines from { $n }
+viewer-target-past-cap = the line is past what the viewer reads
 
 # --- Directory comparison (2026-08-11-directory-comparison.md, `Shift+F2`) ---
 # The diff pane. Every row says WHAT was decided, WHICH criterion decided it

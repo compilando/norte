@@ -137,6 +137,7 @@ keymap = [
     # common chords (see orthodox.toml).
     { on = ["alt+I"], run = "layout.metadata" },
     { on = ["alt+T"], run = "layout.timeline" },
+    { on = ["alt+F"], run = "layout.search" },
     # The terminal panel (#362). Total Commander does not dock a terminal:
     # it opens a separate one, which in norte is `app.terminal`. This is not
     # a transcription, and norte's common chord goes here. See orthodox.toml.

@@ -958,6 +958,7 @@ fn preview_of_the_match_under_the_cursor_in_the_bar() {
         norte_proto::methods::MatchInfo {
             line: Some(42),
             preview: Some("fn main() { hola }\u{1b}[31m\u{202e}".into()),
+            ..Default::default()
         },
     );
     let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");

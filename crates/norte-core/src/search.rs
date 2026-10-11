@@ -29,7 +29,9 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use norte_encoding::{Detection, Encoding, encode_lossless, needle_cycle};
-use norte_proto::methods::{FsSearchParams, MatchInfo, SEARCH_HITS_MAX_BATCH, SearchHits};
+use norte_proto::methods::{
+    FsSearchParams, MatchInfo, SEARCH_HITS_MAX_BATCH, SEARCH_HITS_MAX_LINES, SearchHits,
+};
 use norte_proto::{Entry, EntryKind, Error, Segment, TaskId, VPath};
 use norte_vfs::{ByteStream, Provider};
 use tokio::sync::mpsc;
@@ -361,8 +363,9 @@ impl ContentNeedle {
     /// (or `None`). Updates `ov`, retaining the last `max_len - 1` bytes so
     /// that a needle split by the next chunk's boundary can still be found.
     ///
-    /// The walker (T3) stops at the first hit per file, so there is no
-    /// re-counting of the retained tail between chunks.
+    /// The walker (T3) stops at the first hit per file unless more are
+    /// asked (0.86.0), so there is no re-counting of the retained tail
+    /// between chunks here.
     pub fn find_in(&self, ov: &mut Overlap, chunk: &[u8]) -> Option<usize> {
         let mut buf = std::mem::take(&mut ov.tail);
         buf.extend_from_slice(chunk);
@@ -415,6 +418,18 @@ impl ContentRegex {
     pub fn is_match(&self, line: &str) -> bool {
         self.re.is_match(line)
     }
+
+    /// The non-empty match spans in `line`, as BYTE ranges (0.86.0). An
+    /// empty match (`a*`) still makes the line match through
+    /// [`Self::is_match`]; it just paints nothing.
+    #[must_use]
+    pub fn spans(&self, line: &str) -> Vec<std::ops::Range<usize>> {
+        self.re
+            .find_iter(line)
+            .map(|m| m.range())
+            .filter(|r| !r.is_empty())
+            .collect()
+    }
 }
 
 // ── fs.search walker (T3): walks a subtree and emits hits in batches. ────
@@ -431,12 +446,15 @@ const CURRENT_EVERY: Duration = Duration::from_millis(100);
 /// round trips, few enough not to flood it or a disk.
 const CONTENT_READS_IN_FLIGHT: usize = 8;
 
-/// Cap on a match's `preview` character count (server-side trimming).
+/// Cap on a match's `preview` character count (server-side trimming), `…`
+/// marks included: a longer line is cut to a window centred on its first
+/// match (0.86.0).
 const PREVIEW_MAX_CHARS: usize = 160;
 /// RAM budget per line on the decode path (`scan_decode_lines`): a line
 /// without `'\n'` that exceeds this size is evaluated TRUNCATED to this
 /// prefix and the rest is discarded up to the next `'\n'` (avoids dumping a
-/// single giant-line file entirely into memory).
+/// single giant-line file entirely into memory). Such a line files ONE
+/// match, at its start offset, however many it holds (0.86.0).
 const LINE_MATCH_CAP: usize = 1 << 20;
 
 /// Already-compiled content criterion.
@@ -451,12 +469,27 @@ enum ContentSpec {
     Regex(ContentRegex),
 }
 
+impl ContentSpec {
+    /// What locates the match inside a line this criterion matched
+    /// (0.86.0): the literal escaped, or the regex itself.
+    fn spans(&self, case_sensitive: bool) -> Option<ContentRegex> {
+        match self {
+            Self::Literal(c) => ContentRegex::new(&regex::escape(c), case_sensitive).ok(),
+            Self::Regex(re) => Some(re.clone()),
+            Self::None => None,
+        }
+    }
+}
+
 /// [`FsSearchParams`] criteria already validated and COMPILED (name/content
 /// matchers). Built BEFORE the Task: an invalid glob/regex or an illegal
 /// combination is a REQUEST error, not a Task failure.
 pub struct SearchMatchers {
     name: Option<NameMatcher>,
     content: ContentSpec,
+    /// What locates the match inside a matching line (0.86.0): the literal
+    /// escaped, or the content regex itself. `None` without content.
+    spans: Option<ContentRegex>,
     case_sensitive: bool,
     /// Hit cap (already converted to `usize`); `None` = no cap.
     max_hits: Option<usize>,
@@ -471,6 +504,9 @@ pub struct SearchMatchers {
     /// The encoding to read content with, if the reader forced one
     /// (0.81.0). `None` = whatever each file's detection says.
     encoding: Option<&'static Encoding>,
+    /// Matching lines per file the request asked for, already clamped
+    /// (0.86.0). `None` = the first one only, and stop there.
+    per_file: Option<usize>,
 }
 
 /// What is asked of an entry IN ADDITION to matching by name or content
@@ -662,6 +698,7 @@ impl SearchMatchers {
         };
         Ok(Self {
             name,
+            spans: content.spans(cs),
             content,
             case_sensitive: cs,
             max_hits: params.max_hits.map(|m| m as usize),
@@ -669,6 +706,9 @@ impl SearchMatchers {
             excluded_dir_names,
             recursive: params.recursive,
             encoding,
+            per_file: params
+                .max_matches_per_file
+                .map(|n| n.clamp(1, norte_proto::methods::SEARCH_MATCHES_PER_FILE_MAX) as usize),
         })
     }
 
@@ -694,34 +734,80 @@ impl SearchMatchers {
     fn searches_content(&self) -> bool {
         !matches!(self.content, ContentSpec::None)
     }
+
+    /// How many matching lines per file the scan keeps (0.86.0).
+    fn want(&self) -> Want {
+        self.per_file.map_or(
+            Want {
+                keep: 1,
+                count_more: false,
+            },
+            |keep| Want {
+                keep,
+                count_more: true,
+            },
+        )
+    }
 }
 
 /// Batch of hits under construction; `matches` is only populated for
-/// content searches (aligned 1:1 with `entries`).
+/// content searches (aligned 1:1 with `entries`), and `all`/`more` only
+/// when the search asked for several lines per file.
 struct Batch {
     task_id: TaskId,
     content: bool,
+    per_file: bool,
     entries: Vec<Entry>,
     matches: Vec<MatchInfo>,
+    all: Vec<Vec<MatchInfo>>,
+    more: Vec<u32>,
+    /// `MatchInfo`s held in `all`, against [`SEARCH_HITS_MAX_LINES`].
+    lines: usize,
 }
 
 impl Batch {
-    fn new(task_id: TaskId, content: bool) -> Self {
+    fn new(task_id: TaskId, content: bool, per_file: bool) -> Self {
         Self {
             task_id,
             content,
+            per_file,
             entries: Vec::new(),
             matches: Vec::new(),
+            all: Vec::new(),
+            more: Vec::new(),
+            lines: 0,
         }
     }
 
-    fn push(&mut self, entry: Entry, info: Option<MatchInfo>) {
+    /// Would adding this hit take the batch past one notification's bounds
+    /// ([`SEARCH_HITS_MAX_BATCH`] entries, [`SEARCH_HITS_MAX_LINES`] kept
+    /// lines)? Then what is held goes out first. An empty batch always takes
+    /// it: one file's lines fit by construction.
+    fn would_overflow(&self, found: Option<&FileMatches>) -> bool {
+        let incoming = if self.content && self.per_file {
+            found.map_or(0, |f| f.lines.len())
+        } else {
+            0
+        };
+        !self.is_empty()
+            && (self.len() >= SEARCH_HITS_MAX_BATCH
+                || self.lines + incoming > SEARCH_HITS_MAX_LINES)
+    }
+
+    fn push(&mut self, entry: Entry, found: Option<FileMatches>) {
         self.entries.push(entry);
         if self.content {
-            self.matches.push(info.unwrap_or(MatchInfo {
-                line: None,
-                preview: None,
-            }));
+            let found = found.unwrap_or_default();
+            if self.per_file {
+                self.matches
+                    .push(found.lines.first().cloned().unwrap_or_default());
+                self.lines += found.lines.len();
+                self.all.push(found.lines);
+                self.more.push(found.more);
+            } else {
+                self.matches
+                    .push(found.lines.into_iter().next().unwrap_or_default());
+            }
         }
     }
 
@@ -735,6 +821,7 @@ impl Batch {
 
     /// Extracts the accumulated batch as [`SearchHits`], leaving the buffer empty.
     fn take(&mut self) -> SearchHits {
+        self.lines = 0;
         SearchHits {
             task_id: self.task_id,
             entries: std::mem::take(&mut self.entries),
@@ -743,6 +830,8 @@ impl Batch {
             } else {
                 None
             },
+            all_matches: (self.content && self.per_file).then(|| std::mem::take(&mut self.all)),
+            more: (self.content && self.per_file).then(|| std::mem::take(&mut self.more)),
         }
     }
 }
@@ -808,8 +897,9 @@ async fn flush(
 ///   skipped on error); `bytes_done` = number of accumulated hits (reuses
 ///   the field, there are no real bytes in a search); `current` = last
 ///   entry seen.
-/// - **Coalescing**: hits accumulate up to [`SEARCH_HITS_MAX_BATCH`] or
-///   drain every `FLUSH_INTERVAL` (whichever comes first).
+/// - **Coalescing**: hits accumulate up to [`SEARCH_HITS_MAX_BATCH`] entries
+///   or [`SEARCH_HITS_MAX_LINES`] kept lines, or drain every
+///   `FLUSH_INTERVAL` (whichever comes first).
 ///
 /// # Errors
 /// [`Error::Cancelled`] if cancelled; it never propagates per-entry errors
@@ -835,7 +925,7 @@ pub async fn run_walk(
     }
     let task_id = ctx.progress.snapshot().task_id;
     let content_search = matchers.searches_content();
-    let mut batch = Batch::new(task_id, content_search);
+    let mut batch = Batch::new(task_id, content_search, matchers.per_file.is_some());
     let mut last_flush = Instant::now();
     // In the past, so the first entry is shown.
     let mut last_current = Instant::now()
@@ -858,9 +948,23 @@ pub async fn run_walk(
     // A result goes in the batch; at the cap, what is pending is drained
     // and the search COMPLETES (the cap was reached), dropping the reads
     // still in flight.
+    // A hit that would take the batch past a notification's bounds sends
+    // what is held first: dense files at many lines each would otherwise
+    // build a frame over `MAX_FRAME_BYTES`, and the client cuts the
+    // connection. Here and not in the loop's flush check, because the
+    // reads in flight settle without passing through it.
     macro_rules! hit {
         ($entry:expr, $info:expr) => {{
-            batch.push($entry, $info);
+            let info: Option<FileMatches> = $info;
+            if batch.would_overflow(info.as_ref()) {
+                match flush(&tx, &mut batch, &ctx.cancel).await {
+                    FlushOutcome::Continue => last_flush = Instant::now(),
+                    FlushOutcome::ReceiverGone | FlushOutcome::Cancelled => {
+                        return Err(Error::Cancelled);
+                    }
+                }
+            }
+            batch.push($entry, info);
             hits += 1;
             ctx.progress.update(|p| p.bytes_done = hits as u64);
             if matchers.max_hits.is_some_and(|max| hits >= max) {
@@ -873,7 +977,7 @@ pub async fn run_walk(
     // unreadable file is skipped; a cancellation ends the search.
     macro_rules! settle {
         ($done:expr) => {{
-            let (entry, found): (Entry, Result<Option<MatchInfo>, Error>) = $done;
+            let (entry, found): (Entry, Result<Option<FileMatches>, Error>) = $done;
             match found {
                 Ok(Some(info)) => hit!(entry, Some(info)),
                 Err(Error::Cancelled) => return Err(Error::Cancelled),
@@ -1027,14 +1131,14 @@ pub async fn run_walk(
 }
 
 /// Searches for the content criterion in ONE file, streaming. Returns the
-/// first match's context (`line`/`preview`) or `None` (no match / binary /
-/// empty).
+/// matching lines [`SearchMatchers::want`] asks for, or `None` (no match /
+/// binary / empty).
 async fn search_content(
     provider: &dyn Provider,
     path: &VPath,
     matchers: &SearchMatchers,
     cancel: &CancellationToken,
-) -> Result<Option<MatchInfo>, Error> {
+) -> Result<Option<FileMatches>, Error> {
     let mut stream = provider.read(path, None).await?;
     // First NON-empty chunk for encoding detection.
     let first = loop {
@@ -1063,50 +1167,149 @@ async fn search_content(
     // always, and this is for when it is not.
     let enc = matchers.encoding.unwrap_or(enc);
     let cs = matchers.case_sensitive;
-    match &matchers.content {
-        ContentSpec::None => Ok(None),
+    let want = matchers.want();
+    let found = match &matchers.content {
+        ContentSpec::None => return Ok(None),
         ContentSpec::Literal(text) => {
             // UTF-16 (BOM): the needle is not transcoded to UTF-16
             // (needle_cycle excludes it), so these files are routed through
             // DECODE by lines — they would never match in the byte scan.
             if is_utf16(enc) {
                 let needle = text.clone();
-                scan_decode_lines(enc, first.to_vec(), stream, cancel, move |line| {
+                let spans = matchers.spans.clone();
+                scan_decode_lines(enc, first.to_vec(), stream, cancel, want, move |line| {
                     line_contains(line, &needle, cs)
+                        .then(|| spans.as_ref().map(|re| re.spans(line)).unwrap_or_default())
                 })
-                .await
+                .await?
             } else {
                 match ContentNeedle::for_encoding(text, cs, enc) {
-                    Some(needle) => scan_bytes(&needle, enc, first.to_vec(), stream, cancel).await,
-                    None => Ok(None), // empty needle after encoding: no useful match
+                    Some(needle) => {
+                        scan_bytes(
+                            &needle,
+                            enc,
+                            first.to_vec(),
+                            stream,
+                            cancel,
+                            matchers.spans.as_ref(),
+                            want,
+                        )
+                        .await?
+                    }
+                    None => return Ok(None), // empty needle after encoding: no useful match
                 }
             }
         }
         ContentSpec::Regex(re) => {
             let re = re.clone();
-            scan_decode_lines(enc, first.to_vec(), stream, cancel, move |line| {
-                re.is_match(line)
+            scan_decode_lines(enc, first.to_vec(), stream, cancel, want, move |line| {
+                re.is_match(line).then(|| re.spans(line))
             })
-            .await
+            .await?
         }
+    };
+    Ok((!found.lines.is_empty()).then_some(found))
+}
+
+/// What one file's content scan found (0.86.0).
+#[derive(Debug, Default)]
+struct FileMatches {
+    /// The matching LINES kept, in file order.
+    lines: Vec<MatchInfo>,
+    /// Further matching lines past the cap, counted and not kept.
+    more: u32,
+}
+
+/// How many matching lines a scan keeps, and whether it reads on to count
+/// the rest. `{ keep: 1, count_more: false }` stops at the first hit.
+#[derive(Debug, Clone, Copy)]
+struct Want {
+    keep: usize,
+    count_more: bool,
+}
+
+impl FileMatches {
+    /// One more matching line: kept while there is room (`make` builds it
+    /// only then), counted after. `true` = nothing more is wanted.
+    fn add(&mut self, want: Want, make: impl FnOnce() -> MatchInfo) -> bool {
+        if self.lines.len() < want.keep {
+            self.lines.push(make());
+        } else {
+            self.more = self.more.saturating_add(1);
+        }
+        self.lines.len() >= want.keep && !want.count_more
+    }
+}
+
+/// A matching line as the wire carries it.
+fn matched(
+    line: u64,
+    offset: Option<u64>,
+    text: &str,
+    spans: &[std::ops::Range<usize>],
+) -> MatchInfo {
+    let (preview, ranges) = preview_with_ranges(text, spans);
+    MatchInfo {
+        line: Some(line),
+        offset,
+        preview: Some(preview),
+        ranges: Some(ranges),
+    }
+}
+
+/// Where a byte scan is: the absolute offset of the first byte still held
+/// (`tail[0]`), how many `\n` lie before it, and where the line holding it
+/// began.
+#[derive(Debug, Default, Clone, Copy)]
+struct Cursor {
+    abs: u64,
+    nl: u64,
+    line_start: u64,
+}
+
+impl Cursor {
+    /// `seen` leaves the window: count its newlines, remember the last line start.
+    fn advance(&mut self, seen: &[u8]) {
+        self.nl += count_nl(seen);
+        if let Some(i) = memchr::memrchr(b'\n', seen) {
+            self.line_start = self.abs + i as u64 + 1;
+        }
+        self.abs += seen.len() as u64;
     }
 }
 
 /// LITERAL byte-against-byte scan with the multi-encoding needle and
-/// overlap between chunks; tracks the line (counting `\n`) for the match's
-/// context. Same mechanics as [`ContentNeedle::find_in`] but inline, because
-/// it needs `pos` and the accumulated `\n`s to compute `line`/`preview`
-/// (which `find_in` does not expose).
+/// overlap between chunks; tracks the line (counting `\n`) and the line's
+/// start offset for each match's context. Same mechanics as
+/// [`ContentNeedle::find_in`] but inline, because it needs every hit's
+/// position and the accumulated `\n`s (which `find_in` does not expose).
+///
+/// Files every matching LINE `want` asks for (0.86.0): several hits on one
+/// line are that one line, and a hit already seen in the retained tail is
+/// not filed twice.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scan loop: the cursor, the open line and the tail are shared state"
+)]
 async fn scan_bytes(
     needle: &ContentNeedle,
     enc: &'static Encoding,
     first: Vec<u8>,
     mut stream: ByteStream,
     cancel: &CancellationToken,
-) -> Result<Option<MatchInfo>, Error> {
+    spans: Option<&ContentRegex>,
+    want: Want,
+) -> Result<FileMatches, Error> {
+    let mut found = FileMatches::default();
     let mut tail: Vec<u8> = Vec::new();
-    // Count of `\n` in bytes that have ALREADY left `tail` (committed front of the file).
-    let mut committed_nl: u64 = 0;
+    let mut at = Cursor::default();
+    // A hit starting before `resume` is on a line already filed.
+    let mut resume: u64 = 0;
+    // The last filed line has not ended in what was read yet.
+    let mut open_line = false;
+    // Absolute end of what was already searched: a hit wholly before it
+    // was seen in an earlier pass (a short needle can fit in `tail`).
+    let mut searched_to: u64 = 0;
     let mut chunk = Some(bytes::Bytes::from(first));
     // Built once per file, not once per chunk (#391).
     let finders: Vec<memchr::memmem::Finder<'_>> = needle
@@ -1127,37 +1330,111 @@ async fn scan_bytes(
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
+        let base = at.abs;
+        let end = base + (tail.len() + c.len()) as u64;
         // Positions are in `tail ++ c`, which is only materialised on a hit
-        // (#391: copying every chunk into it doubled the bytes touched).
-        if let Some(pos) = first_hit(&finders, &tail, &c, keep) {
+        // or while a filed line is still open (#391: copying every chunk
+        // into it doubled the bytes touched).
+        // A filed line still open with no `\n` in the new bytes (a giant
+        // single-line file): every hit here is on it, so nothing to search.
+        let inside_open_line = open_line && memchr::memchr(b'\n', &c).is_none();
+        if inside_open_line {
+            resume = end;
+        }
+        if !inside_open_line && (open_line || first_hit(&finders, &tail, &c, keep).is_some()) {
             let mut buf = std::mem::take(&mut tail);
             buf.extend_from_slice(&c);
-            let line = committed_nl + count_nl(&buf[..pos]) + 1;
-            let preview = extract_line_preview(&buf, pos, enc);
-            return Ok(Some(MatchInfo {
-                line: Some(line),
-                preview: Some(preview),
-            }));
-        }
-        // Retains the last `max_len-1` bytes (overlap); the rest is committed.
-        let total = tail.len() + c.len();
-        let split = total - keep.min(total);
-        if split >= tail.len() {
-            committed_nl += count_nl(&tail) + count_nl(&c[..split - tail.len()]);
-            tail = c[split - tail.len()..].to_vec();
+            if open_line {
+                // The filed line ends at the first `\n` in the NEW bytes.
+                let from =
+                    usize::try_from(searched_to - base).map_or(buf.len(), |f| f.min(buf.len()));
+                match memchr::memchr(b'\n', &buf[from..]) {
+                    Some(i) => {
+                        resume = base + (from + i + 1) as u64;
+                        open_line = false;
+                    }
+                    None => resume = end,
+                }
+            }
+            let hits: Vec<(usize, usize)> = if want.count_more {
+                let mut all: Vec<(usize, usize)> = finders
+                    .iter()
+                    .flat_map(|f| {
+                        let n = f.needle().len();
+                        f.find_iter(&buf).map(move |p| (p, n))
+                    })
+                    .collect();
+                all.sort_unstable();
+                all
+            } else {
+                // Stopping at the first hit: nothing was filed before, so
+                // the earliest hit is the one, and the rest of the buffer
+                // is never searched (#391).
+                debug_assert_eq!(want.keep, 1, "stop-at-first keeps exactly one line");
+                finders
+                    .iter()
+                    .filter_map(|f| f.find(&buf).map(|p| (p, f.needle().len())))
+                    .min()
+                    .into_iter()
+                    .collect()
+            };
+            for (p, n) in hits {
+                let abs = base + p as u64;
+                if abs < resume || abs + n as u64 <= searched_to {
+                    continue;
+                }
+                let le = memchr::memchr(b'\n', &buf[p..]).map(|i| p + i);
+                let done = found.add(want, || {
+                    let ls = memchr::memrchr(b'\n', &buf[..p]).map(|i| i + 1);
+                    let line = at.nl + count_nl(&buf[..p]) + 1;
+                    let offset = ls.map_or(at.line_start, |i| base + i as u64);
+                    let (preview, ranges) =
+                        line_preview(&buf[ls.unwrap_or(0)..le.unwrap_or(buf.len())], enc, spans);
+                    MatchInfo {
+                        line: Some(line),
+                        offset: Some(offset),
+                        preview: Some(preview),
+                        ranges: Some(ranges),
+                    }
+                });
+                if done {
+                    return Ok(found);
+                }
+                if let Some(i) = le {
+                    resume = base + i as u64 + 1;
+                } else {
+                    resume = end;
+                    open_line = true;
+                }
+            }
+            let split = buf.len() - keep.min(buf.len());
+            at.advance(&buf[..split]);
+            tail = buf[split..].to_vec();
         } else {
-            committed_nl += count_nl(&tail[..split]);
-            tail.drain(..split);
-            tail.extend_from_slice(&c);
+            // Retains the last `max_len-1` bytes (overlap); the rest is committed.
+            let total = tail.len() + c.len();
+            let split = total - keep.min(total);
+            if split >= tail.len() {
+                at.advance(&tail);
+                at.advance(&c[..split - tail.len()]);
+                tail = c[split - tail.len()..].to_vec();
+            } else {
+                at.advance(&tail[..split]);
+                tail.drain(..split);
+                tail.extend_from_slice(&c);
+            }
         }
+        searched_to = end;
     }
-    Ok(None)
+    Ok(found)
 }
 
 /// The earliest match of any finder in `tail ++ chunk`, as a position in
-/// that concatenation, without building it. `tail` was already searched and
-/// holds no whole match, so one starting in it straddles into the first
-/// `keep` bytes of `chunk`; one starting in `chunk` is found in `chunk`.
+/// that concatenation, without building it. A match starting in `tail`
+/// straddles into the first `keep` bytes of `chunk`; one starting in
+/// `chunk` is found in `chunk`. `tail` may hold a match already filed
+/// (0.86.0, a short needle fits in it): a hit there only sends the chunk
+/// down the slow path, where `searched_to` discards it.
 fn first_hit(
     finders: &[memchr::memmem::Finder<'_>],
     tail: &[u8],
@@ -1195,13 +1472,25 @@ fn first_hit(
 /// prefix and the rest is discarded up to the next `'\n'` — a match beyond
 /// the cap within a single giant line is lost (documented limit; the
 /// preview is already capped to [`PREVIEW_MAX_CHARS`]).
+///
+/// `find` answers, for a decoded line, `None` (no match) or the byte spans
+/// of the match in it (0.86.0; empty = matched but nothing to paint).
 async fn scan_decode_lines(
     enc: &'static Encoding,
     first: Vec<u8>,
     mut stream: ByteStream,
     cancel: &CancellationToken,
-    mut matches: impl FnMut(&str) -> bool,
-) -> Result<Option<MatchInfo>, Error> {
+    want: Want,
+    mut find: impl FnMut(&str) -> Option<Vec<std::ops::Range<usize>>>,
+) -> Result<FileMatches, Error> {
+    let mut found = FileMatches::default();
+    // The decoder sniffs a BOM, consumes it and follows the encoding it
+    // names: offsets start past it, counted in that encoding.
+    let bom = Encoding::for_bom(&first);
+    let enc_for_offsets = bom.map_or(enc, |(e, _)| e);
+    // No offsets for UTF-16 at all (see `encoded_len`), not even line one's.
+    let mut offset: Option<u64> =
+        encoded_len("", enc_for_offsets).map(|_| bom.map_or(0, |(_, n)| n as u64));
     let mut decoder = norte_encoding::StreamDecoder::new(enc);
     let mut pending = String::new();
     let mut line_no: u64 = 0;
@@ -1231,17 +1520,18 @@ async fn scan_decode_lines(
             let line = &pending[start..=nl];
             start = nl + 1;
             line_no += 1;
+            let here = offset;
+            offset = offset.and_then(|o| encoded_len(line, enc_for_offsets).map(|n| o + n));
             if skipping {
                 // The giant line was already evaluated truncated: just counted.
                 skipping = false;
                 continue;
             }
             let l = strip_eol(line);
-            if matches(l) {
-                return Ok(Some(MatchInfo {
-                    line: Some(line_no),
-                    preview: Some(trim_preview(l)),
-                }));
+            if let Some(spans) = find(l)
+                && found.add(want, || matched(line_no, here, l, &spans))
+            {
+                return Ok(found);
             }
         }
         pending.drain(..start);
@@ -1250,15 +1540,16 @@ async fn scan_decode_lines(
         // discard the rest up to the next '\n' (RAM cap).
         if !skipping && pending.len() > LINE_MATCH_CAP {
             let l = strip_eol(&pending);
-            if matches(l) {
-                return Ok(Some(MatchInfo {
-                    line: Some(line_no + 1),
-                    preview: Some(trim_preview(l)),
-                }));
+            if let Some(spans) = find(l)
+                && found.add(want, || matched(line_no + 1, offset, l, &spans))
+            {
+                return Ok(found);
             }
+            offset = offset.and_then(|o| encoded_len(&pending, enc_for_offsets).map(|n| o + n));
             pending.clear();
             skipping = true;
         } else if skipping {
+            offset = offset.and_then(|o| encoded_len(&pending, enc_for_offsets).map(|n| o + n));
             pending.clear();
         }
 
@@ -1267,15 +1558,31 @@ async fn scan_decode_lines(
             if !skipping && !pending.is_empty() {
                 line_no += 1;
                 let l = strip_eol(&pending);
-                if matches(l) {
-                    return Ok(Some(MatchInfo {
-                        line: Some(line_no),
-                        preview: Some(trim_preview(l)),
-                    }));
+                if let Some(spans) = find(l) {
+                    found.add(want, || matched(line_no, offset, l, &spans));
                 }
             }
-            return Ok(None);
+            return Ok(found);
         }
+    }
+}
+
+/// Bytes `text` took in `enc`: exact for UTF-8 and single-byte encodings,
+/// `None` for the rest (`MatchInfo::offset`).
+///
+/// `None` for UTF-16 too, although it could be counted: a viewer that reads
+/// a window from the middle of a UTF-16 file gets no BOM, cuts on a `0x0A`
+/// byte that may be half a code unit and detects the window as binary. With
+/// no offset it reads from the top, which is right up to its cap.
+fn encoded_len(text: &str, enc: &'static Encoding) -> Option<u64> {
+    if enc == norte_encoding::UTF_8 {
+        Some(text.len() as u64)
+    } else if is_utf16(enc) {
+        None
+    } else if enc.is_single_byte() {
+        Some(text.chars().count() as u64)
+    } else {
+        None
     }
 }
 
@@ -1298,7 +1605,8 @@ fn line_contains(line: &str, needle: &str, case_sensitive: bool) -> bool {
     }
 }
 
-/// Sanitizes the preview AT THE SOURCE and trims it to `PREVIEW_MAX_CHARS`.
+/// Sanitizes the preview AT THE SOURCE and trims it to `PREVIEW_MAX_CHARS`,
+/// returning with it where the match is in it (0.86.0).
 /// The order matters: it masks FIRST (controls/bidi/invisibles → `U+FFFD`
 /// via [`norte_encoding::mask_terminal_hazards`]) and trims AFTER, so the
 /// cut never lands inside a bidi isolate (already `U+FFFD`) nor leaves an
@@ -1310,29 +1618,80 @@ fn line_contains(line: &str, needle: &str, case_sensitive: bool) -> bool {
 /// is still not aware of grapheme/terminal cell (a combining cluster or a
 /// double-width char can end up cut at the edge): sanitize-first removes
 /// the concrete BIDI risk; grapheme/cell remains tied to #79/#81.
-fn trim_preview(line: &str) -> String {
-    norte_encoding::mask_terminal_hazards(line)
+///
+/// Masking is char-for-char, so char indices of `line` index the masked
+/// text. `spans` are sorted BYTE ranges of `line`; a line longer than the
+/// cap is cut to a window centred on the first span, with `…` at each cut
+/// end, and the ranges come back in CHARS of the preview as sent. Without a
+/// span the preview is the head of the line, as before 0.86.0.
+fn preview_with_ranges(line: &str, spans: &[std::ops::Range<usize>]) -> (String, Vec<(u32, u32)>) {
+    // Byte spans → char spans, in one pass (the spans are sorted).
+    let mut chars: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+    let mut it = line.char_indices().map(|(b, _)| b).enumerate().peekable();
+    for s in spans {
+        let mut to_char = |byte: usize| {
+            while let Some(&(_, b)) = it.peek() {
+                if b >= byte {
+                    break;
+                }
+                it.next();
+            }
+            it.peek().map_or(line.chars().count(), |&(c, _)| c)
+        };
+        let cs = to_char(s.start);
+        let ce = to_char(s.end);
+        chars.push((cs, ce));
+    }
+    let masked: Vec<char> = norte_encoding::mask_terminal_hazards(line)
         .chars()
-        .take(PREVIEW_MAX_CHARS)
-        .collect()
+        .collect();
+    // A preview is at most PREVIEW_MAX_CHARS chars, so every index fits.
+    let cast = |i: usize| u32::try_from(i).unwrap_or(u32::MAX);
+    if masked.len() <= PREVIEW_MAX_CHARS {
+        let ranges = chars.iter().map(|&(s, e)| (cast(s), cast(e))).collect();
+        return (masked.into_iter().collect(), ranges);
+    }
+    let Some(&(s, e)) = chars.first() else {
+        return (
+            masked.into_iter().take(PREVIEW_MAX_CHARS).collect(),
+            Vec::new(),
+        );
+    };
+    let room = PREVIEW_MAX_CHARS - 2;
+    let len = (e - s).min(room);
+    let start = s.saturating_sub((room - len) / 2).min(masked.len() - room);
+    let end = start + room;
+    let lead = usize::from(start > 0);
+    let mut preview = String::with_capacity(PREVIEW_MAX_CHARS * 4);
+    if start > 0 {
+        preview.push('…');
+    }
+    preview.extend(&masked[start..end]);
+    if end < masked.len() {
+        preview.push('…');
+    }
+    let ranges = chars
+        .iter()
+        .map(|&(s, e)| (s.clamp(start, end), e.clamp(start, end)))
+        .filter(|(s, e)| s < e)
+        .map(|(s, e)| (cast(s - start + lead), cast(e - start + lead)))
+        .collect();
+    (preview, ranges)
 }
 
-/// Extracts the line containing offset `pos` within `buf` (between the
-/// surrounding `\n`s, or the buffer's edges), decoded and trimmed. Limit: if
-/// the line started before the retained `tail` (a line longer than the
+/// The preview of one raw line (between `\n`s, or the buffer's edges):
+/// decoded, `\r` stripped, its match located with `spans`. Limit: if the
+/// line started before the retained `tail` (a line longer than the
 /// overlap), the preview ends up trimmed on the left — best-effort.
-fn extract_line_preview(buf: &[u8], pos: usize, enc: &'static Encoding) -> String {
-    let start = buf[..pos]
-        .iter()
-        .rposition(|&b| b == b'\n')
-        .map_or(0, |i| i + 1);
-    let end = buf[pos..]
-        .iter()
-        .position(|&b| b == b'\n')
-        .map_or(buf.len(), |i| pos + i);
-    let decoded = norte_encoding::decode(&buf[start..end], enc, true).text;
+fn line_preview(
+    raw: &[u8],
+    enc: &'static Encoding,
+    spans: Option<&ContentRegex>,
+) -> (String, Vec<(u32, u32)>) {
+    let decoded = norte_encoding::decode(raw, enc, true).text;
     let line = decoded.strip_suffix('\r').unwrap_or(&decoded);
-    trim_preview(line)
+    let found = spans.map(|re| re.spans(line)).unwrap_or_default();
+    preview_with_ranges(line, &found)
 }
 
 /// Number of `\n` in `bytes`.
@@ -1442,6 +1801,196 @@ mod tests {
             .expect("walk complete");
         drop(ctx);
         h.await.expect("collector")
+    }
+
+    /// A tree of named files with bodies, walked with `p`; every batch.
+    async fn batches(files: &[(&str, &[u8])], p: FsSearchParams) -> Vec<SearchHits> {
+        let mem = Arc::new(MemProvider::new());
+        mem.mkdir(&vp("mem:///t")).await.expect("mkdir");
+        for (name, body) in files {
+            // `dir/file`: the folder first (once is enough; again is an error
+            // nobody needs to read).
+            if let Some((dir, _)) = name.rsplit_once('/') {
+                let _ = mem.mkdir(&vp(&format!("mem:///t/{dir}"))).await;
+            }
+            let mut sink = mem
+                .write(&vp(&format!("mem:///t/{name}")))
+                .await
+                .expect("write");
+            sink.write(bytes::Bytes::copy_from_slice(body))
+                .await
+                .expect("chunk");
+            sink.commit().await.expect("commit");
+        }
+        let matchers = SearchMatchers::compile(&p).expect("criteria");
+        let (tx, mut rx) = mpsc::channel::<SearchHits>(64);
+        let ctx = test_ctx();
+        let provider: Arc<dyn Provider> = mem;
+        let h = tokio::spawn(async move {
+            let mut out = Vec::new();
+            while let Some(b) = rx.recv().await {
+                out.push(b);
+            }
+            out
+        });
+        run_walk(provider, vp("mem:///t"), matchers, Vec::new(), tx, &ctx)
+            .await
+            .expect("walk");
+        drop(ctx);
+        h.await.expect("collector")
+    }
+
+    fn content_in_t(needle: &str, per_file: Option<u32>) -> FsSearchParams {
+        FsSearchParams {
+            content: Some(needle.to_owned()),
+            max_matches_per_file: per_file,
+            ..FsSearchParams::new(vp("mem:///t"))
+        }
+    }
+
+    /// Asked for two lines per file: two kept, the third counted, and the
+    /// 0.85 `matches` still carries the FIRST so an old reader is unchanged.
+    #[tokio::test]
+    async fn per_file_cap_keeps_and_counts() {
+        let b = batches(
+            &[("a.txt", b"x\naguja 1\naguja 2\naguja 3\n")],
+            content_in_t("aguja", Some(2)),
+        )
+        .await;
+        let b = &b[0];
+        let all = b.all_matches.as_ref().expect("asked for");
+        assert_eq!(
+            all[0].iter().map(|m| m.line).collect::<Vec<_>>(),
+            vec![Some(2), Some(3)]
+        );
+        assert_eq!(b.more.as_deref(), Some(&[1][..]));
+        assert_eq!(b.matches.as_ref().expect("content")[0].line, Some(2));
+    }
+
+    /// Not asked: the batch is 0.85's shape — no `all_matches`, no `more`.
+    #[tokio::test]
+    async fn without_the_field_the_batch_keeps_its_old_shape() {
+        let b = batches(&[("a.txt", b"aguja\naguja\n")], content_in_t("aguja", None)).await;
+        assert_eq!(
+            (b[0].all_matches.is_none(), b[0].more.is_none()),
+            (true, true)
+        );
+    }
+
+    /// `entries`, `matches`, `all_matches` and `more` all line up, batch by batch.
+    fn assert_aligned(b: &SearchHits) {
+        let n = b.entries.len();
+        assert_eq!(b.matches.as_ref().map(Vec::len), Some(n));
+        assert_eq!(b.all_matches.as_ref().map(Vec::len), Some(n));
+        assert_eq!(b.more.as_ref().map(Vec::len), Some(n));
+    }
+
+    /// Dense files at the per-file cap do not pile into one frame: a batch
+    /// closes at [`SEARCH_HITS_MAX_LINES`] kept lines (a 256-entry batch of
+    /// them would pass `MAX_FRAME_BYTES` and the client would cut the
+    /// connection), every line still arrives, and the arrays stay aligned.
+    #[tokio::test]
+    async fn dense_files_split_into_batches_within_the_line_budget() {
+        let cap = norte_proto::methods::SEARCH_MATCHES_PER_FILE_MAX;
+        let body = "aguja\n".repeat(cap as usize + 5);
+        let names: Vec<String> = (0..5).map(|i| format!("f{i}.txt")).collect();
+        let files: Vec<(&str, &[u8])> = names
+            .iter()
+            .map(|n| (n.as_str(), body.as_bytes()))
+            .collect();
+        let b = batches(&files, content_in_t("aguja", Some(cap))).await;
+        assert!(b.len() > 1, "{} batch(es)", b.len());
+        let mut total = 0;
+        for batch in &b {
+            assert_aligned(batch);
+            let lines: usize = batch
+                .all_matches
+                .as_ref()
+                .expect("asked for")
+                .iter()
+                .map(Vec::len)
+                .sum();
+            assert!(lines <= SEARCH_HITS_MAX_LINES, "{lines} lines in one batch");
+            assert!(
+                batch
+                    .more
+                    .as_ref()
+                    .expect("asked for")
+                    .iter()
+                    .all(|m| *m == 5)
+            );
+            total += lines;
+        }
+        assert_eq!(total, 5 * cap as usize);
+    }
+
+    /// Under the per-file request, only files whose content matched become
+    /// hits — a non-matching file and a folder do not — and the arrays stay
+    /// aligned with the entries.
+    #[tokio::test]
+    async fn per_file_batches_stay_aligned_with_misses_around() {
+        let b = batches(
+            &[
+                ("a.txt", b"aguja\nnada\naguja\n"),
+                ("b.txt", b"nada\n"),
+                ("sub/c.txt", b"aguja\n"),
+            ],
+            content_in_t("aguja", Some(10)),
+        )
+        .await;
+        let mut seen = Vec::new();
+        for batch in &b {
+            assert_aligned(batch);
+            for (e, lines) in batch
+                .entries
+                .iter()
+                .zip(batch.all_matches.as_ref().expect("asked for"))
+            {
+                seen.push((e.path.to_wire(), lines.len()));
+            }
+        }
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![
+                ("mem:///t/a.txt".to_owned(), 2),
+                ("mem:///t/sub/c.txt".to_owned(), 1)
+            ]
+        );
+    }
+
+    /// A NAME-only search ignores the per-file request: no content, so no
+    /// `matches`, `all_matches` nor `more` — folders and files alike.
+    #[tokio::test]
+    async fn a_name_search_sends_no_lines_even_when_asked() {
+        let p = FsSearchParams {
+            name_glob: Some("*".to_owned()),
+            max_matches_per_file: Some(10),
+            ..FsSearchParams::new(vp("mem:///t"))
+        };
+        let b = batches(&[("a.txt", b"aguja\n"), ("sub/c.txt", b"aguja\n")], p).await;
+        let entries: usize = b.iter().map(|x| x.entries.len()).sum();
+        assert_eq!(entries, 3, "a.txt, sub and sub/c.txt");
+        for batch in &b {
+            assert!(batch.matches.is_none() && batch.all_matches.is_none() && batch.more.is_none());
+        }
+    }
+
+    /// The daemon clamps what it is asked: 0 means one, and nobody gets
+    /// more than the protocol's ceiling.
+    #[test]
+    fn the_per_file_request_is_clamped() {
+        let at = |n| {
+            SearchMatchers::compile(&content_in_t("x", Some(n)))
+                .expect("criteria")
+                .want()
+                .keep
+        };
+        assert_eq!(at(0), 1);
+        assert_eq!(
+            at(5000),
+            norte_proto::methods::SEARCH_MATCHES_PER_FILE_MAX as usize
+        );
     }
 
     /// Excluding a folder NAME skips it at any level, and only stops the
@@ -1897,8 +2446,284 @@ mod tests {
         assert!(n.find_in(&mut Overlap::default(), utf16_bom).is_none());
     }
 
-    /// `scan_bytes` over `content` cut at `cuts`.
+    const ONE: Want = Want {
+        keep: 1,
+        count_more: false,
+    };
+    const ALL: Want = Want {
+        keep: 1000,
+        count_more: true,
+    };
+
+    fn spans_for(needle: &str, cs: bool) -> ContentRegex {
+        ContentRegex::new(&regex::escape(needle), cs).expect("literal regex")
+    }
+
     fn scan_cut(needle: &ContentNeedle, content: &[u8], cuts: &[usize]) -> Option<MatchInfo> {
+        scan_cut_with(needle, content, cuts, None, ONE)
+            .lines
+            .into_iter()
+            .next()
+    }
+
+    /// `scan_decode_lines` over `content` whole, with a regex.
+    fn decode_with(
+        enc: &'static Encoding,
+        content: &[u8],
+        re: &ContentRegex,
+        want: Want,
+    ) -> FileMatches {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let re = re.clone();
+        rt.block_on(scan_decode_lines(
+            enc,
+            content.to_vec(),
+            futures::stream::empty::<Result<bytes::Bytes, Error>>().boxed(),
+            &CancellationToken::new(),
+            want,
+            move |l| re.is_match(l).then(|| re.spans(l)),
+        ))
+        .expect("scan")
+    }
+
+    /// A match past column 160 used to be cut out of its own preview.
+    #[test]
+    fn a_match_far_into_the_line_is_in_the_preview_centred() {
+        let line = format!("{}aguja{}\n", "x".repeat(300), "y".repeat(300));
+        let needle = ContentNeedle::literal("aguja", true);
+        let hit = scan_cut_with(
+            &needle,
+            line.as_bytes(),
+            &[],
+            Some(&spans_for("aguja", true)),
+            ONE,
+        )
+        .lines
+        .remove(0);
+        let p: Vec<char> = hit.preview.expect("preview").chars().collect();
+        assert!(p.len() <= 160, "{}", p.len());
+        assert_eq!((p[0], p[p.len() - 1]), ('…', '…'));
+        let (start, end) = hit.ranges.expect("ranges")[0];
+        assert_eq!(
+            p[start as usize..end as usize].iter().collect::<String>(),
+            "aguja"
+        );
+        let centre = start.midpoint(end);
+        let half = u32::try_from(p.len() / 2).expect("short preview");
+        assert!(
+            centre.abs_diff(half) <= 1,
+            "centred: {centre} of {}",
+            p.len()
+        );
+    }
+
+    /// Ranges count CHARS of the preview, not bytes.
+    #[test]
+    fn ranges_index_chars_not_bytes() {
+        let n = ContentNeedle::literal("año", true);
+        let m = scan_cut_with(
+            &n,
+            "ñandú año\n".as_bytes(),
+            &[],
+            Some(&spans_for("año", true)),
+            ONE,
+        )
+        .lines
+        .remove(0);
+        assert_eq!(m.ranges, Some(vec![(6, 9)]));
+    }
+
+    /// Masking is char-for-char, so a hazard before the match does not move
+    /// the range off the needle.
+    #[test]
+    fn ranges_point_at_the_needle_after_masking() {
+        let n = ContentNeedle::literal("año", true);
+        let m = scan_cut_with(
+            &n,
+            "\u{202E}\u{1b}x año\n".as_bytes(),
+            &[],
+            Some(&spans_for("año", true)),
+            ONE,
+        )
+        .lines
+        .remove(0);
+        assert_eq!(m.preview.as_deref(), Some("\u{FFFD}\u{FFFD}x año"));
+        assert_eq!(m.ranges, Some(vec![(4, 7)]));
+    }
+
+    /// The literal path: the offset is the start of the matching LINE.
+    #[test]
+    fn the_byte_path_gives_the_line_start_offset() {
+        let n = ContentNeedle::literal("año", true);
+        let m = scan_cut(&n, "uno\ndos año\n".as_bytes(), &[]).expect("hit");
+        assert_eq!((m.line, m.offset), (Some(2), Some(4)));
+    }
+
+    /// Several lines are kept, several occurrences on one line are ONE line
+    /// with several ranges, and what is past the cap is counted.
+    #[test]
+    fn lines_are_kept_up_to_the_cap_and_the_rest_counted() {
+        let n = ContentNeedle::literal("año", true);
+        let body = "año\nx\naño y año\naño\naño\n";
+        let f = scan_cut_with(
+            &n,
+            body.as_bytes(),
+            &[],
+            Some(&spans_for("año", true)),
+            Want {
+                keep: 2,
+                count_more: true,
+            },
+        );
+        let lines: Vec<_> = f.lines.iter().map(|m| (m.line, m.offset)).collect();
+        // `año\n` is 5 bytes (ñ is two), `x\n` two: line 3 starts at 7.
+        assert_eq!(lines, vec![(Some(1), Some(0)), (Some(3), Some(7))]);
+        assert_eq!(f.lines[1].ranges, Some(vec![(0, 3), (6, 9)]));
+        assert_eq!(f.more, 2);
+    }
+
+    /// Without a request for more, the scan still stops at the first hit:
+    /// 0.85's cost for 0.85's question.
+    #[test]
+    fn one_line_asked_is_one_line_and_nothing_counted() {
+        let n = ContentNeedle::literal("año", true);
+        let f = scan_cut_with(&n, "año\naño\n".as_bytes(), &[], None, ONE);
+        assert_eq!((f.lines.len(), f.more), (1, 0));
+    }
+
+    /// The regex path: every occurrence ranged, offsets counted in bytes.
+    #[test]
+    fn the_regex_path_ranges_every_occurrence() {
+        let re = ContentRegex::new("a.o", true).expect("regex");
+        let f = decode_with(
+            norte_encoding::UTF_8,
+            "uno\naño y aro\n".as_bytes(),
+            &re,
+            ALL,
+        );
+        assert_eq!(f.lines[0].line, Some(2));
+        assert_eq!(f.lines[0].offset, Some(4));
+        assert_eq!(f.lines[0].ranges, Some(vec![(0, 3), (6, 9)]));
+    }
+
+    /// UTF-16 with a BOM: no offset (a window from the middle would not
+    /// decode), but the line and the ranges are there.
+    #[test]
+    fn utf16_has_no_offsets() {
+        let mut bytes = vec![0xFF, 0xFE];
+        for u in "uno\nhay año\n".encode_utf16() {
+            bytes.extend_from_slice(&u.to_le_bytes());
+        }
+        let enc = Encoding::for_label(b"utf-16le").expect("utf-16le");
+        let re = spans_for("año", true);
+        let f = decode_with(enc, &bytes, &re, ALL);
+        assert_eq!((f.lines[0].line, f.lines[0].offset), (Some(2), None));
+        assert_eq!(f.lines[0].ranges, Some(vec![(4, 7)]));
+    }
+
+    /// Whole word: only the standalone occurrence is ranged.
+    #[test]
+    fn whole_word_ranges_skip_partial_words() {
+        let re = ContentRegex::new(&whole_word_pattern("set"), true).expect("regex");
+        let f = decode_with(norte_encoding::UTF_8, b"offset set settings\n", &re, ALL);
+        assert_eq!(f.lines[0].ranges, Some(vec![(7, 10)]));
+    }
+
+    /// A line that matched as bytes of another encoding but whose text does
+    /// not contain the needle: a hit with no range, preview as before.
+    #[test]
+    fn without_a_range_the_preview_is_the_head_of_the_line() {
+        let line = "z".repeat(200);
+        let (p, r) = preview_with_ranges(&line, &[]);
+        assert_eq!((p.chars().count(), r), (160, vec![]));
+        assert!(!p.contains('…'));
+    }
+
+    /// A file that is one giant line, cut in many chunks, while counting:
+    /// the filed line stays open across all of them and a later line is
+    /// still found with the right number.
+    #[test]
+    fn a_giant_single_line_file_is_counted_right() {
+        let n = ContentNeedle::literal("año", true);
+        let mut body = "año ".to_owned();
+        body.push_str(&"x".repeat(5000));
+        body.push_str(" año\naño\n");
+        let cuts: Vec<usize> = (1..20).map(|i| i * 300).collect();
+        let f = scan_cut_with(&n, body.as_bytes(), &cuts, None, ALL);
+        assert_eq!(
+            f.lines.iter().map(|m| m.line).collect::<Vec<_>>(),
+            vec![Some(1), Some(2)]
+        );
+        assert_eq!(f.more, 0);
+    }
+
+    /// Counting does not make a scan miss cancellation: with the token
+    /// already cancelled, a file read on past its first line is `Cancelled`.
+    #[test]
+    fn counting_the_rest_of_a_file_still_honours_cancellation() {
+        let n = ContentNeedle::literal("a", true);
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let rest: ByteStream =
+            futures::stream::iter(vec![Ok(bytes::Bytes::from_static(b"a\na\n"))]).boxed();
+        let r = rt.block_on(scan_bytes(
+            &n,
+            norte_encoding::UTF_8,
+            b"a\n".to_vec(),
+            rest,
+            &cancel,
+            None,
+            ALL,
+        ));
+        assert!(matches!(r, Err(Error::Cancelled)));
+    }
+
+    proptest::proptest! {
+        /// Every matching line, its line number and its offset are the same
+        /// whatever the chunk cuts (the ranges are not compared) — a short needle repeated across a seam
+        /// is neither counted twice nor lost.
+        #[test]
+        fn all_matches_do_not_depend_on_where_chunks_are_cut(
+            parts in proptest::collection::vec(
+                proptest::prop_oneof![
+                    proptest::strategy::Just(b"a".to_vec()),
+                    proptest::strategy::Just(b"aa".to_vec()),
+                    proptest::strategy::Just(b"\n".to_vec()),
+                    proptest::strategy::Just("añ".as_bytes().to_vec()),
+                    proptest::strategy::Just("AÑO".as_bytes().to_vec()),
+                    proptest::strategy::Just(b"o".to_vec()),
+                ],
+                0..60,
+            ),
+            cuts in proptest::collection::vec(0usize..600, 0..16),
+        ) {
+            let content: Vec<u8> = parts.concat();
+            for needle in ["aa", "año"] {
+                let n = ContentNeedle::literal(needle, false);
+                let re = spans_for(needle, false);
+                let key = |f: FileMatches| {
+                    (f.more, f.lines.into_iter().map(|m| (m.line, m.offset)).collect::<Vec<_>>())
+                };
+                let whole = key(scan_cut_with(&n, &content, &[], Some(&re), ALL));
+                let cut = key(scan_cut_with(&n, &content, &cuts, Some(&re), ALL));
+                proptest::prop_assert_eq!(cut, whole);
+            }
+        }
+    }
+
+    /// `scan_bytes` over `content` cut at `cuts`, keeping what `want` asks.
+    fn scan_cut_with(
+        needle: &ContentNeedle,
+        content: &[u8],
+        cuts: &[usize],
+        spans: Option<&ContentRegex>,
+        want: Want,
+    ) -> FileMatches {
         let mut bounds: Vec<usize> = cuts.iter().map(|c| c % (content.len() + 1)).collect();
         bounds.push(0);
         bounds.push(content.len());
@@ -1927,6 +2752,8 @@ mod tests {
             first,
             stream,
             &CancellationToken::new(),
+            spans,
+            want,
         ))
         .expect("scan")
     }

@@ -379,7 +379,17 @@ impl State {
             }
             return self.close_slot_of_kind(kind, backend, mailbox);
         }
-        self.open_slot_of_kind(kind, backend, mailbox)
+        let (ack, mut outgoing) = self.open_slot_of_kind(kind, backend, mailbox);
+        // The search panel opens to be typed into, as in the terminal: it
+        // takes the keyboard, and the renderer focuses its input.
+        if kind == super::searchpanel::KIND
+            && let Some(id) = self.slot_of_kind(kind)
+        {
+            self.roles.set(RoleId::Active, id);
+            self.reconciles_roles();
+            outgoing.push(self.parche(vec![ViewChange::Layout(self.layout())]));
+        }
+        (ack, outgoing)
     }
 
     /// The slot of that kind, if the tree has one.
@@ -507,6 +517,11 @@ impl State {
             // tree every time the reader enters a folder.
             self.seed_branches();
             self.request_branches(backend, mailbox);
+        }
+        if kind == super::searchpanel::KIND {
+            // Rooted at the focused listing's folder; a restored panel
+            // starts here too, once the session has said where that is.
+            self.reconcile_search_panel(mailbox);
         }
         if kind == super::logpanel::KIND {
             // And the log starts polling: the panel promises it FOLLOWS what

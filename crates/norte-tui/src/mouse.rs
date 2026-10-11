@@ -571,6 +571,10 @@ pub enum After {
     /// A tree branch was activated (#136): same treatment as the sidebar
     /// row, and `App::tree_activate` says the destination.
     TreeActivate,
+    /// The search result that was already selected was pressed again: it
+    /// is activated through the SAME path as its `Enter`
+    /// (`searchpanel::activate`), which needs the backend.
+    SearchPanelActivate,
     /// The status bar's detached-session indicator was pressed: the run loop
     /// opens help on the page that explains it. Cannot be done here: help
     /// opens with the key sheet and the language, which belong to the run
@@ -905,6 +909,17 @@ fn side_panel_click(app: &mut App, col: u16, row: u16) -> Option<After> {
             crate::app::TreeClick::Activate => After::TreeActivate,
         });
     }
+    // A search result: the cursor and the keyboard go to it; the second
+    // press on it activates it, as the tree's does.
+    if let Some(index) = search_row_at(app, col, row) {
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        return Some(if app.search_panel_click(index) {
+            After::SearchPanelActivate
+        } else {
+            After::Nothing
+        });
+    }
     // A timeline row: selected, and its details open (2026-10-08).
     let index = timeline_row_at(app, col, row)?;
     app.mouse.drag.cancel();
@@ -925,6 +940,25 @@ fn timeline_row_at(app: &App, col: u16, row: u16) -> Option<usize> {
         .filter(|y| *y < rect.height.saturating_sub(2))?;
     let t = app.panes.timeline(slot)?;
     let window = crate::ui::timeline_window(t, rect.height.saturating_sub(2));
+    let index = window.start.checked_add(usize::from(y))?;
+    window.contains(&index).then_some(index)
+}
+
+/// The search panel's result row under `(col, row)`, inside its border and
+/// below its form, against the window `draw_search_panel` paints.
+fn search_row_at(app: &App, col: u16, row: u16) -> Option<usize> {
+    let slot = app.search_panel_slot()?;
+    let rect = app.mouse.slots.iter().find(|s| s.slot == slot)?;
+    let width = rect.width.saturating_sub(2);
+    col.checked_sub(rect.x.saturating_add(1))
+        .filter(|x| *x < width)?;
+    let p = app.panes.search_panel(slot)?;
+    let header = crate::ui::search_panel_header(p, width);
+    let height = rect.height.saturating_sub(2).saturating_sub(header);
+    let y = row
+        .checked_sub(rect.y.saturating_add(1).saturating_add(header))
+        .filter(|y| *y < height)?;
+    let window = crate::ui::search_panel_window(p, height);
     let index = window.start.checked_add(usize::from(y))?;
     window.contains(&index).then_some(index)
 }
@@ -2384,17 +2418,7 @@ pub async fn on_mouse(
         self::After::PlacesActivate => {
             app.abandon_pending(resolver);
             if let Some(path) = app.places_activate() {
-                let pane = app.focus();
-                let outcome = cd_in(app, backend, events, pane, path, Trail::Record).await;
-                settle_cd(
-                    app,
-                    backend,
-                    &mut work.fill,
-                    &mut work.decorate,
-                    &mut work.probed,
-                    &mut work.search,
-                    outcome,
-                );
+                focused_to(app, backend, events, work, path).await;
             }
         }
         // And the tree branch, through the SAME `cd` flow as its `Enter`
@@ -2403,18 +2427,36 @@ pub async fn on_mouse(
         self::After::TreeActivate => {
             app.abandon_pending(resolver);
             if let Some(path) = app.tree_activate() {
-                let pane = app.focus();
-                let outcome = cd_in(app, backend, events, pane, path, Trail::Record).await;
-                settle_cd(
-                    app,
-                    backend,
-                    &mut work.fill,
-                    &mut work.decorate,
-                    &mut work.probed,
-                    &mut work.search,
-                    outcome,
-                );
+                focused_to(app, backend, events, work, path).await;
             }
         }
+        // A search result pressed twice: the SAME path as `Enter` in the
+        // results.
+        self::After::SearchPanelActivate => {
+            app.abandon_pending(resolver);
+            crate::searchpanel::activate(app, backend, events, work).await;
+        }
     }
+}
+
+/// Takes the focused listing to `path` through the usual `cd` flow, as a
+/// sidebar or tree row's `Enter` does.
+async fn focused_to(
+    app: &mut crate::app::App,
+    backend: &norte_core::backend::Backend,
+    events: &mut crate::console::Console<'_>,
+    work: &mut crate::jobs::InFlight,
+    path: norte_proto::VPath,
+) {
+    let pane = app.focus();
+    let outcome = cd_in(app, backend, events, pane, path, Trail::Record).await;
+    settle_cd(
+        app,
+        backend,
+        &mut work.fill,
+        &mut work.decorate,
+        &mut work.probed,
+        &mut work.search,
+        outcome,
+    );
 }

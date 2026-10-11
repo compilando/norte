@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 110;
+export const BRIDGE_VERSION = 111;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -443,6 +443,47 @@ export interface TimelineSlotView {
   footer: string;
 }
 
+/** The search panel (spec 2026-10-09, bridge 111): the form, the status
+ *  sentence and a WINDOW of the results tree. */
+export interface SearchPanelSlotView {
+  kind: "search";
+  slot_id: number;
+  title: string;
+  /** Where it searches, masked. */
+  root: string;
+  root_hostile: boolean;
+  /** The SAME fields the search dialog shows; `search_panel_edit` names
+   *  them by `id`. */
+  fields: DialogFieldView[];
+  filters_open: boolean;
+  /** The `n` of "filters (n)". */
+  filters_set: number;
+  /** The field that cannot be read (its `id`), if any. */
+  unreadable: string | null;
+  /** Already translated. */
+  status: string;
+  running: boolean;
+  /** What is shown belongs to an older query. */
+  dimmed: boolean;
+  /** `rows[i]` is row `first_row + i` of `total_rows`; 500 at most. */
+  first_row: number;
+  total_rows: number;
+  /** The rows' numbering: a batch, a fold or a new run moves it. A click
+   *  echoes it back, and the host refuses an index renumbered since. */
+  generation: number;
+  rows: SearchPanelRowView[];
+  /** In the numbering of `total_rows`; null with no rows. */
+  cursor: number | null;
+}
+
+/** A row of the search panel's results. `ranges` are `[start, end)` in
+ *  CODE POINTS of `preview`, not UTF-16 units. */
+export type SearchPanelRowView =
+  | { row: "folder"; path: string; hostile: boolean; count: number; open: boolean }
+  | { row: "file"; name: string; hostile: boolean; count: number }
+  | { row: "line"; line: number; preview: string; ranges: [number, number][] }
+  | { row: "more"; label: string };
+
 export interface LogSlotView {
   kind: "log";
   slot_id: number;
@@ -578,6 +619,7 @@ export type SlotView =
   | PanelSlotView
   | DiskMapSlotView
   | TimelineSlotView
+  | SearchPanelSlotView
   | TerminalSlotView
   | UnsupportedSlotView;
 
@@ -922,6 +964,21 @@ export interface ViewerView {
    * view, and then `lines` is painted.
    */
   styled: SpanView[][];
+  /** The line a search result lit (bridge 111). Absent when nothing is lit. */
+  highlight?: HighlightView;
+  /**
+   * The number of the buffer's first line: 1, or N for a window past the head
+   * (bridge 111). The host always sends it; absent reads as 1.
+   */
+  lines_from?: number;
+}
+
+/** The lit line of a viewer opened from a search result (bridge 111). */
+export interface HighlightView {
+  /** 0-based, in the numbering of `first_line`: the row of `lines` it lands on is `row - first_line`. */
+  row: number;
+  /** `[start, end)` in CODE POINTS (not UTF-16 units) of that row's text. */
+  ranges: [number, number][];
 }
 
 /**
@@ -1952,6 +2009,41 @@ export type UiAction =
   | { action: "tree_set_visible_range"; first: number; count: number }
   | { action: "layout_activate_row"; row: number }
   | { action: "search_activate_row"; row: number }
+  /** The search panel (bridge 111). A text is the field's whole new text;
+   *  the search launches once typing pauses. */
+  | {
+      action: "search_panel_edit";
+      slot_id: number;
+      field: string;
+      value: DialogFieldValue;
+    }
+  /** Enter in one of its inputs: searches now. */
+  | { action: "search_panel_go"; slot_id: number }
+  /** "Search here": the focused listing's folder. */
+  | { action: "search_panel_reroot"; slot_id: number }
+  | { action: "search_panel_filters"; slot_id: number }
+  /** A click on a row, by its index in `total_rows` and the `generation`
+   *  of the view it was painted from. */
+  | {
+      action: "search_panel_activate";
+      slot_id: number;
+      row: number;
+      generation: number;
+    }
+  | {
+      action: "search_panel_fold";
+      slot_id: number;
+      row: number;
+      open: boolean;
+      generation: number;
+    }
+  /** The rows in view (virtual scroll); 500 at most travel. */
+  | {
+      action: "search_panel_visible_range";
+      slot_id: number;
+      first: number;
+      count: number;
+    }
   | { action: "ai_rename_decide"; approve: boolean }
   | { action: "organize_decide"; approve: boolean }
   | { action: "organize_scroll"; down: boolean }

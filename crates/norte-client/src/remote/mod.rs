@@ -3256,6 +3256,9 @@ fn first_filter_since_0_81(p: &FsSearchParams) -> Option<&'static str> {
         whole_word,
         recursive,
         encoding,
+        // 0.86.0: no daemon older than the client's version is reached
+        // (`version_compatible`), so this is not a 0.81 filter to degrade.
+        max_matches_per_file: _,
     } = p;
     if !kinds.is_empty() {
         return Some("kinds");

@@ -2712,6 +2712,15 @@
             "null"
           ]
         },
+        "max_matches_per_file": {
+          "description": "How many matching LINES of each file to report (0.86.0). Absent = the\nfirst one only, and the daemon stops reading the file there — 0.85's\nsearch. With it the daemon reads every content file to the end: it\nreports up to this many lines in [`SearchHits::all_matches`] and\nCOUNTS the rest in [`SearchHits::more`]. Clamped to\n`1..=`[`SEARCH_MATCHES_PER_FILE_MAX`].",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "max_size": {
           "description": "Maximum size in bytes, inclusive.",
           "format": "uint64",
@@ -3428,7 +3437,16 @@
       "description": "Context of ONE content match.",
       "properties": {
         "line": {
-          "description": "Line (1-based) of the first match, if it was computed.",
+          "description": "Line (1-based) of this match, if it was computed. Each `MatchInfo` is\nONE matching line (several occurrences on it are one entry, see\n[`Self::ranges`]).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offset": {
+          "description": "Byte offset in the file of the START of the matching line (0.86.0):\nwhat a viewer needs to load the window holding a line past what it\nreads from the top.\n\nExact on the literal path. On the decoded path (regex, UTF-16) it is\ncounted over the decoded text: exact for UTF-8 and single-byte\nencodings, absent for UTF-16 and for multi-byte legacy ones\n(`Shift_JIS`, GBK…), and shifted by up to two bytes per invalid UTF-8 byte before the\nmatch (each decodes to a three-byte `U+FFFD`).",
           "format": "uint64",
           "minimum": 0,
           "type": [
@@ -3440,6 +3458,30 @@
           "description": "The match's line, lossy-decoded and sanitized AT THE SOURCE\n(control/bidi/invisible chars masked to `U+FFFD`, then trimmed to a\nfixed char limit). The consumer can paint it directly — raw ANSI or\nbidi overrides never arrive over the wire — though the TUI still\npasses it through `detail_for_bar` as a belt.",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "ranges": {
+          "description": "Where the match is inside [`Self::preview`] (0.86.0): `[start, end)`\nin CHARS of the preview as sent — after masking and after the\ncentring that may have put a `…` in front. Every occurrence on the\nline that falls inside the preview; empty when the line matched but\nthe text could not be located in it (a literal found as bytes of\nanother encoding, or case variants of it that the locating pattern\ndoes not find).",
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            ],
+            "type": "array"
+          },
+          "type": [
+            "array",
             "null"
           ]
         }
@@ -5315,6 +5357,19 @@
     "SearchHits": {
       "description": "A batch of [`SEARCH_HITS`] results. `matches` aligned 1:1 with `entries`\nwhen the search is content-based (None if name-only).",
       "properties": {
+        "all_matches": {
+          "description": "Every matching line kept per file, aligned with `entries` (0.86.0).\nOnly on a content search that asked for\n[`FsSearchParams::max_matches_per_file`];\n`matches` keeps carrying the first line so a reader that ignores\nthis field sees 0.85's batch.",
+          "items": {
+            "items": {
+              "$ref": "#/$defs/MatchInfo"
+            },
+            "type": "array"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "entries": {
           "description": "Matching entries.",
           "items": {
@@ -5326,6 +5381,18 @@
           "description": "Content match context, aligned with `entries`.",
           "items": {
             "$ref": "#/$defs/MatchInfo"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "more": {
+          "description": "Matching lines past the cap per file, counted and not sent; aligned\nwith `entries`, `0` = none (0.86.0). Present with `all_matches`.\nSaturates at `u32::MAX`.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
           },
           "type": [
             "array",

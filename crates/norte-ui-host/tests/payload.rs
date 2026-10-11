@@ -258,6 +258,9 @@ fn rows_of(s: &norte_ui_host::dto::SlotView) -> usize {
         // ceiling: they count, and one more page arriving at the bottom adds
         // up.
         SlotView::Timeline(t) => t.rows.len(),
+        // The search panel carries a WINDOW of its results (500 rows at
+        // most), not the tree: those rows count.
+        SlotView::Search(s) => s.rows.len(),
         // The terminal sends its WHOLE grid on every repaint — it does not
         // scroll like a list, it repaints — so its rows are the ones that
         // cross over the most times of all. Counting them is exactly the

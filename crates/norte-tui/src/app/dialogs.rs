@@ -289,6 +289,7 @@ pub const ALLOW_LOG: &[&str] = &[
     "layout.metadata",
     "pane.tree",
     "layout.disk-map",
+    "layout.search",
     "app.menu",
     // And quitting, the key that can die worst inside a panel: the reader
     // closed the terminal believing they'd quit and the process stayed
@@ -325,6 +326,7 @@ pub const ALLOW_DISK_MAP: &[&str] = &[
     "layout.processes",
     "layout.metadata",
     "layout.log",
+    "layout.search",
     "pane.tree",
     "app.menu",
     // And quitting, for the same reason as the log's: the key that can die
@@ -359,6 +361,7 @@ pub const ALLOW_PANEL: &[&str] = &[
     "layout.metadata",
     "layout.log",
     "layout.disk-map",
+    "layout.search",
     "pane.tree",
     "app.menu",
     // Quitting, for the same reason as the log's: the key that can die

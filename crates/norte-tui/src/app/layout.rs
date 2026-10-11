@@ -68,6 +68,17 @@ impl App {
                         .insert_timeline(id, norte_frontend::timeline::Timeline::default());
                     self.timeline_stale = true;
                 }
+                // The search panel, for the same reason: a restored layout
+                // brings the slot without the toggle that would create its
+                // state. Born at the focused listing's folder, empty.
+                Some(crate::searchpanel::KIND) if self.panes.search_panel(id).is_none() => {
+                    self.panes.insert_search_panel(
+                        id,
+                        norte_frontend::search_panel::SearchPanel::new(
+                            self.focused().dir().clone(),
+                        ),
+                    );
+                }
                 // Same again for the disk map: born aimed at nothing, so
                 // `disk_map_wants_measure` asks for the listing's directory.
                 Some(crate::diskmap::KIND) if self.panes.disk_map(id).is_none() => {
@@ -123,6 +134,9 @@ impl App {
             KeyOwner::Tree => self.slot_of_kind_visible(crate::tree::KIND).is_some(),
             KeyOwner::DiskMap => self.slot_of_kind_visible(crate::diskmap::KIND).is_some(),
             KeyOwner::Timeline => self.slot_of_kind_visible(crate::timeline::KIND).is_some(),
+            KeyOwner::Search => self
+                .slot_of_kind_visible(crate::searchpanel::KIND)
+                .is_some(),
             KeyOwner::Log => self.slot_of_kind_visible(crate::logview::KIND).is_some(),
             // The terminal, same as the rest: if its slot goes behind a
             // tab, the keys go back to the listings. The shell stays alive
@@ -752,6 +766,7 @@ impl App {
                 "log" => self.toggle_log(),
                 "disk-map" => self.open_disk_map(),
                 "timeline" => self.open_timeline(),
+                "search" => self.open_search_panel(),
                 "terminal" => self.toggle_terminal(),
                 _ => {}
             }
@@ -869,6 +884,91 @@ impl App {
         );
         self.panes.refresh_visible(&self.layout);
         self.key_owner = KeyOwner::Timeline;
+    }
+
+    /// The search panel's slot, if it's open.
+    #[must_use]
+    pub fn search_panel_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind(crate::searchpanel::KIND)
+    }
+
+    /// Opens the search panel, focuses it, or closes it: three states, like
+    /// the timeline. It opens to TYPE into it, so taking the keyboard on
+    /// open is what's expected.
+    pub fn toggle_search_panel(&mut self) {
+        match self.search_panel_slot() {
+            Some(id) if self.key_owner == KeyOwner::Search && self.is_visible(id) => {
+                self.close_search_panel();
+            }
+            Some(id) => {
+                self.reveal(id);
+                self.key_owner = KeyOwner::Search;
+            }
+            None => self.open_search_panel(),
+        }
+    }
+
+    /// Places the search panel, rooted at the focused listing's folder, if
+    /// it wasn't there, and reveals it if it was hidden.
+    pub fn open_search_panel(&mut self) {
+        use norte_frontend::layout::{KindId, Node};
+        if let Some(id) = self.search_panel_slot() {
+            self.reveal(id);
+            self.key_owner = KeyOwner::Search;
+            return;
+        }
+        let root = self.focused().dir().clone();
+        let id = self.mint_slot();
+        self.panes
+            .insert_search_panel(id, norte_frontend::search_panel::SearchPanel::new(root));
+        // A new panel is typed into: the caret starts in the name.
+        self.search_panel_focus = crate::searchpanel::SearchFocus::default();
+        let d = self.dock_for(crate::searchpanel::KIND);
+        self.layout = self.layout.dock_grouped(
+            self.focused_slot(),
+            d.edge,
+            d.size,
+            &Node::slot(id, KindId::new(crate::searchpanel::KIND)),
+        );
+        self.panes.refresh_visible(&self.layout);
+        self.key_owner = KeyOwner::Search;
+    }
+
+    /// A click on row `index` of the search panel's results: the cursor goes
+    /// there, and the keyboard to the results. `true` when that row WAS
+    /// already selected with the keys in the results: the caller activates
+    /// it, as `Enter` does — the places' and the tree's rule, so a double
+    /// click opens it.
+    pub fn search_panel_click(&mut self, index: usize) -> bool {
+        let in_results = self.key_owner == KeyOwner::Search
+            && self.search_panel_focus == crate::searchpanel::SearchFocus::Tree;
+        let Some(p) = self
+            .search_panel_slot()
+            .and_then(|s| self.panes.search_panel_mut(s))
+        else {
+            return false;
+        };
+        let was_already = in_results && p.cursor() == index;
+        p.set_cursor(index);
+        self.search_panel_focus = crate::searchpanel::SearchFocus::Tree;
+        self.key_owner = KeyOwner::Search;
+        was_already
+    }
+
+    /// Closes the search panel if it's open, and hands the keyboard back to
+    /// the listings if it had it.
+    pub fn close_search_panel(&mut self) {
+        let Some(id) = self.search_panel_slot() else {
+            return;
+        };
+        if let Some(new_layout) = self.layout.close_slot(id) {
+            self.layout = new_layout;
+            self.panes.refresh_visible(&self.layout);
+            self.prune_by_tree();
+        }
+        if self.key_owner == KeyOwner::Search {
+            self.key_owner = KeyOwner::Panes;
+        }
     }
 
     /// Opens the selected timeline row's details (Space or a click): the
@@ -1423,6 +1523,7 @@ impl App {
             "layout.shrink" => self.layout_resize(-1),
             "layout.log" => self.toggle_log(),
             "layout.disk-map" => self.toggle_disk_map(),
+            "layout.search" => self.toggle_search_panel(),
             "layout.processes" => self.toggle_processes(),
             "layout.places" => self.toggle_places(),
             "layout.preview" => self.toggle_preview(),
@@ -1454,6 +1555,7 @@ impl App {
             "layout.grow" => self.layout_resize(1),
             "layout.shrink" => self.layout_resize(-1),
             "layout.disk-map" => self.toggle_disk_map(),
+            "layout.search" => self.toggle_search_panel(),
             "layout.log" => self.toggle_log(),
             "layout.processes" => self.toggle_processes(),
             "layout.places" => self.toggle_places(),
@@ -1487,6 +1589,7 @@ impl App {
             "layout.shrink" => self.layout_resize(-1),
             "layout.log" => self.toggle_log(),
             "layout.disk-map" => self.toggle_disk_map(),
+            "layout.search" => self.toggle_search_panel(),
             "layout.processes" => self.toggle_processes(),
             "layout.places" => self.toggle_places(),
             "layout.preview" => self.toggle_preview(),
@@ -1627,6 +1730,7 @@ impl App {
             KeyOwner::Log => self.log_slot(),
             KeyOwner::DiskMap => self.disk_map_slot(),
             KeyOwner::Timeline => self.timeline_slot(),
+            KeyOwner::Search => self.search_panel_slot(),
             // The terminal grows like any other: twelve rows is the
             // start, and a `make` inside asks for more.
             KeyOwner::Terminal => self.terminal_slot(),

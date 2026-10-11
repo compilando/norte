@@ -1972,6 +1972,12 @@ button.status-item:hover {
   unicode-bidi: bidi-override;
 }
 
+/* What a search result lit in the viewer (bridge 111). */
+.viewer-body mark {
+  background: var(--mark-bg);
+  color: inherit;
+}
+
 /* The viewer's bars: INDICATORS, not controls. The host only sends the
    visible window, so there is nothing the browser's scroll could move; what
    is missing is saying how much there is and how far along you are. */
@@ -4672,6 +4678,199 @@ button.status-item:hover {
   padding: 2px 6px;
   color: var(--info-fg);
   border-top: 1px solid var(--border);
+}
+
+/* The search panel (bridge 111): the form on top, the status sentence, and
+   the results tree below it, a window of rows between two spacers. The row
+   height is FIXED (the cell's): the spacers are counted in it. */
+.searchpanel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.searchpanel-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 4px;
+  padding: 4px 6px;
+}
+
+.searchpanel-root {
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+  color: var(--title-fg);
+}
+
+.searchpanel-root-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.searchpanel-content-row {
+  display: flex;
+  gap: 4px;
+}
+
+.searchpanel-input {
+  flex: 1 1 auto;
+  min-width: 6ch;
+  font: inherit;
+  color: var(--fg);
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 8px;
+  outline: none;
+  transition: border-color 0.12s;
+}
+
+.searchpanel-input::placeholder {
+  color: var(--title-fg);
+  opacity: 0.8;
+}
+
+.searchpanel-input:focus {
+  border-color: var(--border-focus);
+}
+
+.searchpanel-input[aria-invalid="true"] {
+  border-color: var(--error-fg);
+}
+
+.searchpanel-reroot,
+.searchpanel-fold,
+.searchpanel-switch,
+.searchpanel-toggle,
+.searchpanel-cycle {
+  font: inherit;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+
+.searchpanel-reroot:hover,
+.searchpanel-fold:hover,
+.searchpanel-switch:hover,
+.searchpanel-toggle:hover,
+.searchpanel-cycle:hover {
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+.searchpanel-switch {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+}
+
+.searchpanel-switch[aria-pressed="true"],
+.searchpanel-toggle[aria-pressed="true"] {
+  background: var(--selection-bg);
+  border-color: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.searchpanel-fold {
+  align-self: flex-start;
+}
+
+.searchpanel-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.searchpanel-filters[hidden] {
+  display: none;
+}
+
+.searchpanel-status {
+  margin: 0;
+  color: var(--info-fg);
+}
+
+/* What is shown belongs to an older query: it stays, and says so. */
+.searchpanel-status[data-dimmed="true"] {
+  opacity: 0.6;
+}
+
+.searchpanel-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.searchpanel-tree {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.searchpanel-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5ch;
+  height: var(--cell-h);
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.searchpanel-row:hover:not([aria-selected="true"]) {
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+.searchpanel-row[aria-selected="true"] {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.searchpanel-file {
+  padding-left: 2ch;
+}
+
+.searchpanel-line,
+.searchpanel-more {
+  padding-left: 4ch;
+}
+
+.searchpanel-chevron {
+  flex: 0 0 auto;
+  width: 2ch;
+  text-align: center;
+}
+
+.searchpanel-name,
+.searchpanel-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.searchpanel-count,
+.searchpanel-lineno,
+.searchpanel-more {
+  color: var(--title-fg);
+}
+
+.searchpanel-lineno {
+  flex: 0 0 auto;
+  min-width: 4ch;
+  text-align: right;
+}
+
+.searchpanel-preview mark {
+  background: var(--mark-bg);
+  color: inherit;
 }
 
 /* `relative` because clickable zones are placed ON TOP of their row, by

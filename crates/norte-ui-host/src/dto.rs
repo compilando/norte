@@ -1892,6 +1892,33 @@ pub struct ViewerView {
     /// painted it from day one and the window flattened it. A renderer that
     /// does not paint spans keeps using `lines` and loses nothing.
     pub styled: Vec<Vec<SpanView>>,
+    /// The line a search result lit, when the viewer opened on one (bridge
+    /// 111). `None` otherwise, and in hex or a plugin's preview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<HighlightView>,
+    /// The number of the buffer's first line: `1`, or N when the viewer
+    /// opened on a window past the head of a large file (bridge 111). The
+    /// title says "lines from N" when it is above 1.
+    #[serde(default = "one")]
+    pub lines_from: u64,
+}
+
+/// The lit line of a viewer opened from a search result (bridge 111).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HighlightView {
+    /// The line, 0-based, in the same numbering as [`ViewerView::first_line`]
+    /// (the buffer's rows): the row of [`ViewerView::lines`] it lands on is
+    /// `row - first_line`, when it is in sight.
+    pub row: u64,
+    /// `[start, end)` in CHARS (code points, not UTF-16 units) of that
+    /// row's text in `lines`.
+    pub ranges: Vec<(u32, u32)>,
+}
+
+/// The first line's number for [`ViewerView::lines_from`]'s `serde(default)`:
+/// a host older than bridge 111 sent no window, so it was the head.
+const fn one() -> u64 {
+    1
 }
 
 /// The zoom that means FIT, for [`ViewerView::image_zoom`]'s
@@ -2124,6 +2151,9 @@ pub enum SlotView {
     /// The rows, how a batch is grouped and what a cut would take are
     /// decided by `norte_frontend::timeline`, the same model as the TUI.
     Timeline(Box<TimelineSlotView>),
+    /// The search panel (spec 2026-10-09, bridge 111): searches as you type
+    /// under a root and shows every matching line, by folder and file.
+    Search(Box<SearchPanelSlotView>),
     /// A slot of a kind this host does not project yet. Shown empty and
     /// with its name: preserving what is not understood is the session's
     /// rule (ADR 0059), and disappearing would be worse than being grayed
@@ -2306,6 +2336,98 @@ pub struct TimelineRowView {
     /// What sets it apart, already translated: how many entries it brings
     /// if it is a batch, and whether it has no way back. Empty if nothing.
     pub tail: String,
+}
+
+/// The search panel (spec 2026-10-09, bridge 111): the form, the status
+/// sentence and a WINDOW of the results tree.
+///
+/// The model is `norte_frontend::search_panel`, the terminal's: the pause,
+/// the grouping and what activating a row does are decided there, once.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent states of the panel: a masked root, the filters \
+              unfolded, a run walking, results of an older query"
+)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchPanelSlotView {
+    /// Slot id.
+    pub slot_id: u32,
+    /// The panel's title, already translated.
+    pub title: String,
+    /// Where it searches, masked and clamped.
+    pub root: String,
+    /// `root` paints differently from the real path.
+    pub root_hostile: bool,
+    /// The form: the SAME fields the dialog shows (`search_fields`).
+    pub fields: Vec<DialogFieldView>,
+    /// The filters section is unfolded.
+    pub filters_open: bool,
+    /// How many filters are set: the `n` of "filters (n)".
+    pub filters_set: u32,
+    /// The field that cannot be read (`SearchField::id`), if any.
+    pub unreadable: Option<String>,
+    /// The status sentence, already translated.
+    pub status: String,
+    /// A run is still walking.
+    pub running: bool,
+    /// What is shown belongs to an older query.
+    pub dimmed: bool,
+    /// A window of the rows: `rows[i]` is row `first_row + i` of
+    /// `total_rows`.
+    pub first_row: u64,
+    /// Rows the tree has, folded folders' contents left out.
+    pub total_rows: u64,
+    /// The generation of the rows' numbering: it moves when a batch, a
+    /// fold or a new run renumbers rows (a batch that only appends does
+    /// not). A click echoes it back (`search_panel_activate`, `_fold`), and
+    /// the host refuses as stale an index renumbered since.
+    pub generation: u64,
+    /// The rows of the window, never more than 500.
+    pub rows: Vec<SearchPanelRowView>,
+    /// The cursor's row, in the numbering of `total_rows`; `None` with no
+    /// rows.
+    pub cursor: Option<u64>,
+}
+
+/// A row of the search panel's results.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "row")]
+pub enum SearchPanelRowView {
+    /// A folder's header.
+    Folder {
+        /// The folder, relative to the root (`.` for the root itself),
+        /// masked.
+        path: String,
+        /// `path` paints differently from the real one.
+        hostile: bool,
+        /// Files found in it.
+        count: u32,
+        /// Unfolded.
+        open: bool,
+    },
+    /// A file found.
+    File {
+        /// Its name, masked.
+        name: String,
+        /// `name` paints differently from the real one.
+        hostile: bool,
+        /// Its matching lines: the shown ones and the rest.
+        count: u32,
+    },
+    /// A matching line.
+    Line {
+        /// 1-based line number.
+        line: u64,
+        /// The line around the match, masked char for char.
+        preview: String,
+        /// `[start, end)` in CHARS (code points) of `preview` to light up.
+        ranges: Vec<(u32, u32)>,
+    },
+    /// The `+N more` row of a file, already translated.
+    More {
+        /// What it says.
+        label: String,
+    },
 }
 
 /// A plugin panel's clickable zone: where it is, and nothing more.

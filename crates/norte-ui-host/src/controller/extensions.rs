@@ -228,6 +228,10 @@ impl State {
                 Vec::new()
             }
             Background::SearchBroken(epoch, e) => self.search_broken(epoch, &e),
+            Background::SearchPanelHits(run, batch) => self.search_panel_hits(run, &batch),
+            Background::SearchPanelLive(run, id) => self.search_panel_live(run, id, mailbox),
+            Background::SearchPanelBroken(run, e) => self.search_panel_broken(run, &e),
+            Background::SearchPanelEnded(run, state) => self.search_panel_ended(run, &state),
         }
     }
 

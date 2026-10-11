@@ -637,7 +637,12 @@ fn every_bar_button_falls_into_its_place() {
         "and the terminal (#362) after the timeline, by registration order"
     );
     assert_eq!(
-        press(&mut app, 27),
+        press(&mut app, 28).as_deref(),
+        Some("layout.search"),
+        "and the search panel after the terminal, by registration order"
+    );
+    assert_eq!(
+        press(&mut app, 30),
         None,
         "past the last one there is no button"
     );
@@ -2359,4 +2364,60 @@ fn a_failed_shell_says_how_it_ended() {
     assert!(lines.iter().any(|l| l.contains("sh (3)")), "{lines:#?}");
     let said = norte_i18n::ta("terminal-exited", &[("code", "3")]);
     assert!(lines.iter().any(|l| l.contains(&said)), "{lines:#?}");
+}
+
+/// A click on a search result puts the cursor on THAT row — the one
+/// painted under the pointer, below the form — and the keys in the results.
+#[test]
+fn a_click_on_a_search_result_selects_the_row_under_it() {
+    use norte_frontend::search::SearchField;
+    use norte_frontend::search_panel::{DEBOUNCE, Due};
+    use norte_proto::methods::{MatchInfo, SearchHits};
+    let mut app = app_painted(3);
+    app.toggle_search_panel();
+    {
+        let slot = app.search_panel_slot().expect("open");
+        let p = app.panes.search_panel_mut(slot).expect("model");
+        let t0 = std::time::Instant::now();
+        p.edit(SearchField::Content, "aguja".to_owned(), t0);
+        let Some(Due::Launch { epoch, .. }) = p.due(t0 + DEBOUNCE, 0) else {
+            panic!("launch")
+        };
+        let line = |n: u64| MatchInfo {
+            line: Some(n),
+            offset: None,
+            preview: Some(format!("fila {n} aguja")),
+            ranges: Some(vec![(7, 12)]),
+        };
+        p.apply_hits(
+            epoch,
+            &SearchHits {
+                task_id: norte_proto::TaskId::new(1),
+                entries: entries(&vp("file:///casa"), 1),
+                matches: Some(vec![line(3)]),
+                all_matches: Some(vec![vec![line(3), line(8)]]),
+                more: Some(vec![0]),
+            },
+        );
+    }
+    app.search_panel_focus = norte_tui::searchpanel::SearchFocus::Field(SearchField::Name);
+    let lines = paint_at(&mut app, 100, 30);
+    let (row, col) = where_(&lines, "fila 8 aguja");
+    assert_eq!(mouse::handle(&mut app, ev(DOWN, col, row)), After::Nothing);
+    let slot = app.search_panel_slot().expect("open");
+    assert_eq!(app.panes.search_panel(slot).expect("model").cursor(), 3);
+    assert_eq!(
+        app.search_panel_focus,
+        norte_tui::searchpanel::SearchFocus::Tree
+    );
+    assert_eq!(app.key_owner(), KeyOwner::Search);
+    // The listings' rule (places, tree): a press on the row that WAS
+    // already selected activates it, as Enter does — so a double click
+    // opens it, and so do two slow presses.
+    mouse::handle(&mut app, ev(UP, col, row));
+    assert_eq!(
+        mouse::handle(&mut app, ev(DOWN, col, row)),
+        After::SearchPanelActivate
+    );
+    assert_eq!(app.panes.search_panel(slot).expect("model").cursor(), 3);
 }

@@ -163,6 +163,9 @@ pub async fn drain_pending(
     if std::mem::take(&mut app.timeline_stale) {
         crate::dispatch::load_timeline(app, backend, None).await;
     }
+    // The search panel: its pause ends, or it went away with a run in
+    // flight. Here for the same reason — launching is I/O.
+    crate::searchpanel::tick(app, backend, work).await;
     // And entering one of the map's children is a NORMAL `cd`, with its
     // usual return ritual: the map points, and navigating is the same path
     // navigation always takes. A second path is what ADR 0077 exists to

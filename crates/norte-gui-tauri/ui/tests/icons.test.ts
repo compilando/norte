@@ -33,8 +33,8 @@ describe("panel icons", () => {
 
   it("draws every shape of every shared file", () => {
     const entries = Object.entries(files);
-    // Nine panels (the terminal since 2026-10-08) and the column's foot.
-    expect(entries.length).toBe(11);
+    // Ten panels (the search panel since 2026-10-09) and the column's foot.
+    expect(entries.length).toBe(12);
     for (const [path, src] of entries) {
       const kind = path.replace(/^.*\//, "").replace(/\.svg$/, "");
       const svg = icon(document, kind);

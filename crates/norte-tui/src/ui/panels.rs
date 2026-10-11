@@ -117,6 +117,8 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
             ));
         }
         block = block.title(Line::from(spans).right_aligned());
+    } else if let Some(from) = lines_from_title(viewer, &app.theme) {
+        block = block.title(from.right_aligned());
     }
     // T5 (phase 5 WOW): with no plugin preview, a PNG in `Modo::Blocks`
     // falls back to hexview just like a file nobody knows how to interpret
@@ -225,7 +227,7 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
                     )
                 })
                 .collect(),
-            None => viewer.rows(inner_h).into_iter().map(Line::raw).collect(),
+            None => text_lines(viewer, inner_h, &app.theme),
         }
     };
     frame.render_widget(Paragraph::new(lines).block(block), content_area);
@@ -317,6 +319,8 @@ pub(crate) fn draw_preview(
             ))
             .right_aligned(),
         );
+    } else if let Some(from) = lines_from_title(viewer, &app.theme) {
+        block = block.title(from.right_aligned());
     }
     let inner_h = area.height.saturating_sub(2) as usize;
     let lines: Vec<Line<'_>> = match viewer.plugin_styled_rows(inner_h) {
@@ -332,11 +336,59 @@ pub(crate) fn draw_preview(
                 )
             })
             .collect(),
-        None => viewer.rows(inner_h).into_iter().map(Line::raw).collect(),
+        None => text_lines(viewer, inner_h, &app.theme),
     };
     frame.render_widget(Paragraph::new(lines).block(block), area);
     // Vertical only: the bottom border belongs to the status line.
     viewer_scrollbars(frame, area, viewer, &app.theme, false);
+}
+
+/// The viewer's rows as lines: the row with the lit match paints its span
+/// in `Role::Match` (the ranges are chars of the painted row, so they are
+/// sliced as they are); every other row is plain.
+fn text_lines<'a>(
+    viewer: &crate::viewer::Viewer,
+    height: usize,
+    theme: &TuiTheme,
+) -> Vec<Line<'a>> {
+    viewer
+        .rows(height)
+        .into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let ranges = viewer.highlight_chars(viewer.scroll + i);
+            if ranges.is_empty() {
+                return Line::raw(row);
+            }
+            let mut positions: Vec<u32> = ranges
+                .iter()
+                .flat_map(|&(s, e)| s..e)
+                .filter_map(|c| u32::try_from(c).ok())
+                .collect();
+            // `marked_spans` binary-searches them.
+            positions.sort_unstable();
+            positions.dedup();
+            Line::from(super::overlays::marked_spans(
+                &row,
+                &positions,
+                Style::default(),
+                theme.role(Role::Match),
+            ))
+        })
+        .collect()
+}
+
+/// `lines from N`, for a viewer that opened on a window past the head.
+fn lines_from_title<'a>(viewer: &crate::viewer::Viewer, theme: &TuiTheme) -> Option<Line<'a>> {
+    (viewer.first_line() > 1).then(|| {
+        Line::styled(
+            ta(
+                "viewer-lines-from",
+                &[("n", &viewer.first_line().to_string())],
+            ),
+            theme.role(Role::Info),
+        )
+    })
 }
 
 /// The style of a styled span, whether from a preview, a viewer or a
@@ -1625,6 +1677,581 @@ pub(crate) fn draw_timeline(
     state.select(timeline.cursor().checked_sub(window.start));
     *state.offset_mut() = 0;
     frame.render_stateful_widget(list, inner, &mut state);
+}
+
+/// The search panel's status sentence, translated.
+fn search_panel_status(panel: &norte_frontend::search_panel::SearchPanel) -> String {
+    use norte_frontend::search_panel::PanelStatus;
+    match panel.status() {
+        PanelStatus::Idle => t("search-panel-idle"),
+        PanelStatus::Unreadable(field) => {
+            ta("search-panel-unreadable", &[("field", &t(field.key()))])
+        }
+        PanelStatus::Run {
+            key,
+            files,
+            folders,
+            error,
+        } => {
+            if key == norte_frontend::search_panel::KEY_FAILED {
+                // The failure's text came from the daemon: masked.
+                ta(
+                    key,
+                    &[(
+                        "error",
+                        &norte_encoding::mask_terminal_hazards(
+                            error.as_deref().unwrap_or_default(),
+                        ),
+                    )],
+                )
+            } else {
+                crate::searchpanel::run_text(norte_i18n::active(), key, files, folders)
+            }
+        }
+    }
+}
+
+/// Rows the status sentence takes, wrapped to `width`.
+fn search_panel_status_rows(panel: &norte_frontend::search_panel::SearchPanel, width: u16) -> u16 {
+    u16::try_from(word_wrap(&search_panel_status(panel), usize::from(width)).len())
+        .unwrap_or(u16::MAX)
+}
+
+/// `text` wrapped by words to `width` cells; a word wider than a row is cut
+/// by chars. The rows are what gets painted, so counting them is exact — a
+/// row of slack under the status would be a result fewer.
+fn word_wrap(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rows: Vec<String> = Vec::new();
+    let mut row = String::new();
+    for word in text.split_whitespace() {
+        let mut word = word.to_owned();
+        let room = if row.is_empty() {
+            width
+        } else {
+            width.saturating_sub(super::text::cells(&row) + 1)
+        };
+        if super::text::cells(&word) > room && !row.is_empty() {
+            rows.push(std::mem::take(&mut row));
+        }
+        while super::text::cells(&word) > width {
+            let head = super::text::take_width(&word, width);
+            let head = if head.is_empty() {
+                word.chars().take(1).collect()
+            } else {
+                head
+            };
+            word = word[head.len()..].to_owned();
+            rows.push(head);
+        }
+        if !row.is_empty() {
+            row.push(' ');
+        }
+        row.push_str(&word);
+    }
+    if !row.is_empty() || rows.is_empty() {
+        rows.push(row);
+    }
+    rows
+}
+
+/// Rows above the results inside the border, for an interior `width` wide:
+/// the root, the two inputs, the switches, the filters' header (and its
+/// five inputs when open) and the status sentence. ONE count for the paint
+/// and the mouse.
+pub(crate) fn search_panel_header(
+    panel: &norte_frontend::search_panel::SearchPanel,
+    width: u16,
+) -> u16 {
+    let filters = if panel.filters_open() { 5 } else { 0 };
+    5 + filters + search_panel_status_rows(panel, width)
+}
+
+/// The rows of the results painted in `height` rows: a window around the
+/// cursor, pulled back at the end so it stays full.
+pub(crate) fn search_panel_window(
+    panel: &norte_frontend::search_panel::SearchPanel,
+    height: u16,
+) -> std::ops::Range<usize> {
+    let alto = usize::from(height);
+    let total = panel.rows().len();
+    let from = panel
+        .cursor()
+        .saturating_sub(alto.saturating_sub(1) / 2)
+        .min(total.saturating_sub(alto));
+    super::pane::painted_rows(from, total, alto)
+}
+
+/// A folder of the results, relative to the root (`.` for the root itself),
+/// each segment masked; the whole path when it is not under the root.
+fn search_folder_label(dir: &norte_proto::VPath, root: &norte_proto::VPath) -> (String, bool) {
+    let under: Vec<&[u8]> = dir.segments().collect();
+    let base: Vec<&[u8]> = root.segments().collect();
+    if dir.scheme() != root.scheme()
+        || dir.authority() != root.authority()
+        || !under.starts_with(&base)
+    {
+        return crate::app::path_display(dir);
+    }
+    if under.len() == base.len() {
+        return (".".to_owned(), false);
+    }
+    let mut hostile = false;
+    let parts: Vec<String> = under[base.len()..]
+        .iter()
+        .map(|s| {
+            let (text, h) = display_name(s);
+            hostile |= h;
+            text
+        })
+        .collect();
+    (parts.join("/"), hostile)
+}
+
+/// One input: its label, its text masked (the tail, when long), and the
+/// caret when it has the keys.
+fn search_input_line(
+    label: &str,
+    text: &str,
+    caret: bool,
+    width: usize,
+    theme: &TuiTheme,
+) -> Line<'static> {
+    let label = format!("{label} ");
+    let room = width
+        .saturating_sub(super::text::cells(&label))
+        .saturating_sub(usize::from(caret));
+    let mut value = super::text::tail_window(&norte_encoding::mask_terminal_hazards(text), room);
+    if caret {
+        value.push('▏');
+    }
+    let style = if caret {
+        // The input that has the keys: the focus look, never the look of a
+        // search hit.
+        theme.role(Role::Selection)
+    } else {
+        theme.role(Role::Regular)
+    };
+    Line::from(super::text::clamp_spans(
+        vec![
+            Span::styled(label, theme.role(Role::Muted)),
+            Span::styled(value, style),
+        ],
+        width,
+    ))
+}
+
+/// Row `i` of the results.
+fn search_row_line(
+    panel: &norte_frontend::search_panel::SearchPanel,
+    rows: &[norte_frontend::search_panel::Row],
+    i: usize,
+    theme: &TuiTheme,
+    width: usize,
+) -> Line<'static> {
+    use norte_frontend::search_panel::Row;
+    let tree = panel.tree();
+    let spans = match rows[i] {
+        Row::Folder { folder } => {
+            let node = &tree[folder];
+            // Unfolded = its first file follows it.
+            let open = matches!(rows.get(i + 1), Some(Row::File { folder: f, .. }) if *f == folder);
+            let (label, hostile) = search_folder_label(&node.dir, panel.root());
+            vec![Span::styled(
+                format!(
+                    "{} {} ({})",
+                    if open { '▾' } else { '▸' },
+                    with_badge(&label, hostile),
+                    node.files.len()
+                ),
+                theme.role(Role::Title),
+            )]
+        }
+        Row::File { folder, file } => {
+            let entry = &tree[folder].files[file].entry;
+            let (name, hostile) = entry
+                .path
+                .file_name()
+                .map_or((String::new(), false), |s| display_name(s.as_bytes()));
+            vec![Span::styled(
+                format!("  {}", with_badge(&name, hostile)),
+                theme.role(Role::Regular),
+            )]
+        }
+        Row::Line { folder, file, line } => {
+            let m = &tree[folder].files[file].matches[line];
+            // The ranges count chars of the preview, and masking is char for
+            // char: they still fall on the same chars after it.
+            let preview = norte_encoding::mask_terminal_hazards(&m.preview);
+            let mut positions: Vec<u32> = m.ranges.iter().flat_map(|&(s, e)| s..e).collect();
+            positions.sort_unstable();
+            positions.dedup();
+            let mut spans = vec![Span::styled(
+                format!("    {} ", m.line),
+                theme.role(Role::Muted),
+            )];
+            spans.extend(super::overlays::marked_spans(
+                &preview,
+                &positions,
+                theme.role(Role::Regular),
+                theme.role(Role::Match),
+            ));
+            spans
+        }
+        Row::More { folder, file } => vec![Span::styled(
+            format!(
+                "    {}",
+                ta(
+                    "search-panel-more",
+                    &[("n", &tree[folder].files[file].more.to_string())]
+                )
+            ),
+            theme.role(Role::Muted),
+        )],
+    };
+    Line::from(super::text::clamp_spans(spans, width))
+}
+
+/// The rows above the results, one line each: where it searches, the two
+/// inputs, the switches, the filters (and their inputs when unfolded) and
+/// the status sentence wrapped. As many as [`search_panel_header`] counts.
+fn search_panel_form(
+    panel: &norte_frontend::search_panel::SearchPanel,
+    focus: crate::searchpanel::SearchFocus,
+    with_keyboard: bool,
+    width: usize,
+    theme: &TuiTheme,
+) -> Vec<Line<'static>> {
+    use crate::searchpanel::SearchFocus;
+    use norte_frontend::search::SearchField;
+    let form = panel.form();
+    let caret = |f: SearchField| with_keyboard && focus == SearchFocus::Field(f);
+    let input =
+        |f: SearchField| search_input_line(&t(f.key()), form.text(f), caret(f), width, theme);
+    let (root, hostile) = crate::app::path_display(panel.root());
+    let mut lines = vec![Line::from(super::text::clamp_spans(
+        vec![Span::styled(
+            ta(
+                "search-panel-root",
+                &[("root", &middle(&with_badge(&root, hostile), width))],
+            ),
+            theme.role(Role::Muted),
+        )],
+        width,
+    ))];
+    lines.push(input(SearchField::Name));
+    lines.push(input(SearchField::Content));
+    let switch = |on: bool, label: &'static str| {
+        Span::styled(
+            label,
+            theme.role(if on { Role::Match } else { Role::Muted }),
+        )
+    };
+    lines.push(Line::from(vec![
+        switch(form.case, "[Aa]"),
+        Span::raw(" "),
+        switch(form.whole_word, "[ab]"),
+        Span::raw(" "),
+        switch(form.regex, "[.*]"),
+    ]));
+    lines.push(Line::styled(
+        format!(
+            "{} {}",
+            if panel.filters_open() { '▾' } else { '▸' },
+            ta(
+                "search-panel-filters",
+                &[("n", &panel.filters_set().to_string())]
+            )
+        ),
+        theme.role(Role::Info),
+    ));
+    if panel.filters_open() {
+        lines.extend(SearchField::ORDEN[2..].iter().map(|&f| input(f)));
+    }
+    // Wrapped: the idle sentence is longer than a docked panel is wide.
+    let status_style = theme.role(if panel.is_dimmed() {
+        Role::Muted
+    } else {
+        Role::Info
+    });
+    lines.extend(
+        word_wrap(&search_panel_status(panel), width)
+            .into_iter()
+            .map(|row| Line::styled(row, status_style)),
+    );
+    lines
+}
+
+/// The search panel: where it searches, the form, the status sentence and
+/// the results grouped by folder and file, with their matching lines lit.
+pub(crate) fn draw_search_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    panel: &norte_frontend::search_panel::SearchPanel,
+    focus: crate::searchpanel::SearchFocus,
+    app: &App,
+    with_keyboard: bool,
+) {
+    use crate::searchpanel::SearchFocus;
+    let theme = &app.theme;
+    let border = if with_keyboard {
+        Role::BorderFocus
+    } else {
+        Role::BorderUnfocused
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} ", t("search-panel-title")))
+        .title_style(theme.role(Role::Title))
+        .border_style(theme.role(border));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let width = usize::from(inner.width);
+    let bottom = inner.y + inner.height;
+    let mut y = inner.y;
+    for line in search_panel_form(panel, focus, with_keyboard, width, theme) {
+        if y >= bottom {
+            break;
+        }
+        frame.render_widget(Paragraph::new(line), Rect::new(inner.x, y, inner.width, 1));
+        y += 1;
+    }
+    let tree_area = Rect::new(inner.x, y, inner.width, bottom.saturating_sub(y));
+    if tree_area.height == 0 {
+        return;
+    }
+    let rows = panel.rows();
+    let window = search_panel_window(panel, tree_area.height);
+    let items: Vec<ListItem<'_>> = window
+        .clone()
+        .map(|i| ListItem::new(search_row_line(panel, &rows, i, theme, width)))
+        .collect();
+    let list = List::new(items).highlight_style(theme.role(
+        if with_keyboard && focus == SearchFocus::Tree {
+            Role::Selection
+        } else {
+            Role::SelectionUnfocused
+        },
+    ));
+    let mut state = ListState::default();
+    state.select(panel.cursor().checked_sub(window.start));
+    *state.offset_mut() = 0;
+    frame.render_stateful_widget(list, tree_area, &mut state);
+}
+
+#[cfg(test)]
+mod text_lines_tests {
+    use super::*;
+
+    /// Ranges out of order (the daemon's, or a viewer that found the text
+    /// twice) still light every span: `marked_spans` binary-searches its
+    /// positions, so they are fed sorted.
+    #[test]
+    fn unordered_ranges_light_every_span() {
+        let mut v = crate::viewer::Viewer::new(
+            norte_proto::VPath::parse("mem:///a.txt").expect("wire"),
+            b"aguja x aguja\n".to_vec(),
+            false,
+        );
+        v.aim(&norte_frontend::viewer::ViewerTarget {
+            line: 1,
+            offset: Some(0),
+            preview: "aguja x aguja".to_owned(),
+            ranges: vec![(8, 13), (0, 5)],
+        });
+        let theme = TuiTheme::default();
+        let lines = text_lines(&v, 1, &theme);
+        let lit: Vec<String> = lines[0]
+            .spans
+            .iter()
+            .filter(|s| s.style == theme.role(Role::Match))
+            .map(|s| s.content.to_string())
+            .collect();
+        assert_eq!(lit, vec!["aguja", "aguja"]);
+    }
+}
+
+#[cfg(test)]
+mod draw_search_panel_tests {
+    use super::*;
+    use norte_frontend::search::SearchField;
+    use norte_frontend::search_panel::{DEBOUNCE, Due, SearchPanel};
+    use norte_proto::methods::{MatchInfo, SearchHits};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn panel_with(preview: &str, ranges: Vec<(u32, u32)>) -> SearchPanel {
+        let mut p = SearchPanel::new(norte_proto::VPath::parse("file:///casa").expect("wire"));
+        let t0 = std::time::Instant::now();
+        p.edit(SearchField::Content, "aguja".to_owned(), t0);
+        let Some(Due::Launch { epoch, .. }) = p.due(t0 + DEBOUNCE, 0) else {
+            panic!("launch")
+        };
+        let m = MatchInfo {
+            line: Some(7),
+            offset: None,
+            preview: Some(preview.to_owned()),
+            ranges: Some(ranges),
+        };
+        p.apply_hits(
+            epoch,
+            &SearchHits {
+                task_id: norte_proto::TaskId::new(1),
+                entries: vec![norte_proto::Entry {
+                    path: norte_proto::VPath::parse("file:///casa/notas.txt").expect("wire"),
+                    kind: norte_proto::EntryKind::File,
+                    size: None,
+                    mtime_ms: None,
+                    attrs: std::collections::BTreeMap::new(),
+                }],
+                matches: Some(vec![m.clone()]),
+                all_matches: Some(vec![vec![m]]),
+                more: Some(vec![0]),
+            },
+        );
+        p
+    }
+
+    /// Paints the panel alone and returns the buffer and the row whose text
+    /// contains `needle`.
+    fn painted(p: &SearchPanel, needle: &str) -> (ratatui::buffer::Buffer, u16) {
+        let app = crate::app::testutil::app_two_panes();
+        let mut terminal = Terminal::new(TestBackend::new(40, 16)).expect("terminal");
+        terminal
+            .draw(|f| {
+                draw_search_panel(
+                    f,
+                    f.area(),
+                    p,
+                    crate::searchpanel::SearchFocus::default(),
+                    &app,
+                    true,
+                );
+            })
+            .expect("draw");
+        let buf = terminal.backend().buffer().clone();
+        let row = (0..buf.area.height)
+            .find(|&y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains(needle)
+            })
+            .expect("painted");
+        (buf, row)
+    }
+
+    fn has_style(cell: &ratatui::buffer::Cell, s: Style) -> bool {
+        s.fg.is_none_or(|fg| cell.fg == fg)
+            && s.bg.is_none_or(|bg| cell.bg == bg)
+            && cell.modifier.contains(s.add_modifier)
+    }
+
+    /// The cells of a range carry `Role::Match`; the ones next to them do not.
+    #[test]
+    fn a_range_is_painted_with_the_match_role() {
+        let p = panel_with("hay aguja aquí", vec![(4, 9)]);
+        let (buf, y) = painted(&p, "hay aguja");
+        let start = (0..buf.area.width)
+            .find(|&x| buf[(x, y)].symbol() == "h" && buf[(x + 4, y)].symbol() == "a")
+            .expect("the preview");
+        let mark = crate::app::testutil::app_two_panes()
+            .theme
+            .role(Role::Match);
+        for x in start + 4..start + 9 {
+            assert!(has_style(&buf[(x, y)], mark), "cell {x} lit");
+        }
+        assert!(!has_style(&buf[(start + 3, y)], mark), "before it, not");
+        assert!(!has_style(&buf[(start + 9, y)], mark), "after it, not");
+    }
+
+    /// A multi-byte char inside the range is lit whole, and a hazard in the
+    /// preview is masked without moving the range.
+    #[test]
+    fn ranges_count_chars_and_hazards_are_masked() {
+        let p = panel_with("\u{1b}ñ agujá", vec![(3, 8)]);
+        let (buf, y) = painted(&p, "agujá");
+        let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+        assert!(!row.contains('\u{1b}'), "{row}");
+        assert!(row.contains("\u{FFFD}ñ agujá"), "{row}");
+        let at = (0..buf.area.width)
+            .find(|&x| buf[(x, y)].symbol() == "á")
+            .expect("á");
+        let mark = crate::app::testutil::app_two_panes()
+            .theme
+            .role(Role::Match);
+        assert!(has_style(&buf[(at, y)], mark), "the last char of the range");
+        assert!(has_style(&buf[(at - 4, y)], mark), "and its first");
+        assert!(!has_style(&buf[(at - 5, y)], mark), "the space before");
+    }
+
+    /// The mouse's count of the form's rows is the paint's, folded or not.
+    #[test]
+    fn the_header_count_is_the_painted_form() {
+        let theme = crate::app::testutil::app_two_panes().theme;
+        let mut p = panel_with("hay aguja", vec![(4, 9)]);
+        for _ in 0..2 {
+            for width in [12_u16, 34, 80] {
+                let painted = search_panel_form(
+                    &p,
+                    crate::searchpanel::SearchFocus::default(),
+                    true,
+                    usize::from(width),
+                    &theme,
+                );
+                assert_eq!(
+                    painted.len(),
+                    usize::from(search_panel_header(&p, width)),
+                    "width {width}, filters open: {}",
+                    p.filters_open()
+                );
+            }
+            p.toggle_filters();
+        }
+    }
+
+    /// Wrapping by words, a word too wide cut by chars, never an empty row
+    /// of slack.
+    #[test]
+    fn word_wrap_packs_words_and_cuts_only_what_cannot_fit() {
+        assert_eq!(word_wrap("uno dos tres", 7), vec!["uno dos", "tres"]);
+        assert_eq!(word_wrap("abcdefghij x", 4), vec!["abcd", "efgh", "ij x"]);
+        assert_eq!(word_wrap("año ñu", 6), vec!["año ñu"]);
+        assert_eq!(word_wrap("", 5), vec![""]);
+    }
+
+    /// The idle sentence wraps inside the border instead of being cut.
+    #[test]
+    fn the_idle_status_wraps() {
+        let p = SearchPanel::new(norte_proto::VPath::parse("file:///casa").expect("wire"));
+        let app = crate::app::testutil::app_two_panes();
+        let mut terminal = Terminal::new(TestBackend::new(20, 12)).expect("terminal");
+        terminal
+            .draw(|f| {
+                draw_search_panel(
+                    f,
+                    f.area(),
+                    &p,
+                    crate::searchpanel::SearchFocus::default(),
+                    &app,
+                    true,
+                );
+            })
+            .expect("draw");
+        let screen: String = terminal
+            .backend()
+            .to_string()
+            .lines()
+            .map(|l| l.trim_matches('"').trim_matches('│').trim())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let idle = t("search-panel-idle");
+        // Its rows joined back give the whole sentence: nothing was cut.
+        assert!(screen.contains(&idle), "{screen}");
+    }
 }
 
 #[cfg(test)]

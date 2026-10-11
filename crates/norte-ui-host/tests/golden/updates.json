@@ -102,6 +102,15 @@
             "y": 20
           },
           {
+            "focus_index": 13,
+            "height": 38,
+            "role": null,
+            "slot_id": 15,
+            "width": 30,
+            "x": 150,
+            "y": 0
+          },
+          {
             "focus_index": 5,
             "height": 2,
             "role": null,
@@ -717,6 +726,15 @@
           "width": 30,
           "x": 120,
           "y": 20
+        },
+        {
+          "focus_index": 13,
+          "height": 38,
+          "role": null,
+          "slot_id": 15,
+          "width": 30,
+          "x": 150,
+          "y": 0
         },
         {
           "focus_index": 5,
@@ -1389,6 +1407,15 @@
           "forced": false,
           "had_errors": false,
           "hex": false,
+          "highlight": {
+            "ranges": [
+              [
+                0,
+                6
+              ]
+            ],
+            "row": 4
+          },
           "image": {
             "format": "PNG",
             "height": 1080,
@@ -1399,6 +1426,7 @@
           "lines": [
             "quinta línea"
           ],
+          "lines_from": 3001,
           "path_display": "⟨file⟩/home/oscar/notas.txt",
           "path_hostile": false,
           "preview_by": "via PDF de ACME",
@@ -1463,6 +1491,74 @@
         ],
         "slot_id": 14,
         "title": "Línea de tiempo"
+      },
+      {
+        "cursor": 3,
+        "dimmed": true,
+        "fields": [
+          {
+            "hostile": false,
+            "id": "content",
+            "kind": {
+              "kind": "text"
+            },
+            "label_key": "search-content",
+            "value": "aguja"
+          },
+          {
+            "hostile": false,
+            "id": "regex",
+            "kind": {
+              "kind": "toggle",
+              "on": true
+            },
+            "label_key": "search-toggle-regex",
+            "value": ""
+          }
+        ],
+        "filters_open": true,
+        "filters_set": 1,
+        "first_row": 1,
+        "generation": 7,
+        "kind": "search",
+        "root": "/casa",
+        "root_hostile": false,
+        "rows": [
+          {
+            "count": 1,
+            "hostile": false,
+            "open": true,
+            "path": "docs",
+            "row": "folder"
+          },
+          {
+            "count": 52,
+            "hostile": true,
+            "name": "caf�.txt",
+            "row": "file"
+          },
+          {
+            "line": 7,
+            "preview": "x aguja",
+            "ranges": [
+              [
+                2,
+                7
+              ]
+            ],
+            "row": "line"
+          },
+          {
+            "label": "+2 más",
+            "row": "more"
+          }
+        ],
+        "running": true,
+        "slot_id": 15,
+        "status": "1 fichero en 1 carpeta · buscando…",
+        "title": "Buscar",
+        "total_rows": 5,
+        "unreadable": "min-size"
       },
       {
         "hits": [
@@ -1587,6 +1683,15 @@
       "forced": false,
       "had_errors": false,
       "hex": false,
+      "highlight": {
+        "ranges": [
+          [
+            0,
+            6
+          ]
+        ],
+        "row": 4
+      },
       "image": {
         "format": "PNG",
         "height": 1080,
@@ -1597,6 +1702,7 @@
       "lines": [
         "quinta línea"
       ],
+      "lines_from": 3001,
       "path_display": "⟨file⟩/home/oscar/notas.txt",
       "path_hostile": false,
       "preview_by": "via PDF de ACME",

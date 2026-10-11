@@ -253,15 +253,13 @@ pub const CATALOGUE: &[CommandDef] = &[
     // two things is not.
     live("layout.disk-map", false, Inert),
     // The journal's timeline (phase 7): what has been done and how far
-    // back you can go. NO key in any preset, and it is deliberate: the
-    // `alt+<letter>` space for panels is exhausted — b, j, l, t, z are
-    // already others — and none is free in all seven at once. Binding it
-    // in three and in four is no worse than binding it in none: it is a
-    // capability half the readers would not have and nobody would tell
-    // them why. It is reached through the panel bar, which is generated
-    // from the kind registry and therefore has it in ALL SEVEN, and
-    // through the View menu.
+    // back you can go. `alt+T` in all seven (shifted: every lowercase
+    // `alt+<letter>` was taken in some preset), and through the panel bar
+    // and the View menu.
     live("layout.timeline", false, Inert),
+    // The search panel: a keyboard panel, `alt+F` (Alt+Shift+F) in all
+    // seven because Ctrl+Shift+F cannot reach a terminal (C1).
+    live("layout.search", false, Inert),
     // The terminal panel (#362). `Launches` and not `Inert`: what it opens
     // is a SHELL, with the environment and directory of whoever opened it,
     // and that is the first thing the reader must be warned about — the

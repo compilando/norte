@@ -412,6 +412,115 @@ pub struct PluginPreviewView {
     styled: Vec<crate::ansi::StyledLine>,
 }
 
+/// Where to open a file and what to light up (spec 2026-10-09 §5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewerTarget {
+    /// 1-based line.
+    pub line: u64,
+    /// Byte offset of the line's start, when the daemon knew it.
+    pub offset: Option<u64>,
+    /// The preview the ranges index (C7: how the viewer finds them in the line).
+    pub preview: String,
+    /// `[start, end)` in chars of `preview`.
+    pub ranges: Vec<(u32, u32)>,
+}
+
+/// Bytes of context read before a target line past the cap.
+pub const CONTEXT_BEFORE: u64 = 4096;
+
+/// A match starting past this cell scrolls the viewer sideways on `aim`.
+const AIM_MARGIN: usize = 40;
+/// Cells left before the match when `aim` scrolls sideways.
+const AIM_LEAD: usize = 8;
+
+/// The read that shows `t` in a viewer that reads `cap` bytes: from the top
+/// when the line starts inside the cap (or nobody knows where it starts),
+/// else a window from [`CONTEXT_BEFORE`] bytes before it. `len = Some(cap + 1)`
+/// — the extra byte is how the caller learns the file kept going.
+///
+/// ```
+/// use norte_frontend::viewer::{CONTEXT_BEFORE, ViewerTarget, read_for};
+/// let t = |offset| ViewerTarget { line: 9, offset, preview: String::new(), ranges: vec![] };
+/// assert_eq!(read_for(&t(Some(100)), 1024).offset, 0);
+/// assert_eq!(read_for(&t(None), 1024).offset, 0);
+/// let far = read_for(&t(Some(1_000_000)), 1024);
+/// assert_eq!(far.offset, 1_000_000 - CONTEXT_BEFORE);
+/// assert_eq!(far.len, Some(1025));
+/// ```
+#[must_use]
+pub fn read_for(t: &ViewerTarget, cap: u64) -> norte_proto::ByteRange {
+    let offset = match t.offset {
+        Some(o) if o >= cap => o.saturating_sub(CONTEXT_BEFORE),
+        _ => 0,
+    };
+    norte_proto::ByteRange {
+        offset,
+        len: Some(cap.saturating_add(1)),
+    }
+}
+
+/// Where `t`'s ranges fall in `line`, as CHAR ranges of `line`.
+///
+/// The ranges index the daemon's preview, which is the line MASKED
+/// (`mask_terminal_hazards`, char for char) and, when long, cut to a window
+/// with `…` at each cut end. So the preview's core is looked for in the
+/// masked line and its position shifts the ranges — that is what picks the
+/// right occurrence when the matched text appears twice (C7). When the core
+/// is not there (the viewer decoded the line differently), each range's text
+/// is looked for instead and every occurrence is lit: better too much light
+/// than none.
+///
+/// A hit past the cap inside a single line longer than 256 KiB may lie
+/// beyond the bytes the window read: then neither the core nor the ranges'
+/// text is there, nothing is lit, and the viewer still opens at the line.
+fn locate(line: &str, t: &ViewerTarget) -> Vec<(usize, usize)> {
+    let masked = norte_encoding::mask_terminal_hazards(line);
+    let chars = masked.chars().count();
+    let ranges = t.ranges.iter().map(|&(s, e)| {
+        (
+            usize::try_from(s).unwrap_or(usize::MAX),
+            usize::try_from(e).unwrap_or(usize::MAX),
+        )
+    });
+    let lead = usize::from(t.preview.starts_with('…'));
+    let core = t.preview.strip_prefix('…').unwrap_or(&t.preview);
+    let core = core.strip_suffix('…').unwrap_or(core);
+    if !core.is_empty()
+        && let Some(at) = masked.find(core)
+    {
+        let k = masked[..at].chars().count();
+        return ranges
+            .map(|(s, e)| {
+                (
+                    s.saturating_add(k).saturating_sub(lead).min(chars),
+                    e.saturating_add(k).saturating_sub(lead).min(chars),
+                )
+            })
+            .filter(|(s, e)| s < e)
+            .collect();
+    }
+    let preview: Vec<char> = t.preview.chars().collect();
+    let mut out = Vec::new();
+    for (s, e) in ranges {
+        let needle: String = preview
+            .get(s.min(preview.len())..e.min(preview.len()))
+            .unwrap_or_default()
+            .iter()
+            .collect();
+        if needle.is_empty() {
+            continue;
+        }
+        let width = needle.chars().count();
+        for (at, _) in masked.match_indices(&needle) {
+            let k = masked[..at].chars().count();
+            out.push((k, k + width));
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// The viewer open over a file.
 #[expect(
     clippy::struct_excessive_bools,
@@ -480,6 +589,14 @@ pub struct Viewer {
     /// A plugin's preview (M4-P5): if present, REPLACES the raw view and the
     /// decoding (bytes/encoding are ignored; `lines` already masked).
     plugin_preview: Option<PluginPreviewView>,
+    /// The number of the first line held: 1, or N for a window read past
+    /// the cap ([`Viewer::window`]).
+    first_line: u64,
+    /// The lit line (0-based in this viewer) and its spans, as CHAR ranges
+    /// of the decoded source line (before tab expansion and scroll).
+    highlight: Option<(usize, Vec<(usize, usize)>)>,
+    /// The last [`Viewer::aim`] missed: see [`Viewer::target_past_cap`].
+    target_past_cap: bool,
     // ---- decoding cache (recomputed when the encoding changes) ----
     text: String,
     encoding_name: &'static str,
@@ -506,6 +623,9 @@ impl Viewer {
             // see it whole.
             zoom: None,
             plugin_preview: None,
+            first_line: 1,
+            highlight: None,
+            target_past_cap: false,
             text: String::new(),
             encoding_name: "",
             eol: Eol::None,
@@ -716,6 +836,8 @@ impl Viewer {
         }
         self.scroll = 0;
         self.hscroll = 0;
+        // Another decoding is another line: the lit chars named the old one.
+        self.highlight = None;
     }
 
     /// "Reload as…": next encoding in the cycle (spec §6). On a binary it
@@ -869,6 +991,173 @@ impl Viewer {
             return row;
         }
         crate::display::skip_cells(&row, self.hscroll)
+    }
+
+    /// A viewer over a window read at `start` (from [`read_for`]): drops the
+    /// partial first line, numbers the rest from `t`'s line, aims at `t`.
+    ///
+    /// The numbering counts the `\n`s between the first whole line and the
+    /// target's start (`t.offset`), so it is exact without reading what came
+    /// before the window. With `start == 0` this is [`Self::new`] plus
+    /// [`Self::aim`].
+    #[must_use]
+    pub fn window(
+        path: VPath,
+        mut bytes: Vec<u8>,
+        truncated: bool,
+        start: u64,
+        t: &ViewerTarget,
+    ) -> Self {
+        let mut first_line = 1;
+        if start > 0 {
+            // A read that starts mid-file starts mid-line: that half goes.
+            let drop = bytes
+                .iter()
+                .position(|&b| b == b'\n')
+                .map_or(bytes.len(), |i| i + 1);
+            let upto = t
+                .offset
+                .and_then(|o| o.checked_sub(start))
+                .and_then(|d| usize::try_from(d).ok())
+                .map_or(drop, |d| d.clamp(drop, bytes.len()));
+            // `n` separators split a slice into `n + 1` pieces.
+            let between = bytes[drop..upto].split(|&b| b == b'\n').count() - 1;
+            first_line = t
+                .line
+                .saturating_sub(u64::try_from(between).unwrap_or(u64::MAX))
+                .max(1);
+            bytes.drain(..drop);
+        }
+        let mut v = Self::new(path, bytes, truncated);
+        v.first_line = first_line;
+        v.aim(t);
+        v
+    }
+
+    /// Scroll to `t`'s line and light up its ranges (text mode only; hex and
+    /// plugin previews keep their scroll and light nothing). A line not
+    /// held whose offset nobody knew opens at the top instead, and
+    /// [`Self::target_past_cap`] says so.
+    pub fn aim(&mut self, t: &ViewerTarget) {
+        self.target_past_cap = false;
+        if self.hex || self.plugin_preview.is_some() {
+            return;
+        }
+        let rel = usize::try_from(t.line.saturating_sub(self.first_line)).unwrap_or(usize::MAX);
+        let idx = rel.min(self.lines.saturating_sub(1));
+        self.scroll = idx;
+        // A line this viewer does not hold lights nothing: the last line
+        // held is another line. With no offset there was no window to read
+        // around it, so the top — not the end of the read, which looks like
+        // an answer — and the frontend says why (C9).
+        self.highlight = if rel < self.lines {
+            self.text.lines().nth(idx).map(|l| (idx, locate(l, t)))
+        } else {
+            None
+        };
+        if self.highlight.is_none() && t.offset.is_none() {
+            self.scroll = 0;
+            self.target_past_cap = true;
+        }
+        // The first lit span in sight: past the margin, scroll sideways to
+        // a little before it.
+        self.hscroll = 0;
+        if let Some((line, spans)) = &self.highlight
+            && let Some(&(s, _)) = spans.first()
+            && let Some(src) = self.text.lines().nth(*line)
+        {
+            let cell = src.chars().take(s).fold(0, next_col);
+            if cell > AIM_MARGIN {
+                self.hscroll = cell.saturating_sub(AIM_LEAD);
+            }
+        }
+    }
+
+    /// Did the last [`Self::aim`] miss? The target's line is not in what
+    /// was read and nobody knew its byte offset (a UTF-16 file, a legacy
+    /// encoding a regex search decoded, past the cap): the viewer is at the
+    /// top, and the frontend says so (`viewer-target-past-cap`).
+    #[must_use]
+    pub const fn target_past_cap(&self) -> bool {
+        self.target_past_cap
+    }
+
+    /// The first line's number: 1, or N for a window past the cap.
+    #[must_use]
+    pub const fn first_line(&self) -> u64 {
+        self.first_line
+    }
+
+    /// Which line (0-based in this viewer) is lit, if any. `None` in hex,
+    /// which has no lines.
+    #[must_use]
+    pub fn highlight_line(&self) -> Option<usize> {
+        if self.hex {
+            return None;
+        }
+        self.highlight.as_ref().map(|(line, _)| *line)
+    }
+
+    /// The lit spans of line `line`, as CHAR ranges of the string
+    /// [`Self::rows`] returns for it — after tab expansion and horizontal
+    /// scroll. Empty for any other line.
+    ///
+    /// The source chars are measured in cells by `render_line`'s own rule
+    /// (`next_col`), the scroll is subtracted in cells, and the cells are
+    /// mapped back to chars of the painted row: a frontend slices that string
+    /// by chars and never counts columns of its own.
+    #[must_use]
+    pub fn highlight_chars(&self, line: usize) -> Vec<(usize, usize)> {
+        use unicode_width::UnicodeWidthChar;
+        let Some((lit, spans)) = &self.highlight else {
+            return Vec::new();
+        };
+        if self.hex || *lit != line {
+            return Vec::new();
+        }
+        let Some(src) = self.text.lines().nth(line) else {
+            return Vec::new();
+        };
+        // The cell where each source char starts, plus the line's end.
+        let mut starts = Vec::with_capacity(src.len() + 1);
+        let mut col = 0;
+        for c in src.chars() {
+            starts.push(col);
+            col = next_col(col, c);
+        }
+        starts.push(col);
+        let last = starts.len() - 1;
+        // The cell where each char of the painted row starts.
+        let row = self.truncated_row(render_line(src));
+        let row_chars: Vec<char> = row.chars().collect();
+        let mut row_starts = Vec::with_capacity(row_chars.len());
+        let mut col = 0;
+        for &c in &row_chars {
+            row_starts.push(col);
+            // `None` is a control, and `render_line` already masked those;
+            // a zero-width char (combining mark, ZWJ, VS16) shares the cell
+            // of the char before it.
+            col += UnicodeWidthChar::width(c).unwrap_or(0);
+        }
+        let to_char = |cell: usize| row_starts.partition_point(|&s| s < cell);
+        spans
+            .iter()
+            .filter_map(|&(s, e)| {
+                let cs = starts[s.min(last)].saturating_sub(self.hscroll);
+                let ce = starts[e.min(last)].saturating_sub(self.hscroll);
+                let (a, mut b) = (to_char(cs), to_char(ce));
+                // The zero-width chars after the span belong to its last
+                // char: `e` + U+0301 is lit whole, never cut from its accent.
+                while b > a
+                    && row_chars
+                        .get(b)
+                        .is_some_and(|&c| UnicodeWidthChar::width(c) == Some(0))
+                {
+                    b += 1;
+                }
+                (a < b).then_some((a, b))
+            })
+            .collect()
     }
 
     /// The decoded encoding's name (`"UTF-8"`…), or `""` if binary.
@@ -1037,27 +1326,37 @@ const TAB_WIDTH: usize = 8;
 /// character, an ideogram before a tab moved the stop by one column and the
 /// rest of the line ended up misaligned relative to its neighbours.
 fn render_line(line: &str) -> String {
-    use unicode_width::UnicodeWidthChar;
     let mut out = String::with_capacity(line.len());
     let mut col = 0usize;
     for c in line.chars() {
+        let next = next_col(col, c);
         if c == '\t' {
-            let next = (col / TAB_WIDTH + 1) * TAB_WIDTH;
             for _ in col..next {
                 out.push(' ');
             }
-            col = next;
         } else if norte_encoding::is_terminal_hazard(c) {
             out.push('\u{FFFD}');
-            col += 1;
         } else {
             out.push(c);
-            // `unwrap_or(1)`: `None` is a CONTROL, and controls already went
-            // through the branch above. One is painted taking up something.
-            col += UnicodeWidthChar::width(c).unwrap_or(1);
         }
+        col = next;
     }
     out
+}
+
+/// The column after painting `c` at `col`: [`render_line`]'s cell rule, and
+/// [`Viewer::highlight_chars`]'s — one rule, so the light lands on the text.
+fn next_col(col: usize, c: char) -> usize {
+    use unicode_width::UnicodeWidthChar;
+    if c == '\t' {
+        (col / TAB_WIDTH + 1) * TAB_WIDTH
+    } else if norte_encoding::is_terminal_hazard(c) {
+        col + 1
+    } else {
+        // `unwrap_or(1)`: `None` is a CONTROL, and controls already went
+        // through the branch above. One is painted taking up something.
+        col + UnicodeWidthChar::width(c).unwrap_or(1)
+    }
 }
 
 /// The widest styled line, in cells.
@@ -1822,6 +2121,228 @@ mod tests {
             (b"a.webp", ImageFmt::Webp),
         ] {
             assert_eq!(image_format_by_name(name), Some(fmt), "{name:?}");
+        }
+    }
+
+    /// Opening at a line and lighting up the match (spec 2026-10-09 §5).
+    mod aim {
+        use super::super::{CONTEXT_BEFORE, TAB_WIDTH, Viewer, ViewerTarget, read_for};
+        use norte_proto::VPath;
+
+        fn vp(wire: &str) -> VPath {
+            VPath::parse(wire).unwrap()
+        }
+
+        fn target(
+            line: u64,
+            offset: Option<u64>,
+            preview: &str,
+            ranges: &[(u32, u32)],
+        ) -> ViewerTarget {
+            ViewerTarget {
+                line,
+                offset,
+                preview: preview.to_owned(),
+                ranges: ranges.to_vec(),
+            }
+        }
+
+        #[test]
+        fn aim_scrolls_to_the_line_and_lights_the_match() {
+            let mut v = Viewer::new(
+                vp("mem:///a.txt"),
+                b"uno\ndos aguja\ntres\n".to_vec(),
+                false,
+            );
+            v.aim(&target(2, Some(4), "dos aguja", &[(4, 9)]));
+            assert_eq!(v.scroll, 1);
+            assert_eq!(v.highlight_line(), Some(1));
+            assert_eq!(v.highlight_chars(1), vec![(4, 9)]);
+            assert!(v.highlight_chars(0).is_empty());
+        }
+
+        /// C7: the same text twice on the line — the preview's position picks
+        /// the right occurrence, not the first.
+        #[test]
+        fn the_preview_picks_which_occurrence() {
+            let line = format!("aguja {} aguja fin", "x".repeat(300));
+            let mut v = Viewer::new(vp("mem:///a.txt"), format!("{line}\n").into_bytes(), false);
+            let tail: String = line.chars().skip(200).collect(); // a preview cut on the left
+            let preview = format!("…{tail}");
+            let at =
+                u32::try_from(preview.chars().position(|c| c == 'a').expect("a")).expect("small");
+            v.aim(&target(1, Some(0), &preview, &[(at, at + 5)]));
+            // "aguja " (6) + 300 x + " " → the second `aguja` is chars
+            // 307..312; aiming scrolled sideways to 8 cells before it.
+            assert_eq!(v.hscroll(), 299);
+            assert_eq!(v.highlight_chars(0), vec![(8, 13)]);
+        }
+
+        /// A match near the start does not scroll sideways; one past the
+        /// margin scrolls to a little before it, so it is in sight.
+        #[test]
+        fn aim_scrolls_sideways_only_past_the_margin() {
+            let near = format!("{}aguja\n", "x".repeat(40));
+            let mut v = Viewer::new(vp("mem:///a.txt"), near.into_bytes(), false);
+            v.aim(&target(1, Some(0), "aguja", &[(0, 5)]));
+            assert_eq!((v.hscroll(), v.highlight_chars(0)), (0, vec![(40, 45)]));
+            let far = format!("{}aguja\n", "x".repeat(41));
+            let mut v = Viewer::new(vp("mem:///a.txt"), far.into_bytes(), false);
+            v.aim(&target(1, Some(0), "aguja", &[(0, 5)]));
+            assert_eq!((v.hscroll(), v.highlight_chars(0)), (33, vec![(8, 13)]));
+        }
+
+        /// A line the viewer does not hold and nobody knew the byte offset
+        /// of (UTF-16, some legacy encodings, past the cap): the viewer
+        /// opens at the TOP, lights nothing, and says it missed — the same
+        /// rule in both frontends, which each put it in words.
+        #[test]
+        fn a_line_not_held_without_an_offset_opens_at_the_top_and_says_so() {
+            let mut v = Viewer::new(vp("mem:///a.txt"), b"uno\ndos\ntres\n".to_vec(), true);
+            v.aim(&target(500, None, "aguja", &[(0, 5)]));
+            assert_eq!(v.scroll, 0);
+            assert_eq!(v.highlight_line(), None);
+            assert!(v.highlight_chars(2).is_empty());
+            assert!(v.target_past_cap());
+            // A line it holds says nothing.
+            v.aim(&target(2, None, "dos", &[(0, 3)]));
+            assert!(!v.target_past_cap());
+            assert_eq!(v.highlight_line(), Some(1));
+        }
+
+        /// A UTF-16 hit carries no offset: the viewer reads from the top,
+        /// decodes the file as text and lights the right line.
+        #[test]
+        fn a_utf16_target_reads_from_the_top() {
+            let t = target(2, None, "hay aguja", &[(4, 9)]);
+            assert_eq!(read_for(&t, 256 * 1024).offset, 0);
+            let mut bytes = vec![0xFF, 0xFE];
+            for u in "uno\nhay aguja\ntres\n".encode_utf16() {
+                bytes.extend_from_slice(&u.to_le_bytes());
+            }
+            let mut v = Viewer::new(vp("mem:///a.txt"), bytes, false);
+            v.aim(&t);
+            assert_eq!(v.highlight_line(), Some(1));
+            assert_eq!(v.highlight_chars(1), vec![(4, 9)]);
+        }
+
+        /// A span ending at a letter with a combining accent after it takes
+        /// the accent: `e` is never lit without its U+0301.
+        #[test]
+        fn a_span_takes_the_combining_marks_after_it() {
+            let mut v = Viewer::new(
+                vp("mem:///a.txt"),
+                "cafe\u{301} x\n".as_bytes().to_vec(),
+                false,
+            );
+            v.aim(&target(1, Some(0), "cafe\u{301} x", &[(0, 5)]));
+            assert_eq!(v.highlight_chars(0), vec![(0, 5)]);
+            v.aim(&target(1, Some(0), "cafe\u{301} x", &[(0, 4)]));
+            assert_eq!(
+                v.highlight_chars(0),
+                vec![(0, 5)],
+                "not cut from its accent"
+            );
+        }
+
+        /// When the viewer decoded the line differently and the preview's
+        /// core is not in it, every occurrence of the ranges' text is lit.
+        #[test]
+        fn without_the_core_every_occurrence_is_lit() {
+            let mut v = Viewer::new(vp("mem:///a.txt"), b"xx aguja yy aguja\n".to_vec(), false);
+            v.aim(&target(1, Some(0), "ZZ aguja", &[(3, 8)]));
+            assert_eq!(v.highlight_chars(0), vec![(3, 8), (12, 17)]);
+        }
+
+        /// A tab before the match moves it in the PAINTED row; so does scrolling sideways.
+        /// The daemon's preview has the tab masked, as it sends it.
+        #[test]
+        fn tabs_and_horizontal_scroll_move_the_highlight() {
+            let mut v = Viewer::new(vp("mem:///a.txt"), b"\taguja\n".to_vec(), false);
+            v.aim(&target(1, Some(0), "\u{FFFD}aguja", &[(1, 6)]));
+            assert_eq!(v.highlight_chars(0), vec![(TAB_WIDTH, TAB_WIDTH + 5)]);
+            v.scroll_right(2);
+            assert_eq!(v.highlight_chars(0), vec![(TAB_WIDTH - 2, TAB_WIDTH + 3)]);
+        }
+
+        /// The ranges are CHARS of the row string, not cells: two ideograms
+        /// take four cells but are two chars.
+        #[test]
+        fn wide_chars_count_as_one_char_of_the_row() {
+            let mut v = Viewer::new(
+                vp("mem:///a.txt"),
+                "日本 aguja\n".as_bytes().to_vec(),
+                false,
+            );
+            v.aim(&target(1, Some(0), "日本 aguja", &[(3, 8)]));
+            assert_eq!(v.highlight_chars(0), vec![(3, 8)]);
+            let row: Vec<char> = v.rows(1)[0].chars().collect();
+            assert_eq!(row[3..8].iter().collect::<String>(), "aguja");
+        }
+
+        /// The daemon masks the preview; the viewer finds it in the masked
+        /// line, so a hazard before the match does not throw it off.
+        #[test]
+        fn a_masked_preview_is_found_in_the_masked_line() {
+            let mut v = Viewer::new(vp("mem:///a.txt"), b"a\x1bb aguja\n".to_vec(), false);
+            v.aim(&target(1, Some(0), "a\u{FFFD}b aguja", &[(4, 9)]));
+            assert_eq!(v.highlight_chars(0), vec![(4, 9)]);
+        }
+
+        /// Past the cap: the window starts mid-line, that partial line goes, and
+        /// the lines are numbered from the target's.
+        #[test]
+        fn a_window_past_the_cap_numbers_from_the_known_line() {
+            let near = target(1000, Some(10_000), "aguja", &[(0, 5)]);
+            assert_eq!(
+                read_for(&near, 256 * 1024).offset,
+                0,
+                "inside the cap reads from the top"
+            );
+            let far = target(90_000, Some(1_000_000), "aguja", &[(0, 5)]);
+            assert_eq!(
+                read_for(&far, 256 * 1024).offset,
+                1_000_000 - CONTEXT_BEFORE
+            );
+            assert_eq!(read_for(&far, 256 * 1024).len, Some(256 * 1024 + 1));
+            assert_eq!(read_for(&target(5, None, "a", &[]), 10).offset, 0);
+            // The window: half a line, two whole lines, then the target.
+            let bytes = b"tial\nuno\ndos\naguja\n".to_vec();
+            let start = 1_000_000 - 13; // `aguja` starts at byte 1_000_000
+            let mut v = Viewer::window(vp("mem:///a.txt"), bytes, true, start, &far);
+            assert_eq!(v.first_line(), 89_998);
+            assert_eq!(v.highlight_line(), Some(2));
+            assert_eq!(v.rows(1), vec!["aguja"], "aimed at the target");
+            v.scroll_top();
+            assert_eq!(v.rows(1), vec!["uno"], "the partial line is gone");
+        }
+
+        #[test]
+        fn a_viewer_from_the_top_numbers_from_one() {
+            let v = Viewer::new(vp("mem:///a.txt"), b"uno\n".to_vec(), false);
+            assert_eq!(v.first_line(), 1);
+            assert_eq!(v.highlight_line(), None);
+        }
+
+        #[test]
+        fn hex_lights_nothing() {
+            let mut v = Viewer::new(vp("mem:///a.bin"), b"\0\0aguja".to_vec(), false);
+            assert!(v.hex);
+            v.aim(&target(1, Some(0), "aguja", &[(0, 5)]));
+            assert_eq!(v.highlight_line(), None);
+        }
+
+        #[test]
+        fn a_plugin_preview_lights_nothing() {
+            let mut v = Viewer::with_plugin_preview(
+                vp("mem:///a.txt"),
+                "P".to_owned(),
+                "uno\ndos aguja\n",
+                false,
+            );
+            v.aim(&target(2, Some(4), "dos aguja", &[(4, 9)]));
+            assert_eq!(v.highlight_line(), None);
+            assert_eq!(v.scroll, 0, "the preview keeps its scroll");
         }
     }
 }

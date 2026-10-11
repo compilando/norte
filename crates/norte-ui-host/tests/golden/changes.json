@@ -639,6 +639,15 @@
         "y": 20
       },
       {
+        "focus_index": 13,
+        "height": 38,
+        "role": null,
+        "slot_id": 15,
+        "width": 30,
+        "x": 150,
+        "y": 0
+      },
+      {
         "focus_index": 5,
         "height": 2,
         "role": null,
@@ -1323,6 +1332,15 @@
       "forced": false,
       "had_errors": false,
       "hex": false,
+      "highlight": {
+        "ranges": [
+          [
+            0,
+            6
+          ]
+        ],
+        "row": 4
+      },
       "image": {
         "format": "PNG",
         "height": 1080,
@@ -1333,6 +1351,7 @@
       "lines": [
         "quinta línea"
       ],
+      "lines_from": 3001,
       "path_display": "⟨file⟩/home/oscar/notas.txt",
       "path_hostile": false,
       "preview_by": "via PDF de ACME",

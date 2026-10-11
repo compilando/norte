@@ -80,6 +80,7 @@ mod pane;
 pub mod plugin_config;
 pub mod processes;
 pub mod search;
+pub mod search_panel;
 pub mod search_status;
 pub mod secret;
 pub mod session;

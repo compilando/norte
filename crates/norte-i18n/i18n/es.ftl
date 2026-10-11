@@ -1198,11 +1198,12 @@ menu-item-layout-set-target = Fijar destino
 panelbar-places = Sitios
 panelbar-tree = Árbol
 panelbar-viewer = Visor
-panelbar-processes = Procesos
+panelbar-processes = Tareas
 panelbar-metadata = Detalles
-panelbar-log = Registro
+panelbar-log = Log
 panelbar-disk-map = Mapa
 panelbar-timeline = Historial
+panelbar-search = Buscar
 panelbar-terminal = Terminal
 # El pie del panel de terminal: la ÚNICA tecla que el panel no le pasa al
 # shell, así que es la única que hay que anunciar.
@@ -1277,6 +1278,7 @@ menu-item-layout-processes = Procesos
 menu-item-layout-log = Registro
 menu-item-layout-disk-map = Mapa de disco
 menu-item-layout-timeline = Historial
+menu-item-layout-search = Panel de búsqueda
 menu-item-layout-terminal = Terminal
 menu-item-terminal-new = Nueva terminal
 menu-item-terminal-new-profile = Nueva terminal con…
@@ -1410,6 +1412,7 @@ help-cmd-layout-processes = muestra u oculta el panel de procesos
 help-cmd-layout-log = muestra u oculta el registro de esta sesión
 help-cmd-layout-disk-map = muestra u oculta el mapa de disco
 help-cmd-layout-timeline = muestra u oculta el historial
+help-cmd-layout-search = muestra u oculta el panel de búsqueda
 # No dice «muestra u oculta» como sus vecinos, y es a propósito: el segundo
 # toque devuelve el foco y deja el shell vivo, no lo cierra.
 help-cmd-layout-terminal = abre un terminal en un panel, o le devuelve el foco
@@ -1729,6 +1732,29 @@ search-status-done = búsqueda: { $n } hits
 search-status-truncated = búsqueda: { $n } hits (truncada)
 search-status-cancelled = búsqueda: { $n } hits (cancelada)
 search-status-failed = búsqueda fallida: { $error }
+# El panel de búsqueda (2026-10-09-search-panel): busca mientras escribes y
+# agrupa los resultados por carpeta y fichero, con sus líneas coincidentes.
+search-panel-title = Buscar
+search-panel-idle = Escribe un nombre o un texto para buscar
+search-panel-unreadable = { $field } no se puede leer
+# Los recuentos son DOS ids cada uno (ver `modal-chmod-one` en en.ftl): los
+# argumentos de texto nunca casan con un selector plural; elige el código.
+search-panel-files-one = 1 fichero
+search-panel-files = { $n } ficheros
+search-panel-folders-one = 1 carpeta
+search-panel-folders = { $n } carpetas
+search-panel-running = { $files } en { $folders } · buscando…
+search-panel-done = { $files } en { $folders }
+search-panel-truncated = detenida en { $n } resultados
+search-panel-cancelled = { $files } · detenida
+search-panel-failed = búsqueda fallida: { $error }
+search-panel-more = +{ $n } más
+search-panel-filters = filtros ({ $n })
+search-panel-root = en { $root }
+search-panel-reroot = Buscar aquí
+# El visor abierto en la línea de un resultado de búsqueda.
+viewer-lines-from = líneas desde { $n }
+viewer-target-past-cap = la línea está más allá de lo que lee el visor
 
 # --- Comparación de directorios (2026-08-11-directory-comparison.md, `Shift+F2`) ---
 # El panel de diferencias. Cada fila dice QUÉ se decidió, QUÉ criterio lo

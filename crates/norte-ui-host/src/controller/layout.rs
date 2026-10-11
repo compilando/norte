@@ -509,6 +509,9 @@ impl State {
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.set_tree(tree, active);
+        // The search panel placed, moved or closed by this tree: closing it
+        // cancels its run, before the snapshot says the board.
+        self.reconcile_search_panel(mailbox);
         self.wake_visible(backend, mailbox);
         if self.places_slot().is_some() {
             self.seed_places();

@@ -384,6 +384,9 @@ impl State {
         if kind.as_str() == super::timeline::KIND {
             return self.timeline_effect(effect);
         }
+        if kind.as_str() == super::searchpanel::KIND {
+            return self.search_panel_effect(effect);
+        }
         if kind.as_str() != "processes" {
             // Another pane that takes keys and that this host does not yet
             // project: it is let through, and the listing keeps responding.

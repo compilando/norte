@@ -37,6 +37,8 @@ pub fn default_dock(kind: &str) -> Dock {
     let (edge, size) = match kind {
         "places" => (Edge::Left, Size::Fixed(16)),
         "tree" => (Edge::Left, Size::Fixed(24)),
+        // What you navigate WITH: VS Code's place for it.
+        "search" => (Edge::Left, Size::Fixed(36)),
         "viewer" => (Edge::Right, Size::Weight(1)),
         "processes" => (Edge::Bottom, Size::Fixed(8)),
         "log" | "terminal" | "timeline" | "disk-map" => (Edge::Bottom, Size::Fixed(12)),
@@ -194,7 +196,7 @@ mod tests {
         for k in ["timeline", "terminal", "disk-map", "log", "processes"] {
             assert_eq!(default_dock(k).edge, Edge::Bottom, "{k}");
         }
-        for k in ["places", "tree"] {
+        for k in ["places", "tree", "search"] {
             assert_eq!(default_dock(k).edge, Edge::Left, "{k}");
         }
         for k in ["viewer", "metadata", "plugin:x:y"] {

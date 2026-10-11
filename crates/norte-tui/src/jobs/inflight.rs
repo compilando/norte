@@ -200,6 +200,10 @@ pub struct InFlight {
     /// Live search in progress (liveSearch T6): at most one, the virtual
     /// pane is one. Drained in the select and dropped on exit.
     pub search: Option<SearchRun>,
+    /// The search panel's run: at most one — a new query cancels the one it
+    /// replaces. Drained in the select; NOT on the task board (the panel
+    /// says how it goes).
+    pub search_panel: Option<crate::searchpanel::PanelRun>,
     /// Directory comparison in progress (`Shift+F2`): at most one, the diff
     /// panel is one.
     pub compare: Option<CompareRun>,

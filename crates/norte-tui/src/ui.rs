@@ -48,8 +48,8 @@ pub use overlays::{
 };
 pub use pane::painted_len_and_selection;
 pub(crate) use pane::pane_columns;
-pub(crate) use panels::timeline_window;
 pub use panels::{PlaceZone, TreeZone, places_zones, tree_zones};
+pub(crate) use panels::{search_panel_header, search_panel_window, timeline_window};
 pub use pickers::draw_theme_picker;
 pub use status::{SessionZone, StatusItemZone, session_zone, status_item_zones, status_zones};
 pub use text::fit_hint_groups;
@@ -78,7 +78,8 @@ use overlays::{
 use pane::draw_pane;
 use panels::{
     draw_disk_map, draw_log, draw_metadata, draw_places, draw_plugin_panel, draw_preview,
-    draw_processes, draw_tasks, draw_terminal, draw_timeline, draw_tree, draw_viewer,
+    draw_processes, draw_search_panel, draw_tasks, draw_terminal, draw_timeline, draw_tree,
+    draw_viewer,
 };
 use pickers::{
     draw_columns_picker, draw_connections_picker, draw_layout_picker, draw_profile_picker,
@@ -266,6 +267,10 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
 /// whether its kind was placed and paints if so — so they come out together
 /// and the order is kept: they go AFTER the listings and before the chrome
 /// below.
+#[expect(
+    clippy::too_many_lines,
+    reason = "a homogeneous run of `if let` blocks, one per kind; splitting it would only rename the pieces"
+)]
 fn draw_side_panels(
     frame: &mut Frame<'_>,
     res: &norte_frontend::layout::Resolved,
@@ -349,6 +354,18 @@ fn draw_side_panels(
             tl,
             app,
             app.key_owner() == crate::app::KeyOwner::Timeline,
+        );
+    }
+    if let Some((id, rect)) = placed_of_kind(res, &app.layout, crate::searchpanel::KIND)
+        && let Some(sp) = app.panes.search_panel(id)
+    {
+        draw_search_panel(
+            frame,
+            rect,
+            sp,
+            app.search_panel_focus,
+            app,
+            app.key_owner() == crate::app::KeyOwner::Search,
         );
     }
     if let Some((id, rect)) = placed_of_kind(res, &app.layout, crate::tree::KIND)

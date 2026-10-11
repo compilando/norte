@@ -23,9 +23,11 @@ import type {
   LogSlotView,
   PanelSlotView,
   RowView,
+  SearchPanelSlotView,
   TerminalInstanceView,
   UiAction,
   ViewSnapshot,
+  ViewerView,
   WindowVerb,
 } from "../src/types";
 
@@ -1695,7 +1697,88 @@ describe("the mark checkbox", () => {
   });
 });
 
+/** A raw viewer, with what the test says changed. */
+function viewerView(over: Partial<ViewerView>): ViewerView {
+  return {
+    path_display: "⟨file⟩/casa/notas",
+    path_hostile: false,
+    encoding: "UTF-8",
+    eol: "lf",
+    hex: false,
+    forced: false,
+    had_errors: false,
+    truncated: false,
+    total_rows: 3,
+    first_line: 0,
+    total_cols: 0,
+    first_col: 0,
+    lines: [],
+    preview_by: "",
+    preview_lossy: false,
+    image: null,
+    image_refused: "",
+    image_zoom: 100,
+    styled: [],
+    lines_from: 1,
+    ...over,
+  };
+}
+
 describe("the viewer", () => {
+  it("a highlighted range is a <mark> over the right code points", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.viewer = viewerView({
+      lines: ["añ aguja fin"],
+      first_line: 0,
+      highlight: { row: 0, ranges: [[3, 8]] },
+    });
+    screen.paint(v);
+    expect(document.querySelector(".viewer mark")?.textContent).toBe("aguja");
+    expect(document.querySelector(".viewer-body")?.textContent).toBe("añ aguja fin");
+  });
+
+  it("counts an astral character as ONE position, and marks only the lit row", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.viewer = viewerView({
+      lines: ["uno", "😀 aguja", "tres"],
+      first_line: 4,
+      // Row 5 is the second line shown: `first_line` is the numbering.
+      highlight: { row: 5, ranges: [[2, 7]] },
+    });
+    screen.paint(v);
+    const marks = document.querySelectorAll(".viewer mark");
+    expect(marks).toHaveLength(1);
+    expect(marks[0]?.textContent).toBe("aguja");
+    expect(document.querySelector(".viewer-body")?.textContent).toBe(
+      "uno\n😀 aguja\ntres",
+    );
+  });
+
+  it("writes the file's text as text, never as markup", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.viewer = viewerView({
+      lines: ["<b>x</b> aguja"],
+      highlight: { row: 0, ranges: [[9, 14]] },
+    });
+    screen.paint(v);
+    expect(document.querySelector(".viewer-body b")).toBeNull();
+    expect(document.querySelector(".viewer mark")?.textContent).toBe("aguja");
+  });
+
+  it("says where a window past the head starts", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.viewer = viewerView({ lines: ["a"], lines_from: 3001 });
+    screen.paint(v);
+    expect(document.querySelector(".viewer-meta")?.textContent).toContain("3001");
+    v.viewer = viewerView({ lines: ["a"], lines_from: 1 });
+    screen.paint(v);
+    expect(document.querySelector(".viewer-meta")?.textContent).not.toContain("3001");
+  });
+
   it("covers the screen and says which encoding it's reading with", () => {
     const { screen, sent } = mount();
     const v = view({});
@@ -6772,5 +6855,459 @@ describe("search by meaning", () => {
     // The similarity is visible, with two decimals: without it, the order
     // looks arbitrary.
     expect(box.querySelector(".search-score")?.textContent).toBe("0.91");
+  });
+});
+
+const panelSlot = (over: Partial<SearchPanelSlotView> = {}): SearchPanelSlotView => ({
+  kind: "search",
+  slot_id: 9,
+  title: "Search",
+  root: "/casa",
+  root_hostile: false,
+  fields: [
+    {
+      id: "name",
+      label_key: "search-name",
+      value: "",
+      hostile: false,
+      kind: { kind: "text" },
+    },
+    {
+      id: "content",
+      label_key: "search-content",
+      value: "aguja",
+      hostile: false,
+      kind: { kind: "text" },
+    },
+    {
+      id: "regex",
+      label_key: "search-toggle-regex",
+      value: "",
+      hostile: false,
+      kind: { kind: "toggle", on: false },
+    },
+    {
+      id: "case",
+      label_key: "search-toggle-case",
+      value: "",
+      hostile: false,
+      kind: { kind: "toggle", on: true },
+    },
+    {
+      id: "whole-word",
+      label_key: "search-toggle-whole-word",
+      value: "",
+      hostile: false,
+      kind: { kind: "toggle", on: false },
+    },
+    {
+      id: "exclude",
+      label_key: "search-exclude",
+      value: "",
+      hostile: false,
+      kind: { kind: "text" },
+    },
+    {
+      id: "kinds",
+      label_key: "search-toggle-kinds",
+      value: "",
+      hostile: false,
+      kind: { kind: "cycle", value_key: "search-kinds-any" },
+    },
+  ],
+  filters_open: false,
+  filters_set: 0,
+  unreadable: null,
+  status: "1 files in 1 folders",
+  running: false,
+  dimmed: false,
+  first_row: 0,
+  total_rows: 3,
+  generation: 4,
+  cursor: 2,
+  rows: [
+    { row: "folder", path: "/casa", hostile: false, count: 1, open: true },
+    { row: "file", name: "a.txt", hostile: false, count: 1 },
+    { row: "line", line: 7, preview: "x <b>aguja</b>", ranges: [[2, 7]] },
+  ],
+  ...over,
+});
+
+function withPanel(
+  slot: SearchPanelSlotView,
+  role: "active" | null = null,
+): ViewSnapshot {
+  const v = view({});
+  v.slots = [...v.slots, slot];
+  v.layout.placements = [
+    ...v.layout.placements.map((p) => (role === "active" ? { ...p, role: null } : p)),
+    { slot_id: 9, x: 0, y: 0, width: 40, height: 20, role, focus_index: 2 },
+  ];
+  return v;
+}
+
+describe("the search panel", () => {
+  beforeEach(() => {
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0);
+      return 0;
+    });
+  });
+
+  it("a match is a <mark> of text, never markup", () => {
+    const { screen } = mount();
+    screen.paint(withPanel(panelSlot()));
+    expect(document.querySelector(".searchpanel-line mark")?.textContent).toBe("<b>ag");
+    expect(document.querySelector(".searchpanel-line b")).toBeNull();
+  });
+
+  it("a root with `$&` or `$$` in it paints verbatim", () => {
+    const { screen } = mount();
+    const root = "/data/a$&b/c$$d/e$`f$'g";
+    screen.paint(withPanel(panelSlot({ root })));
+    expect(document.querySelector(".searchpanel-root-text")?.textContent).toBe(
+      realCatalog()["search-panel-root"]!.replace(/\{\s*\$root\s*\}/u, () => root),
+    );
+    expect(document.querySelector(".searchpanel-root-text")?.textContent).toContain(root);
+  });
+
+  it("ranges count code points, not UTF-16 units", () => {
+    const { screen } = mount();
+    const rows: SearchPanelSlotView["rows"] = [
+      { row: "line", line: 1, preview: "😀aguja", ranges: [[1, 3]] },
+    ];
+    screen.paint(withPanel(panelSlot({ rows, total_rows: 1, cursor: 0 })));
+    expect(document.querySelector(".searchpanel-line mark")?.textContent).toBe("ag");
+  });
+
+  it("typing sends an edit and a stale echo does not move the caret", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPanel(panelSlot()));
+    const input = document.querySelector<HTMLInputElement>(
+      ".searchpanel-input[data-field='content']",
+    )!;
+    input.focus();
+    input.value = "agu";
+    input.dispatchEvent(new Event("input"));
+    expect(sent.at(-1)).toEqual({
+      action: "search_panel_edit",
+      slot_id: 9,
+      field: "content",
+      value: { set: "text", text: "agu" },
+    });
+    const stale = panelSlot().fields.map((f) =>
+      f.id === "content" ? { ...f, value: "ag" } : f,
+    );
+    screen.paint(withPanel(panelSlot({ fields: stale })));
+    expect(input.value).toBe("agu");
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("an unfocused input follows the host, and the inputs survive a new tree", () => {
+    const { screen } = mount();
+    screen.paint(withPanel(panelSlot()));
+    const input = document.querySelector<HTMLInputElement>(
+      ".searchpanel-input[data-field='content']",
+    )!;
+    const fields = panelSlot().fields.map((f) =>
+      f.id === "content" ? { ...f, value: "hilo" } : f,
+    );
+    screen.paint(
+      withPanel(panelSlot({ fields, status: "otra", total_rows: 1, rows: [] })),
+    );
+    expect(document.querySelector(".searchpanel-input[data-field='content']")).toBe(
+      input,
+    );
+    expect(input.value).toBe("hilo");
+  });
+
+  it("Enter in an input searches now", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPanel(panelSlot()));
+    const input = document.querySelector<HTMLInputElement>(
+      ".searchpanel-input[data-field='name']",
+    )!;
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(sent.at(-1)).toEqual({ action: "search_panel_go", slot_id: 9 });
+  });
+
+  it("the switches read [Aa] [ab] [.*] and send a toggle", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPanel(panelSlot()));
+    const switches = [...document.querySelectorAll<HTMLElement>(".searchpanel-switch")];
+    expect(switches.map((s) => s.textContent)).toEqual(["Aa", "ab", ".*"]);
+    expect(switches.map((s) => s.getAttribute("aria-pressed"))).toEqual([
+      "true",
+      "false",
+      "false",
+    ]);
+    switches[2]!.click();
+    expect(sent.at(-1)).toEqual({
+      action: "search_panel_edit",
+      slot_id: 9,
+      field: "regex",
+      value: { set: "toggled" },
+    });
+  });
+
+  it("the fold holds the other inputs and a click on it asks the host", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPanel(panelSlot({ filters_set: 2 })));
+    const fold = document.querySelector<HTMLElement>(".searchpanel-fold")!;
+    expect(fold.textContent).toContain("2");
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector<HTMLElement>(".searchpanel-filters")!.hidden).toBe(
+      true,
+    );
+    fold.click();
+    expect(sent.at(-1)).toEqual({ action: "search_panel_filters", slot_id: 9 });
+    screen.paint(withPanel(panelSlot({ filters_open: true })));
+    expect(document.querySelector<HTMLElement>(".searchpanel-filters")!.hidden).toBe(
+      false,
+    );
+    document.querySelector<HTMLElement>(".searchpanel-cycle")!.click();
+    expect(sent.at(-1)).toEqual({
+      action: "search_panel_edit",
+      slot_id: 9,
+      field: "kinds",
+      value: { set: "cycled" },
+    });
+  });
+
+  it("Search here re-roots", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPanel(panelSlot()));
+    document.querySelector<HTMLElement>(".searchpanel-reroot")!.click();
+    expect(sent.at(-1)).toEqual({ action: "search_panel_reroot", slot_id: 9 });
+  });
+
+  it("the status is polite, dims, and an unreadable input is invalid", () => {
+    const { screen } = mount();
+    screen.paint(withPanel(panelSlot({ dimmed: true, unreadable: "name" })));
+    const status = document.querySelector(".searchpanel p[role='status']")!;
+    expect(status.getAttribute("aria-live")).toBe("polite");
+    expect(status.textContent).toBe("1 files in 1 folders");
+    expect((status as HTMLElement).dataset["dimmed"]).toBe("true");
+    const name = document.querySelector(".searchpanel-input[data-field='name']")!;
+    expect(name.getAttribute("aria-invalid")).toBe("true");
+    expect(
+      document
+        .querySelector(".searchpanel-input[data-field='content']")!
+        .hasAttribute("aria-invalid"),
+    ).toBe(false);
+  });
+
+  it("a cursor-only change moves the mark on the SAME nodes", () => {
+    const { screen } = mount();
+    screen.paint(withPanel(panelSlot()));
+    const before = [...document.querySelectorAll(".searchpanel-row")];
+    screen.paint(withPanel(panelSlot({ cursor: 1 })));
+    const after = [...document.querySelectorAll(".searchpanel-row")];
+    expect(after).toEqual(before);
+    expect(after[1]?.getAttribute("aria-selected")).toBe("true");
+    expect(after[2]?.getAttribute("aria-selected")).toBe("false");
+    const tree = document.querySelector(".searchpanel [role='tree']")!;
+    expect(tree.getAttribute("aria-activedescendant")).toBe(after[1]?.id);
+  });
+
+  it("a click on a line activates it", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPanel(panelSlot()));
+    (document.querySelectorAll(".searchpanel-row")[2] as HTMLElement).click();
+    expect(sent.at(-1)).toEqual({
+      action: "search_panel_activate",
+      slot_id: 9,
+      row: 2,
+      generation: 4,
+    });
+  });
+
+  it("a click echoes the generation of the paint it was made on", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPanel(panelSlot()));
+    screen.paint(withPanel(panelSlot({ generation: 5 })));
+    (document.querySelectorAll(".searchpanel-row")[1] as HTMLElement).click();
+    expect(sent.at(-1)).toEqual({
+      action: "search_panel_activate",
+      slot_id: 9,
+      row: 1,
+      generation: 5,
+    });
+  });
+
+  it("a click on a folder's chevron folds it, not activates it", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPanel(panelSlot()));
+    document.querySelector<HTMLElement>(".searchpanel-chevron")!.click();
+    expect(sent.at(-1)).toEqual({
+      action: "search_panel_fold",
+      slot_id: 9,
+      row: 0,
+      open: false,
+      generation: 4,
+    });
+  });
+
+  it("rows are numbered in the whole tree and spacers stand for the rest", () => {
+    const { screen, sent } = mount();
+    const rows: SearchPanelSlotView["rows"] = [
+      { row: "file", name: "a.txt", hostile: false, count: 1 },
+      { row: "file", name: "b.txt", hostile: false, count: 1 },
+    ];
+    screen.paint(
+      withPanel(panelSlot({ first_row: 100, total_rows: 1000, cursor: 100, rows })),
+    );
+    const spacers = [...document.querySelectorAll<HTMLElement>(".searchpanel-spacer")];
+    expect(spacers.map((s) => s.style.height)).toEqual([
+      `${String(100 * CELL_H)}px`,
+      `${String(898 * CELL_H)}px`,
+    ]);
+    (document.querySelectorAll(".searchpanel-row")[1] as HTMLElement).click();
+    expect(sent.at(-1)).toEqual({
+      action: "search_panel_activate",
+      slot_id: 9,
+      row: 101,
+      generation: 4,
+    });
+  });
+
+  it("becoming the active slot puts the caret in the name input", () => {
+    const { screen } = mount();
+    screen.paint(withPanel(panelSlot()));
+    const name = document.querySelector<HTMLInputElement>(
+      ".searchpanel-input[data-field='name']",
+    )!;
+    expect(document.activeElement).not.toBe(name);
+    screen.paint(withPanel(panelSlot(), "active"));
+    expect(document.activeElement).toBe(name);
+  });
+
+  it("a click that made it active keeps the focus where the click put it", () => {
+    const { screen } = mount();
+    screen.paint(withPanel(panelSlot()));
+    const tree = document.querySelector<HTMLElement>(".searchpanel [role='tree']")!;
+    tree.focus();
+    screen.paint(withPanel(panelSlot(), "active"));
+    expect(document.activeElement).toBe(tree);
+  });
+
+  it("ArrowDown and Tab walk the inputs and then into the results", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPanel(panelSlot(), "active"));
+    const input = (id: string): HTMLInputElement =>
+      document.querySelector<HTMLInputElement>(`.searchpanel-input[data-field='${id}']`)!;
+    const tree = document.querySelector<HTMLElement>(".searchpanel [role='tree']")!;
+    const press = (key: string, shiftKey = false): void => {
+      document.activeElement!.dispatchEvent(
+        new KeyboardEvent("keydown", { key, shiftKey, bubbles: true, cancelable: true }),
+      );
+    };
+    const before = sent.length;
+    expect(document.activeElement).toBe(input("name"));
+    press("ArrowDown");
+    expect(document.activeElement).toBe(input("content"));
+    // The fold is closed: its inputs are not stops.
+    press("Tab");
+    expect(document.activeElement).toBe(tree);
+    press("Tab");
+    expect(document.activeElement).toBe(input("name"));
+    press("Tab", true);
+    expect(document.activeElement).toBe(tree);
+    press("Tab", true);
+    expect(document.activeElement).toBe(input("content"));
+    press("ArrowUp");
+    expect(document.activeElement).toBe(input("name"));
+    expect(sent.slice(before).filter((a) => a.action === "key")).toEqual([]);
+  });
+
+  it("Escape leaves the input and lets the host give the keys back", () => {
+    const { screen } = mount();
+    screen.paint(withPanel(panelSlot(), "active"));
+    const name = document.querySelector<HTMLInputElement>(
+      ".searchpanel-input[data-field='name']",
+    )!;
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    name.dispatchEvent(escape);
+    expect(document.activeElement).not.toBe(name);
+    expect(escape.defaultPrevented).toBe(false);
+  });
+
+  it("losing the keyboard takes the caret out of the panel", () => {
+    const { screen } = mount();
+    screen.paint(withPanel(panelSlot(), "active"));
+    const name = document.querySelector<HTMLInputElement>(
+      ".searchpanel-input[data-field='name']",
+    )!;
+    expect(document.activeElement).toBe(name);
+    screen.paint(withPanel(panelSlot()));
+    expect(document.activeElement).not.toBe(name);
+  });
+
+  it("a cursor that moved says the visible range again, even unscrolled", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPanel(panelSlot({ total_rows: 1000 })));
+    const scroller = document.querySelector<HTMLElement>(".searchpanel-scroll")!;
+    Object.defineProperty(scroller, "clientHeight", {
+      value: 10 * CELL_H,
+      configurable: true,
+    });
+    const ranges = (): UiAction[] =>
+      sent.filter((a) => a.action === "search_panel_visible_range");
+    screen.paint(withPanel(panelSlot({ total_rows: 1000 })));
+    expect(ranges()).toHaveLength(1);
+    // The host forgot the window on that key: it must hear it again.
+    screen.paint(withPanel(panelSlot({ total_rows: 1000, cursor: 3 })));
+    expect(ranges()).toHaveLength(2);
+    expect(ranges()[1]).toEqual(ranges()[0]);
+  });
+
+  it("a batch that renumbers the cursor leaves a wheel-scrolled view alone", () => {
+    const { screen } = mount();
+    const at = (over: Partial<SearchPanelSlotView>): ViewSnapshot =>
+      withPanel(panelSlot({ total_rows: 1000, cursor: 3, ...over }));
+    screen.paint(at({}));
+    const scroller = document.querySelector<HTMLElement>(".searchpanel-scroll")!;
+    Object.defineProperty(scroller, "clientHeight", {
+      value: 10 * CELL_H,
+      configurable: true,
+    });
+    screen.paint(at({}));
+    // The wheel takes the view far from the cursor.
+    scroller.scrollTop = 500 * CELL_H;
+    // A batch sorted two rows in above the cursor: same row, new index.
+    screen.paint(at({ cursor: 5, generation: 5 }));
+    expect(scroller.scrollTop).toBe(500 * CELL_H);
+    // The reader's own move (same numbering) is still followed.
+    screen.paint(at({ cursor: 6, generation: 5 }));
+    expect(scroller.scrollTop).toBe(6 * CELL_H);
+  });
+
+  it("scrolling sends the visible range only when it changes", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPanel(panelSlot({ total_rows: 1000 })));
+    const scroller = document.querySelector<HTMLElement>(".searchpanel-scroll")!;
+    Object.defineProperty(scroller, "clientHeight", {
+      value: 10 * CELL_H,
+      configurable: true,
+    });
+    const ranges = (): UiAction[] =>
+      sent.filter((a) => a.action === "search_panel_visible_range");
+    scroller.scrollTop = 300 * CELL_H;
+    scroller.dispatchEvent(new Event("scroll"));
+    expect(ranges()).toHaveLength(1);
+    scroller.dispatchEvent(new Event("scroll"));
+    expect(ranges()).toHaveLength(1);
+    const first = ranges()[0] as Extract<
+      UiAction,
+      { action: "search_panel_visible_range" }
+    >;
+    expect(first.slot_id).toBe(9);
+    expect(first.first).toBeLessThanOrEqual(300);
+    expect(first.first + first.count).toBeGreaterThanOrEqual(310);
+    expect(first.count).toBeLessThanOrEqual(500);
   });
 });

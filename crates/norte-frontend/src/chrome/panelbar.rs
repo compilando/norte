@@ -174,6 +174,7 @@ pub fn icon(kind: &str, set: IconSet) -> Option<&'static str> {
         "disk-map" => ("◔", "\u{f200}"),
         "timeline" => ("◷", "\u{f017}"),
         "terminal" => ("❯", "\u{f120}"),
+        "search" => ("⌕", "\u{f002}"),
         _ => return None,
     };
     Some(match set {
@@ -203,6 +204,7 @@ pub fn icon_svg(kind: &str) -> Option<&'static str> {
         "disk-map" => include_str!("../../assets/panel-icons/disk-map.svg"),
         "timeline" => include_str!("../../assets/panel-icons/timeline.svg"),
         "terminal" => include_str!("../../assets/panel-icons/terminal.svg"),
+        "search" => include_str!("../../assets/panel-icons/search.svg"),
         // The column's foot (`FOOTER`), not panels.
         "settings" => include_str!("../../assets/panel-icons/settings.svg"),
         "help" => include_str!("../../assets/panel-icons/help.svg"),
@@ -548,6 +550,7 @@ mod tests {
             "log",
             "disk-map",
             "timeline",
+            "search",
         ];
         for k in kinds {
             assert!(reg.get(&KindId::new(k)).is_some(), "{k} is a built-in kind");
@@ -593,6 +596,8 @@ mod tests {
                 // not close with its own button: a second tap gives it
                 // back the focus and leaves the shell alive.
                 "terminal",
+                // The search panel, registered after the terminal.
+                "search",
             ],
             "the built-in buttons' order changed"
         );
@@ -820,6 +825,7 @@ mod tests {
         assert_eq!(toggled_kind(&reg, "pane.tree"), Some("tree"));
         assert_eq!(toggled_kind(&reg, "layout.preview"), Some("viewer"));
         assert_eq!(toggled_kind(&reg, "layout.timeline"), Some("timeline"));
+        assert_eq!(toggled_kind(&reg, "layout.search"), Some("search"));
         assert_eq!(toggled_kind(&reg, "layout.split-h"), None);
         assert_eq!(toggled_kind(&reg, "pane.copy"), None);
     }

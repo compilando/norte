@@ -28,6 +28,9 @@
 # It is in the Panels menu, which declines without a key: with no lone
 # chord there is no way back from the shell.
 #
+# Krusader's own search stays on `ctrl+s` (`pane.search`); the search
+# panel (`layout.search`) takes `alt+F` here as in the other six.
+#
 # Omitted families (norte has no concept): Alt+F1..F12 and Ctrl+F1..F12 /
 # Ctrl+Shift+F1..F12 are explicitly "Standard (Plasma) key-bindings" per the
 # source itself, not Krusader's — never Krusader's to bind (drive selection
@@ -160,6 +163,7 @@ keymap = [
     # chords (see orthodox.toml).
     { on = ["alt+I"], run = "layout.metadata" },
     { on = ["alt+T"], run = "layout.timeline" },
+    { on = ["alt+F"], run = "layout.search" },
     # The terminal panel (#362). **Krusader DOES have this panel** —it is
     # the docked terminal emulator, and a good part of why norte adds it—,
     # so here its chord should be transcribed rather than invented.

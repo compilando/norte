@@ -1163,6 +1163,16 @@ pub async fn run(
             } => {
                 drain_search(app, &mut work.search, hits);
             }
+            hits = async {
+                // The search panel's run. `drain` drops it on the `None`
+                // that ends it, so a closed channel never spins here.
+                match &mut work.search_panel {
+                    Some(r) => r.rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                crate::searchpanel::drain(app, &mut work.search_panel, hits);
+            }
             batch = async {
                 // Same as the hits arm: only drained with the run ALIVE,
                 // because a closed channel would return `None` in a loop

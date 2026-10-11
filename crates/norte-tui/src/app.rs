@@ -253,6 +253,9 @@ pub enum KeyOwner {
     /// The journal timeline (phase 7). No payload, for the same reason as the
     /// map: it declares `multi: false`, so there is at most one.
     Timeline,
+    /// The search panel. No payload, for the same reason as the map: it
+    /// declares `multi: false`, so there is at most one.
+    Search,
     /// The terminal panel (#362). No payload, and that is the reason the kind
     /// declares `multi: false`: with several you would have to carry WHICH
     /// one has the keys, and this type is compared for equality in
@@ -788,6 +791,8 @@ pub struct App {
     /// yet" about a journal it had not even looked at — which is the worst
     /// possible sentence on a history screen.
     pub timeline_stale: bool,
+    /// Where the search panel's keys go: one of its inputs or its results.
+    pub search_panel_focus: crate::searchpanel::SearchFocus,
     /// The panel bar is pinned (`[ui] panel_bar`, #324).
     ///
     /// Side panels used to open by shortcut, by the menu or by the palette,
@@ -1459,6 +1464,7 @@ impl App {
             pending_disk_map_enter: None,
             disk_map_stale: false,
             timeline_stale: false,
+            search_panel_focus: crate::searchpanel::SearchFocus::default(),
             // Off until startup says otherwise: a test `App` does not read
             // configuration, and a row that appears on its own would shift
             // the indices of eighty tests that are not about this.

@@ -115,7 +115,13 @@ export function viewerBody(viewer: ViewerView): HTMLElement {
   const body = document.createElement("pre");
   body.className = viewer.hex ? "viewer-body hexview" : "viewer-body";
   if (viewer.styled.length === 0) {
-    body.textContent = viewer.lines.join("\n");
+    const lit =
+      viewer.highlight === undefined ? -1 : viewer.highlight.row - viewer.first_line;
+    if (viewer.highlight === undefined || lit < 0 || lit >= viewer.lines.length) {
+      body.textContent = viewer.lines.join("\n");
+    } else {
+      body.append(...litBody(viewer.lines, lit, viewer.highlight.ranges));
+    }
     return body;
   }
   // A picture drawn in `▀` half-blocks (an image previewer): its rows must
@@ -146,6 +152,44 @@ export function viewerBody(viewer: ViewerView): HTMLElement {
     body.append(row);
   }
   return body;
+}
+
+/**
+ * The raw body with line `lit` carrying `<mark>` over its ranges.
+ *
+ * Built node by node, never as HTML: the text is the file's. The ranges are
+ * CODE POINTS (Rust chars), not UTF-16 units, so the line is split with
+ * `Array.from` — slicing the string would shift every range after an astral
+ * character.
+ */
+function litBody(lines: string[], lit: number, ranges: [number, number][]): Node[] {
+  const chars = Array.from(lines[lit] ?? "");
+  const nodes: Node[] = [];
+  if (lit > 0) {
+    nodes.push(document.createTextNode(`${lines.slice(0, lit).join("\n")}\n`));
+  }
+  let at = 0;
+  for (const [from, to] of ranges) {
+    const start = Math.max(from, at);
+    const end = Math.min(to, chars.length);
+    if (end <= start) {
+      continue;
+    }
+    if (start > at) {
+      nodes.push(document.createTextNode(chars.slice(at, start).join("")));
+    }
+    const mark = document.createElement("mark");
+    mark.textContent = chars.slice(start, end).join("");
+    nodes.push(mark);
+    at = end;
+  }
+  const after = lines.slice(lit + 1);
+  const tail =
+    chars.slice(at).join("") + (after.length > 0 ? `\n${after.join("\n")}` : "");
+  if (tail !== "") {
+    nodes.push(document.createTextNode(tail));
+  }
+  return nodes;
 }
 
 /**

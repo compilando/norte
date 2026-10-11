@@ -3976,6 +3976,9 @@ async fn the_pane_bar_shows_the_panes_and_a_click_opens_them() {
             // really be needed: the grid is built by `norte-term` once for
             // both frontends (T4).
             "terminal",
+            // The search panel, likewise: shared registry, so its button is
+            // here before the window paints it.
+            "search",
         ],
         "the same buttons and the same order as `panelbar::buttons`"
     );
@@ -4078,6 +4081,31 @@ async fn the_pane_bar_shows_the_panes_and_a_click_opens_them() {
     );
 }
 
+/// `layout.search` places the search panel, rooted at the listing's folder,
+/// and, again, takes it away.
+#[tokio::test]
+async fn layout_search_toggles_a_search_slot() {
+    let (h, _snap) = host_tree(fake_tree()).await;
+    let mut sub = h.subscribe();
+    run_by_palette(&h, &mut sub, "layout.search").await;
+    let root = snapshot_until(&h, &mut sub, "the search slot", |s| {
+        s.slots.iter().find_map(|v| match v {
+            SlotView::Search(p) => Some(p.root.clone()),
+            _ => None,
+        })
+    })
+    .await;
+    assert!(root.ends_with("/casa"), "{root}");
+    run_by_palette(&h, &mut sub, "layout.search").await;
+    let () = snapshot_until(&h, &mut sub, "the search slot gone", |s| {
+        s.slots
+            .iter()
+            .all(|v| !matches!(v, SlotView::Search(_)))
+            .then_some(())
+    })
+    .await;
+}
+
 /// ADR 0134 (phase F): two panels on the same border share a spot as tabs;
 /// the group is a PANELS one and its tabs carry the panel's name. Pressing
 /// the hidden one brings it to the front, and pressing the visible one
@@ -4095,7 +4123,7 @@ async fn panes_on_one_edge_share_room_as_tabs() {
     .await;
     let titles: Vec<&str> = snapshot.tabs.iter().map(|t| t.title.as_str()).collect();
     // The panel bar's names, not the kind ids.
-    assert_eq!(titles, ["Historial", "Registro"], "{snapshot:?}");
+    assert_eq!(titles, ["Historial", "Log"], "{snapshot:?}");
     assert_eq!(snapshot.active, 1, "the one that arrives stays in front");
 
     // The timeline is hidden: pressing it SHOWS it.
