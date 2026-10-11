@@ -262,6 +262,18 @@ impl UserCommand {
     pub fn uses_targets(&self) -> bool {
         self.argv.iter().skip(1).any(|t| t == "%f" || t == "%F")
     }
+
+    /// How many of `selected` targets it runs on: all with `%F`, the first
+    /// with `%f` alone, none otherwise.
+    fn target_count(&self, selected: usize) -> usize {
+        if self.argv.iter().skip(1).any(|t| t == "%F") {
+            selected
+        } else if self.uses_targets() {
+            selected.min(1)
+        } else {
+            0
+        }
+    }
 }
 
 /// Bytes an expanded argv may take before norte refuses it. Half of macOS's
@@ -413,7 +425,7 @@ pub fn request(
         run_in: cmd.run_in,
         refresh: cmd.refresh,
         confirm: cmd.confirm,
-        count: if cmd.uses_targets() { files.len() } else { 0 },
+        count: cmd.target_count(files.len()),
     })
 }
 
@@ -529,13 +541,19 @@ pub async fn run_background(launch: Launch) -> Finished {
             };
         }
     };
-    let spawned = tokio::process::Command::new(&program)
+    let mut command = tokio::process::Command::new(&program);
+    command
         .args(&launch.args)
         .current_dir(&launch.cwd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn();
+        .stderr(std::process::Stdio::piped());
+    // Its own process group: a program that reads /dev/tty (ssh, sudo, gpg)
+    // is stopped by the kernel instead of taking the TUI's keystrokes. It
+    // cannot ask anything; `run_in = "terminal"` can.
+    #[cfg(unix)]
+    command.process_group(0);
+    let spawned = command.spawn();
     let mut child = match spawned {
         Ok(c) => c,
         Err(e) => {
@@ -568,11 +586,46 @@ fn log_line(raw: &[u8]) -> String {
     norte_encoding::mask_terminal_hazards(&String::from_utf8_lossy(raw))
 }
 
-async fn forward(pipe: Option<impl tokio::io::AsyncRead + Unpin>, id: String, stderr: bool) {
+/// The longest piece of one output line that goes to the log as one event.
+const SEGMENT_CAP: usize = 64 * 1024;
+
+/// Reads the next line (without its `\n`) into `buf`, at most `cap` bytes: a
+/// longer line comes back as several segments, so output with no newline
+/// cannot grow norte's memory without bound. `false` at the end.
+async fn next_segment<R: tokio::io::AsyncBufRead + Unpin>(
+    r: &mut R,
+    buf: &mut Vec<u8>,
+    cap: usize,
+) -> std::io::Result<bool> {
     use tokio::io::AsyncBufReadExt;
+    buf.clear();
+    loop {
+        let avail = r.fill_buf().await?;
+        if avail.is_empty() {
+            return Ok(!buf.is_empty());
+        }
+        let room = cap - buf.len();
+        // `room + 1`: a `\n` right after a full segment still ends it.
+        let window = &avail[..avail.len().min(room + 1)];
+        if let Some(i) = window.iter().position(|&b| b == b'\n') {
+            buf.extend_from_slice(&window[..i]);
+            r.consume(i + 1);
+            return Ok(true);
+        }
+        let take = avail.len().min(room);
+        buf.extend_from_slice(&avail[..take]);
+        r.consume(take);
+        if buf.len() >= cap {
+            return Ok(true);
+        }
+    }
+}
+
+async fn forward(pipe: Option<impl tokio::io::AsyncRead + Unpin>, id: String, stderr: bool) {
     let Some(pipe) = pipe else { return };
-    let mut lines = tokio::io::BufReader::new(pipe).split(b'\n');
-    while let Ok(Some(line)) = lines.next_segment().await {
+    let mut reader = tokio::io::BufReader::new(pipe);
+    let mut line = Vec::new();
+    while let Ok(true) = next_segment(&mut reader, &mut line, SEGMENT_CAP).await {
         let text = log_line(&line);
         if stderr {
             tracing::warn!(target: LOG_TARGET, command = %id, "{text}");
@@ -861,6 +914,22 @@ refresh = false
     }
 
     #[test]
+    fn a_percent_f_only_template_counts_one_target() {
+        // `%f` takes the first target only: confirm must not say "3 items".
+        let c = cmds("[[command]]\nid = \"x\"\nlabel = \"X\"\nargv = [\"p\", \"%f\"]\n");
+        let three = [vp("file:///d/a"), vp("file:///d/b"), vp("file:///d/c")];
+        let l = request(&c, "x", &vp("file:///d"), &three).unwrap();
+        assert_eq!(l.args, [std::ffi::OsString::from("/d/a")]);
+        assert_eq!(l.count, 1);
+        let both = cmds("[[command]]\nid = \"x\"\nlabel = \"X\"\nargv = [\"p\", \"%f\", \"%F\"]\n");
+        assert_eq!(
+            request(&both, "x", &vp("file:///d"), &three).unwrap().count,
+            3,
+            "%F anywhere runs on all of them"
+        );
+    }
+
+    #[test]
     fn refusals() {
         let c = cmds(PNG);
         assert_eq!(
@@ -985,6 +1054,43 @@ refresh = false
         .await
         .expect("both pipes are drained");
         assert_eq!(f, Finished::Ok);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_background_command_runs_in_its_own_process_group() {
+        // Its own group: a read of /dev/tty stops it instead of painting over
+        // the TUI and stealing keystrokes. `$$` is the child itself.
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(
+            run_background(sh("echo $$ $(ps -o pgid= -p $$) > ids", d.path())).await,
+            Finished::Ok
+        );
+        let ids = std::fs::read_to_string(d.path().join("ids")).unwrap();
+        let mut it = ids.split_whitespace();
+        let (pid, pgid) = (it.next().unwrap(), it.next().unwrap());
+        assert_eq!(pid, pgid, "the child leads its own process group");
+    }
+
+    #[tokio::test]
+    async fn output_segments_are_capped() {
+        async fn all(mut src: &[u8], cap: usize) -> Vec<Vec<u8>> {
+            let mut out = Vec::new();
+            let mut buf = Vec::new();
+            while next_segment(&mut src, &mut buf, cap).await.unwrap() {
+                out.push(buf.clone());
+            }
+            out
+        }
+        let s = |v: &[&str]| v.iter().map(|x| x.as_bytes().to_vec()).collect::<Vec<_>>();
+        assert_eq!(all(b"aaaaa\nbb", 3).await, s(&["aaa", "aa", "bb"]));
+        assert_eq!(all(b"abc\nd\n\ne", 3).await, s(&["abc", "d", "", "e"]));
+        assert_eq!(all(b"", 3).await, s(&[]));
+        let big = vec![b'x'; 3 * SEGMENT_CAP + 10];
+        let segs = all(&big, SEGMENT_CAP).await;
+        assert_eq!(segs.len(), 4);
+        assert!(segs.iter().all(|g| g.len() <= SEGMENT_CAP));
+        assert_eq!(segs.iter().map(Vec::len).sum::<usize>(), big.len());
     }
 
     #[tokio::test]
