@@ -331,7 +331,8 @@ pub fn finalize_outcome(s: &SearchRun) -> Outcome {
 /// The cursor lands through the pane's pending focus, resolved when the
 /// listing arrives — not an index set afterwards, which would miss a hit on
 /// a page still filling. A folder that cannot be listed closes the empty
-/// tab again (the error is already in the bar).
+/// tab again (the error is already in the bar), and so does Esc during a
+/// slow listing: an empty tab at the folder would read as an empty folder.
 pub async fn open_hit_folder(
     app: &mut App,
     backend: &Backend,
@@ -353,7 +354,7 @@ pub async fn open_hit_folder(
     let _slot = app.tab_new_at(parent.clone());
     app.focused_mut().set_pending_focus(hit);
     let outcome = cd(app, backend, events, parent).await;
-    let failed = matches!(outcome, Cd::Failed(_));
+    let failed = matches!(outcome, Cd::Failed(_) | Cd::Cancelled);
     settle_cd(
         app,
         backend,

@@ -701,19 +701,210 @@ fn the_results_tab_title_measures_its_emoji() {
                 .all(|(k, c)| cells.get(x + k).is_some_and(|s| s == &c.to_string()))
         })
         .expect("the third title is painted");
-    let x = u16::try_from(x).expect("fits");
-    let _ = norte_tui::mouse::handle(
-        &mut app,
-        crossterm::event::MouseEvent {
-            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
-            column: x,
-            row,
-            modifiers: crossterm::event::KeyModifiers::NONE,
-        },
-    );
+    click(&mut app, x, row);
     let (_, active) = app.layout.tabs_of(third).expect("group");
     assert_eq!(
         active, 2,
         "the click on the third title selects the third tab"
     );
+    // And the LAST painted cell of the results title (its `)`) selects the
+    // results tab: a zone measured in chars instead of cells would end
+    // three cells early (🔍 +1, 漢字 +2, 🎉 +1, the combining mark −1), and
+    // this click would fall into the third tab's zone.
+    let lens = cells.iter().position(|c| c == "🔍").expect("the lens");
+    let close = (lens..cells.len())
+        .find(|&x| cells[x] == ")")
+        .expect("the results title ends in `)`");
+    click(&mut app, close, row);
+    let (_, active) = app.layout.tabs_of(third).expect("group");
+    assert_eq!(
+        active, 1,
+        "the click on the results title's last cell selects the results tab"
+    );
+}
+
+/// A left click at painted column `x` of `row`.
+fn click(app: &mut App, x: usize, row: u16) {
+    let _ = norte_tui::mouse::handle(
+        app,
+        crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: u16::try_from(x).expect("fits"),
+            row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        },
+    );
+}
+
+/// C5 (review of Task 4): a split's pieces go to the other visible pane;
+/// when that pane is a results tab they would land in its search root, so
+/// it refuses — on opening and on confirming.
+#[tokio::test]
+async fn a_split_into_a_results_tab_is_refused() {
+    let (mut app, backend, mut work, _r) =
+        harness_with_tree(&[("a/x.txt", "aguja\n"), ("r.txt", "nada\n")]).await;
+    let root = app.focused().dir().clone();
+    let r_entry = Entry {
+        attrs: std::collections::BTreeMap::new(),
+        path: vp("mem:///r.txt"),
+        kind: EntryKind::File,
+        size: Some(5),
+        mtime_ms: None,
+    };
+    app.panes[1].set_listing(root.clone(), vec![r_entry]);
+    let slot = launch_results(
+        &mut app,
+        &backend,
+        &mut work.search,
+        saved_content(&root, "aguja"),
+        None,
+    )
+    .await
+    .expect("tab");
+    drain_until_closed(&mut app, &mut work, slot).await;
+    assert_eq!(app.focus(), 0, "the results tab is on the left");
+    app.set_focus(1);
+    cursor_on(&mut app, &vp("mem:///r.txt"));
+    assert_eq!(app.split_dest_pane(), 0, "the pieces would go to the tab");
+
+    app.message = None;
+    app.open_split();
+    assert!(app.modal.is_none(), "no dialog");
+    assert_eq!(app.message, Some(t("msg-pane-not-a-location")));
+
+    // A dialog already open when the other side became a results tab.
+    app.modal = Some(Modal::Split {
+        size: "10M".to_owned(),
+        error: None,
+    });
+    assert!(app.split_confirm().is_none(), "nothing to submit");
+    match &app.modal {
+        Some(Modal::Split { error, .. }) => {
+            assert_eq!(
+                error.as_deref(),
+                Some(t("msg-pane-not-a-location").as_str())
+            );
+        }
+        other => panic!("the dialog stays with its error, got {other:?}"),
+    }
+}
+
+/// C5 (review of Task 4): packing from a results tab writes the archive
+/// next to the FIRST marked hit, like combine-files writes next to its
+/// first piece — not into the search root. The names inside stay relative
+/// to the root, as the Folder column shows them.
+#[tokio::test]
+async fn packing_from_a_results_tab_writes_next_to_the_first_hit() {
+    let (mut app, backend, mut work, _r) =
+        harness_with_tree(&[("a/x.txt", "aguja\n"), ("b/y.txt", "aguja\n")]).await;
+    let root = app.focused().dir().clone();
+    let slot = launch_results(
+        &mut app,
+        &backend,
+        &mut work.search,
+        saved_content(&root, "aguja"),
+        None,
+    )
+    .await
+    .expect("tab");
+    drain_until_closed(&mut app, &mut work, slot).await;
+    for p in ["mem:///a/x.txt", "mem:///b/y.txt"] {
+        cursor_on(&mut app, &vp(p));
+        app.focused_mut().toggle_mark();
+    }
+    let first = app.focused().marked_paths()[0].clone();
+    app.open_pack();
+    assert!(
+        matches!(app.modal, Some(Modal::Pack { .. })),
+        "{:?}",
+        app.message
+    );
+    let params = app.pack_confirm().expect("params");
+    assert_eq!(
+        params.dest.parent(),
+        first.parent(),
+        "next to the first marked hit"
+    );
+    assert_ne!(params.dest.parent().as_ref(), Some(&root), "not the root");
+    assert_eq!(params.base, root, "names relative to the search root");
+}
+
+/// C10 (review of Task 4): Esc while the hit's folder is still listing
+/// closes the new tab, as a failed listing does — an empty tab at the
+/// folder would read as an empty folder.
+#[tokio::test]
+async fn cancelling_the_hit_folder_listing_closes_the_new_tab() {
+    let (mut app, backend, mut work, mem) = harness_with_tree(&[("a/x.txt", "aguja\n")]).await;
+    let root = app.focused().dir().clone();
+    let results = launch_results(
+        &mut app,
+        &backend,
+        &mut work.search,
+        saved_content(&root, "aguja"),
+        None,
+    )
+    .await
+    .expect("tab");
+    drain_until_closed(&mut app, &mut work, results).await;
+    cursor_on(&mut app, &vp("mem:///a/x.txt"));
+    // A listing that takes a minute, and a console whose stream ends at
+    // once: the wait is abandoned, as with Esc.
+    mem.faults()
+        .set_latency_per_op(Some(std::time::Duration::from_mins(1)));
+    let mut stream = futures::stream::empty();
+    let mut events = norte_tui::console::Console::detached(&mut stream);
+    open_hit_folder(
+        &mut app,
+        &backend,
+        &mut events,
+        &mut work.fill,
+        &mut work.decorate,
+        &mut work.probed,
+        &mut work.search,
+    )
+    .await;
+    let (tabs, active) = app.layout.tabs_of(results).expect("a group");
+    assert_eq!(
+        tabs.len(),
+        2,
+        "the folder tab and the results, nothing else"
+    );
+    assert_eq!(tabs[active], results, "back on the results tab");
+    assert!(app.focused().is_results());
+}
+
+/// Review Focus 1 (review of Task 4): a batch that arrives after the tab
+/// became a folder does not land in it; the run is dropped.
+#[tokio::test]
+async fn a_late_batch_does_not_land_in_the_folder() {
+    let (mut app, backend, mut work, _r) =
+        harness_with_tree(&[("a/x.txt", "aguja\n"), ("b/y.txt", "aguja\n")]).await;
+    let root = app.focused().dir().clone();
+    let slot = launch_results(
+        &mut app,
+        &backend,
+        &mut work.search,
+        saved_content(&root, "aguja"),
+        None,
+    )
+    .await
+    .expect("tab");
+    let batch = work
+        .search
+        .get_mut(slot)
+        .expect("run")
+        .rx
+        .recv()
+        .await
+        .expect("a batch of hits");
+    assert!(!batch.entries.is_empty());
+    app.panes
+        .browser_mut(slot)
+        .expect("tab")
+        .set_listing(root.clone(), vec![]);
+    drain_search(&mut app, &mut work.search, slot, Some(batch));
+    let tab = app.panes.browser(slot).expect("tab");
+    assert!(!tab.is_results());
+    assert!(tab.entries().is_empty(), "the late batch did not land");
+    assert!(work.search.get(slot).is_none(), "the run was dropped");
 }
