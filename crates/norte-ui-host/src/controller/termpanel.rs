@@ -139,33 +139,10 @@ impl State {
             let envelope = self.over(UiUpdate::Snapshot(Box::new(snap)));
             return (self.applied(), vec![envelope]);
         }
-        // A shell sits in a filesystem directory: over an `sftp://` there is
-        // nowhere to sit it, and opening it in `$HOME` without saying
-        // anything would be opening it somewhere else. It is the same gate as
-        // `app.terminal`, with the same reason and the same phrase.
-        let dir = self.slot().pane.dir().clone();
-        if !norte_frontend::shell::is_local(&dir) {
-            let outgoing = self.say("host-not-local");
-            return (
-                ActionAck::Unavailable {
-                    reason_key: "host-not-local".to_owned(),
-                },
-                outgoing,
-            );
-        }
-        // A new slot: any shells still listed belonged to a slot that went
-        // away without closing them (a layout switch), and are not this
-        // panel's to show.
-        bury(self.terminals.drain());
-        let (ack, mut updates) = self.open_slot_of_kind(KIND, backend, mailbox);
-        // Focus goes to the panel: opening it and not being able to type
-        // inside without hunting for the mouse is not opening it.
-        // `open_slot_of_kind` leaves it on the remembered listing, so it is
-        // set here.
-        if let Some(id) = self.slot_of_kind(KIND) {
-            self.roles.set(norte_frontend::layout::RoleId::Active, id);
-            self.reconciles_roles();
-        }
+        let (ack, mut updates) = match self.open_panel_slot(backend, mailbox) {
+            Ok(opened) => opened,
+            Err(refused) => return refused,
+        };
         updates.extend(self.start_si_missing(mailbox));
         // The focus moved AFTER `open_slot_of_kind` sent its frame, and the
         // active role only travels in the layout: without a frame here the
@@ -174,6 +151,50 @@ impl State {
         let snap = self.snapshot();
         updates.push(self.over(UiUpdate::Snapshot(Box::new(snap))));
         (ack, updates)
+    }
+
+    /// Creates the panel's slot, focused, WITHOUT starting any shell: the part
+    /// of opening the panel that a user command's terminal run shares (it
+    /// brings its own program, and a default login shell beside it would be a
+    /// second process nobody asked for). `Err` is the refusal when the pane is
+    /// not on this disk. The caller republishes: the focus moved after
+    /// `open_slot_of_kind` sent its frame.
+    pub(super) fn open_panel_slot(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> Result<
+        (ActionAck, Vec<BridgeEnvelope<UiUpdate>>),
+        (ActionAck, Vec<BridgeEnvelope<UiUpdate>>),
+    > {
+        // A shell sits in a filesystem directory: over an `sftp://` there is
+        // nowhere to sit it, and opening it in `$HOME` without saying
+        // anything would be opening it somewhere else. It is the same gate as
+        // `app.terminal`, with the same reason and the same phrase.
+        let dir = self.slot().pane.dir().clone();
+        if !norte_frontend::shell::is_local(&dir) {
+            let outgoing = self.say("host-not-local");
+            return Err((
+                ActionAck::Unavailable {
+                    reason_key: "host-not-local".to_owned(),
+                },
+                outgoing,
+            ));
+        }
+        // A new slot: any shells still listed belonged to a slot that went
+        // away without closing them (a layout switch), and are not this
+        // panel's to show.
+        bury(self.terminals.drain());
+        let (ack, updates) = self.open_slot_of_kind(KIND, backend, mailbox);
+        // Focus goes to the panel: opening it and not being able to type
+        // inside without hunting for the mouse is not opening it.
+        // `open_slot_of_kind` leaves it on the remembered listing, so it is
+        // set here.
+        if let Some(id) = self.slot_of_kind(KIND) {
+            self.roles.set(norte_frontend::layout::RoleId::Active, id);
+            self.reconciles_roles();
+        }
+        Ok((ack, updates))
     }
 
     /// Starts the shell if the slot exists and does not have one, and
@@ -261,8 +282,14 @@ impl State {
         };
         let mut out = Vec::new();
         if self.slot_of_kind(KIND).is_none() {
-            let (_, opened) = self.open_terminal_panel(backend, mailbox);
-            out.extend(opened);
+            // The slot only: the command is the panel's one process.
+            match self.open_panel_slot(backend, mailbox) {
+                Ok((_, opened)) | Err((_, opened)) => out.extend(opened),
+            }
+            if self.slot_of_kind(KIND).is_some() {
+                let snap = self.snapshot();
+                out.push(self.over(UiUpdate::Snapshot(Box::new(snap))));
+            }
         }
         if self.slot_of_kind(KIND).is_none() {
             // This layout cannot hold the panel (or the pane is remote and

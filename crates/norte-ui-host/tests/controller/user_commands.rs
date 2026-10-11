@@ -127,6 +127,57 @@ async fn finished_says_how_it_ended() {
     assert!(said.contains("Optimize") && said.contains('2'), "{said}");
 }
 
+/// A finished run re-lists the panes only when it asked (`refresh`) and the
+/// program actually ran.
+#[tokio::test]
+async fn finished_re_lists_only_when_asked_and_it_ran() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let mut fake = Fake::default();
+    fake.put("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let fake = Arc::new(fake);
+    let (h, _snap) = host_en_con(fake.clone(), "file:///casa", cfg_with(PNG)).await;
+    let mut sub = h.subscribe();
+    let finish = |finished, refresh| UiAction::UserCommandFinished {
+        label: "Optimize".into(),
+        finished,
+        refresh,
+    };
+    // Settle: the first listing has been served.
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let _ = next_snapshot(&mut sub).await;
+    let base = fake.listings.load(SeqCst);
+
+    // It did not run: no re-list, however much it asked.
+    for f in [
+        Finished::Missing {
+            program: "oxipng".into(),
+        },
+        Finished::NotStarted { error: "x".into() },
+    ] {
+        h.dispatch(finish(f, true)).await.expect("host alive");
+    }
+    // It ran but did not ask: none either.
+    h.dispatch(finish(Finished::Ok, false))
+        .await
+        .expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let _ = next_snapshot(&mut sub).await;
+    assert_eq!(fake.listings.load(SeqCst), base, "nothing re-listed");
+
+    // It ran and asked: the panes are listed again.
+    h.dispatch(finish(Finished::Ok, true))
+        .await
+        .expect("host alive");
+    let wait = async {
+        while fake.listings.load(SeqCst) == base {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), wait)
+        .await
+        .expect("re-listed in time");
+}
+
 /// A key bound to `user:<id>` that commands.toml does not define loads (the
 /// window knows the `user:` namespace) and says so when pressed.
 #[tokio::test]

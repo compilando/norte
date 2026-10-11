@@ -541,6 +541,10 @@ fn paths(layers: &norte_config::Layers, socket: &std::path::Path) -> HostPaths {
 /// runs — and that is the warning that cannot be left overwritten. The
 /// ignored project layer's (#260) is the other one: skipping it silently
 /// leaves the reader with a configuration they believe is active and is not.
+///
+/// `user_undefined` is the already-composed notice for keys bound to
+/// `user:<id>` ids commands.toml does not define (ADR 0177): it overrides the
+/// project and profile warnings and loses only to Lua's.
 fn startup_notice(
     cfg: &norte_frontend::config::FrontendConfig,
     lang: Lang,
