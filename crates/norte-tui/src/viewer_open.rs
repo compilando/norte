@@ -12,6 +12,7 @@ use crate::app::{App, error_category};
 use crate::console::Waited;
 use crate::viewer::Viewer;
 use norte_frontend::busy::{Busy, BusyKind};
+use norte_frontend::viewer::{ViewerTarget, read_for};
 
 /// How this image is going to be shown, with the key and the terminal
 /// already resolved.
@@ -659,6 +660,56 @@ pub async fn open_viewer(
     events: &mut crate::console::Console<'_>,
     path: VPath,
 ) {
+    open(app, backend, events, path, None).await;
+}
+
+/// [`open_viewer`] at a search result: reads what [`read_for`] says (the
+/// head, or a window past the cap), scrolls to the line and lights the
+/// match. A plugin's preview is not aimed. A target with no byte offset
+/// whose line the head does not hold opens at the top and says so.
+pub async fn open_viewer_at(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut crate::console::Console<'_>,
+    path: VPath,
+    target: ViewerTarget,
+) {
+    open(app, backend, events, path, Some(target)).await;
+}
+
+/// The viewer for `path` aimed at `target`: from the head when the line is
+/// inside the cap, else a window around it.
+async fn viewer_at(
+    backend: &Backend,
+    path: &VPath,
+    target: &ViewerTarget,
+    modo: Modo,
+) -> Result<(Viewer, Thumbnail), Error> {
+    let range = read_for(target, VIEW_CAP);
+    if range.offset == 0 {
+        let (mut viewer, thumbnail) = viewer_for(backend, path, modo).await?;
+        viewer.aim(target);
+        return Ok((viewer, thumbnail));
+    }
+    let start = range.offset;
+    let mut bytes = backend.read(path, Some(range)).await?;
+    let truncated = bytes.len() as u64 > VIEW_CAP;
+    if truncated {
+        bytes.truncate(usize::try_from(VIEW_CAP).unwrap_or(usize::MAX));
+    }
+    Ok((
+        Viewer::window(path.clone(), bytes, truncated, start, target),
+        Thumbnail::Ninguna,
+    ))
+}
+
+async fn open(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut crate::console::Console<'_>,
+    path: VPath,
+    target: Option<ViewerTarget>,
+) {
     // #323: fetching a REMOTE file's header is another wait that eats the
     // loop. The panel does not change while it lasts, so with no F3
     // indicator a file on a bucket looked exactly like a key that did
@@ -670,11 +721,27 @@ pub async fn open_viewer(
         Some(app.focus()),
     ));
     let modo = modo_effective(app.chrome.images(), crate::kitty_graphics::supported());
-    let waited =
-        crate::console::wait_painting(events, app, started, viewer_for(backend, &path, modo)).await;
+    let read = async {
+        match &target {
+            None => viewer_for(backend, &path, modo).await,
+            Some(t) => viewer_at(backend, &path, t, modo).await,
+        }
+    };
+    let waited = crate::console::wait_painting(events, app, started, read).await;
     app.busy = None;
     match waited {
-        Waited::Done(Ok((viewer, thumbnail))) => {
+        Waited::Done(Ok((mut viewer, thumbnail))) => {
+            // The line is not in what was read and nobody knew its byte
+            // offset: the top, and a word about it (C9).
+            if let Some(tg) = &target
+                && tg.offset.is_none()
+                && !viewer.hex
+                && viewer.preview_plugin().is_none()
+                && viewer.highlight_line().is_none()
+            {
+                viewer.scroll = 0;
+                app.message = Some(t("viewer-target-past-cap"));
+            }
             // The mismatched format is noted BEFORE consuming the
             // thumbnail, and against THIS path: it is what tells apart
             // "there is no thumbnail extension" from "there is one, it

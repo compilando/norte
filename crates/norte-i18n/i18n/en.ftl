@@ -1781,10 +1781,16 @@ search-status-failed = search failed: { $error }
 search-panel-title = Search
 search-panel-idle = Type a name or some text to search
 search-panel-unreadable = { $field } cannot be read
-search-panel-running = { $n } files in { $folders } folders · searching…
-search-panel-done = { $n } files in { $folders } folders
+# The counts are TWO ids each (see `modal-chmod-one`): string args never match
+# a plural selector, so the code picks `-one` or the plain one.
+search-panel-files-one = 1 file
+search-panel-files = { $n } files
+search-panel-folders-one = 1 folder
+search-panel-folders = { $n } folders
+search-panel-running = { $files } in { $folders } · searching…
+search-panel-done = { $files } in { $folders }
 search-panel-truncated = stopped at { $n } results
-search-panel-cancelled = { $n } files · stopped
+search-panel-cancelled = { $files } · stopped
 search-panel-failed = search failed: { $error }
 search-panel-more = +{ $n } more
 search-panel-filters = filters ({ $n })

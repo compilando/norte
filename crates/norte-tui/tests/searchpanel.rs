@@ -96,6 +96,10 @@ async fn harness_with_tree(
     let mem = Arc::new(MemProvider::new());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
     for (name, content) in files {
+        if let Some((dir, _)) = name.rsplit_once('/') {
+            // Idempotent for a second file in the same folder.
+            let _ = mem.mkdir(&vp(&format!("mem:///{dir}"))).await;
+        }
         let mut sink = mem
             .write(&vp(&format!("mem:///{name}")))
             .await
@@ -128,7 +132,18 @@ async fn key(
     resolver: &mut Resolver,
     code: KeyCode,
 ) {
-    searchpanel::on_key(app, backend, work, resolver, KeyModifiers::NONE, code).await;
+    let mut stream = futures::stream::pending();
+    let mut events = norte_tui::console::Console::detached(&mut stream);
+    searchpanel::on_key(
+        app,
+        backend,
+        &mut events,
+        work,
+        resolver,
+        KeyModifiers::NONE,
+        code,
+    )
+    .await;
 }
 
 async fn type_in(
@@ -496,4 +511,171 @@ fn snapshot_search_panel_masks_a_hostile_name() {
         "no raw escape reaches the screen"
     );
     insta::assert_snapshot!(screen);
+}
+
+// ── A result opens where it matched (Task 8) ────────────────────────────
+
+/// Types `text` into `field`, searches now and drains the run; the keyboard
+/// ends in the results with the cursor on the first row.
+async fn search_for(
+    app: &mut App,
+    backend: &Backend,
+    work: &mut InFlight,
+    resolver: &mut Resolver,
+    field: SearchField,
+    text: &str,
+) {
+    app.toggle_search_panel();
+    app.search_panel_focus = SearchFocus::Field(field);
+    type_in(app, backend, work, resolver, text).await;
+    key(app, backend, work, resolver, KeyCode::Enter).await;
+    searchpanel::tick(app, backend, work).await;
+    loop {
+        let hits = work.search_panel.as_mut().expect("run").rx.recv().await;
+        let end = hits.is_none();
+        searchpanel::drain(app, &mut work.search_panel, hits);
+        if end {
+            break;
+        }
+    }
+    app.search_panel_focus = SearchFocus::Tree;
+}
+
+/// Enter on a matching line opens the viewer on that line, lit.
+#[tokio::test]
+async fn enter_on_a_line_opens_the_viewer_at_it() {
+    // No extension: a syntax-highlighting previewer would claim `.txt`, and
+    // a plugin preview is not aimed.
+    let (mut app, backend, mut work, mut resolver, _mem) =
+        harness_with_tree(&[("notes", "uno\ndos\naguja aqui\ncuatro\n")]).await;
+    let content = SearchField::Content;
+    search_for(
+        &mut app,
+        &backend,
+        &mut work,
+        &mut resolver,
+        content,
+        "aguja",
+    )
+    .await;
+    // folder, file, line.
+    key(&mut app, &backend, &mut work, &mut resolver, KeyCode::Down).await;
+    key(&mut app, &backend, &mut work, &mut resolver, KeyCode::Down).await;
+    key(&mut app, &backend, &mut work, &mut resolver, KeyCode::Enter).await;
+    let v = app.viewer.as_ref().expect("the viewer opened");
+    assert_eq!(v.highlight_line(), Some(2));
+    assert_eq!(v.scroll, 2);
+    assert_eq!(v.highlight_chars(2), vec![(0, 5)]);
+}
+
+/// Enter on a file goes to its folder with the cursor on it, and the keys
+/// are the panes' again.
+#[tokio::test]
+async fn enter_on_a_file_goes_to_its_folder() {
+    let (mut app, backend, mut work, mut resolver, _mem) =
+        harness_with_tree(&[("d/a.txt", "aguja\n"), ("d/b.txt", "nada\n")]).await;
+    let name = SearchField::Name;
+    search_for(&mut app, &backend, &mut work, &mut resolver, name, "b.txt").await;
+    // folder `d`, then its file.
+    key(&mut app, &backend, &mut work, &mut resolver, KeyCode::Down).await;
+    key(&mut app, &backend, &mut work, &mut resolver, KeyCode::Enter).await;
+    assert_eq!(app.focused().dir(), &vp("mem:///d"));
+    assert_eq!(
+        app.focused().cursor_entry().map(|e| e.path.clone()),
+        Some(vp("mem:///d/b.txt"))
+    );
+    assert_eq!(app.key_owner(), KeyOwner::Panes);
+    assert!(app.viewer.is_none());
+}
+
+/// A match past the viewer's cap opens a window around it, numbered from
+/// its true line.
+#[tokio::test]
+async fn a_match_past_the_cap_opens_a_window() {
+    use norte_frontend::viewer::ViewerTarget;
+    let line = "x".repeat(99);
+    let mut text = String::new();
+    for _ in 0..3000 {
+        text.push_str(&line);
+        text.push('\n');
+    }
+    let at = text.len() as u64;
+    text.push_str("aguja\nfin\n");
+    assert!(at > 256 * 1024);
+    let (mut app, backend, _work, _resolver, _mem) = harness_with_tree(&[("big.txt", &text)]).await;
+    let mut stream = futures::stream::pending();
+    let mut events = norte_tui::console::Console::detached(&mut stream);
+    let target = ViewerTarget {
+        line: 3001,
+        offset: Some(at),
+        preview: "aguja".to_owned(),
+        ranges: vec![(0, 5)],
+    };
+    norte_tui::viewer_open::open_viewer_at(
+        &mut app,
+        &backend,
+        &mut events,
+        vp("mem:///big.txt"),
+        target,
+    )
+    .await;
+    let v = app.viewer.as_ref().expect("the viewer opened");
+    assert!(v.first_line() > 1, "a window, not the head");
+    let lit = v.highlight_line().expect("the target line is lit");
+    assert_eq!(v.first_line() + lit as u64, 3001);
+    assert_eq!(v.highlight_chars(lit), vec![(0, 5)]);
+}
+
+/// The viewer paints the lit span.
+#[tokio::test]
+async fn snapshot_viewer_lights_the_match() {
+    let (mut app, backend, mut work, mut resolver, _mem) =
+        harness_with_tree(&[("notes", "uno\ndos\naguja aqui\ncuatro\n")]).await;
+    let content = SearchField::Content;
+    search_for(
+        &mut app,
+        &backend,
+        &mut work,
+        &mut resolver,
+        content,
+        "aguja",
+    )
+    .await;
+    for code in [KeyCode::Down, KeyCode::Down, KeyCode::Enter] {
+        key(&mut app, &backend, &mut work, &mut resolver, code).await;
+    }
+    app.render_now_ms = Some(0);
+    let mut terminal = Terminal::new(TestBackend::new(60, 8)).expect("terminal");
+    terminal
+        .draw(|f| norte_tui::ui::draw(f, &app))
+        .expect("draw");
+    insta::assert_snapshot!(terminal.backend().to_string());
+}
+
+/// The status sentence is chosen per count: Fluent never matches a plural
+/// on string args ("1 ficheros en 1 carpetas").
+#[test]
+fn the_status_says_one_and_many() {
+    use norte_i18n::Lang::{En, Es};
+    let run = |lang, key, files, folders| searchpanel::run_text(lang, key, files, folders);
+    assert_eq!(run(Es, "search-panel-done", 1, 1), "1 fichero en 1 carpeta");
+    assert_eq!(
+        run(Es, "search-panel-done", 3, 3),
+        "3 ficheros en 3 carpetas"
+    );
+    assert_eq!(
+        run(Es, "search-panel-running", 1, 3),
+        "1 fichero en 3 carpetas · buscando…"
+    );
+    assert_eq!(
+        run(Es, "search-panel-cancelled", 1, 1),
+        "1 fichero · detenida"
+    );
+    assert_eq!(run(En, "search-panel-done", 1, 1), "1 file in 1 folder");
+    assert_eq!(run(En, "search-panel-done", 3, 3), "3 files in 3 folders");
+    assert_eq!(
+        run(En, "search-panel-running", 3, 1),
+        "3 files in 1 folder · searching…"
+    );
+    assert_eq!(run(En, "search-panel-cancelled", 1, 1), "1 file · stopped");
 }

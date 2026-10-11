@@ -13,9 +13,13 @@
 //! needs exactly these two, always both, and separating them makes every
 //! function along the way born with one more parameter.
 
-use crossterm::event::EventStream;
+use crossterm::event::Event;
 
 use crate::app::App;
+
+/// What the reader types, as a stream: the loop's `EventStream`, or anything
+/// else in a test (a run with no terminal cannot build the real one).
+pub type Events<'a> = &'a mut (dyn futures::Stream<Item = std::io::Result<Event>> + Unpin + 'a);
 
 /// The event stream plus something to repaint with while waiting.
 pub struct Console<'a> {
@@ -23,7 +27,7 @@ pub struct Console<'a> {
     /// `next_event(&mut self)` method would hold `&mut self` for the whole
     /// future, and the repainting arm, in the same `select!`, would not
     /// compile.
-    pub events: &'a mut EventStream,
+    pub events: Events<'a>,
     paint: Paint<'a>,
     /// A repaint failure has already been warned about on this console.
     failure_warned: bool,
@@ -41,7 +45,7 @@ enum Paint<'a> {
 
 impl<'a> Console<'a> {
     /// The loop's console: reads and paints.
-    pub fn new(events: &'a mut EventStream, terminal: &'a mut crate::tty::Tui) -> Self {
+    pub fn new(events: Events<'a>, terminal: &'a mut crate::tty::Tui) -> Self {
         Self {
             events,
             paint: Paint::Terminal(terminal),
@@ -50,7 +54,7 @@ impl<'a> Console<'a> {
     }
 
     /// A console that only reads (tests, and any context with no terminal).
-    pub fn detached(events: &'a mut EventStream) -> Self {
+    pub fn detached(events: Events<'a>) -> Self {
         Self {
             events,
             paint: Paint::Detached,

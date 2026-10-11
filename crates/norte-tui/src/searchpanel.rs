@@ -15,13 +15,16 @@ use norte_core::backend::{Backend, TaskRef};
 use norte_frontend::search::{
     ID_CASE, ID_KINDS, ID_RECURSIVE, ID_REGEX, ID_WHOLE_WORD, SearchField,
 };
-use norte_frontend::search_panel::{Due, SearchPanel};
+use norte_frontend::search_panel::{Activation, Due, SearchPanel};
 use norte_frontend::search_status::{Outcome, outcome_of};
 use norte_proto::methods::SearchHits;
 
 use crate::app::{App, KeyOwner, detail_for_bar, error_category};
+use crate::console::Console;
 use crate::jobs::InFlight;
 use crate::keymap::{Resolution, Resolver, chord_from_crossterm};
+use crate::navigate::{Cd, cd, settle_cd};
+use crate::viewer_open::open_viewer_at;
 
 /// The slot's `kind`, exactly as the shared registry declares it.
 pub const KIND: &str = "search";
@@ -121,19 +124,45 @@ fn prev_stop(focus: SearchFocus, filters_open: bool) -> SearchFocus {
     }
 }
 
+/// The status sentence of a run, in `lang`. The counts pick their own id
+/// (`-one` or plural) HERE: Fluent cannot select a plural on string args, so
+/// the Spanish read "1 ficheros en 1 carpetas".
+#[must_use]
+pub fn run_text(lang: norte_i18n::Lang, key: &str, files: usize, folders: usize) -> String {
+    let count = |one: &str, many: &str, n: usize| {
+        if n == 1 {
+            norte_i18n::t_in(lang, one)
+        } else {
+            norte_i18n::ta_in(lang, many, &[("n", &n.to_string())])
+        }
+    };
+    norte_i18n::ta_in(
+        lang,
+        key,
+        &[
+            ("n", &files.to_string()),
+            (
+                "files",
+                &count("search-panel-files-one", "search-panel-files", files),
+            ),
+            (
+                "folders",
+                &count("search-panel-folders-one", "search-panel-folders", folders),
+            ),
+        ],
+    )
+}
+
 /// A key while the panel has the keyboard.
 ///
 /// With an input focused the keys are FIXED, like the `Alt+F7` dialog's
 /// (`jobs/search.rs`): a printable key is text, so it cannot go through a
 /// keymap where `j` or `/` mean something. In the results they resolve
 /// through the `dialog` keymap, like the timeline's.
-#[expect(
-    clippy::unused_async,
-    reason = "going to a result and opening its line drive the backend from here"
-)]
 pub async fn on_key(
     app: &mut App,
-    _backend: &Backend,
+    backend: &Backend,
+    events: &mut Console<'_>,
     work: &mut InFlight,
     resolver: &mut Resolver,
     mods: KeyModifiers,
@@ -143,11 +172,39 @@ pub async fn on_key(
         app.quit = true;
         return;
     }
+    let mut activation = None;
     match app.search_panel_focus {
         SearchFocus::Field(field) => on_input_key(app, work, field, mods, code),
-        SearchFocus::Tree => on_tree_key(app, resolver, mods, code),
+        SearchFocus::Tree => activation = on_tree_key(app, resolver, mods, code),
     }
     app.needs_frame = true;
+    match activation {
+        // A folder folded or unfolded: only a repaint.
+        None | Some(Activation::Toggled) => {}
+        // The focused listing lands on the entry, the way a compare row
+        // does, and the keys go back to the panes.
+        Some(Activation::GoTo { dir, entry }) => {
+            app.return_keys_to_panes();
+            app.focused_mut().set_pending_focus(entry);
+            let outcome = cd(app, backend, events, dir).await;
+            if matches!(outcome, Cd::Failed(_)) {
+                app.focused_mut().clear_pending_focus();
+            }
+            settle_cd(
+                app,
+                backend,
+                &mut work.fill,
+                &mut work.decorate,
+                &mut work.probed,
+                &mut work.search,
+                outcome,
+            );
+        }
+        // The viewer opens over the panel; closing it lands back here.
+        Some(Activation::View { path, target }) => {
+            open_viewer_at(app, backend, events, path, target).await;
+        }
+    }
 }
 
 /// A key with the caret in `field`.
@@ -205,40 +262,43 @@ fn on_input_key(
 /// A key in the results, through the `dialog` keymap. ←/→ and Tab are
 /// matched first: the `dialog` screen gives the arrows no command, and Tab
 /// must leave the results whatever the preset calls it.
-fn on_tree_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifiers, code: KeyCode) {
+///
+/// Returns what Enter asked for, when it asked for something to do.
+fn on_tree_key(
+    app: &mut App,
+    resolver: &mut Resolver,
+    mods: KeyModifiers,
+    code: KeyCode,
+) -> Option<Activation> {
     if mods.is_empty() {
         match code {
             KeyCode::Left | KeyCode::Right => {
                 if let Some(p) = panel_mut(app) {
                     p.fold(code == KeyCode::Right);
                 }
-                return;
+                return None;
             }
             KeyCode::Tab => {
                 app.search_panel_focus = SearchFocus::Field(SearchField::Name);
-                return;
+                return None;
             }
             _ => {}
         }
     }
-    let Some(chord) = chord_from_crossterm(mods, code) else {
-        return;
-    };
+    let chord = chord_from_crossterm(mods, code)?;
     let cmd = match resolver.push(chord) {
         Resolution::Run { command: cmd, .. } => cmd,
         Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
-            return;
+            return None;
         }
-        Resolution::Reset => return,
+        Resolution::Reset => return None,
     };
     match cmd.as_str() {
         "dialog.cancel" => app.return_keys_to_panes(),
         "dialog.pane" => app.search_panel_focus = SearchFocus::Field(SearchField::Name),
         _ => {
-            let Some(p) = panel_mut(app) else {
-                return;
-            };
+            let p = panel_mut(app)?;
             match cmd.as_str() {
                 "dialog.up" => p.up(1),
                 "dialog.down" => p.down(1),
@@ -246,15 +306,14 @@ fn on_tree_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifiers, code:
                 "dialog.page-down" => p.down(PAGE),
                 "dialog.top" => p.home(),
                 "dialog.bottom" => p.end(),
-                // A folder folds or unfolds here. Going to a file and
-                // opening a line need the listing and the viewer.
-                "dialog.confirm" => {
-                    let _ = p.activate();
-                }
+                // What it asks for needs the listing or the viewer: the
+                // caller does it.
+                "dialog.confirm" => return p.activate(),
                 _ => {}
             }
         }
     }
+    None
 }
 
 /// Once per loop turn: when the pause is over, cancels what runs and

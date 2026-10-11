@@ -1717,10 +1717,16 @@ search-status-failed = búsqueda fallida: { $error }
 search-panel-title = Buscar
 search-panel-idle = Escribe un nombre o un texto para buscar
 search-panel-unreadable = { $field } no se puede leer
-search-panel-running = { $n } ficheros en { $folders } carpetas · buscando…
-search-panel-done = { $n } ficheros en { $folders } carpetas
+# Los recuentos son DOS ids cada uno (ver `modal-chmod-one` en en.ftl): los
+# argumentos de texto nunca casan con un selector plural; elige el código.
+search-panel-files-one = 1 fichero
+search-panel-files = { $n } ficheros
+search-panel-folders-one = 1 carpeta
+search-panel-folders = { $n } carpetas
+search-panel-running = { $files } en { $folders } · buscando…
+search-panel-done = { $files } en { $folders }
 search-panel-truncated = detenida en { $n } resultados
-search-panel-cancelled = { $n } ficheros · detenida
+search-panel-cancelled = { $files } · detenida
 search-panel-failed = búsqueda fallida: { $error }
 search-panel-more = +{ $n } más
 search-panel-filters = filtros ({ $n })

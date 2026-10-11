@@ -347,8 +347,16 @@ pub async fn on_key(
     } else if app.key_owner() == crate::app::KeyOwner::Search && !modal_wins(app) {
         // The search panel, for the same reason as its neighbors: what is
         // typed into it must not reach the listing behind it.
-        crate::searchpanel::on_key(app, backend, work, dialog_resolver, key.modifiers, key.code)
-            .await;
+        crate::searchpanel::on_key(
+            app,
+            backend,
+            events,
+            work,
+            dialog_resolver,
+            key.modifiers,
+            key.code,
+        )
+        .await;
     } else if app.key_owner() == crate::app::KeyOwner::Terminal && !modal_wins(app) {
         // The terminal panel (#362), and this arm does NOT look like its
         // neighbors: the others translate keys into commands, and here the

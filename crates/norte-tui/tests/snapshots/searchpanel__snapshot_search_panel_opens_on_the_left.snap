@@ -8,7 +8,7 @@ expression: terminal.backend().to_string()
 "│en /casa                          ││Nombre▲                 Tamaño││Nombre▲                 Tamaño│"
 "│nombre (glob): ▏                  ││   f00                     1 B││   f00                     1 B│"
 "│contenido:                        ││   f01                     1 B││   f01                     1 B│"
-"│[.*] [Aa] [ab]                    ││   f02                     1 B││   f02                     1 B│"
+"│[Aa] [ab] [.*]                    ││   f02                     1 B││   f02                     1 B│"
 "│▸ filtros (0)                     ││                              ││                              │"
 "│Escribe un nombre o un texto para ││                              ││                              │"
 "│buscar                            ││                              ││                              │"

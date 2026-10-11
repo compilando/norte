@@ -117,6 +117,8 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
             ));
         }
         block = block.title(Line::from(spans).right_aligned());
+    } else if let Some(from) = lines_from_title(viewer, &app.theme) {
+        block = block.title(from.right_aligned());
     }
     // T5 (phase 5 WOW): with no plugin preview, a PNG in `Modo::Blocks`
     // falls back to hexview just like a file nobody knows how to interpret
@@ -225,7 +227,7 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
                     )
                 })
                 .collect(),
-            None => viewer.rows(inner_h).into_iter().map(Line::raw).collect(),
+            None => text_lines(viewer, inner_h, &app.theme),
         }
     };
     frame.render_widget(Paragraph::new(lines).block(block), content_area);
@@ -317,6 +319,8 @@ pub(crate) fn draw_preview(
             ))
             .right_aligned(),
         );
+    } else if let Some(from) = lines_from_title(viewer, &app.theme) {
+        block = block.title(from.right_aligned());
     }
     let inner_h = area.height.saturating_sub(2) as usize;
     let lines: Vec<Line<'_>> = match viewer.plugin_styled_rows(inner_h) {
@@ -332,11 +336,56 @@ pub(crate) fn draw_preview(
                 )
             })
             .collect(),
-        None => viewer.rows(inner_h).into_iter().map(Line::raw).collect(),
+        None => text_lines(viewer, inner_h, &app.theme),
     };
     frame.render_widget(Paragraph::new(lines).block(block), area);
     // Vertical only: the bottom border belongs to the status line.
     viewer_scrollbars(frame, area, viewer, &app.theme, false);
+}
+
+/// The viewer's rows as lines: the row with the lit match paints its span
+/// in `Role::Match` (the ranges are chars of the painted row, so they are
+/// sliced as they are); every other row is plain.
+fn text_lines<'a>(
+    viewer: &crate::viewer::Viewer,
+    height: usize,
+    theme: &TuiTheme,
+) -> Vec<Line<'a>> {
+    viewer
+        .rows(height)
+        .into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let ranges = viewer.highlight_chars(viewer.scroll + i);
+            if ranges.is_empty() {
+                return Line::raw(row);
+            }
+            let positions: Vec<u32> = ranges
+                .iter()
+                .flat_map(|&(s, e)| s..e)
+                .filter_map(|c| u32::try_from(c).ok())
+                .collect();
+            Line::from(super::overlays::marked_spans(
+                &row,
+                &positions,
+                Style::default(),
+                theme.role(Role::Match),
+            ))
+        })
+        .collect()
+}
+
+/// `lines from N`, for a viewer that opened on a window past the head.
+fn lines_from_title<'a>(viewer: &crate::viewer::Viewer, theme: &TuiTheme) -> Option<Line<'a>> {
+    (viewer.first_line() > 1).then(|| {
+        Line::styled(
+            ta(
+                "viewer-lines-from",
+                &[("n", &viewer.first_line().to_string())],
+            ),
+            theme.role(Role::Info),
+        )
+    })
 }
 
 /// The style of a styled span, whether from a preview, a viewer or a
@@ -1634,18 +1683,22 @@ fn search_panel_status(panel: &norte_frontend::search_panel::SearchPanel) -> Str
             files,
             folders,
             error,
-        } => ta(
-            key,
-            &[
-                ("n", &files.to_string()),
-                ("folders", &folders.to_string()),
+        } => {
+            if key == "search-panel-failed" {
                 // The failure's text came from the daemon: masked.
-                (
-                    "error",
-                    &norte_encoding::mask_terminal_hazards(error.as_deref().unwrap_or_default()),
-                ),
-            ],
-        ),
+                ta(
+                    key,
+                    &[(
+                        "error",
+                        &norte_encoding::mask_terminal_hazards(
+                            error.as_deref().unwrap_or_default(),
+                        ),
+                    )],
+                )
+            } else {
+                crate::searchpanel::run_text(norte_i18n::active(), key, files, folders)
+            }
+        }
     }
 }
 
@@ -1764,7 +1817,9 @@ fn search_input_line(
         value.push('▏');
     }
     let style = if caret {
-        theme.role(Role::Match)
+        // The input that has the keys: the focus look, never the look of a
+        // search hit.
+        theme.role(Role::Selection)
     } else {
         theme.role(Role::Regular)
     };
@@ -1884,11 +1939,11 @@ fn search_panel_form(
         )
     };
     lines.push(Line::from(vec![
-        switch(form.regex, "[.*]"),
-        Span::raw(" "),
         switch(form.case, "[Aa]"),
         Span::raw(" "),
         switch(form.whole_word, "[ab]"),
+        Span::raw(" "),
+        switch(form.regex, "[.*]"),
     ]));
     lines.push(Line::styled(
         format!(

@@ -1,0 +1,12 @@
+---
+source: crates/norte-tui/tests/searchpanel.rs
+expression: terminal.backend().to_string()
+---
+" Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver       "
+"   ┌⟨mem⟩/notes────────────────────────────────────────────┐"
+"   │aguja aqui                                             │"
+"   │cuatro                                                 │"
+"   │                                                       │"
+"   │                                                       │"
+"   └───────────────────────────────────────────────────────┘"
+"    UTF-8  LF  3/4                                          "
