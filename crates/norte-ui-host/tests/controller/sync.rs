@@ -4122,7 +4122,7 @@ async fn panes_on_one_edge_share_room_as_tabs() {
     .await;
     let titles: Vec<&str> = snapshot.tabs.iter().map(|t| t.title.as_str()).collect();
     // The panel bar's names, not the kind ids.
-    assert_eq!(titles, ["Historial", "Registro"], "{snapshot:?}");
+    assert_eq!(titles, ["Historial", "Log"], "{snapshot:?}");
     assert_eq!(snapshot.active, 1, "the one that arrives stays in front");
 
     // The timeline is hidden: pressing it SHOWS it.
