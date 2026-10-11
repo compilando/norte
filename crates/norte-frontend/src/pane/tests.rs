@@ -3721,6 +3721,25 @@ fn results_ignore_folder_cursor_hints_and_refresh_keeps_the_hit() {
     assert_eq!(p.cursor(), 0);
 }
 
+/// A folder hint set before a results listing is DROPPED by it, not kept
+/// for later: otherwise the next real listing (leaving the tab for a
+/// folder) would land on a row the reader asked for long ago.
+#[test]
+fn a_results_listing_drops_a_stale_folder_hint() {
+    use crate::results::{MAX_HITS, ResultSet};
+    let mut p = PaneState::new(vp("mem:///casa"), vec![]);
+    p.set_pending_focus(vp("mem:///casa/b"));
+    p.begin_results(
+        ResultSet::new(saved_search("mem:///casa"), MAX_HITS),
+        vec![file("mem:///casa/a/1")],
+    );
+    p.set_listing(
+        vp("mem:///casa"),
+        vec![file("mem:///casa/a"), file("mem:///casa/b")],
+    );
+    assert_eq!(p.cursor(), 0, "the hint died with the results listing");
+}
+
 /// `forget` takes hits and their marks out and keeps the cursor on the
 /// next row (orthodox), without ending the result set.
 #[test]

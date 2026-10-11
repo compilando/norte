@@ -807,7 +807,10 @@ impl PaneState {
         // A results tab skips both: its cursor is a row among hits, not a
         // place in `dir`, so a folder hint or the root's remembered cursor
         // would start it on a stale row (`begin_results` restores its own).
+        // The hint is still CONSUMED: kept, it would survive into the next
+        // real listing and land that one on a row asked for long before.
         let restored = if self.results.is_some() {
+            self.pending_focus = None;
             None
         } else {
             self.pending_focus
