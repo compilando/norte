@@ -76,32 +76,48 @@ with the count and runs nothing. From `sh -c`, `xargs` is the way around it.
 Bind it in `keymap.toml`:
 
 ```toml
-{ on = ["ctrl+alt+o"], run = "user:optimize-png" }
+[pane]
+prepend_keymap = [{ on = ["ctrl+alt+o"], run = "user:optimize-png" }]
 ```
 
 Or find it without a key: open the search box with {{cmd:app.palette}}, or
 type `>` in it, and look under the User category. `F1` over a row shows its
 `description`. A binding to an `id` that `commands.toml` does not define is
-not fatal: the file loads, the problem is reported when the configuration
-loads or reloads, `norte doctor` names the key, and pressing it says there is
-no such command.
+not fatal: the file loads, and the status bar reports it at start-up and on a
+profile switch in the window, and at start-up and on every reload in the
+terminal. `norte doctor` lists it as `user:<id>`, and pressing the key says
+there is no such command.
 
 ## Where it runs and where its output goes
 
-In the background (the default) the program is detached. Its output goes to
-the log panel, and how it ended goes to the status bar. Quitting norte does
-not stop a background command, and whatever it prints after that is lost; a
-command that never exits is yours to stop.
+In the background (the default) the program runs on its own, apart from
+your keyboard. Its output goes to the log panel, and how it ended goes to the
+status bar. A background command cannot ask you anything: a program that
+prompts for a password or a confirmation, such as `ssh`, `sudo` or `gpg`, is
+stopped when it tries to read the answer. Use `run_in = "terminal"` for
+programs that prompt.
 
-With `run_in = "terminal"`, norte opens a new shell in the terminal panel and
-runs the program there, so you can watch it and answer it.
+A background command that is still writing output when norte quits is
+stopped at its next write; for long jobs use `run_in = "terminal"` or
+redirect its output inside `sh -c`. A command that never exits is yours to
+stop.
+
+With `run_in = "terminal"`, norte runs the program itself, with no shell in
+between, as a new entry in the terminal panel, so you can watch it and
+answer it. The entry closes when the program succeeds, and stays open to be
+read when it fails.
 
 User commands run only on local folders. In a remote pane they are refused
 with a reason. A window opened read-only does not run them either.
 
+norte cannot undo what a user command does: the program is yours, and its
+changes to your files are not in norte's history. Set `confirm = true` on a
+command you want to think twice about.
+
 ## Which files are read
 
-`commands.toml` is read from the user and the system layers. A project's
+`commands.toml` is read from every configuration layer except the project
+one: the system layer, the user layer and the active profile. A project's
 `.norte/commands.toml`, and any `user:` binding in a project's keymap, are
 ignored: a folder you downloaded must not choose what runs with your rights.
 A file that does not parse, or has an invalid command, is a configuration

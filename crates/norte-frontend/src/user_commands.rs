@@ -13,8 +13,8 @@
 //! ```
 //!
 //! `argv` is never run through a shell; `%f`, `%F` and `%d` are expanded as
-//! whole tokens, same contract as the openers. Only the user and system
-//! layers are read, never a project's (ADR 0177).
+//! whole tokens, same contract as the openers. Every configuration layer is
+//! read except the project one (ADR 0177).
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -521,8 +521,11 @@ pub const LOG_TARGET: &str = "norte::user_command";
 /// Runs a [`RunIn::Background`] launch to the end: resolves the program off
 /// the async thread, spawns it with stdin closed, forwards each stdout line
 /// as an INFO and each stderr line as a WARN event under [`LOG_TARGET`],
-/// and reports how it ended. Not killed on drop: quitting norte leaves it
-/// running (its output is then lost) — ADR 0177.
+/// and reports how it ended. Not killed on drop, but a background command
+/// that is still writing output when norte quits is stopped at its next
+/// write (its pipes close); for long jobs use `run_in = "terminal"` or
+/// redirect its output inside `sh -c` — ADR 0177. It runs in its own
+/// process group (unix), so it cannot read the terminal norte is drawing on.
 pub async fn run_background(launch: Launch) -> Finished {
     let probe = launch.clone();
     let program = match tokio::task::spawn_blocking(move || resolve(&probe)).await {

@@ -9,12 +9,14 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
-- **Your own commands on a key** (ADR 0177). `~/.config/norte/commands.toml`
-  declares programs to run on the marked files or the cursor file, with `%f`,
-  `%F` and `%d`. Bind one with `run = "user:<id>"`, or find it in the search
-  box under `>` in the User category. They run in the background, with their
-  output in the log panel and the exit in the status bar, or in a new
-  terminal-panel shell. They run only on local folders, ask first with
+- **Your own commands on a key** (ADR 0177, bridge 110).
+  `~/.config/norte/commands.toml` declares programs to run on the marked
+  files or the cursor file, with `%f`, `%F` and `%d`. Bind one with
+  `run = "user:<id>"`, or find it in the search box under `>` in the User
+  category. They run in the background, with their output in the log panel
+  and the exit in the status bar, or as a new entry in the terminal panel,
+  which closes when the program succeeds and stays open when it fails. They
+  run only on local folders, ask first with
   `confirm = true`, and are never offered to agents. A project's
   `.norte/commands.toml` is ignored. In both frontends.
 - **One search box for places, commands and help** (bridge 108).

@@ -65,8 +65,9 @@ box.
   for `lua:`). A folder that was downloaded must not choose what runs with
   the user's rights (ADR 0026).
 - **An unknown id loads and is reported.** A binding to an id that no file
-  defines is not fatal: it is reported at load and reload and by `norte
-  doctor`, and pressing it says there is no such command. A file that does
+  defines is not fatal: it is reported on the status bar at start-up and on
+  a profile switch (window) or a reload (terminal), and by `norte doctor` as
+  `user:<id>`, and pressing it says there is no such command. A file that does
   not parse is a configuration error and the previous configuration stays.
 - **Never in MCP or agent sessions, and no daemon method.** The commands run
   arbitrary programs in the user's session, outside the journal and the
@@ -75,8 +76,13 @@ box.
   `user:`, and a call to one is an unknown tool; tests pin all three.
 - **Background output goes to the log panel**, masked, and the exit to the
   status bar, not to the processes panel: a detached child is not a task of
-  the daemon, and the panel would promise a cancel it cannot keep. `run_in =
-  "terminal"` runs the argv in a new shell of the terminal panel (ADR 0176).
+  the daemon, and the panel would promise a cancel it cannot keep. A
+  background command runs in its own process group with stdin closed, so it
+  cannot ask the user anything: a program that reads `/dev/tty` (ssh, sudo,
+  gpg) is stopped instead of taking the TUI's keystrokes; programs that
+  prompt use `run_in = "terminal"`. That mode runs the program itself, with
+  no shell, as a new entry of the terminal panel (ADR 0176); the entry closes
+  when it succeeds and stays open when it fails.
 - **One runner, both frontends.** The model, the templates, the refusals
   (remote panes, no targets, too long, program missing) and the box rows live
   in `norte-frontend`; the TUI and the window only start the process and
@@ -94,8 +100,12 @@ and what it did to the files is not in the journal.
   no new capability for plugins or agents.
 - Good: the file travels between machines, because a missing program is a
   refusal at run time, not a load error.
-- Bad: a detached background command survives quitting norte, and what it
-  prints afterwards is lost. A command that never exits is the user's to stop.
+- Bad: a background command that is still writing output when norte quits
+  is stopped at its next write (its pipes close); for long jobs use `run_in =
+  "terminal"` or redirect its output inside `sh -c`. A command that never
+  exits is the user's to stop.
+- Bad: a background command that prompts on `/dev/tty` is stopped and never
+  finishes on its own; its status-bar line does not come.
 - Bad: the window reloads `commands.toml` late: on a profile switch, a
   settings change or a restart, because it has no file watcher; the terminal
   reloads on save.
