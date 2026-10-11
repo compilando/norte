@@ -476,6 +476,15 @@
     "generation": 6,
     "row": 2
   },
+  "user_command_finished": {
+    "action": "user_command_finished",
+    "finished": {
+      "code": 2,
+      "kind": "failed"
+    },
+    "label": "Optimize",
+    "refresh": true
+  },
   "viewer_scroll": {
     "action": "viewer_scroll",
     "cols": -8,

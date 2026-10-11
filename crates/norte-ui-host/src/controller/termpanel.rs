@@ -72,6 +72,9 @@ pub(super) const COMMAND: &str = "layout.terminal";
 /// the shared list, the TUI's too (ADR 0077).
 use norte_frontend::terminals::PASS_THROUGH;
 
+/// An answer and what it publishes.
+type Acked = (ActionAck, Vec<BridgeEnvelope<UiUpdate>>);
+
 impl State {
     /// Opens the terminal panel, or brings it to the front.
     ///
@@ -139,33 +142,10 @@ impl State {
             let envelope = self.over(UiUpdate::Snapshot(Box::new(snap)));
             return (self.applied(), vec![envelope]);
         }
-        // A shell sits in a filesystem directory: over an `sftp://` there is
-        // nowhere to sit it, and opening it in `$HOME` without saying
-        // anything would be opening it somewhere else. It is the same gate as
-        // `app.terminal`, with the same reason and the same phrase.
-        let dir = self.slot().pane.dir().clone();
-        if !norte_frontend::shell::is_local(&dir) {
-            let outgoing = self.say("host-not-local");
-            return (
-                ActionAck::Unavailable {
-                    reason_key: "host-not-local".to_owned(),
-                },
-                outgoing,
-            );
-        }
-        // A new slot: any shells still listed belonged to a slot that went
-        // away without closing them (a layout switch), and are not this
-        // panel's to show.
-        bury(self.terminals.drain());
-        let (ack, mut updates) = self.open_slot_of_kind(KIND, backend, mailbox);
-        // Focus goes to the panel: opening it and not being able to type
-        // inside without hunting for the mouse is not opening it.
-        // `open_slot_of_kind` leaves it on the remembered listing, so it is
-        // set here.
-        if let Some(id) = self.slot_of_kind(KIND) {
-            self.roles.set(norte_frontend::layout::RoleId::Active, id);
-            self.reconciles_roles();
-        }
+        let (ack, mut updates) = match self.open_panel_slot(backend, mailbox) {
+            Ok(opened) => opened,
+            Err(refused) => return refused,
+        };
         updates.extend(self.start_si_missing(mailbox));
         // The focus moved AFTER `open_slot_of_kind` sent its frame, and the
         // active role only travels in the layout: without a frame here the
@@ -174,6 +154,47 @@ impl State {
         let snap = self.snapshot();
         updates.push(self.over(UiUpdate::Snapshot(Box::new(snap))));
         (ack, updates)
+    }
+
+    /// Creates the panel's slot, focused, WITHOUT starting any shell: the part
+    /// of opening the panel that a user command's terminal run shares (it
+    /// brings its own program, and a default login shell beside it would be a
+    /// second process nobody asked for). `Err` is the refusal when the pane is
+    /// not on this disk. The caller republishes: the focus moved after
+    /// `open_slot_of_kind` sent its frame.
+    pub(super) fn open_panel_slot(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> Result<Acked, Acked> {
+        // A shell sits in a filesystem directory: over an `sftp://` there is
+        // nowhere to sit it, and opening it in `$HOME` without saying
+        // anything would be opening it somewhere else. It is the same gate as
+        // `app.terminal`, with the same reason and the same phrase.
+        let dir = self.slot().pane.dir().clone();
+        if !norte_frontend::shell::is_local(&dir) {
+            let outgoing = self.say("host-not-local");
+            return Err((
+                ActionAck::Unavailable {
+                    reason_key: "host-not-local".to_owned(),
+                },
+                outgoing,
+            ));
+        }
+        // A new slot: any shells still listed belonged to a slot that went
+        // away without closing them (a layout switch), and are not this
+        // panel's to show.
+        bury(self.terminals.drain());
+        let (ack, updates) = self.open_slot_of_kind(KIND, backend, mailbox);
+        // Focus goes to the panel: opening it and not being able to type
+        // inside without hunting for the mouse is not opening it.
+        // `open_slot_of_kind` leaves it on the remembered listing, so it is
+        // set here.
+        if let Some(id) = self.slot_of_kind(KIND) {
+            self.roles.set(norte_frontend::layout::RoleId::Active, id);
+            self.reconciles_roles();
+        }
+        Ok((ack, updates))
     }
 
     /// Starts the shell if the slot exists and does not have one, and
@@ -193,7 +214,8 @@ impl State {
             return Vec::new();
         }
         let profile = self.config.shell_profiles.default_profile().clone();
-        match self.spawn_instance(&profile, mailbox) {
+        let dir = self.slot().pane.dir().clone();
+        match self.spawn_instance(&profile, &dir, mailbox) {
             Ok(()) => self.republicar_terminal(),
             Err(outgoing) => outgoing,
         }
@@ -232,7 +254,8 @@ impl State {
             // problem, not the panel.
             return rejected();
         };
-        match self.spawn_instance(&profile, mailbox) {
+        let dir = self.slot().pane.dir().clone();
+        match self.spawn_instance(&profile, &dir, mailbox) {
             Ok(()) => (self.applied(), self.republicar_terminal()),
             Err(outgoing) => (
                 ActionAck::Unavailable {
@@ -243,12 +266,65 @@ impl State {
         }
     }
 
-    /// Starts `profile`'s shell in the pane's directory and puts it in
-    /// front. On failure nothing is added, and the reader is TOLD: an empty
-    /// panel with no reason is what makes a panel distrusted.
+    /// Runs a user command (ADR 0177) as a new terminal-panel entry in its
+    /// cwd, opening the panel first if there is none. `program` is already
+    /// resolved on `PATH`. An entry whose program exits 0 goes away by itself
+    /// and a failing one stays to be read, like the TUI's.
+    pub(super) fn start_user_terminal(
+        &mut self,
+        launch: &norte_frontend::user_commands::Launch,
+        program: std::path::PathBuf,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (Result<(), &'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Ok(cwd) = norte_vfs::native::vpath_from_native(&launch.cwd) else {
+            return (Err("user-cmd-remote"), self.say("user-cmd-remote"));
+        };
+        let mut out = Vec::new();
+        if self.slot_of_kind(KIND).is_none() {
+            // The slot only: the command is the panel's one process.
+            match self.open_panel_slot(backend, mailbox) {
+                Ok((_, opened)) | Err((_, opened)) => out.extend(opened),
+            }
+            if self.slot_of_kind(KIND).is_some() {
+                let snap = self.snapshot();
+                out.push(self.over(UiUpdate::Snapshot(Box::new(snap))));
+            }
+        }
+        if self.slot_of_kind(KIND).is_none() {
+            // This layout cannot hold the panel (or the pane is remote and
+            // opening it already said so).
+            if out.is_empty() {
+                out.extend(self.say("cmd-not-here"));
+            }
+            return (Err("cmd-not-here"), out);
+        }
+        let profile = ShellProfile {
+            name: launch.label.clone(),
+            program,
+            args: launch.args.clone(),
+            icon: None,
+            color: None,
+        };
+        match self.spawn_instance(&profile, &cwd, mailbox) {
+            Ok(()) => {
+                out.extend(self.republicar_terminal());
+                (Ok(()), out)
+            }
+            Err(said) => {
+                out.extend(said);
+                (Err("host-shell-failed"), out)
+            }
+        }
+    }
+
+    /// Starts `profile`'s program in `dir` and puts it in front. On failure
+    /// nothing is added, and the reader is TOLD: an empty panel with no
+    /// reason is what makes a panel distrusted.
     fn spawn_instance(
         &mut self,
         profile: &ShellProfile,
+        dir: &norte_proto::VPath,
         mailbox: &mpsc::Sender<Message>,
     ) -> Result<(), Vec<BridgeEnvelope<UiUpdate>>> {
         // The read-only rule for this panel, in ONE place: a read-only window
@@ -257,8 +333,7 @@ impl State {
         if self.effects == crate::commands::Effects::SoloRead {
             return Err(Self::no_mutates().1);
         }
-        let dir = self.slot().pane.dir().clone();
-        match start(&dir, profile) {
+        match start(dir, profile) {
             Ok(shell) => {
                 // Not journalled: a shell the reader opens is the reader
                 // acting with their own permissions (ADR 0084). Logged

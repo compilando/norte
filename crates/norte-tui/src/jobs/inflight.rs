@@ -232,6 +232,11 @@ pub struct InFlight {
     /// one, and launching another CANCELS the previous one's Task on top of
     /// aborting its wait.
     pub checksum: Option<ChecksumRun>,
+    /// User commands in flight (ADR 0177): any number at once — each is
+    /// its own program, and none waits for another. Dropping the set aborts
+    /// the waits, never the programs (`run_background` does not kill on
+    /// drop).
+    pub user_commands: tokio::task::JoinSet<crate::user_cmd::Outcome>,
     /// Disk map measurement in flight (phase 4): at most one — the panel is
     /// one, and launching another CANCELS the previous one's Task. Without
     /// that, navigating fast through a large tree left the core measuring

@@ -10,6 +10,14 @@ use norte_ui_host::dto::{TerminalSlotView, ViewChange};
 async fn local_host(
     profiles: Option<&str>,
 ) -> (UiHost, norte_ui_host::UiSubscription, tempfile::TempDir) {
+    local_host_with(profiles, None).await
+}
+
+/// [`local_host`] with a `commands.toml` too.
+async fn local_host_with(
+    profiles: Option<&str>,
+    user_commands: Option<&str>,
+) -> (UiHost, norte_ui_host::UiSubscription, tempfile::TempDir) {
     let tmp = tempfile::tempdir().expect("tmp");
     let wire = format!("file://{}", tmp.path().display());
     let mut fake = Fake::default();
@@ -19,6 +27,10 @@ async fn local_host(
         let file = norte_frontend::shell_profiles::ShellProfiles::parse(toml).expect("parses");
         settings.shell_profiles =
             norte_frontend::shell_profiles::ShellProfiles::merge(vec![file]).expect("merges");
+    }
+    if let Some(src) = user_commands {
+        settings.user_commands =
+            norte_frontend::user_commands::UserCommands::parse(src).expect("valid");
     }
     let (h, _) = Box::pin(UiHost::start(UiHostOptions {
         backend: Arc::new(fake),
@@ -380,5 +392,22 @@ async fn rename_then_closing_the_slot_kills_them_all() {
     assert!(
         matches!(ack, ActionAck::Unavailable { .. }),
         "no panel, no instances: {ack:?}"
+    );
+}
+
+/// A terminal-mode user command with NO panel open opens the slot and runs
+/// the command in it, and nothing else: no default login shell beside it
+/// (real `/bin/sh`, so the PTY is the real one, not faked).
+#[tokio::test]
+async fn a_terminal_user_command_with_no_panel_leaves_exactly_one_instance() {
+    let src = "[[command]]\nid = \"nap\"\nlabel = \"Nap\"\nargv = [\"sh\", \"-c\", \"sleep 30\"]\nrun_in = \"terminal\"\n";
+    let (h, mut sub, _tmp) = local_host_with(None, Some(src)).await;
+    run_by_palette(&h, &mut sub, "user:nap").await;
+    let view = terminal_until(&mut sub, |t| t.instances.iter().any(|i| i.title == "Nap")).await;
+    assert_eq!(
+        view.instances.len(),
+        1,
+        "only the command, no default shell: {:?}",
+        view.instances.iter().map(|i| &i.title).collect::<Vec<_>>()
     );
 }

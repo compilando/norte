@@ -96,6 +96,7 @@ pub mod tasks;
 pub mod terminals;
 pub mod theme;
 pub mod timeline;
+pub mod user_commands;
 pub mod version;
 pub mod viewport;
 

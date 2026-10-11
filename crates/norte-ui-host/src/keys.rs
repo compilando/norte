@@ -289,18 +289,72 @@ fn effective_with(
     effects: crate::commands::Effects,
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
     let preset = preset_from(name)?;
-    norte_frontend::keymap::Effective::build_for(
-        &preset,
-        layers,
-        &crate::commands::all_with(effects),
-        screen,
-    )
+    let mut known = crate::commands::all_with(effects);
+    // `user:<id>` (ADR 0177) runs a program, so a read-only window does not
+    // know it. Never in `IMPLEMENTED`: that list feeds the palette rows, and
+    // the user's own rows come from commands.toml.
+    if effects == crate::commands::Effects::Full {
+        known.push(norte_frontend::keymap::USER_HOST);
+    }
+    norte_frontend::keymap::Effective::build_for(&preset, layers, &known, screen)
+}
+
+/// What the bar says when `eff` binds `user:<id>` ids that `cmds` does not
+/// define (ADR 0177), or `None` when every one is defined.
+#[must_use]
+pub fn undefined_user_commands_notice(
+    eff: &norte_frontend::keymap::Effective,
+    cmds: &norte_frontend::user_commands::UserCommands,
+    lang: norte_i18n::Lang,
+) -> Option<String> {
+    let undefined = norte_frontend::user_commands::undefined_bindings(eff, cmds);
+    let first = undefined.first()?;
+    Some(norte_i18n::ta_in(
+        lang,
+        "msg-user-cmd-undefined",
+        &[
+            ("n", &undefined.len().to_string()),
+            ("first", &norte_encoding::mask_terminal_hazards(first)),
+        ],
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use norte_frontend::keymap::{KeyCode, Mods};
+
+    /// A `user:` binding loads in a window that may start programs, and the
+    /// one commands.toml does not define is named on the bar.
+    #[test]
+    fn user_bindings_load_in_a_full_window_and_undefined_ones_are_said() {
+        let layer = norte_frontend::keymap::parse_keymap(
+            "[pane]\nprepend_keymap = [{ on = [\"alt+o\"], run = \"user:gone\" }, \
+             { on = [\"alt+p\"], run = \"user:png\" }]\n",
+        )
+        .expect("a valid keymap");
+        let eff = preset_keymap_with_layers("orthodox", &[layer], crate::commands::Effects::Full)
+            .expect("a full window does");
+        let cmds = norte_frontend::user_commands::UserCommands::parse(
+            "[[command]]\nid = \"png\"\nlabel = \"P\"\nargv = [\"oxipng\"]\n",
+        )
+        .expect("valid commands");
+        let said = undefined_user_commands_notice(&eff, &cmds, norte_i18n::Lang::En)
+            .expect("one is undefined");
+        assert!(said.contains("gone") && !said.contains("png"), "{said}");
+        assert!(
+            undefined_user_commands_notice(
+                &eff,
+                &norte_frontend::user_commands::UserCommands::parse(
+                    "[[command]]\nid = \"gone\"\nlabel = \"G\"\nargv = [\"x\"]\n\
+                     [[command]]\nid = \"png\"\nlabel = \"P\"\nargv = [\"oxipng\"]\n",
+                )
+                .expect("valid commands"),
+                norte_i18n::Lang::En,
+            )
+            .is_none()
+        );
+    }
 
     /// A user layer changes this window's EFFECTIVE keymap (#253).
     ///

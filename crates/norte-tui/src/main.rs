@@ -338,6 +338,8 @@ async fn main() -> Result<()> {
     app.terminal_chord = browse_eff.lone_chord(norte_tui::termpanel::COMMAND);
     // Declarative openers (#28): `pane.open`'s source (F4).
     app.openers = cfg.openers.clone();
+    // User commands (ADR 0177): what `user:<id>` and the box run.
+    app.user_commands = cfg.user_commands.clone();
     // `[ui] editor` (#133): norte's editor, if the config names one.
     // Without it, `$VISUAL`/`$EDITOR` rule, as usual.
     app.editor = cfg
@@ -393,6 +395,11 @@ async fn main() -> Result<()> {
     // effectives BEFORE they move into the `Resolver` below — same
     // criterion as `help_lines`/`dialog_hints`.
     app.palette_rows = norte_tui::palette::build_rows(&browse_eff, &viewer_eff);
+    // User commands: their chords for the box, and the `user:<id>` bindings
+    // commands.toml does not define (said on the bar below).
+    app.user_chords = norte_frontend::goto::user_command_chords(&cfg.user_commands, &browse_eff);
+    let undefined_user =
+        norte_frontend::user_commands::undefined_bindings(&browse_eff, &cfg.user_commands);
     // The first-run wizard (spec 2026-09-10): with no user `norte.toml`, or
     // with `--setup`. Never under `--pick`.
     let wizard = norte_tui::wizard::should_open(cli_setup, cli_pick).await;
@@ -482,6 +489,15 @@ async fn main() -> Result<()> {
         for reason in &cfg.common.profile_warnings {
             tracing::warn!(reason = %reason, "profile line ignored");
         }
+    }
+    if let Some(first) = undefined_user.first() {
+        app.message = Some(ta(
+            "msg-user-cmd-undefined",
+            &[
+                ("n", &undefined_user.len().to_string()),
+                ("first", &norte_tui::app::detail_for_bar(first)),
+            ],
+        ));
     }
     // AFTER the polling notice: the security one must not be overridden.
     if discarded_lua > 0 {

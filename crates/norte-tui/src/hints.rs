@@ -189,7 +189,7 @@ fn hints_in_order_with(order: &[&str], eff: &Effective, label: impl Fn(&str) -> 
 #[derive(Debug, Clone, Default)]
 pub struct DialogHints {
     /// `Modal::ConfirmDelete`/`Modal::ConfirmTransfer`/`Modal::ConfirmQuit`
-    /// (S2, `[ui] confirm_quit`).
+    /// (S2, `[ui] confirm_quit`)/`Modal::ConfirmUserCommand` (ADR 0177).
     pub confirm: String,
     /// `Modal::Collision`.
     pub collision: String,

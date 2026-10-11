@@ -1968,6 +1968,20 @@ mod tests {
         }
     }
 
+    /// User commands run arbitrary programs with the user's rights (ADR
+    /// 0177): no tool may name them.
+    #[test]
+    fn user_commands_are_never_a_tool() {
+        let Value::Array(defs) = tool_defs() else {
+            panic!("tool_defs is an array")
+        };
+        for d in &defs {
+            let text = d.to_string();
+            assert!(!text.contains("user:"), "{text}");
+            assert!(!text.contains("commands.toml"), "{text}");
+        }
+    }
+
     /// `compare` asks with the same names it answers with.
     #[test]
     fn compare_asks_with_the_same_names_it_answers_with() {

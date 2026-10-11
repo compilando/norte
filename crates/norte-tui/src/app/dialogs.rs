@@ -591,6 +591,7 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         Modal::ConfirmDelete { .. }
         | Modal::ConfirmTransfer { .. }
         | Modal::ConfirmQuit
+        | Modal::ConfirmUserCommand { .. }
         | Modal::SemanticHits { .. } => {
             if !ALLOW_CONFIRM.contains(&cmd) {
                 return None;

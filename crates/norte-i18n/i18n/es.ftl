@@ -320,7 +320,7 @@ msg-lua-busy = ya hay un comando Lua en marcha (encolado)
 msg-lua-queue-full = comando Lua descartado: cola llena
 msg-lua-denied-changed = el init.lua del proyecto se denegó; ha cambiado (no se carga)
 msg-lua-symlink = el init.lua del proyecto es un symlink; no se carga
-msg-lua-keymap-project = keymap.toml del proyecto: { $n } binding(s) lua: ignorados (sin trust)
+msg-lua-keymap-project = keymap.toml del proyecto: { $n } binding(s) lua:/user: ignorados (sin trust)
 # `--cd-file` (S3, shell.rs `cd_bytes`): el pane activo no era `file://`, así
 # que no se escribió nada en el cd-file y el wrapper deja el shell donde
 # estaba. `$path` ya pasó por el enmascarado de `path_display`, con un `!` al
@@ -849,6 +849,26 @@ cmd-ns-profile = Perfil
 cmd-ns-task = Tareas
 cmd-ns-terminal = Terminal
 cmd-ns-viewer = Visor
+# Comandos de usuario (commands.toml, ADR 0177)
+cmd-ns-user = Usuario
+user-cmd-unknown = no hay ningún comando de usuario { $id } en commands.toml
+user-cmd-remote = los comandos de usuario se ejecutan en carpetas locales
+user-cmd-no-targets = { $label }: no hay nada seleccionado
+user-cmd-too-long = { $label }: { $count } elementos no caben en una línea de comandos
+user-cmd-missing = no se encuentra { $program }
+user-cmd-confirm-title = Ejecutar comando
+# Tres ids, no un selector plural: los args viajan como TEXTO y `[0]`/`[one]`
+# nunca coinciden (ver `modal-chmod-one`). `confirm_text` elige por la cuenta.
+user-cmd-confirm-none = ¿Ejecutar { $label }?
+user-cmd-confirm-one = ¿Ejecutar { $label } sobre 1 elemento?
+user-cmd-confirm = ¿Ejecutar { $label } sobre { $count } elementos?
+user-cmd-started = { $label } en marcha
+user-cmd-ok = { $label } terminó
+user-cmd-failed = { $label } salió con código { $code }
+user-cmd-signalled = { $label } terminó por una señal
+user-cmd-not-started = { $label } no pudo arrancar: { $error }
+user-cmd-no-description = { $label } no tiene descripción
+msg-user-cmd-undefined = { $n } tecla(s) ejecutan comandos de usuario que commands.toml no define ({ $first })
 msg-goto-bad-path = esa ruta no se puede leer como destino
 msg-goto-no-home = no hay HOME en el entorno, así que «~» no nombra nada
 help-cmd-app-settings = ajustes

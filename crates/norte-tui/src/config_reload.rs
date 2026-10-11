@@ -27,6 +27,32 @@ use crate::screens::pickers::apply_theme;
 use crate::screens::settings::plugin_config_summaries;
 use crate::shortcuts_editor::{Maps, build_keymaps, shortcut_rows};
 
+/// What the reloaded config says about the programs norte launches: whoever
+/// changes them in the file need not restart norte.
+fn apply_external_programs(app: &mut App, cfg: &config::LoadedConfig) {
+    // Openers (#28) and user commands (ADR 0177).
+    app.openers = cfg.openers.clone();
+    app.user_commands = cfg.user_commands.clone();
+    // The `[ui] editor` editor.
+    app.editor = cfg
+        .common
+        .ui_editor
+        .clone()
+        .map(|command| crate::app::EditorSpec {
+            command,
+            detached: cfg.common.ui_editor_detached.unwrap_or(false),
+        });
+    // The `[ui] diff` comparator (#312).
+    app.diff = cfg
+        .common
+        .ui_diff
+        .clone()
+        .map(|command| crate::app::EditorSpec {
+            command,
+            detached: cfg.common.ui_diff_detached.unwrap_or(false),
+        });
+}
+
 /// Hot-reload (ADR 0007): rereads ALL layers; on ANY error the current config
 /// is kept and a warning goes on the bar — never break a running session over
 /// a half-saved TOML.
@@ -103,27 +129,7 @@ pub async fn reload_config(
                 // The `..` row, also hot: it is presentation, and the pane
                 // adds or removes it without touching the listing.
                 app.set_parent_row(cfg.common.ui_parent_entry.unwrap_or(true));
-                // Openers (#28): reloaded with the rest of the config.
-                app.openers = cfg.openers.clone();
-                // And the `[ui] editor` editor, for the same reason: whoever
-                // changes it in the file need not restart norte.
-                app.editor = cfg
-                    .common
-                    .ui_editor
-                    .clone()
-                    .map(|command| crate::app::EditorSpec {
-                        command,
-                        detached: cfg.common.ui_editor_detached.unwrap_or(false),
-                    });
-                // And the `[ui] diff` comparator (#312), for the same reason.
-                app.diff = cfg
-                    .common
-                    .ui_diff
-                    .clone()
-                    .map(|command| crate::app::EditorSpec {
-                        command,
-                        detached: cfg.common.ui_diff_detached.unwrap_or(false),
-                    });
+                apply_external_programs(app, &cfg);
                 // #108 7a: `[ui.columns]` edited externally also refreshes
                 // the session (it used to only apply at startup); the re-sort
                 // keeps the panes consistent with the file — the picker's
@@ -162,6 +168,12 @@ pub async fn reload_config(
                 // BEFORE it moves into the resolver below — same criterion as
                 // help_lines.
                 app.palette_rows = crate::palette::build_rows(&browse, &viewer);
+                // User commands (ADR 0177): their chords for the box, and the
+                // bindings that name a command commands.toml does not define.
+                app.user_chords =
+                    norte_frontend::goto::user_command_chords(&cfg.user_commands, &browse);
+                let undefined =
+                    norte_frontend::user_commands::undefined_bindings(&browse, &cfg.user_commands);
                 // An open box is closed (like help): its chords and facts are
                 // stale.
                 app.goto = None;
@@ -206,6 +218,16 @@ pub async fn reload_config(
                 // The theme is also hot-reloadable (ADR 0020): if it fails,
                 // the theme's error message overrides "config reloaded".
                 apply_theme(app, &cfg);
+                // Before the security warning, which must still win.
+                if let Some(first) = undefined.first() {
+                    app.message = Some(ta(
+                        "msg-user-cmd-undefined",
+                        &[
+                            ("n", &undefined.len().to_string()),
+                            ("first", &crate::app::detail_for_bar(first)),
+                        ],
+                    ));
+                }
                 // LAST: the security warning must not end up overridden.
                 if discarded_lua > 0 {
                     app.message = Some(ta(
@@ -296,5 +318,50 @@ mod tests {
             app.goto.is_none(),
             "a reload closes the box: its chords are stale"
         );
+    }
+
+    /// A binding to a `user:<id>` that commands.toml does not define is said
+    /// on the bar by the reload, not only by doctor.
+    #[tokio::test]
+    async fn a_reload_warns_about_undefined_user_commands() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let mut cfg = config::load(&layers).expect("an empty layer loads");
+        let (browse, viewer, dialog) = build_keymaps(&cfg, None).expect("keymaps");
+        let (mut resolver, mut viewer_resolver, mut dialog_resolver) = (
+            Resolver::new(browse),
+            Resolver::new(viewer),
+            Resolver::new(dialog),
+        );
+        std::fs::write(
+            dir.path().join("keymap.toml"),
+            "[pane]\nprepend_keymap = [{ on = [\"ctrl+alt+o\"], run = \"user:gone\" }]\n",
+        )
+        .expect("write keymap");
+        let d = norte_proto::VPath::parse("file:///x").expect("test wire");
+        let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
+        let backend = Backend::Embedded(Arc::new(norte_core::Engine::new()));
+        let (mut quick_mode, mut confirm_quit) =
+            (cfg.quick_search_mode, cfg.common.ui_confirm_quit);
+        let applied = reload_config(
+            &mut app,
+            &backend,
+            &mut resolver,
+            &mut viewer_resolver,
+            &mut dialog_resolver,
+            &mut Vec::new(),
+            norte_i18n::Lang::En,
+            &layers,
+            None,
+            &mut quick_mode,
+            &mut confirm_quit,
+            &mut cfg,
+        )
+        .await;
+        assert!(applied, "the keymap loads");
+        let msg = app.message.expect("a warning");
+        assert!(msg.contains("gone"), "{msg}");
     }
 }

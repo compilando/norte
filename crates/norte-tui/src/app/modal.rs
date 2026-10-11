@@ -376,6 +376,14 @@ pub enum Modal {
     /// next to the dispatch arm): that emergency exit stays immediate in
     /// every overlay, same as before S2.
     ConfirmQuit,
+    /// Running a user command (ADR 0177) — `confirm = true` in
+    /// commands.toml. Confirming queues `launch` (`App::pending_user`);
+    /// the run loop starts it. Reuses [`crate::app::ALLOW_CONFIRM`] and the
+    /// confirm hint, like [`Self::ConfirmQuit`].
+    ConfirmUserCommand {
+        /// What runs if the answer is yes.
+        launch: norte_frontend::user_commands::Launch,
+    },
     /// Marking (`mark = true`) or unmarking by pattern (`+`/`-`, #103). The
     /// text is the user's RAW query; it gets masked when painted, same as
     /// quick search (a pattern can arrive via PASTE with bidi or invisibles

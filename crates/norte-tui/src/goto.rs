@@ -16,8 +16,8 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use norte_frontend::goto::{
     BROUGHT_BY_LIST, FixedSource, Goto, GotoRow, GotoSource, PREFIX_COMMANDS, PathSource,
     SECTION_COMMANDS, SECTION_CONNECTIONS, SECTION_FAVORITES, SECTION_HELP, SECTION_HISTORY,
-    SECTION_INDEX, SECTION_PLUGINS, SECTION_POPULAR, command_rows, plugin_command_rows,
-    row_connection, row_path,
+    SECTION_INDEX, SECTION_PLUGINS, SECTION_POPULAR, SECTION_USER, command_rows,
+    plugin_command_rows, row_connection, row_path,
 };
 use norte_i18n::t;
 
@@ -102,6 +102,17 @@ pub fn sources(
     out.push(Box::new(FixedSource::new(
         SECTION_PLUGINS,
         plugin_command_rows(crate::palette::plugin_rows(plugins)),
+    )));
+
+    // The user's own commands (ADR 0177); the model lists them under `>` only.
+    out.push(Box::new(FixedSource::new(
+        SECTION_USER,
+        norte_frontend::goto::user_command_rows(
+            &app.user_commands,
+            &app.user_chords,
+            norte_frontend::shell::is_local(app.focused().dir()),
+            norte_i18n::active(),
+        ),
     )));
 
     out.push(Box::new(FixedSource::new(
@@ -199,6 +210,37 @@ mod tests {
         open(&mut a, &[], &[], norte_frontend::goto::PREFIX_COMMANDS);
         let g = a.goto.as_ref().expect("open");
         assert_eq!((g.query(), g.mode()), (">", Mode::Commands));
+    }
+
+    /// The user's commands are rows of the box under `>` only: in places
+    /// mode they never show, and a recent user command leads the empty `>`.
+    #[test]
+    fn the_box_lists_user_commands_under_the_prefix() {
+        let mut a = app();
+        a.user_commands = norte_frontend::user_commands::UserCommands::parse(
+            "[[command]]\nid = \"png\"\nlabel = \"Optimize PNGs\"\nargv = [\"oxipng\", \"%F\"]\n",
+        )
+        .expect("valid commands");
+        open(&mut a, &[], &[], "");
+        assert!(
+            a.goto
+                .as_ref()
+                .expect("open")
+                .rows()
+                .iter()
+                .all(|r| r.key != "cmd:user:png"),
+            "places mode never lists user commands"
+        );
+        a.goto = None;
+        open(&mut a, &[], &[], ">optim");
+        let rows = a.goto.as_ref().expect("open").rows();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].key, "cmd:user:png");
+        a.goto = None;
+        a.palette_recent = vec!["user:png".to_owned()];
+        open(&mut a, &[], &[], ">");
+        let rows = a.goto.as_ref().expect("open").rows();
+        assert!(rows[0].key == "cmd:user:png" && rows[0].recent);
     }
 
     /// Ctrl+G opens it empty, in places; opening again while open switches

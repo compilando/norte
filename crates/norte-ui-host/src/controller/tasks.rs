@@ -1858,6 +1858,13 @@ impl State {
         vec![parche, notice]
     }
 
+    /// Puts text already composed (and masked) on the bar. No notice: the
+    /// renderer announces by key, and this text has none.
+    pub(super) fn say_text(&mut self, text: String) -> Vec<BridgeEnvelope<UiUpdate>> {
+        self.status.message = Some(clamp_display(text));
+        vec![self.parche(vec![ViewChange::Status(self.status.clone())])]
+    }
+
     /// Requests a task's cancellation. Idempotent by contract: requesting it
     /// twice is not an error and changes nothing.
     pub(super) fn cancel(&mut self, task_id: u64) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
