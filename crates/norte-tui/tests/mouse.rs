@@ -2411,4 +2411,13 @@ fn a_click_on_a_search_result_selects_the_row_under_it() {
         norte_tui::searchpanel::SearchFocus::Tree
     );
     assert_eq!(app.key_owner(), KeyOwner::Search);
+    // The listings' rule (places, tree): a press on the row that WAS
+    // already selected activates it, as Enter does — so a double click
+    // opens it, and so do two slow presses.
+    mouse::handle(&mut app, ev(UP, col, row));
+    assert_eq!(
+        mouse::handle(&mut app, ev(DOWN, col, row)),
+        After::SearchPanelActivate
+    );
+    assert_eq!(app.panes.search_panel(slot).expect("model").cursor(), 3);
 }

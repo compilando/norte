@@ -568,6 +568,31 @@ async fn enter_on_a_line_opens_the_viewer_at_it() {
     assert_eq!(v.highlight_chars(2), vec![(0, 5)]);
 }
 
+/// The mouse's second press on a result goes through `activate`, the same
+/// path as Enter: on a line, the viewer opens there.
+#[tokio::test]
+async fn activating_by_the_mouse_opens_the_line_like_enter() {
+    let (mut app, backend, mut work, mut resolver, _mem) =
+        harness_with_tree(&[("notes", "uno\ndos\naguja aqui\ncuatro\n")]).await;
+    let content = SearchField::Content;
+    search_for(
+        &mut app,
+        &backend,
+        &mut work,
+        &mut resolver,
+        content,
+        "aguja",
+    )
+    .await;
+    assert!(!app.search_panel_click(2), "the first press selects");
+    assert!(app.search_panel_click(2), "the second activates");
+    let mut stream = futures::stream::pending();
+    let mut events = norte_tui::console::Console::detached(&mut stream);
+    searchpanel::activate(&mut app, &backend, &mut events, &mut work).await;
+    let v = app.viewer.as_ref().expect("the viewer opened");
+    assert_eq!(v.highlight_line(), Some(2));
+}
+
 /// One key through the whole chain, the way the loop sends it.
 async fn chain_key(
     app: &mut App,

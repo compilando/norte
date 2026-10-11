@@ -186,6 +186,30 @@ pub async fn on_key(
         SearchFocus::Tree => activation = on_tree_key(app, resolver, mods, code),
     }
     app.needs_frame = true;
+    carry_out(app, backend, events, work, activation).await;
+}
+
+/// Activates the cursor's row as Enter in the results does: the mouse's
+/// press on the row that was already selected.
+pub async fn activate(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut Console<'_>,
+    work: &mut InFlight,
+) {
+    let activation = panel_mut(app).and_then(SearchPanel::activate);
+    app.needs_frame = true;
+    carry_out(app, backend, events, work, activation).await;
+}
+
+/// Does what activating a row asked for.
+async fn carry_out(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut Console<'_>,
+    work: &mut InFlight,
+    activation: Option<Activation>,
+) {
     match activation {
         // A folder folded or unfolded: only a repaint.
         None | Some(Activation::Toggled) => {}

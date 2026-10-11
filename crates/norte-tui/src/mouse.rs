@@ -571,6 +571,10 @@ pub enum After {
     /// A tree branch was activated (#136): same treatment as the sidebar
     /// row, and `App::tree_activate` says the destination.
     TreeActivate,
+    /// The search result that was already selected was pressed again: it
+    /// is activated through the SAME path as its `Enter`
+    /// (`searchpanel::activate`), which needs the backend.
+    SearchPanelActivate,
     /// The status bar's detached-session indicator was pressed: the run loop
     /// opens help on the page that explains it. Cannot be done here: help
     /// opens with the key sheet and the language, which belong to the run
@@ -905,12 +909,16 @@ fn side_panel_click(app: &mut App, col: u16, row: u16) -> Option<After> {
             crate::app::TreeClick::Activate => After::TreeActivate,
         });
     }
-    // A search result: the cursor and the keyboard go to it.
+    // A search result: the cursor and the keyboard go to it; the second
+    // press on it activates it, as the tree's does.
     if let Some(index) = search_row_at(app, col, row) {
         app.mouse.drag.cancel();
         app.mouse.last_click = None;
-        app.search_panel_click(index);
-        return Some(After::Nothing);
+        return Some(if app.search_panel_click(index) {
+            After::SearchPanelActivate
+        } else {
+            After::Nothing
+        });
     }
     // A timeline row: selected, and its details open (2026-10-08).
     let index = timeline_row_at(app, col, row)?;
@@ -2441,6 +2449,12 @@ pub async fn on_mouse(
                     outcome,
                 );
             }
+        }
+        // A search result pressed twice: the SAME path as `Enter` in the
+        // results.
+        self::After::SearchPanelActivate => {
+            app.abandon_pending(resolver);
+            crate::searchpanel::activate(app, backend, events, work).await;
         }
     }
 }

@@ -935,17 +935,24 @@ impl App {
     }
 
     /// A click on row `index` of the search panel's results: the cursor goes
-    /// there, and the keyboard to the results.
-    pub fn search_panel_click(&mut self, index: usize) {
+    /// there, and the keyboard to the results. `true` when that row WAS
+    /// already selected with the keys in the results: the caller activates
+    /// it, as `Enter` does — the places' and the tree's rule, so a double
+    /// click opens it.
+    pub fn search_panel_click(&mut self, index: usize) -> bool {
+        let in_results = self.key_owner == KeyOwner::Search
+            && self.search_panel_focus == crate::searchpanel::SearchFocus::Tree;
         let Some(p) = self
             .search_panel_slot()
             .and_then(|s| self.panes.search_panel_mut(s))
         else {
-            return;
+            return false;
         };
+        let was_already = in_results && p.cursor() == index;
         p.set_cursor(index);
         self.search_panel_focus = crate::searchpanel::SearchFocus::Tree;
         self.key_owner = KeyOwner::Search;
+        was_already
     }
 
     /// Closes the search panel if it's open, and hands the keyboard back to
