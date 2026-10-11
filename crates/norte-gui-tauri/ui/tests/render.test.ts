@@ -6957,6 +6957,16 @@ describe("the search panel", () => {
     expect(document.querySelector(".searchpanel-line b")).toBeNull();
   });
 
+  it("a root with `$&` or `$$` in it paints verbatim", () => {
+    const { screen } = mount();
+    const root = "/data/a$&b/c$$d/e$`f$'g";
+    screen.paint(withPanel(panelSlot({ root })));
+    expect(document.querySelector(".searchpanel-root-text")?.textContent).toBe(
+      realCatalog()["search-panel-root"]!.replace(/\{\s*\$root\s*\}/u, () => root),
+    );
+    expect(document.querySelector(".searchpanel-root-text")?.textContent).toContain(root);
+  });
+
   it("ranges count code points, not UTF-16 units", () => {
     const { screen } = mount();
     const rows: SearchPanelSlotView["rows"] = [

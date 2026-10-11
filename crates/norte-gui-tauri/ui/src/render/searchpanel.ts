@@ -88,9 +88,8 @@ export function paintSearchPanel(
   } else {
     paintTree(c, slot, h, this.t("hostile-name"));
   }
-  if (slot.cursor !== c.lastCursor) {
+  if (slot.cursor !== c.lastCursor && revealCursor(c, slot.cursor, h)) {
     c.lastCursor = slot.cursor;
-    revealCursor(c, slot.cursor, h);
   }
   scheduleRange(this, c);
 }
@@ -274,7 +273,9 @@ function createControls(
 
 /** Everything that is not the tree, brought in line with the host's view. */
 function paintControls(screen: Screen, c: Controls, slot: SearchPanelSlotView): void {
-  const rootText = screen.t("search-panel-root").replace(/\{\s*\$root\s*\}/u, slot.root);
+  const rootText = screen
+    .t("search-panel-root")
+    .replace(/\{\s*\$root\s*\}/u, () => slot.root);
   if (c.rootText.textContent !== rootText) {
     c.rootText.textContent = rootText;
   }
@@ -289,7 +290,7 @@ function paintControls(screen: Screen, c: Controls, slot: SearchPanelSlotView): 
   }
   const fold = screen
     .t("search-panel-filters")
-    .replace(/\{\s*\$n\s*\}/u, String(slot.filters_set));
+    .replace(/\{\s*\$n\s*\}/u, () => String(slot.filters_set));
   if (c.fold.textContent !== fold) {
     c.fold.textContent = fold;
   }
@@ -473,11 +474,18 @@ function positionsOf(text: string, ranges: readonly [number, number][]): number[
   return out;
 }
 
-/** Brings the cursor's row into the scroller, and nothing else moves. */
-function revealCursor(c: Controls, cursor: number | null, h: number): void {
+/**
+ * Brings the cursor's row into the scroller, and nothing else moves. False
+ * when it could not (no cursor, or the scroller has no height yet): the
+ * caller asks again on the next paint.
+ */
+function revealCursor(c: Controls, cursor: number | null, h: number): boolean {
   const view = c.scroll.clientHeight;
-  if (cursor === null || view === 0) {
-    return;
+  if (cursor === null) {
+    return true;
+  }
+  if (view === 0) {
+    return false;
   }
   const top = cursor * h;
   if (top < c.scroll.scrollTop) {
@@ -485,6 +493,7 @@ function revealCursor(c: Controls, cursor: number | null, h: number): void {
   } else if (top + h > c.scroll.scrollTop + view) {
     c.scroll.scrollTop = top + h - view;
   }
+  return true;
 }
 
 /** Measures after the layout, once per paint. */

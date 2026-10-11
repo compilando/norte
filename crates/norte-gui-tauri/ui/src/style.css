@@ -4702,7 +4702,7 @@ button.status-item:hover {
   display: flex;
   align-items: center;
   gap: 1ch;
-  color: var(--muted, var(--title-fg));
+  color: var(--title-fg);
 }
 
 .searchpanel-root-text {
@@ -4723,8 +4723,8 @@ button.status-item:hover {
   min-width: 6ch;
   font: inherit;
   color: var(--fg);
-  background: var(--input-bg, var(--panel-bg));
-  border: 1px solid var(--input-border, var(--border));
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
   border-radius: 3px;
   padding: 2px 8px;
   outline: none;
@@ -4732,12 +4732,12 @@ button.status-item:hover {
 }
 
 .searchpanel-input::placeholder {
-  color: var(--muted, var(--title-fg));
+  color: var(--title-fg);
   opacity: 0.8;
 }
 
 .searchpanel-input:focus {
-  border-color: var(--focus-border, var(--border-focus));
+  border-color: var(--border-focus);
 }
 
 .searchpanel-input[aria-invalid="true"] {
@@ -4752,7 +4752,7 @@ button.status-item:hover {
   font: inherit;
   color: var(--fg);
   background: transparent;
-  border: 1px solid var(--separator, var(--border));
+  border: 1px solid var(--border);
   border-radius: 3px;
   padding: 1px 8px;
   cursor: pointer;
@@ -4859,7 +4859,7 @@ button.status-item:hover {
 .searchpanel-count,
 .searchpanel-lineno,
 .searchpanel-more {
-  color: var(--muted, var(--title-fg));
+  color: var(--title-fg);
 }
 
 .searchpanel-lineno {
