@@ -7265,6 +7265,27 @@ describe("the search panel", () => {
     expect(ranges()[1]).toEqual(ranges()[0]);
   });
 
+  it("a batch that renumbers the cursor leaves a wheel-scrolled view alone", () => {
+    const { screen } = mount();
+    const at = (over: Partial<SearchPanelSlotView>): ViewSnapshot =>
+      withPanel(panelSlot({ total_rows: 1000, cursor: 3, ...over }));
+    screen.paint(at({}));
+    const scroller = document.querySelector<HTMLElement>(".searchpanel-scroll")!;
+    Object.defineProperty(scroller, "clientHeight", {
+      value: 10 * CELL_H,
+      configurable: true,
+    });
+    screen.paint(at({}));
+    // The wheel takes the view far from the cursor.
+    scroller.scrollTop = 500 * CELL_H;
+    // A batch sorted two rows in above the cursor: same row, new index.
+    screen.paint(at({ cursor: 5, generation: 5 }));
+    expect(scroller.scrollTop).toBe(500 * CELL_H);
+    // The reader's own move (same numbering) is still followed.
+    screen.paint(at({ cursor: 6, generation: 5 }));
+    expect(scroller.scrollTop).toBe(6 * CELL_H);
+  });
+
   it("scrolling sends the visible range only when it changes", () => {
     const { screen, sent } = mount();
     screen.paint(withPanel(panelSlot({ total_rows: 1000 })));

@@ -79,6 +79,7 @@ export function paintSearchPanel(
     controlsOf.set(dom, c);
   }
   c.slotId = slot.slot_id;
+  const renumbered = c.generation !== slot.generation;
   c.generation = slot.generation;
   if (dom.scroller.firstChild !== c.body || dom.scroller.childNodes.length !== 1) {
     // The node is reused by whatever slot kind comes next: put the panel back.
@@ -88,17 +89,29 @@ export function paintSearchPanel(
   followTheKeyboard(c, dom.root.dataset["role"] === "active");
 
   const h = this.cell().h;
+  // Measured before the tree is repainted: where the reader was looking.
+  const wasInView = inView(c, c.lastCursor, h);
   const treeSignature = JSON.stringify([slot.first_row, slot.total_rows, slot.rows, h]);
   if (unchanged(c.tree, treeSignature)) {
     markCursor(c, slot);
   } else {
     paintTree(c, slot, h, this.t("hostile-name"));
   }
-  if (slot.cursor !== c.lastCursor && revealCursor(c, slot.cursor, h)) {
-    c.lastCursor = slot.cursor;
-    // A cursor that moved made the host forget the window (it carries the
-    // rows around the cursor until told): say it again, even unmoved.
-    c.lastRange = null;
+  if (slot.cursor !== c.lastCursor) {
+    // A batch that sorted rows in above the cursor moves its INDEX, not
+    // the reader: a view scrolled away by the wheel stays where it is.
+    // Only the reader's own move (same numbering), or a cursor that was
+    // in view, is followed.
+    const own = c.lastCursor === null || !renumbered || wasInView;
+    if (!own) {
+      c.lastCursor = slot.cursor;
+    } else if (revealCursor(c, slot.cursor, h)) {
+      c.lastCursor = slot.cursor;
+      // A key that moved the cursor made the host forget the window (it
+      // carries the rows around the cursor until told): say it again,
+      // even unmoved.
+      c.lastRange = null;
+    }
   }
   scheduleRange(this, c);
 }
@@ -566,6 +579,17 @@ function positionsOf(text: string, ranges: readonly [number, number][]): number[
  * when it could not (no cursor, or the scroller has no height yet): the
  * caller asks again on the next paint.
  */
+/** Is row `cursor` wholly inside the scroller's viewport? */
+function inView(c: Controls, cursor: number | null, h: number): boolean {
+  if (cursor === null) {
+    return false;
+  }
+  const top = cursor * h;
+  return (
+    top >= c.scroll.scrollTop && top + h <= c.scroll.scrollTop + c.scroll.clientHeight
+  );
+}
+
 function revealCursor(c: Controls, cursor: number | null, h: number): boolean {
   const view = c.scroll.clientHeight;
   if (cursor === null) {
