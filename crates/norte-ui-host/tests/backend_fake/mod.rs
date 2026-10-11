@@ -400,6 +400,10 @@ pub struct Fake {
     /// gate is taken, so later calls are not held): the window where the
     /// forwarder has not yet learned the task's id.
     pub search_ack_gate: std::sync::Mutex<Option<Arc<tokio::sync::Notify>>>,
+    /// When set, the NEXT `search` call's walk, once cancelled, waits on it
+    /// before ending (the gate is taken): a run whose last words reach the
+    /// host LATE, after the panel that launched it was closed and reopened.
+    pub search_end_gate: std::sync::Mutex<Option<Arc<tokio::sync::Notify>>>,
     /// What EVERY later search answers, whatever its pattern: one batch
     /// carrying lines (`all_matches`), the shape the search panel asks for.
     /// `None` = the `findings` table, by glob.
@@ -1093,6 +1097,7 @@ impl HostBackend for Fake {
             .unwrap_or(norte_proto::TaskState::Completed);
         let cancellations = Arc::clone(&self.cancellations);
         let gate = self.search_ack_gate.lock().expect("gate mutex").take();
+        let end_gate = self.search_end_gate.lock().expect("gate mutex").take();
         // One id per search, from 77: two runs that share an id would share
         // a row of the board, and the panel's one-row rule would pass by
         // accident.
@@ -1134,6 +1139,9 @@ impl HostBackend for Fake {
                     }
                     None => outcome,
                 };
+                if let Some(end) = end_gate {
+                    end.notified().await;
+                }
                 // And it ends: the view stops saying "searching…". WITH its
                 // outcome, which is not cosmetic — "finished", "was
                 // stopped" and "broke" say three different things about the

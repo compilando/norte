@@ -159,6 +159,10 @@ pub enum Due {
     Unreadable(SearchField),
 }
 
+/// The status key of a failed run: the one whose argument is the failure's
+/// text, which each frontend masks before it is said.
+pub const KEY_FAILED: &str = "search-panel-failed";
+
 /// The status line, as a Fluent key and its arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PanelStatus {
@@ -624,7 +628,7 @@ impl SearchPanel {
             "search-status-truncated" => "search-panel-truncated",
             "search-status-cancelled" => "search-panel-cancelled",
             // `search-status-failed`, the only one left.
-            _ => "search-panel-failed",
+            _ => KEY_FAILED,
         };
         let error = match &run.outcome {
             Outcome::Failed(e) => Some(e.clone()),

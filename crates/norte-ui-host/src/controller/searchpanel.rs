@@ -16,11 +16,11 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use norte_frontend::search::{ID_KINDS, SearchField};
 use norte_frontend::search_panel::{
-    Activation, DEBOUNCE, Due, FolderNode, PanelStatus, Row, SearchPanel,
+    Activation, DEBOUNCE, Due, FolderNode, KEY_FAILED, PanelStatus, Row, SearchPanel,
 };
 use norte_frontend::search_status::Outcome;
 
@@ -62,7 +62,12 @@ impl PanelState {
 
 /// The run in flight, as this host knows it.
 struct PanelRunHost {
-    /// The model's epoch for this run: its messages carry it back.
+    /// This run's identity across the WHOLE host, which its messages carry
+    /// back. The model's epoch starts over with every panel, so a closed
+    /// panel's run and a reopened one's first would both be epoch 1, and a
+    /// late message of the old walk would land on the new one.
+    run: u64,
+    /// The model's epoch for this run, for the calls into the model.
     epoch: u64,
     /// The daemon's Task, once `SearchPanelLive` brings it. Zero until then.
     task: norte_proto::TaskId,
@@ -71,6 +76,12 @@ struct PanelRunHost {
     abandoned: Arc<AtomicBool>,
     /// The walk ended: nothing left to cancel, only a row to forget.
     ended: bool,
+}
+
+/// The next host-wide run identity (see [`PanelRunHost::run`]).
+fn next_run_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// The clock the pause is measured with: tokio's, so a test on a stopped
@@ -122,13 +133,9 @@ fn status_text(lang: norte_i18n::Lang, model: &SearchPanel) -> String {
             "search-panel-unreadable",
             &[("field", &norte_i18n::t_in(lang, field.key()))],
         ),
-        PanelStatus::Run {
-            key: "search-panel-failed",
-            error,
-            ..
-        } => norte_i18n::ta_in(
+        PanelStatus::Run { key, error, .. } if key == KEY_FAILED => norte_i18n::ta_in(
             lang,
-            "search-panel-failed",
+            KEY_FAILED,
             &[("error", error.as_deref().unwrap_or_default())],
         ),
         PanelStatus::Run {
@@ -205,12 +212,26 @@ fn row_view(
         }
         Row::Line { folder, file, line } => {
             let m = &tree[folder].files[file].matches[line];
+            // Masked char for char, so the ranges still fall on the same
+            // chars.
+            let preview = clamp_display(norte_encoding::mask_terminal_hazards(&m.preview));
+            // A clamp cuts the text (and ends it in `…`): a range past what
+            // is left marks nothing, and one across the cut stops at it.
+            let kept = preview.chars().count().saturating_sub(usize::from(
+                preview.len() < m.preview.len() && preview.ends_with('…'),
+            ));
+            let ranges = m
+                .ranges
+                .iter()
+                .filter_map(|&(start, end)| {
+                    let limit = u32::try_from(kept).unwrap_or(u32::MAX);
+                    (start < limit).then(|| (start, end.min(limit)))
+                })
+                .collect();
             SearchPanelRowView::Line {
                 line: m.line,
-                // Masked char for char, so the ranges still fall on the
-                // same chars.
-                preview: clamp_display(norte_encoding::mask_terminal_hazards(&m.preview)),
-                ranges: m.ranges.clone(),
+                preview,
+                ranges,
             }
         }
         Row::More { folder, file } => SearchPanelRowView::More {
@@ -406,7 +427,8 @@ impl State {
 
     /// Launches the run `epoch` and hooks up its forwarder, the one
     /// `launch_search` uses: the Task to the board, its id, its batches and
-    /// how it ended, all through the mailbox.
+    /// how it ended, all through the mailbox. Its messages carry the run's
+    /// host-wide identity, and none is sent once the run was let go.
     fn launch_panel_run(
         &mut self,
         epoch: u64,
@@ -414,6 +436,7 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) {
+        let run = next_run_id();
         let abandoned = Arc::new(AtomicBool::new(false));
         let abandoned2 = Arc::clone(&abandoned);
         let backend = Arc::clone(backend);
@@ -423,12 +446,11 @@ impl State {
             let (task, mut rx) = match backend.search(params).await {
                 Ok(pair) => pair,
                 Err(e) => {
-                    let _ = mailbox
-                        .send(background(Background::SearchPanelBroken(
-                            epoch,
-                            Box::new(e),
-                        )))
-                        .await;
+                    if !abandoned2.load(Ordering::SeqCst) {
+                        let _ = mailbox
+                            .send(background(Background::SearchPanelBroken(run, Box::new(e))))
+                            .await;
+                    }
                     return;
                 }
             };
@@ -446,7 +468,7 @@ impl State {
                 .await;
             // Named HERE and not with the first batch: there may be none.
             let _ = mailbox
-                .send(background(Background::SearchPanelLive(epoch, id)))
+                .send(background(Background::SearchPanelLive(run, id)))
                 .await;
             while let Some(batch) = rx.recv().await {
                 if abandoned2.load(Ordering::SeqCst) {
@@ -455,7 +477,7 @@ impl State {
                 }
                 if mailbox
                     .send(background(Background::SearchPanelHits(
-                        epoch,
+                        run,
                         Box::new(batch),
                     )))
                     .await
@@ -464,16 +486,22 @@ impl State {
                     return;
                 }
             }
+            // A run let go says nothing more: the walk it ended is not the
+            // one the panel is waiting for.
+            if abandoned2.load(Ordering::SeqCst) {
+                return;
+            }
             let state = progress.borrow().state.clone();
             let _ = mailbox
                 .send(background(Background::SearchPanelEnded(
-                    epoch,
+                    run,
                     Box::new(state),
                 )))
                 .await;
         });
         if let Some((_, s)) = self.search_panel.as_mut() {
             s.run = Some(PanelRunHost {
+                run,
                 epoch,
                 task: norte_proto::TaskId::new(0),
                 abandoned,
@@ -482,25 +510,26 @@ impl State {
         }
     }
 
-    /// Is `epoch` the run in flight?
-    fn is_panel_run(&self, epoch: u64) -> bool {
+    /// The model's epoch of the run `run`, if it is the one in flight.
+    fn panel_run_epoch(&self, run: u64) -> Option<u64> {
         self.search_panel
             .as_ref()
             .and_then(|(_, s)| s.run.as_ref())
-            .is_some_and(|r| r.epoch == epoch)
+            .filter(|r| r.run == run)
+            .map(|r| r.epoch)
     }
 
-    /// The run `epoch` is live with Task `id`. The current one takes its id
+    /// The run `run` is live with Task `id`. The current one takes its id
     /// and the row of the run it replaced leaves the board; a replaced one
     /// that slipped onto the board between the forwarder's check and the
     /// abandon is cancelled and taken off it.
     pub(super) fn search_panel_live(
         &mut self,
-        epoch: u64,
+        run: u64,
         id: norte_proto::TaskId,
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let gone = if self.is_panel_run(epoch) {
+        let gone = if self.panel_run_epoch(run).is_some() {
             let Some((_, s)) = self.search_panel.as_mut() else {
                 return Vec::new();
             };
@@ -521,12 +550,16 @@ impl State {
         vec![self.repaint_board(mailbox)]
     }
 
-    /// A batch of the run `epoch`; a stale one is dropped by the model.
+    /// A batch of the run `run`; one of another run is dropped here, and a
+    /// stale epoch by the model.
     pub(super) fn search_panel_hits(
         &mut self,
-        epoch: u64,
+        run: u64,
         batch: &norte_proto::methods::SearchHits,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(epoch) = self.panel_run_epoch(run) else {
+            return Vec::new();
+        };
         let Some((_, s)) = self.search_panel.as_mut() else {
             return Vec::new();
         };
@@ -536,22 +569,22 @@ impl State {
         self.repaint_search_panel()
     }
 
-    /// The run `epoch` never got queued: the panel says why.
+    /// The run `run` never got queued: the panel says why.
     pub(super) fn search_panel_broken(
         &mut self,
-        epoch: u64,
+        run: u64,
         e: &Error,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let category = clamp_display(norte_frontend::error::error_category_in(self.lang, e));
-        self.search_panel_finished(epoch, Outcome::Failed(category))
+        self.search_panel_finished(run, Outcome::Failed(category))
     }
 
-    /// The run `epoch` sent its last batch, and its Task stood at `state`.
+    /// The run `run` sent its last batch, and its Task stood at `state`.
     /// A channel that closed before the terminal state was published reads
     /// as done: the walker sends no more.
     pub(super) fn search_panel_ended(
         &mut self,
-        epoch: u64,
+        run: u64,
         state: &norte_proto::TaskState,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let lang = self.lang;
@@ -559,17 +592,17 @@ impl State {
             clamp_display(norte_frontend::error::error_category_in(lang, e))
         })
         .unwrap_or(Outcome::Done);
-        self.search_panel_finished(epoch, outcome)
+        self.search_panel_finished(run, outcome)
     }
 
     fn search_panel_finished(
         &mut self,
-        epoch: u64,
+        run: u64,
         outcome: Outcome,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        if !self.is_panel_run(epoch) {
+        let Some(epoch) = self.panel_run_epoch(run) else {
             return Vec::new();
-        }
+        };
         let Some((_, s)) = self.search_panel.as_mut() else {
             return Vec::new();
         };

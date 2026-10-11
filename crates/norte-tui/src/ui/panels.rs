@@ -1690,7 +1690,7 @@ fn search_panel_status(panel: &norte_frontend::search_panel::SearchPanel) -> Str
             folders,
             error,
         } => {
-            if key == "search-panel-failed" {
+            if key == norte_frontend::search_panel::KEY_FAILED {
                 // The failure's text came from the daemon: masked.
                 ta(
                     key,

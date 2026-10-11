@@ -229,7 +229,27 @@ fn fake_with_file(lines: usize, at: usize) -> (Fake, u64) {
         }
     }
     f.content.insert("mem:///casa/a.txt".to_owned(), body);
+    // A previewer that WOULD match: an aimed open must not ask it (the lit
+    // line is the file's own bytes, and a styled view has no such line).
+    f.previews.insert(
+        "mem:///casa/a.txt".to_owned(),
+        super::viewer::preview_de("Texto", &["x aguja"], false),
+    );
     (f, offset)
+}
+
+/// The viewer opened at a line, lit, and no styled preview was requested.
+async fn assert_aimed_open_asks_no_previewer(h: &mut Harness, fake: &Fake) {
+    // A few rounds so a late request, had one been made, would have landed.
+    for _ in 0..3 {
+        h.settle().await;
+    }
+    let v = h.snapshot().await.viewer.expect("the viewer opened");
+    assert!(v.highlight.is_some(), "the line is lit");
+    assert!(
+        fake.preview_widths.lock().expect("mutex").is_empty(),
+        "an aimed open does not request a styled preview"
+    );
 }
 
 /// Searches `aguja` with `hits` answering, then activates row 2 (the line).
@@ -271,6 +291,7 @@ async fn activating_a_line_opens_the_viewer_at_it() {
     assert_eq!((lit.row, v.first_line), (6, 6));
     assert_eq!(lit.ranges, vec![(2, 7)]);
     assert_eq!(v.lines_from, 1, "inside the cap: the file from its head");
+    assert_aimed_open_asks_no_previewer(&mut h, &fake).await;
 }
 
 /// A line past the viewer's cap: the read starts `CONTEXT_BEFORE` bytes
@@ -298,6 +319,7 @@ async fn a_line_past_the_cap_reads_a_window_around_it() {
     assert!(v.lines_from > 1, "a window, not the head: {}", v.lines_from);
     let lit = v.highlight.expect("the line is lit");
     assert_eq!(lit.ranges, vec![(2, 7)]);
+    assert_aimed_open_asks_no_previewer(&mut h, &fake).await;
 }
 
 /// Review Focus 5: closing the panel cancels the run and forgets its row.
@@ -322,6 +344,87 @@ async fn closing_the_panel_cancels_its_run() {
     assert_eq!(h.open_slot("layout.search").await, 0, "the panel closed");
     assert_eq!(fake.cancellations.load(Ordering::SeqCst), 1);
     assert_eq!(search_rows(&h.snapshot().await), 0, "and its row went");
+}
+
+/// The model's epoch starts over with every panel, so the run of a closed
+/// panel and the first run of the reopened one are both "epoch 1": the old
+/// walk's last words, arriving late, must not end the new run — or the next
+/// relaunch would skip cancelling it and its walk would leak.
+#[tokio::test(start_paused = true)]
+async fn a_closed_panels_late_ending_does_not_touch_the_reopened_one() {
+    let (mut h, fake) = harness_with_fake().await;
+    let end = Arc::new(tokio::sync::Notify::new());
+    *fake.search_end_gate.lock().expect("gate mutex") = Some(Arc::clone(&end));
+    let slot = h.open_slot("layout.search").await;
+    h.act(UiAction::SearchPanelEdit {
+        slot_id: slot,
+        field: "content".into(),
+        value: text("aguja"),
+    })
+    .await;
+    h.act(UiAction::SearchPanelGo { slot_id: slot }).await;
+    h.settle().await;
+    assert_eq!(fake.searches_launched(), 1);
+    // Closed: the walk is cancelled, but it is held before it ends.
+    assert_eq!(h.open_slot("layout.search").await, 0);
+    h.settle().await;
+    assert_eq!(fake.cancellations.load(Ordering::SeqCst), 1);
+
+    let slot = h.open_slot("layout.search").await;
+    assert_ne!(slot, 0, "the panel reopened");
+    h.act(UiAction::SearchPanelEdit {
+        slot_id: slot,
+        field: "content".into(),
+        value: text("pajar"),
+    })
+    .await;
+    h.act(UiAction::SearchPanelGo { slot_id: slot }).await;
+    h.settle().await;
+    assert_eq!(fake.searches_launched(), 2);
+
+    // The old walk ends now, late.
+    end.notify_one();
+    h.settle().await;
+    assert!(
+        h.panel(slot).await.running,
+        "the old run's ending is not the new run's"
+    );
+
+    // So relaunching still cancels the new walk.
+    h.act(UiAction::SearchPanelEdit {
+        slot_id: slot,
+        field: "content".into(),
+        value: text("pajares"),
+    })
+    .await;
+    h.act(UiAction::SearchPanelGo { slot_id: slot }).await;
+    h.settle().await;
+    assert_eq!(fake.searches_launched(), 3);
+    assert_eq!(fake.cancellations.load(Ordering::SeqCst), 2);
+}
+
+/// "Search here" lets go of what runs under the old root at once, not at
+/// the tic.
+#[tokio::test(start_paused = true)]
+async fn rerooting_cancels_the_run_now() {
+    let (mut h, fake) = harness_with_fake().await;
+    let slot = h.open_slot("layout.search").await;
+    h.act(UiAction::SearchPanelEdit {
+        slot_id: slot,
+        field: "content".into(),
+        value: text("aguja"),
+    })
+    .await;
+    h.act(UiAction::SearchPanelGo { slot_id: slot }).await;
+    h.settle().await;
+    assert_eq!(fake.cancellations.load(Ordering::SeqCst), 0);
+    let ack = h.act(UiAction::SearchPanelReroot { slot_id: slot }).await;
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    assert_eq!(
+        fake.cancellations.load(Ordering::SeqCst),
+        1,
+        "cancelled before the pause is over"
+    );
 }
 
 /// A run relaunched before the daemon acknowledged the previous one: the
