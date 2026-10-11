@@ -733,6 +733,7 @@ async fn open(
         Waited::Done(Ok((mut viewer, thumbnail))) => {
             // The line is not in what was read and nobody knew its byte
             // offset: the top, and a word about it (C9).
+            // (A plugin's preview is not aimed, so it never says "lines from".)
             if let Some(tg) = &target
                 && tg.offset.is_none()
                 && !viewer.hex

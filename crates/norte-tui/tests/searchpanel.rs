@@ -568,6 +568,79 @@ async fn enter_on_a_line_opens_the_viewer_at_it() {
     assert_eq!(v.highlight_chars(2), vec![(0, 5)]);
 }
 
+/// One key through the whole chain, the way the loop sends it.
+async fn chain_key(
+    app: &mut App,
+    backend: &Backend,
+    work: &mut InFlight,
+    resolvers: &mut [Resolver; 3],
+    code: KeyCode,
+) {
+    let cfg = norte_tui::config::load(&norte_config::Layers { dirs: vec![] }).expect("config");
+    let mut cap = norte_tui::mouse::Capture::new();
+    let mut stream = futures::stream::pending();
+    let mut events = norte_tui::console::Console::detached(&mut stream);
+    let [browse, viewer, dialog] = resolvers;
+    norte_tui::keys::on_key(
+        app,
+        backend,
+        &mut cap,
+        &mut events,
+        browse,
+        viewer,
+        dialog,
+        &mut Vec::new(),
+        norte_i18n::Lang::Es,
+        norte_tui::nav::Mode::default(),
+        norte_tui::config::ConfirmQuit::default(),
+        &cfg,
+        None,
+        None,
+        work,
+        crossterm::event::KeyEvent::new(code, KeyModifiers::NONE),
+    )
+    .await;
+}
+
+/// While the viewer opened from a line is up its keys are the viewer's
+/// (scroll, close); closing it gives the keys back to the panel.
+#[tokio::test]
+async fn the_viewer_over_the_panel_takes_the_keys_and_returns_them() {
+    for close in [KeyCode::Esc, KeyCode::Char('q'), KeyCode::F(3)] {
+        let (mut app, backend, mut work, mut resolver, _mem) =
+            harness_with_tree(&[("notes", "uno\ndos\naguja aqui\ncuatro\n")]).await;
+        search_for(
+            &mut app,
+            &backend,
+            &mut work,
+            &mut resolver,
+            SearchField::Content,
+            "aguja",
+        )
+        .await;
+        for code in [KeyCode::Down, KeyCode::Down, KeyCode::Enter] {
+            key(&mut app, &backend, &mut work, &mut resolver, code).await;
+        }
+        let at = panel(&app).cursor();
+        let scroll = app.viewer.as_ref().expect("the viewer opened").scroll;
+        let src = presets::source("orthodox").expect("the preset exists");
+        let kf = norte_frontend::keymap::parse_keymap(src).expect("the preset parses");
+        let known: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
+        let build = |s| Resolver::new(Effective::build_for(&kf, &[], &known, s).expect("merges"));
+        let mut resolvers = [
+            build(Screen::Browse),
+            build(Screen::Viewer),
+            build(Screen::Dialog),
+        ];
+        chain_key(&mut app, &backend, &mut work, &mut resolvers, KeyCode::Up).await;
+        assert_eq!(app.viewer.as_ref().expect("still open").scroll, scroll - 1);
+        assert_eq!(panel(&app).cursor(), at, "the results cursor did not move");
+        chain_key(&mut app, &backend, &mut work, &mut resolvers, close).await;
+        assert!(app.viewer.is_none(), "{close:?} closes the viewer");
+        assert_eq!(app.key_owner(), KeyOwner::Search);
+    }
+}
+
 /// Enter on a file goes to its folder with the cursor on it, and the keys
 /// are the panes' again.
 #[tokio::test]
@@ -602,7 +675,7 @@ async fn a_match_past_the_cap_opens_a_window() {
     let at = text.len() as u64;
     text.push_str("aguja\nfin\n");
     assert!(at > 256 * 1024);
-    let (mut app, backend, _work, _resolver, _mem) = harness_with_tree(&[("big.txt", &text)]).await;
+    let (mut app, backend, _work, _resolver, _mem) = harness_with_tree(&[("big", &text)]).await;
     let mut stream = futures::stream::pending();
     let mut events = norte_tui::console::Console::detached(&mut stream);
     let target = ViewerTarget {
@@ -615,7 +688,7 @@ async fn a_match_past_the_cap_opens_a_window() {
         &mut app,
         &backend,
         &mut events,
-        vp("mem:///big.txt"),
+        vp("mem:///big"),
         target,
     )
     .await;

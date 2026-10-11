@@ -82,6 +82,14 @@ pub fn typing(app: &App) -> bool {
     app.key_owner() == KeyOwner::Search && matches!(app.search_panel_focus, SearchFocus::Field(_))
 }
 
+/// Is the full-screen viewer open over the panel (Enter on a line row)? Its
+/// keys are the viewer's while it lasts; the panel keeps the keyboard
+/// OWNERSHIP, so closing the viewer lands the keys back on the results.
+#[must_use]
+pub fn viewer_over(app: &App) -> bool {
+    app.viewer.is_some() && app.key_owner() == KeyOwner::Search
+}
+
 /// Would this key be TEXT in the panel's input? A plain key with the caret
 /// in an input is; a chord with ctrl or alt never is, so it can still run a
 /// shared panel command (`alt+F` closes the panel it opened).

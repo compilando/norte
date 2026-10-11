@@ -228,6 +228,8 @@ pub async fn on_key(
         // a chord with ctrl/alt writes nothing, and `alt+F` has to close
         // the panel it opened with the caret already in it.
         && !crate::searchpanel::types_text(app, key.modifiers)
+        // A viewer opened from a result row: its keys are the viewer's.
+        && !crate::searchpanel::viewer_over(app)
         && matches!(
             app.key_owner(),
             crate::app::KeyOwner::Tree
@@ -344,9 +346,14 @@ pub async fn on_key(
         // It is async because reaching the bottom asks for the next page and
         // because Enter opens the undo question, which needs the backend.
         on_timeline_key(app, backend, dialog_resolver, key.modifiers, key.code).await;
-    } else if app.key_owner() == crate::app::KeyOwner::Search && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Search
+        && !crate::searchpanel::viewer_over(app)
+        && !modal_wins(app)
+    {
         // The search panel, for the same reason as its neighbors: what is
-        // typed into it must not reach the listing behind it.
+        // typed into it must not reach the listing behind it. Not while a
+        // viewer opened from a result is up: the keys fall through to the
+        // viewer's resolver, and closing it leaves them here.
         crate::searchpanel::on_key(
             app,
             backend,
