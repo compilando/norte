@@ -1732,6 +1732,11 @@ search-status-done = búsqueda: { $n } hits
 search-status-truncated = búsqueda: { $n } hits (truncada)
 search-status-cancelled = búsqueda: { $n } hits (cancelada)
 search-status-failed = búsqueda fallida: { $error }
+# Resultados de búsqueda abiertos como listado (2026-10-10-search-b-listing).
+results-tab-title = 🔍 { $query } ({ $n })
+results-location = búsqueda «{ $query }» en { $root }
+results-already-there = algunos de estos ficheros ya están en esa carpeta
+results-not-a-location = los resultados de una búsqueda no son una carpeta: elige una carpeta como destino
 # El panel de búsqueda (2026-10-09-search-panel): busca mientras escribes y
 # agrupa los resultados por carpeta y fichero, con sus líneas coincidentes.
 search-panel-title = Buscar

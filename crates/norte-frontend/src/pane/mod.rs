@@ -26,6 +26,7 @@ pub use marks::MarksSummary;
 
 use crate::decoration::Decoration;
 use crate::nav::{Mode, QuickSearch};
+use crate::results::ResultSet;
 use crate::sort::SortKey;
 use globset::GlobBuilder;
 use norte_proto::{Entry, EntryKind, VPath};
@@ -201,6 +202,13 @@ pub struct PaneState {
     entries: Vec<Entry>,
     /// What state the `..` row is in (`[ui] parent_entry`).
     parent_row: ParentRow,
+    /// Set while this pane is a results TAB (Open as listing): the query and
+    /// run state behind `entries`. Any real listing drops it.
+    results: Option<ResultSet>,
+    /// The `show_hidden` preference from before the results tab forced it
+    /// on, given back when the tab ends. Only written when `None`, so
+    /// re-beginning results does not overwrite it.
+    hidden_before_results: Option<bool>,
     /// Persisted sort keys, index-parallel to `entries` (#54): the fill
     /// merges batches O(n+m) without recomputing the NFC key of what was
     /// already listed.
@@ -420,6 +428,8 @@ impl PaneState {
             viewport_rows: None,
             viewport_offset: 0,
             parent_row: ParentRow::Off,
+            results: None,
+            hidden_before_results: None,
         }
     }
 
@@ -491,7 +501,8 @@ impl PaneState {
     /// on: there is nowhere to go up to, and a row that leads nowhere is
     /// worse than not having it.
     fn insert_parent_row(&mut self) {
-        if !matches!(self.parent_row, ParentRow::Requested) {
+        // A results tab has no directory to go up from.
+        if !matches!(self.parent_row, ParentRow::Requested) || self.results.is_some() {
             return;
         }
         let Some(parent) = self.dir.parent() else {
@@ -728,7 +739,29 @@ impl PaneState {
     /// whether or not it matches); (2) otherwise, the per-dir memory
     /// ([`Self::remember_cursor`]) for the new `dir`, clamped; (3) if
     /// neither applies, 0 — the behaviour it always had.
+    ///
+    /// A real listing ends a results tab: the result set is dropped and the
+    /// `show_hidden` preference it overrode comes back.
     pub fn set_listing(&mut self, dir: VPath, entries: Vec<Entry>) {
+        self.end_results();
+        self.replace_listing(dir, entries);
+    }
+
+    /// Ends a results tab, if this is one: drops the result set, gives back
+    /// the hidden preference, and resets a sort by Folder (meaningless
+    /// outside results; that part lands with the column in Task 2).
+    fn end_results(&mut self) {
+        if self.results.take().is_some() {
+            // A results tab always saved the preference in `begin_results`.
+            if let Some(hidden) = self.hidden_before_results.take() {
+                self.set_show_hidden(hidden);
+            }
+        }
+    }
+
+    /// [`Self::set_listing`] without ending the result set: what
+    /// [`Self::begin_results`] also uses.
+    fn replace_listing(&mut self, dir: VPath, entries: Vec<Entry>) {
         // #107: the PREVIOUS listing's stash goes away; the new one is
         // filtered on entry if hiding is on.
         self.hidden_stash.clear();
@@ -797,7 +830,11 @@ impl PaneState {
     ///
     /// [`set_listing`]: PaneState::set_listing
     pub fn begin_loading(&mut self, dir: VPath) {
-        self.remember_cursor();
+        // A results tab's cursor is a row among hits, not a place in `dir`.
+        if self.results.is_none() {
+            self.remember_cursor();
+        }
+        self.end_results();
         self.dir = dir;
         self.entries = Vec::new();
         self.sort_keys = Vec::new();
@@ -819,6 +856,69 @@ impl PaneState {
         self.hidden_stash.clear(); // #107: belonged to the previous listing
         self.clear_decorations();
         self.plugin_columns.clear();
+    }
+
+    /// Makes this pane a results TAB over `set`, listing `entries` (the hits
+    /// so far). Hidden entries are shown while it lasts (a hit is explicit),
+    /// and the `..` row is not inserted. The preference is given back by the
+    /// first real listing; beginning results again (refresh) keeps the
+    /// preference saved the first time.
+    pub fn begin_results(&mut self, set: ResultSet, entries: Vec<Entry>) {
+        if self.hidden_before_results.is_none() {
+            self.hidden_before_results = Some(self.show_hidden);
+        }
+        self.set_show_hidden(true);
+        let root = set.root().clone();
+        // Before the listing is replaced: the `..` row checks it.
+        self.results = Some(set);
+        self.replace_listing(root, entries);
+    }
+
+    /// The result set, if this pane is a results tab.
+    #[must_use]
+    pub const fn results(&self) -> Option<&ResultSet> {
+        self.results.as_ref()
+    }
+
+    /// The result set, mutably.
+    pub const fn results_mut(&mut self) -> Option<&mut ResultSet> {
+        self.results.as_mut()
+    }
+
+    /// Is this pane a results tab?
+    #[must_use]
+    pub const fn is_results(&self) -> bool {
+        self.results.is_some()
+    }
+
+    /// Takes `paths` (and their marks) out of a results tab, keeping the
+    /// cursor on the next row by index, WITHOUT ending the result set.
+    /// Returns how many hits left; paths that are not hits count for nothing.
+    pub fn forget(&mut self, paths: &[VPath]) -> usize {
+        let gone: HashSet<&VPath> = paths.iter().collect();
+        // The stash too: hidden hits (the user may have toggled hiding in
+        // the tab) must survive the rebuild, which re-stashes from scratch.
+        let all = self.real_entries().len() + self.hidden_stash.len();
+        let keep: Vec<Entry> = self
+            .real_entries()
+            .iter()
+            .chain(self.hidden_stash.iter())
+            .filter(|e| !gone.contains(&e.path))
+            .cloned()
+            .collect();
+        let left = all - keep.len();
+        if left > 0 {
+            self.replace_entries_keeping(keep);
+        }
+        left
+    }
+
+    /// The Folder column's text for `entry`; `None` outside a results tab.
+    #[must_use]
+    pub fn folder_text(&self, entry: &Entry) -> Option<String> {
+        self.results
+            .as_ref()
+            .map(|r| crate::results::folder_text(entry, r.root(), self.name_encoding))
     }
 
     /// Skipped from the current listing's container (#93/#96) — see the
@@ -1349,7 +1449,14 @@ impl PaneState {
     /// `prune_marks`/[`Self::pruned_marks`]) — the listing passed in
     /// must be COMPLETE, since a partial page would silently discard the
     /// marks it omits.
-    pub fn refill(&mut self, mut entries: Vec<Entry>) {
+    pub fn refill(&mut self, entries: Vec<Entry>) {
+        self.end_results();
+        self.replace_entries_keeping(entries);
+    }
+
+    /// The body of [`Self::refill`], shared with [`Self::forget`]: replaces
+    /// the entries without ending the result set.
+    fn replace_entries_keeping(&mut self, mut entries: Vec<Entry>) {
         let quick_prev = self.quick_selected_path();
         self.inherit_known_metadata(&mut entries);
         // #107: the refill brings the dir's COMPLETE listing — the stash is

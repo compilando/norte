@@ -79,6 +79,7 @@ pub mod openers;
 mod pane;
 pub mod plugin_config;
 pub mod processes;
+pub mod results;
 pub mod search;
 pub mod search_panel;
 pub mod search_status;

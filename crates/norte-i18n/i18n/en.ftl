@@ -1796,6 +1796,11 @@ search-status-done = search: { $n } hits
 search-status-truncated = search: { $n } hits (truncated)
 search-status-cancelled = search: { $n } hits (cancelled)
 search-status-failed = search failed: { $error }
+# Search results opened as a listing (2026-10-10-search-b-listing).
+results-tab-title = 🔍 { $query } ({ $n })
+results-location = search “{ $query }” in { $root }
+results-already-there = some of these files are already in that folder
+results-not-a-location = search results are not a folder: choose a folder as the destination
 # The search panel (2026-10-09-search-panel): searches as you type, results
 # grouped by folder and file with their matching lines.
 search-panel-title = Search

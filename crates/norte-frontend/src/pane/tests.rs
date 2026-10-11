@@ -3637,3 +3637,60 @@ fn the_marks_summary_matches_the_three_separate_passes() {
     }
     assert!(p.marks_summary(10).dirs > 0 && p.marks_summary(10).bytes > 0);
 }
+
+fn vp(s: &str) -> VPath {
+    VPath::parse(s).expect("test wire")
+}
+fn file(p: &str) -> Entry {
+    e(p, EntryKind::File)
+}
+fn saved_search(root: &str) -> crate::results::SavedSearch {
+    crate::results::SavedSearch::from_form(&crate::search::SearchForm::new(), vp(root))
+}
+
+/// A results tab: hidden entries shown (a hit is explicit), no `..` row,
+/// and the first real listing drops the result set and gives back the
+/// hidden preference.
+#[test]
+fn a_real_listing_ends_a_results_tab_and_restores_hidden() {
+    use crate::results::{MAX_HITS, ResultSet};
+    let mut p = PaneState::new(vp("mem:///casa"), vec![]);
+    p.set_show_hidden(false);
+    p.set_parent_row(true);
+    let set = ResultSet::new(saved_search("mem:///casa"), MAX_HITS);
+    p.begin_results(set, vec![file("mem:///casa/sub/.env")]);
+    assert!(p.is_results() && p.show_hidden());
+    assert!(
+        !(0..p.entries().len()).any(|i| p.is_parent_row(i)),
+        "no `..` in results"
+    );
+    assert_eq!(p.entries().len(), 1);
+    p.set_listing(vp("mem:///casa"), vec![]);
+    assert!(!p.is_results());
+    assert!(!p.show_hidden(), "the preference comes back");
+}
+
+/// `forget` takes hits and their marks out and keeps the cursor on the
+/// next row (orthodox), without ending the result set.
+#[test]
+fn forget_removes_hits_and_marks_but_keeps_results() {
+    use crate::results::{MAX_HITS, ResultSet};
+    let mut p = PaneState::new(vp("mem:///casa"), vec![]);
+    p.begin_results(
+        ResultSet::new(saved_search("mem:///casa"), MAX_HITS),
+        vec![
+            file("mem:///casa/a/1"),
+            file("mem:///casa/b/2"),
+            file("mem:///casa/c/3"),
+        ],
+    );
+    p.set_cursor(1);
+    p.toggle_mark();
+    assert_eq!(p.forget(&[vp("mem:///casa/b/2"), vp("mem:///casa/zz")]), 1);
+    assert!(p.is_results());
+    assert_eq!(p.marks_len(), 0);
+    assert_eq!(
+        p.selected().map(|e| e.path.clone()),
+        Some(vp("mem:///casa/c/3"))
+    );
+}
