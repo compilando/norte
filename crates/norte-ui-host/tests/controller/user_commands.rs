@@ -228,6 +228,77 @@ async fn a_key_to_an_undefined_user_command_says_it_is_not_defined() {
     );
 }
 
+/// A read-only window never runs a user command: the bound key is refused,
+/// the box offers no user row, and nothing leaves as a native effect.
+#[tokio::test]
+async fn a_read_only_window_never_runs_them() {
+    let solo = norte_ui_host::commands::Effects::SoloRead;
+    let mut fake = Fake::default();
+    fake.put("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let layer = norte_frontend::keymap::parse_keymap(
+        "[pane]\nprepend_keymap = [{ on = [\"alt+o\"], run = \"user:png\" }]\n",
+    )
+    .expect("a valid keymap");
+    let keymap = norte_ui_host::keys::preset_keymap_with_layers("orthodox", &[layer], solo)
+        .expect("a `user:` binding still loads, as unavailable");
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: Arc::new(fake),
+        initial_dir: VPath::parse("file:///casa").expect("vpath"),
+        initial_dir_requested: false,
+        attach: false,
+        locale: "es".to_owned(),
+        keymap,
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: cfg_with(PNG),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::default_columns(),
+        effects: solo,
+        log_ring: None,
+    })
+    .await
+    .expect("starts");
+    let mut sub = h.subscribe();
+    let mut effects = h.native_effects();
+
+    // The key: refused, never run.
+    let ack = h.dispatch(key_alt("o")).await.expect("host alive");
+    assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
+
+    // The box under `>`: no user row to pick, so the box path cannot reach it.
+    h.dispatch(key_mod("p", true, false))
+        .await
+        .expect("host alive");
+    let _ = next_goto(&mut sub).await;
+    for c in "optimize".chars() {
+        h.dispatch(press(&c.to_string())).await.expect("host alive");
+    }
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let g = next_snapshot(&mut sub).await.goto.expect("the box is open");
+    assert!(
+        !goto_descs(&g).iter().any(|d| d.starts_with("user:")),
+        "{:?}",
+        goto_descs(&g)
+    );
+    assert!(!goto_texts(&g).iter().any(|t| t == "Optimize"));
+    h.dispatch(press("Enter")).await.expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let _ = next_snapshot(&mut sub).await;
+
+    assert!(
+        matches!(
+            effects.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ),
+        "no program started"
+    );
+}
+
 /// `F1` on a user row says its description on the bar; the box stays open.
 #[tokio::test]
 async fn f1_on_a_user_row_says_its_description() {
