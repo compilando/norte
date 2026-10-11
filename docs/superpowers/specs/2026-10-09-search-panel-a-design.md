@@ -31,9 +31,10 @@ one line, and the engine could not tell them anyway:
 Success: a **Search** panel in the rail of both frontends. Typing searches
 after a 300 ms pause, cancelling the previous run. Results arrive live as a
 tree folder → file → matching lines, each line with the match highlighted
-and the preview centred on it. A click (Enter) on a line opens norte's viewer
-at that line with the match highlighted; on a file, the pane goes to its
-folder with the cursor on it.
+and the preview centred on it. Enter on a line — a click in the window, a
+second click on the selected row in the terminal (its listings' rule) —
+opens norte's viewer at that line with the match highlighted; on a file,
+the pane goes to its folder with the cursor on it.
 
 ## Decisions taken
 

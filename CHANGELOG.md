@@ -15,11 +15,15 @@ independently through `PROTOCOL_VERSION`.
   stop typing, cancelling the previous run, and shows folder → file →
   every matching line with the match highlighted and centred, up to 50
   lines per file and then "+N more". Switches for case, whole word and
-  regex, and a fold of filters; in the terminal `F7` searches from the
-  current folder. Enter or a click on a line opens the viewer at it with
-  the match lit; on a file, the pane goes to its folder. Past 256 KiB the
-  viewer reads a window around the line ("lines from N"); UTF-16 and
-  multi-byte legacy encodings that large open at the top. The protocol
+  regex, and a fold of filters (exclusions, size, age, subfolders, kind,
+  encoding); the window's "Search here" button, or `F7` in the terminal,
+  moves the search to the current folder. Enter on a line opens the
+  viewer at it with the match lit, and so does a click in the window or
+  a second click on the selected row in the terminal; on a file, the
+  pane goes to its folder. Past 256 KiB the viewer reads a window around
+  the line ("lines from N"); when norte cannot tell where that line
+  starts (UTF-16 and some other encodings) it opens at the top and says
+  so. The protocol
   returns every matching line with its offset and ranges
   (`max_matches_per_file`), in batches bounded by the lines kept. The
   `Alt+F7` dialog is unchanged.
@@ -125,8 +129,11 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
-- In Spanish, the processes panel is called "Tareas" and the log panel
-  "Log".
+- In Spanish, the panel bar labels of the processes and log panels are
+  now "Tareas" and "Log"; the menus and help keep their names.
+- A 0.86 daemon sends every client — the `Alt+F7` dialog included — a
+  match's preview centred on the match, cut with `…` at either end when
+  the line is longer than 160 characters, instead of the line's head.
 - **The command palette is the search box with `>`.** Its keys are the
   same; go-to no longer mixes commands into its places list — type `>` for
   them. Krusader, Far, Norton and Total Commander still have no

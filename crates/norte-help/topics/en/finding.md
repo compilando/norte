@@ -93,7 +93,9 @@ not there.
 {{cmd:layout.search}} (`Alt+Shift+F`), the Search button in the rail, or Find →
 Search panel opens a panel that asks the same question as {{cmd:pane.search}}
 but keeps the answer in view. The panel searches the folder the listing was in
-when it opened; that folder is its root.
+when it opened; that folder is its root. It opens with the keyboard in its name
+field: Tab and Down go on to the text field and then to the results, and Escape
+gives the keys back to the listing.
 
 It searches as you type: a moment after you stop (about a third of a second) it
 starts, and if a search was still running it is cancelled first, so two never
@@ -102,10 +104,11 @@ arrive the old ones stay on screen, dimmed.
 
 Next to the text there are three switches: match case, whole word and regular
 expression. A fold below them holds the rest — skip folders, size, age,
-subfolders, kind of entry. In the terminal the switches are `F2` to `F6` as in
-the dialog, `F7` ("search here") moves the root to the folder the listing is in
-now, and `F8` opens or folds the filters. A regular expression that cannot be
-read is said so in the panel instead of searching.
+subfolders, kind of entry, the encoding to read text as. The "Search here"
+button moves the root to the folder the listing is in now; in the terminal that
+is `F7`, the switches are `F2` to `F6` as in the dialog, and `F8` opens or folds
+the filters. A regular expression that cannot be read is said so in the panel
+instead of searching.
 
 Results are a tree: folder, then file, then the lines that matched, each with
 the match highlighted and the line centred on it. A file shows up to 50 lines;
@@ -113,12 +116,14 @@ the rest are summed up as "+N more". Left and Right fold and unfold, and the
 status line says how many files and folders were reached while the walk is
 still going.
 
-Enter, or a click, on a line opens norte's viewer on that line with the match
-lit, scrolling sideways when the line is long. A very large file (over 256 KiB)
-opens on a window around the line, and the title says "lines from N"; a file in
-UTF-16, or in a multi-byte legacy encoding and that large, opens at the top
-instead. In the terminal, closing the viewer puts you back in the panel. Enter
-on a file takes the pane to its folder with the cursor on it.
+Enter on a line opens norte's viewer on that line with the match lit, scrolling
+sideways when the line is long. In the window a click does the same; in the
+terminal the first click selects the row and a second click on it — or a double
+click — opens it. A very large file (over 256 KiB) opens on a window around the
+line, and the title says "lines from N". When norte cannot tell where that line
+starts — UTF-16 and some other encodings — it opens at the top instead and says
+so. In the terminal, closing the viewer puts you back in the panel. Enter on a
+file takes the pane to its folder with the cursor on it.
 
 The {{cmd:pane.search}} dialog is still there, and it fills the pane with the
 hits as before.
