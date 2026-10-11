@@ -1071,8 +1071,8 @@ refresh = false
         );
         let ids = std::fs::read_to_string(d.path().join("ids")).unwrap();
         let mut it = ids.split_whitespace();
-        let (pid, pgid) = (it.next().unwrap(), it.next().unwrap());
-        assert_eq!(pid, pgid, "the child leads its own process group");
+        let (process, group) = (it.next().unwrap(), it.next().unwrap());
+        assert_eq!(process, group, "the child leads its own process group");
     }
 
     #[tokio::test]
