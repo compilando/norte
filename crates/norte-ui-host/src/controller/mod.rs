@@ -644,13 +644,15 @@ pub struct UiHost {
 
 /// What comes back from a listing: the token that requested it, the slot it
 /// goes to, the directory and the result.
-/// What the viewer requested: token, path, the header read and the plugin
-/// preview if one applied.
+/// What the viewer requested: token, path, the header read, the plugin
+/// preview if one applied, and where the read started with the search
+/// result it aims at, if it opened on one.
 type Content = (
     RequestToken,
     VPath,
     Result<Vec<u8>, Error>,
     Option<norte_proto::methods::PluginPreviewStyled>,
+    Option<(u64, norte_frontend::viewer::ViewerTarget)>,
 );
 
 /// The same, for the DOCKED viewer (#291): the slot that requested it goes
@@ -1522,13 +1524,15 @@ async fn actor(
                 }
             }
             Message::Content(data) => {
-                let (token, path, read, preview) = *data;
-                if let Some(u) = state.open_visor(token, path, read, preview, &backend, &mailbox) {
+                let (token, path, read, preview, aim) = *data;
+                if let Some(u) =
+                    state.open_visor(token, path, read, preview, aim.as_ref(), &backend, &mailbox)
+                {
                     let _ = updates.send(u);
                 }
             }
             Message::PreviewContent(data) => {
-                let (slot, (token, path, read, preview)) = *data;
+                let (slot, (token, path, read, preview, _)) = *data;
                 if let Some(u) = state.land_preview(slot, token, path, read, preview) {
                     let _ = updates.send(u);
                 }

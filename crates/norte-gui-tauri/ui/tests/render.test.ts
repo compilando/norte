@@ -26,6 +26,7 @@ import type {
   TerminalInstanceView,
   UiAction,
   ViewSnapshot,
+  ViewerView,
   WindowVerb,
 } from "../src/types";
 
@@ -1695,7 +1696,88 @@ describe("the mark checkbox", () => {
   });
 });
 
+/** A raw viewer, with what the test says changed. */
+function viewerView(over: Partial<ViewerView>): ViewerView {
+  return {
+    path_display: "⟨file⟩/casa/notas",
+    path_hostile: false,
+    encoding: "UTF-8",
+    eol: "lf",
+    hex: false,
+    forced: false,
+    had_errors: false,
+    truncated: false,
+    total_rows: 3,
+    first_line: 0,
+    total_cols: 0,
+    first_col: 0,
+    lines: [],
+    preview_by: "",
+    preview_lossy: false,
+    image: null,
+    image_refused: "",
+    image_zoom: 100,
+    styled: [],
+    lines_from: 1,
+    ...over,
+  };
+}
+
 describe("the viewer", () => {
+  it("a highlighted range is a <mark> over the right code points", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.viewer = viewerView({
+      lines: ["añ aguja fin"],
+      first_line: 0,
+      highlight: { row: 0, ranges: [[3, 8]] },
+    });
+    screen.paint(v);
+    expect(document.querySelector(".viewer mark")?.textContent).toBe("aguja");
+    expect(document.querySelector(".viewer-body")?.textContent).toBe("añ aguja fin");
+  });
+
+  it("counts an astral character as ONE position, and marks only the lit row", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.viewer = viewerView({
+      lines: ["uno", "😀 aguja", "tres"],
+      first_line: 4,
+      // Row 5 is the second line shown: `first_line` is the numbering.
+      highlight: { row: 5, ranges: [[2, 7]] },
+    });
+    screen.paint(v);
+    const marks = document.querySelectorAll(".viewer mark");
+    expect(marks).toHaveLength(1);
+    expect(marks[0]?.textContent).toBe("aguja");
+    expect(document.querySelector(".viewer-body")?.textContent).toBe(
+      "uno\n😀 aguja\ntres",
+    );
+  });
+
+  it("writes the file's text as text, never as markup", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.viewer = viewerView({
+      lines: ["<b>x</b> aguja"],
+      highlight: { row: 0, ranges: [[9, 14]] },
+    });
+    screen.paint(v);
+    expect(document.querySelector(".viewer-body b")).toBeNull();
+    expect(document.querySelector(".viewer mark")?.textContent).toBe("aguja");
+  });
+
+  it("says where a window past the head starts", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.viewer = viewerView({ lines: ["a"], lines_from: 3001 });
+    screen.paint(v);
+    expect(document.querySelector(".viewer-meta")?.textContent).toContain("3001");
+    v.viewer = viewerView({ lines: ["a"], lines_from: 1 });
+    screen.paint(v);
+    expect(document.querySelector(".viewer-meta")?.textContent).not.toContain("3001");
+  });
+
   it("covers the screen and says which encoding it's reading with", () => {
     const { screen, sent } = mount();
     const v = view({});

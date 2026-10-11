@@ -1323,6 +1323,15 @@
       "forced": false,
       "had_errors": false,
       "hex": false,
+      "highlight": {
+        "ranges": [
+          [
+            0,
+            6
+          ]
+        ],
+        "row": 4
+      },
       "image": {
         "format": "PNG",
         "height": 1080,
@@ -1333,6 +1342,7 @@
       "lines": [
         "quinta línea"
       ],
+      "lines_from": 3001,
       "path_display": "⟨file⟩/home/oscar/notas.txt",
       "path_hostile": false,
       "preview_by": "via PDF de ACME",

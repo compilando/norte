@@ -698,6 +698,8 @@ impl State {
                         .collect()
                 })
                 .unwrap_or_default(),
+            highlight: super::viewer::highlight_of(v),
+            lines_from: v.first_line(),
         }
     }
 

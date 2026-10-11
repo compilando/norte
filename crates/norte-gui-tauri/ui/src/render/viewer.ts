@@ -375,6 +375,13 @@ function viewerMarks(screen: Screen, viewer: ViewerView): string {
   if (viewer.truncated) {
     marks.push(screen.t("viewer-truncated"));
   }
+  const from = viewer.lines_from ?? 1;
+  if (from > 1) {
+    // A window past the head of a big file, numbered from its true line. The
+    // catalogue carries the string without arguments (Fluent writes a
+    // missing variable as `{ $n }`), so the number goes in here.
+    marks.push(screen.t("viewer-lines-from").replace(/\{\s*\$n\s*\}/u, String(from)));
+  }
   // The row and the COLUMN, in words: it is what whoever cannot see the bars
   // reads, since they are visual indicators and are `aria-hidden`.
   marks.push(

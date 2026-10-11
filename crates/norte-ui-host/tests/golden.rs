@@ -1286,6 +1286,14 @@ fn reference_viewer() -> norte_ui_host::dto::ViewerView {
                 bg: None,
             },
         ]],
+        // A result's lit span (bridge 111), on a window past the head: with
+        // `lines_from` 1 and no highlight the golden would not tell "it is
+        // set" from "the field does not exist".
+        highlight: Some(norte_ui_host::dto::HighlightView {
+            row: 4,
+            ranges: vec![(0, 6)],
+        }),
+        lines_from: 3001,
     }
 }
 
@@ -3222,7 +3230,7 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // `context_menu` change, the right-click menu.
     // 108 (spec 2026-10-09): `ViewSnapshot.palette` and the `palette`
     // change go; `app.palette` opens the go-to box with `>`.
-    const SHAPE: u64 = 12_326_835_412_188_999_390;
+    const SHAPE: u64 = 5_068_941_113_691_192_620;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

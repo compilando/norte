@@ -194,7 +194,7 @@ impl State {
                         let _ = mailbox
                             .send(Message::PreviewContent(Box::new((
                                 id,
-                                (token, path, read_bytes, preview),
+                                (token, path, read_bytes, preview, None),
                             ))))
                             .await;
                     });

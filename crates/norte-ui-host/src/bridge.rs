@@ -613,7 +613,9 @@ use serde::{Deserialize, Serialize};
 ///   (ADR 0177): how a user command run in the background ended. Sent by the
 ///   shell, never the renderer, like `program_finished`. (109 is another
 ///   branch's.)
-pub const BRIDGE_VERSION: u32 = 110;
+/// - **111**: `ViewerView.highlight` and `lines_from`; `SlotView::Search` and
+///   the `search_panel_*` actions: the search panel (spec 2026-10-09).
+pub const BRIDGE_VERSION: u32 = 111;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

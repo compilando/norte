@@ -1892,6 +1892,33 @@ pub struct ViewerView {
     /// painted it from day one and the window flattened it. A renderer that
     /// does not paint spans keeps using `lines` and loses nothing.
     pub styled: Vec<Vec<SpanView>>,
+    /// The line a search result lit, when the viewer opened on one (bridge
+    /// 111). `None` otherwise, and in hex or a plugin's preview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<HighlightView>,
+    /// The number of the buffer's first line: `1`, or N when the viewer
+    /// opened on a window past the head of a large file (bridge 111). The
+    /// title says "lines from N" when it is above 1.
+    #[serde(default = "one")]
+    pub lines_from: u64,
+}
+
+/// The lit line of a viewer opened from a search result (bridge 111).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HighlightView {
+    /// The line, 0-based, in the same numbering as [`ViewerView::first_line`]
+    /// (the buffer's rows): the row of [`ViewerView::lines`] it lands on is
+    /// `row - first_line`, when it is in sight.
+    pub row: u64,
+    /// `[start, end)` in CHARS (code points, not UTF-16 units) of that
+    /// row's text in `lines`.
+    pub ranges: Vec<(u32, u32)>,
+}
+
+/// The first line's number for [`ViewerView::lines_from`]'s `serde(default)`:
+/// a host older than bridge 111 sent no window, so it was the head.
+const fn one() -> u64 {
+    1
 }
 
 /// The zoom that means FIT, for [`ViewerView::image_zoom`]'s

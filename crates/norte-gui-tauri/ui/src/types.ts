@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 110;
+export const BRIDGE_VERSION = 111;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -922,6 +922,21 @@ export interface ViewerView {
    * view, and then `lines` is painted.
    */
   styled: SpanView[][];
+  /** The line a search result lit (bridge 111). Absent when nothing is lit. */
+  highlight?: HighlightView;
+  /**
+   * The number of the buffer's first line: 1, or N for a window past the head
+   * (bridge 111). The host always sends it; absent reads as 1.
+   */
+  lines_from?: number;
+}
+
+/** The lit line of a viewer opened from a search result (bridge 111). */
+export interface HighlightView {
+  /** 0-based, in the numbering of `first_line`: the row of `lines` it lands on is `row - first_line`. */
+  row: number;
+  /** `[start, end)` in CODE POINTS (not UTF-16 units) of that row's text. */
+  ranges: [number, number][];
 }
 
 /**

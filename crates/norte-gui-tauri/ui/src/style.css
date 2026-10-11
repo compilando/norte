@@ -1972,6 +1972,12 @@ button.status-item:hover {
   unicode-bidi: bidi-override;
 }
 
+/* What a search result lit in the viewer (bridge 111). */
+.viewer-body mark {
+  background: var(--mark-bg);
+  color: inherit;
+}
+
 /* The viewer's bars: INDICATORS, not controls. The host only sends the
    visible window, so there is nothing the browser's scroll could move; what
    is missing is saying how much there is and how far along you are. */
