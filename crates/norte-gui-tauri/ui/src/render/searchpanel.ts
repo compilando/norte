@@ -105,6 +105,8 @@ export function paintSearchPanel(
     const own = c.lastCursor === null || !renumbered || wasInView;
     if (!own) {
       c.lastCursor = slot.cursor;
+      // A key press in the same frame made the host forget the window too.
+      c.lastRange = null;
     } else if (revealCursor(c, slot.cursor, h)) {
       c.lastCursor = slot.cursor;
       // A key that moved the cursor made the host forget the window (it
@@ -574,11 +576,6 @@ function positionsOf(text: string, ranges: readonly [number, number][]): number[
   return out;
 }
 
-/**
- * Brings the cursor's row into the scroller, and nothing else moves. False
- * when it could not (no cursor, or the scroller has no height yet): the
- * caller asks again on the next paint.
- */
 /** Is row `cursor` wholly inside the scroller's viewport? */
 function inView(c: Controls, cursor: number | null, h: number): boolean {
   if (cursor === null) {
@@ -590,6 +587,11 @@ function inView(c: Controls, cursor: number | null, h: number): boolean {
   );
 }
 
+/**
+ * Brings the cursor's row into the scroller, and nothing else moves. False
+ * when it could not (no cursor, or the scroller has no height yet): the
+ * caller asks again on the next paint.
+ */
 function revealCursor(c: Controls, cursor: number | null, h: number): boolean {
   const view = c.scroll.clientHeight;
   if (cursor === null) {
