@@ -3357,9 +3357,9 @@ pub struct MatchInfo {
     /// reads from the top.
     ///
     /// Exact on the literal path. On the decoded path (regex, UTF-16) it is
-    /// counted over the decoded text: exact for UTF-8, UTF-16 and
-    /// single-byte encodings, absent for multi-byte legacy ones (`Shift_JIS`,
-    /// GBK…), and shifted by up to two bytes per invalid UTF-8 byte before the
+    /// counted over the decoded text: exact for UTF-8 and single-byte
+    /// encodings, absent for UTF-16 and for multi-byte legacy ones
+    /// (`Shift_JIS`, GBK…), and shifted by up to two bytes per invalid UTF-8 byte before the
     /// match (each decodes to a three-byte `U+FFFD`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<u64>,

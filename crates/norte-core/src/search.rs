@@ -1488,7 +1488,9 @@ async fn scan_decode_lines(
     // names: offsets start past it, counted in that encoding.
     let bom = Encoding::for_bom(&first);
     let enc_for_offsets = bom.map_or(enc, |(e, _)| e);
-    let mut offset: Option<u64> = Some(bom.map_or(0, |(_, n)| n as u64));
+    // No offsets for UTF-16 at all (see `encoded_len`), not even line one's.
+    let mut offset: Option<u64> =
+        encoded_len("", enc_for_offsets).map(|_| bom.map_or(0, |(_, n)| n as u64));
     let mut decoder = norte_encoding::StreamDecoder::new(enc);
     let mut pending = String::new();
     let mut line_no: u64 = 0;
@@ -1565,13 +1567,18 @@ async fn scan_decode_lines(
     }
 }
 
-/// Bytes `text` took in `enc`: exact for UTF-8, UTF-16 and single-byte
-/// encodings, `None` for the rest (`MatchInfo::offset`).
+/// Bytes `text` took in `enc`: exact for UTF-8 and single-byte encodings,
+/// `None` for the rest (`MatchInfo::offset`).
+///
+/// `None` for UTF-16 too, although it could be counted: a viewer that reads
+/// a window from the middle of a UTF-16 file gets no BOM, cuts on a `0x0A`
+/// byte that may be half a code unit and detects the window as binary. With
+/// no offset it reads from the top, which is right up to its cap.
 fn encoded_len(text: &str, enc: &'static Encoding) -> Option<u64> {
     if enc == norte_encoding::UTF_8 {
         Some(text.len() as u64)
     } else if is_utf16(enc) {
-        Some(2 * text.encode_utf16().count() as u64)
+        None
     } else if enc.is_single_byte() {
         Some(text.chars().count() as u64)
     } else {
@@ -2601,9 +2608,10 @@ mod tests {
         assert_eq!(f.lines[0].ranges, Some(vec![(0, 3), (6, 9)]));
     }
 
-    /// UTF-16 with a BOM: the offset counts the BOM and two bytes per unit.
+    /// UTF-16 with a BOM: no offset (a window from the middle would not
+    /// decode), but the line and the ranges are there.
     #[test]
-    fn utf16_offsets_count_the_bom_and_code_units() {
+    fn utf16_has_no_offsets() {
         let mut bytes = vec![0xFF, 0xFE];
         for u in "uno\nhay año\n".encode_utf16() {
             bytes.extend_from_slice(&u.to_le_bytes());
@@ -2611,7 +2619,7 @@ mod tests {
         let enc = Encoding::for_label(b"utf-16le").expect("utf-16le");
         let re = spans_for("año", true);
         let f = decode_with(enc, &bytes, &re, ALL);
-        assert_eq!((f.lines[0].line, f.lines[0].offset), (Some(2), Some(2 + 8)));
+        assert_eq!((f.lines[0].line, f.lines[0].offset), (Some(2), None));
         assert_eq!(f.lines[0].ranges, Some(vec![(4, 7)]));
     }
 
