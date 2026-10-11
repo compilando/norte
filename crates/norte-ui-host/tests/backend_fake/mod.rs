@@ -400,6 +400,16 @@ pub struct Fake {
     /// gate is taken, so later calls are not held): the window where the
     /// forwarder has not yet learned the task's id.
     pub search_ack_gate: std::sync::Mutex<Option<Arc<tokio::sync::Notify>>>,
+    /// What EVERY later search answers, whatever its pattern: one batch
+    /// carrying lines (`all_matches`), the shape the search panel asks for.
+    /// `None` = the `findings` table, by glob.
+    pub search_answer: std::sync::Mutex<Option<norte_proto::methods::SearchHits>>,
+    /// A search keeps walking until it is CANCELLED: no terminal progress
+    /// and the batch channel open until then, the way a daemon walks a big
+    /// tree. Off = it completes at once.
+    pub search_runs_until_cancelled: bool,
+    /// The byte ranges `read` was asked for, in order.
+    pub reads: std::sync::Mutex<Vec<(VPath, Option<norte_proto::ByteRange>)>>,
     /// How many times the volumes have been enumerated.
     ///
     /// It counts this so a NEGATIVE test can anchor on it: "the dialog says
@@ -613,6 +623,16 @@ impl Fake {
     /// between frontends could not be written as a test.
     pub fn put_kind(&mut self, wire: &str, kind: EntryKind) {
         self.kinds.insert(wire.to_owned(), kind);
+    }
+
+    /// Every later search answers `hits`, whatever it asks for.
+    pub fn answer_search_with(&self, hits: norte_proto::methods::SearchHits) {
+        *self.search_answer.lock().expect("answer mutex") = Some(hits);
+    }
+
+    /// How many searches have been launched against this double.
+    pub fn searches_launched(&self) -> usize {
+        self.params_search.lock().expect("params mutex").len()
     }
 
     /// Arms the NEXT `log.tail` response (#328).
@@ -898,6 +918,42 @@ fn other_spelling(path: &VPath) -> VPath {
     }
 }
 
+/// The one batch a search of Task `id` sends: the armed answer, or the
+/// glob's findings.
+///
+/// An EMPTY batch is not sent: `norte-core` cuts it off before (`if
+/// batch.is_empty() { return FlushOutcome::Continue }`), and a double that
+/// did send it would hide everything that depends on the first batch
+/// arriving. This is the divergence that covered up a search with no hits
+/// never getting cancelled.
+fn search_batch(
+    id: norte_proto::TaskId,
+    answer: Option<norte_proto::methods::SearchHits>,
+    findings: Vec<VPath>,
+) -> Option<norte_proto::methods::SearchHits> {
+    if let Some(mut hits) = answer {
+        hits.task_id = id;
+        return Some(hits);
+    }
+    let entries: Vec<Entry> = findings
+        .into_iter()
+        .map(|path| Entry {
+            path,
+            kind: EntryKind::File,
+            size: Some(1),
+            mtime_ms: Some(0),
+            attrs: std::collections::BTreeMap::new(),
+        })
+        .collect();
+    (!entries.is_empty()).then_some(norte_proto::methods::SearchHits {
+        task_id: id,
+        entries,
+        matches: None,
+        all_matches: None,
+        more: None,
+    })
+}
+
 /// The tree the parity scenarios use: a directory with two subdirectories
 /// and a hostile name.
 pub fn test_tree() -> Fake {
@@ -1030,17 +1086,28 @@ impl HostBackend for Fake {
             return Box::pin(async move { Err(e) });
         }
         let findings = self.findings.get(&patron).cloned().unwrap_or_default();
+        let answer = self.search_answer.lock().expect("answer mutex").clone();
         let outcome = self
             .search_outcome
             .clone()
             .unwrap_or(norte_proto::TaskState::Completed);
         let cancellations = Arc::clone(&self.cancellations);
         let gate = self.search_ack_gate.lock().expect("gate mutex").take();
+        // One id per search, from 77: two runs that share an id would share
+        // a row of the board, and the panel's one-row rule would pass by
+        // accident.
+        let launched = self.params_search.lock().expect("params mutex").len();
+        let id = norte_proto::TaskId::new(76 + u64::try_from(launched).unwrap_or(0));
+        let batch = search_batch(id, answer, findings);
+        // Held: the walk ends when it is cancelled, not before.
+        let stop = self
+            .search_runs_until_cancelled
+            .then(|| Arc::new(tokio::sync::Notify::new()));
+        let stop_walk = stop.clone();
         Box::pin(async move {
             if let Some(gate) = gate {
                 gate.notified().await;
             }
-            let id = norte_proto::TaskId::new(77);
             let (tx, rx) = tokio::sync::mpsc::channel(8);
             let (ptx, prx) = tokio::sync::watch::channel(norte_proto::TaskProgress {
                 task_id: id,
@@ -1055,33 +1122,18 @@ impl HostBackend for Fake {
                 unvisited: None,
             });
             tokio::spawn(async move {
-                let entries: Vec<norte_proto::Entry> = findings
-                    .into_iter()
-                    .map(|path| norte_proto::Entry {
-                        path,
-                        kind: norte_proto::EntryKind::File,
-                        size: Some(1),
-                        mtime_ms: Some(0),
-                        attrs: std::collections::BTreeMap::new(),
-                    })
-                    .collect();
-                // An EMPTY batch is not sent: `norte-core` cuts it off
-                // before (`if batch.is_empty() { return
-                // FlushOutcome::Continue }`), and a double that did send it
-                // would hide everything that depends on the first batch
-                // arriving. This is the divergence that covered up a search
-                // with no hits never getting cancelled.
-                if !entries.is_empty() {
-                    let _ = tx
-                        .send(norte_proto::methods::SearchHits {
-                            task_id: id,
-                            entries,
-                            matches: None,
-                            all_matches: None,
-                            more: None,
-                        })
-                        .await;
+                if let Some(batch) = batch {
+                    let _ = tx.send(batch).await;
                 }
+                // A held walk goes on until it is cancelled, and THAT is how
+                // it ends.
+                let outcome = match stop_walk {
+                    Some(stop) => {
+                        stop.notified().await;
+                        norte_proto::TaskState::Cancelled
+                    }
+                    None => outcome,
+                };
                 // And it ends: the view stops saying "searching…". WITH its
                 // outcome, which is not cosmetic — "finished", "was
                 // stopped" and "broke" say three different things about the
@@ -1108,6 +1160,9 @@ impl HostBackend for Fake {
                     progress: prx,
                     cancel: Arc::new(move || {
                         cancellations.fetch_add(1, Ordering::SeqCst);
+                        if let Some(stop) = &stop {
+                            stop.notify_one();
+                        }
                     }),
                     pause: None,
                     cola: None,
@@ -1467,6 +1522,10 @@ impl HostBackend for Fake {
         range: Option<norte_proto::ByteRange>,
     ) -> BoxFuture<'static, Result<Vec<u8>, Error>> {
         let bytes = self.content.get(&path.to_wire()).cloned();
+        self.reads
+            .lock()
+            .expect("reads mutex")
+            .push((path.clone(), range));
         let delay = self.delay_ms;
         self.requests.fetch_add(1, Ordering::SeqCst);
         let served = Arc::clone(&self.served);

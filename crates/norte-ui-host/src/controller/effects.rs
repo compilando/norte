@@ -83,6 +83,11 @@ impl State {
         if self.the_line_has_focus() && matches!(effect, Effect::Enter) {
             return self.ask_undo_until();
         }
+        // `Enter` on the search panel's results: the cursor's row does what
+        // its kind does — fold, go to the file, open the line.
+        if self.search_panel_has_focus() && matches!(effect, Effect::Enter) {
+            return self.search_panel_enter(backend, mailbox);
+        }
         // Space, like Quick Look: the cursor row's details (2026-10-08).
         if self.the_line_has_focus() && matches!(effect, Effect::Mark) {
             return self.show_timeline_details(None);

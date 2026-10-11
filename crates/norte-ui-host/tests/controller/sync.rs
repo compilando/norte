@@ -4081,25 +4081,26 @@ async fn the_pane_bar_shows_the_panes_and_a_click_opens_them() {
     );
 }
 
-/// `layout.search` places a slot of the `search` kind (projected as
-/// unsupported until the window paints it) and, again, takes it away.
+/// `layout.search` places the search panel, rooted at the listing's folder,
+/// and, again, takes it away.
 #[tokio::test]
 async fn layout_search_toggles_a_search_slot() {
     let (h, _snap) = host_tree(fake_tree()).await;
     let mut sub = h.subscribe();
     run_by_palette(&h, &mut sub, "layout.search").await;
-    let () = snapshot_until(&h, &mut sub, "the search slot", |s| {
-        s.slots
-            .iter()
-            .any(|v| matches!(v, SlotView::Unsupported { kind_name, .. } if kind_name == "search"))
-            .then_some(())
+    let root = snapshot_until(&h, &mut sub, "the search slot", |s| {
+        s.slots.iter().find_map(|v| match v {
+            SlotView::Search(p) => Some(p.root.clone()),
+            _ => None,
+        })
     })
     .await;
+    assert!(root.ends_with("/casa"), "{root}");
     run_by_palette(&h, &mut sub, "layout.search").await;
     let () = snapshot_until(&h, &mut sub, "the search slot gone", |s| {
         s.slots
             .iter()
-            .all(|v| !matches!(v, SlotView::Unsupported { kind_name, .. } if kind_name == "search"))
+            .all(|v| !matches!(v, SlotView::Search(_)))
             .then_some(())
     })
     .await;

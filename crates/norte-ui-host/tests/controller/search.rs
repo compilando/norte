@@ -372,10 +372,6 @@ async fn cancellations_reach(backend: &Fake, n: usize) {
 /// Letting go of a search before the daemon has acknowledged it still
 /// cancels it, as soon as it lands (`abandoned`): the forwarder is the only
 /// one who knows the id by then.
-///
-/// (Relaunching over an open search view is not reachable through the
-/// window's dialog today — the view keeps the keys — so this exercises the
-/// same `abandon_search` path through `Escape`.)
 #[tokio::test]
 async fn closing_a_search_before_the_id_is_known_still_cancels() {
     let backend = tree_with_findings("*.txt", &["mem:///casa/notas.txt"]);
@@ -393,6 +389,76 @@ async fn closing_a_search_before_the_id_is_known_still_cancels() {
     );
     gate.notify_one();
     cancellations_reach(&backend, 1).await;
+}
+
+/// A search launched over an open one CANCELS the one it replaces: the
+/// daemon stops walking, not only the epoch stops listening.
+///
+/// The keys cannot do it — the open view keeps them — but the menu bar
+/// can: `Find › Search` opens the dialog over the view.
+#[tokio::test]
+async fn a_search_launched_over_an_open_one_cancels_it() {
+    let backend = tree_with_findings("*.txt", &["mem:///casa/notas.txt"]);
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
+    let mut sub = h.subscribe();
+
+    let _ = search(&h, &mut sub, "*.txt").await;
+    // The first one's Task is known: its row is on the board, and the
+    // forwarder named it to the view right behind it.
+    snapshot_until(&h, &mut sub, "the first search on the board", |s| {
+        s.tasks.iter().any(|t| t.kind == "search").then_some(())
+    })
+    .await;
+    assert_eq!(backend.cancellations.load(Ordering::SeqCst), 0);
+
+    let (menu, row) = norte_frontend::menu::MENUS
+        .iter()
+        .enumerate()
+        .find_map(|(m, menu)| {
+            menu.items()
+                .position(|c| c == "pane.search")
+                .map(|r| (m, r))
+        })
+        .expect("the menu bar offers the search");
+    h.dispatch(UiAction::MenuOpen {
+        menu: u32::try_from(menu).expect("fits"),
+    })
+    .await
+    .expect("host alive");
+    h.dispatch(UiAction::MenuActivateRow {
+        row: u32::try_from(row).expect("fits"),
+    })
+    .await
+    .expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = next_snapshot(&mut sub).await;
+    assert!(snap.search.is_some(), "the first view is still open");
+    let dialog = snap
+        .dialogs
+        .iter()
+        .find(|d| !d.fields.is_empty())
+        .expect("the search prompt opened over the view");
+    h.dispatch(UiAction::DialogField {
+        id: dialog.id,
+        field: "name".to_owned(),
+        value: norte_ui_host::action::DialogFieldValue::Text {
+            text: "*.md".to_owned(),
+        },
+    })
+    .await
+    .expect("host alive");
+    h.dispatch(UiAction::Dialog {
+        id: dialog.id,
+        choice: "confirm".to_owned(),
+        secret: None,
+    })
+    .await
+    .expect("host alive");
+    assert_eq!(
+        backend.cancellations.load(Ordering::SeqCst),
+        1,
+        "the replaced search's Task is cancelled as the new one launches"
+    );
 }
 
 /// A stray batch from the PREVIOUS search does not fill the new one's list.

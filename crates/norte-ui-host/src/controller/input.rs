@@ -426,7 +426,7 @@ impl State {
         if let Some(outcome) = self.key_in_terminal(k, backend, mailbox) {
             return outcome;
         }
-        if let Some(outcome) = self.escape_from_side_panel(k) {
+        if let Some(outcome) = self.key_in_side_panel(k) {
             return outcome;
         }
         let Ok(chord) = k.to_chord() else {
@@ -526,6 +526,16 @@ impl State {
             }
             Resolution::Reset => self.key_missed(idle, chord),
         }
+    }
+
+    /// The keys a focused side panel keeps before any keymap: the search
+    /// panel's ←/→ fold its results, and `Escape` leaves any of them.
+    fn key_in_side_panel(
+        &mut self,
+        k: &crate::keys::KeyInput,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        self.key_in_search_panel(k)
+            .or_else(|| self.escape_from_side_panel(k))
     }
 
     /// `Escape` with a side panel focused gives the keys back to the listing.

@@ -65,6 +65,7 @@ mod places;
 mod preview;
 mod profiles;
 mod search;
+mod searchpanel;
 mod selectors;
 mod session;
 mod settings;
@@ -879,6 +880,10 @@ enum Message {
     /// EPOCH of the opening that scheduled it: one from a previous opening
     /// is left to die instead of rearming forever.
     LogTic(u64),
+    /// The search panel's pause may be over (C5: the host has no tick, so
+    /// each edit schedules one of these). The model decides whether it IS
+    /// over: only the last edit's pause launches.
+    SearchPanelTic,
     /// What the daemon answered to `log.tail` (#328), with the EPOCH of the
     /// opening that requested it.
     ///
@@ -1200,6 +1205,17 @@ enum Background {
     /// about a search that does not exist, while the error passed through
     /// the status bar and the next key swept it away.
     SearchBroken(u64, Box<Error>),
+    /// A batch of the search panel's run `epoch`.
+    SearchPanelHits(u64, Box<norte_proto::methods::SearchHits>),
+    /// The search panel's run `epoch` has a Task: this is its id. Arrives
+    /// right after its `TaskNew`, so the row is on the board by then.
+    SearchPanelLive(u64, norte_proto::TaskId),
+    /// The search panel's run `epoch` never got queued, and why.
+    SearchPanelBroken(u64, Box<Error>),
+    /// The search panel's run `epoch` sent its last batch: how its Task
+    /// stood when the channel closed. Through the forwarder and not the
+    /// board's progress, so it lands AFTER the run's last batch.
+    SearchPanelEnded(u64, Box<norte_proto::TaskState>),
     /// The volumes, requested by the SIDE PANEL.
     ///
     /// Separate from the selector's for the same reason as the two plugin
@@ -1292,7 +1308,7 @@ impl UiHost {
         // hand: the tree anchors, the log polls, the terminal gets its
         // shell. Placed and never started, they came up blank — the tree
         // empty, the terminal saying "no shell" (2026-10-08).
-        for kind in ["tree", logpanel::KIND] {
+        for kind in ["tree", logpanel::KIND, searchpanel::KIND] {
             if state.slot_of_kind(kind).is_some() {
                 state.after_opening(kind, &backend, &tx2);
             }
@@ -1504,6 +1520,11 @@ async fn actor(
             }
             Message::LogTic(epoch) => {
                 for u in state.log_tick(epoch, &backend, &mailbox) {
+                    let _ = updates.send(u);
+                }
+            }
+            Message::SearchPanelTic => {
+                for u in state.search_panel_tick(&backend, &mailbox) {
                     let _ = updates.send(u);
                 }
             }
@@ -2888,6 +2909,9 @@ struct State {
     /// lowering the second does not stop capturing. Duplicating it here would
     /// have meant duplicating those two.
     log_panel: norte_frontend::logpanel::LogPanel,
+    /// The search panel's slot and state, while one is open: the SAME model
+    /// as the terminal's, and the run in flight.
+    search_panel: Option<(u32, searchpanel::PanelState)>,
     /// The ring the lines come from. `None` = this process did not mount it,
     /// and then the panel SAYS so instead of showing itself empty as if
     /// nothing had happened.
@@ -3426,6 +3450,7 @@ impl State {
             gen_profiles: 0,
             cursor_processes: norte_frontend::processes::Processes::default(),
             log_panel: norte_frontend::logpanel::LogPanel::default(),
+            search_panel: None,
             log_ring,
             // One until the first frame tells the truth: never zero, so a
             // page keypress before painting moves something instead of
@@ -4254,6 +4279,15 @@ impl State {
             }
             UiAction::LayoutActivateRow { row } => self.choose_layout(*row, backend, mailbox),
             UiAction::SearchActivateRow { row } => self.go_to_result(*row, backend, mailbox),
+            UiAction::SearchPanelEdit { .. }
+            | UiAction::SearchPanelGo { .. }
+            | UiAction::SearchPanelReroot { .. }
+            | UiAction::SearchPanelFilters { .. }
+            | UiAction::SearchPanelActivate { .. }
+            | UiAction::SearchPanelFold { .. }
+            | UiAction::SearchPanelVisibleRange { .. } => {
+                self.search_panel_action(action, backend, mailbox)
+            }
             UiAction::HelpActivate { index } => self.activate_in_help(*index, backend, mailbox),
             // The rest was handled by `apply`; getting here would be an arm
             // it forgot, and answering `Applied` to something that was not

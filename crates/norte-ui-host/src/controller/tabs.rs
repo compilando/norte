@@ -508,6 +508,11 @@ impl State {
             self.seed_branches();
             self.request_branches(backend, mailbox);
         }
+        if kind == super::searchpanel::KIND {
+            // Rooted at the focused listing's folder; a restored panel
+            // starts here too, once the session has said where that is.
+            self.reconcile_search_panel(mailbox);
+        }
         if kind == super::logpanel::KIND {
             // And the log starts polling: the panel promises it FOLLOWS what
             // arrives, and this window only repaints when someone does

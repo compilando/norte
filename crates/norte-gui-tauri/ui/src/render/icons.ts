@@ -18,6 +18,7 @@ import log from "../../../../norte-frontend/assets/panel-icons/log.svg?raw";
 import metadata from "../../../../norte-frontend/assets/panel-icons/metadata.svg?raw";
 import places from "../../../../norte-frontend/assets/panel-icons/places.svg?raw";
 import processes from "../../../../norte-frontend/assets/panel-icons/processes.svg?raw";
+import search from "../../../../norte-frontend/assets/panel-icons/search.svg?raw";
 import timeline from "../../../../norte-frontend/assets/panel-icons/timeline.svg?raw";
 import tree from "../../../../norte-frontend/assets/panel-icons/tree.svg?raw";
 import viewer from "../../../../norte-frontend/assets/panel-icons/viewer.svg?raw";
@@ -42,6 +43,7 @@ const PANEL_SVG: Record<string, string> = {
   "disk-map": diskMap,
   timeline,
   terminal,
+  search,
   // The column's foot (bridge 101), not panels.
   settings,
   help,

@@ -224,6 +224,13 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::PlaceActivateRow { .. } => "place_activate_row",
         UiAction::LayoutActivateRow { .. } => "layout_activate_row",
         UiAction::SearchActivateRow { .. } => "search_activate_row",
+        UiAction::SearchPanelEdit { .. } => "search_panel_edit",
+        UiAction::SearchPanelGo { .. } => "search_panel_go",
+        UiAction::SearchPanelReroot { .. } => "search_panel_reroot",
+        UiAction::SearchPanelFilters { .. } => "search_panel_filters",
+        UiAction::SearchPanelActivate { .. } => "search_panel_activate",
+        UiAction::SearchPanelFold { .. } => "search_panel_fold",
+        UiAction::SearchPanelVisibleRange { .. } => "search_panel_visible_range",
         UiAction::AiRenameDecide { .. } => "ai_rename_decide",
         UiAction::OrganizeDecide { .. } => "organize_decide",
         UiAction::OrganizeScroll { .. } => "organize_scroll",
@@ -565,6 +572,50 @@ fn overlay_actions() -> Vec<(&'static str, UiAction)> {
         (
             "search_activate_row",
             UiAction::SearchActivateRow { row: 2 },
+        ),
+        // Bridge 111: the search panel's seven. The edit carries a text, the
+        // field the dialog's ids name; the rest name the slot and a row.
+        (
+            "search_panel_edit",
+            UiAction::SearchPanelEdit {
+                slot_id: 15,
+                field: "content".to_owned(),
+                value: DialogFieldValue::Text {
+                    text: "aguja".to_owned(),
+                },
+            },
+        ),
+        ("search_panel_go", UiAction::SearchPanelGo { slot_id: 15 }),
+        (
+            "search_panel_reroot",
+            UiAction::SearchPanelReroot { slot_id: 15 },
+        ),
+        (
+            "search_panel_filters",
+            UiAction::SearchPanelFilters { slot_id: 15 },
+        ),
+        (
+            "search_panel_activate",
+            UiAction::SearchPanelActivate {
+                slot_id: 15,
+                row: 2,
+            },
+        ),
+        (
+            "search_panel_fold",
+            UiAction::SearchPanelFold {
+                slot_id: 15,
+                row: 0,
+                open: false,
+            },
+        ),
+        (
+            "search_panel_visible_range",
+            UiAction::SearchPanelVisibleRange {
+                slot_id: 15,
+                first: 40,
+                count: 30,
+            },
         ),
         ("help_select_topic", UiAction::HelpSelectTopic { row: 3 }),
         ("help_activate", UiAction::HelpActivate { index: 1 }),
@@ -1189,6 +1240,16 @@ fn reference_placements() -> Vec<SlotPlacement> {
             role: None,
             focus_index: 12,
         },
+        // The search panel (bridge 111), a column of its own.
+        SlotPlacement {
+            slot_id: 15,
+            x: 150,
+            y: 0,
+            width: 30,
+            height: 38,
+            role: None,
+            focus_index: 13,
+        },
         SlotPlacement {
             slot_id: 8,
             x: 0,
@@ -1563,6 +1624,61 @@ fn reference_slots() -> Vec<SlotView> {
             cursor: Some(1),
             empty: "todavía no se ha hecho nada".to_owned(),
             footer: "1 entradas se deshacen".to_owned(),
+        })),
+        // The search panel (bridge 111): one row of each kind, a hostile
+        // name, a field that cannot be read, and a window that does not
+        // start at the top — the renderer offsets rows by `first_row`.
+        SlotView::Search(Box::new(norte_ui_host::dto::SearchPanelSlotView {
+            slot_id: 15,
+            title: "Buscar".to_owned(),
+            root: "/casa".to_owned(),
+            root_hostile: false,
+            fields: vec![
+                norte_ui_host::dto::DialogFieldView {
+                    id: "content".to_owned(),
+                    label_key: "search-content".to_owned(),
+                    value: "aguja".to_owned(),
+                    hostile: false,
+                    kind: norte_ui_host::dto::DialogFieldKind::Text,
+                },
+                norte_ui_host::dto::DialogFieldView {
+                    id: "regex".to_owned(),
+                    label_key: "search-toggle-regex".to_owned(),
+                    value: String::new(),
+                    hostile: false,
+                    kind: norte_ui_host::dto::DialogFieldKind::Toggle { on: true },
+                },
+            ],
+            filters_open: true,
+            filters_set: 1,
+            unreadable: Some("min-size".to_owned()),
+            status: "1 fichero en 1 carpeta · buscando…".to_owned(),
+            running: true,
+            dimmed: true,
+            first_row: 1,
+            total_rows: 5,
+            rows: vec![
+                norte_ui_host::dto::SearchPanelRowView::Folder {
+                    path: "docs".to_owned(),
+                    hostile: false,
+                    count: 1,
+                    open: true,
+                },
+                norte_ui_host::dto::SearchPanelRowView::File {
+                    name: "caf\u{fffd}.txt".to_owned(),
+                    hostile: true,
+                    count: 52,
+                },
+                norte_ui_host::dto::SearchPanelRowView::Line {
+                    line: 7,
+                    preview: "x aguja".to_owned(),
+                    ranges: vec![(2, 7)],
+                },
+                norte_ui_host::dto::SearchPanelRowView::More {
+                    label: "+2 más".to_owned(),
+                },
+            ],
+            cursor: Some(3),
         })),
         // A PLUGIN's panel (phase 3): styled spans and zones WITHOUT their
         // command — the renderer says where it was clicked and the host
@@ -3230,7 +3346,9 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // `context_menu` change, the right-click menu.
     // 108 (spec 2026-10-09): `ViewSnapshot.palette` and the `palette`
     // change go; `app.palette` opens the go-to box with `>`.
-    const SHAPE: u64 = 5_068_941_113_691_192_620;
+    // 111 (spec 2026-10-09): `ViewerView.highlight`/`.lines_from`, and
+    // `SlotView::Search` with its rows, the search panel.
+    const SHAPE: u64 = 1_408_676_155_775_652_974;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

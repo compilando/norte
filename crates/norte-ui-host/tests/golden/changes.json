@@ -639,6 +639,15 @@
         "y": 20
       },
       {
+        "focus_index": 13,
+        "height": 38,
+        "role": null,
+        "slot_id": 15,
+        "width": 30,
+        "x": 150,
+        "y": 0
+      },
+      {
         "focus_index": 5,
         "height": 2,
         "role": null,

@@ -1,0 +1,397 @@
+use super::*;
+
+// ---------------------------------------------------------------------------
+// The search panel (spec 2026-10-09): the window runs the shared model —
+// the pause, the runs, one board row — and projects it as `SlotView::Search`.
+//
+// On a STOPPED clock (`start_paused`): the pause is 300 ms of tokio's time,
+// and `advance` skips it instead of waiting for it.
+// ---------------------------------------------------------------------------
+
+use std::time::Duration;
+
+use norte_frontend::search_panel::DEBOUNCE;
+use norte_ui_host::action::DialogFieldValue;
+use norte_ui_host::dto::{SearchPanelRowView, SearchPanelSlotView};
+
+/// A host and what it is driven with.
+struct Harness {
+    h: UiHost,
+}
+
+impl Harness {
+    /// One action, answered.
+    async fn act(&mut self, action: UiAction) -> ActionAck {
+        self.h.dispatch(action).await.expect("host alive")
+    }
+
+    /// Opens (or, pressed again, closes) the panel of `command`
+    /// (`layout.<kind>`) by its button in the panel bar, the way a click
+    /// does; returns the slot of that kind, or 0 if there is none now.
+    async fn open_slot(&mut self, command: &str) -> u32 {
+        let kind = command.strip_prefix("layout.").expect("a layout command");
+        let snap = self.snapshot().await;
+        let button = snap
+            .panel_bar
+            .buttons
+            .iter()
+            .position(|b| b.kind == kind)
+            .unwrap_or_else(|| panic!("`{kind}` is not in the panel bar"));
+        self.act(UiAction::PanelBarActivate {
+            button: u32::try_from(button).expect("fits"),
+        })
+        .await;
+        self.settle().await;
+        self.snapshot()
+            .await
+            .slots
+            .iter()
+            .find_map(|s| match s {
+                SlotView::Search(p) => Some(p.slot_id),
+                _ => None,
+            })
+            .unwrap_or(0)
+    }
+
+    /// Until the executor has nothing left ready. On the stopped clock a
+    /// sleep only ends once every task is waiting on something.
+    async fn settle(&mut self) {
+        for _ in 0..3 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+
+    /// The whole screen, now.
+    async fn snapshot(&mut self) -> norte_ui_host::ViewSnapshot {
+        let mut sub = self.h.subscribe();
+        self.act(UiAction::Resync).await;
+        next_snapshot(&mut sub).await
+    }
+
+    /// Slot `id`'s view, now.
+    async fn slot(&mut self, id: u32) -> SlotView {
+        let wanted = id;
+        self.snapshot()
+            .await
+            .slots
+            .into_iter()
+            .find(|s| matches!(s, SlotView::Search(p) if p.slot_id == wanted))
+            .unwrap_or_else(|| panic!("no search slot {id}"))
+    }
+
+    /// The search panel's view, now.
+    async fn panel(&mut self, id: u32) -> SearchPanelSlotView {
+        let SlotView::Search(s) = self.slot(id).await else {
+            panic!("search slot")
+        };
+        *s
+    }
+}
+
+/// The double the panel tests run on: the usual tree, and searches that
+/// walk until they are cancelled.
+fn panel_fake() -> Fake {
+    let mut f = tree_as_fake();
+    f.search_runs_until_cancelled = true;
+    f
+}
+
+async fn harness_over(fake: Fake) -> (Harness, Arc<Fake>) {
+    let fake = Arc::new(fake);
+    // Boxed: starting a host is a large future, and every test awaits this.
+    let (h, _snap) = Box::pin(host_tree(Arc::clone(&fake))).await;
+    (Harness { h }, fake)
+}
+
+async fn harness_with_fake() -> (Harness, Arc<Fake>) {
+    harness_over(panel_fake()).await
+}
+
+/// A batch with one file and one matching line of it.
+fn one_file_one_line(
+    path: &str,
+    line: u64,
+    offset: Option<u64>,
+    preview: &str,
+    range: (u32, u32),
+) -> norte_proto::methods::SearchHits {
+    let m = norte_proto::methods::MatchInfo {
+        line: Some(line),
+        preview: Some(preview.to_owned()),
+        offset,
+        ranges: Some(vec![range]),
+    };
+    norte_proto::methods::SearchHits {
+        task_id: norte_proto::TaskId::new(1),
+        entries: vec![norte_proto::Entry {
+            path: VPath::parse(path).expect("vpath"),
+            kind: norte_proto::EntryKind::File,
+            size: Some(1),
+            mtime_ms: Some(0),
+            attrs: std::collections::BTreeMap::new(),
+        }],
+        matches: Some(vec![m.clone()]),
+        all_matches: Some(vec![vec![m]]),
+        more: Some(vec![0]),
+    }
+}
+
+fn text(t: &str) -> DialogFieldValue {
+    DialogFieldValue::Text { text: t.into() }
+}
+
+fn search_rows(snap: &norte_ui_host::ViewSnapshot) -> usize {
+    snap.tasks.iter().filter(|t| t.kind == "search").count()
+}
+
+/// Review Focus 2: edits within the pause launch ONE search; a later edit
+/// cancels it, and the board keeps one row for the panel.
+#[tokio::test(start_paused = true)]
+async fn typing_launches_once_and_relaunching_keeps_one_board_row() {
+    let (mut h, fake) = harness_with_fake().await;
+    let slot = h.open_slot("layout.search").await;
+    for t in ["a", "ag", "agu"] {
+        h.act(UiAction::SearchPanelEdit {
+            slot_id: slot,
+            field: "content".into(),
+            value: text(t),
+        })
+        .await;
+        tokio::time::advance(Duration::from_millis(100)).await;
+    }
+    tokio::time::advance(DEBOUNCE).await;
+    h.settle().await;
+    assert_eq!(fake.searches_launched(), 1);
+    h.act(UiAction::SearchPanelEdit {
+        slot_id: slot,
+        field: "content".into(),
+        value: text("aguj"),
+    })
+    .await;
+    tokio::time::advance(DEBOUNCE).await;
+    h.settle().await;
+    assert_eq!(
+        (
+            fake.searches_launched(),
+            fake.cancellations.load(Ordering::SeqCst)
+        ),
+        (2, 1)
+    );
+    assert_eq!(search_rows(&h.snapshot().await), 1);
+}
+
+/// A batch becomes rows: folder, file, the line with its ranges.
+#[tokio::test(start_paused = true)]
+async fn hits_become_rows_with_ranges() {
+    let (mut h, fake) = harness_with_fake().await;
+    let slot = h.open_slot("layout.search").await;
+    fake.answer_search_with(one_file_one_line(
+        "mem:///casa/a.txt",
+        7,
+        Some(30),
+        "x aguja",
+        (2, 7),
+    ));
+    h.act(UiAction::SearchPanelEdit {
+        slot_id: slot,
+        field: "content".into(),
+        value: text("aguja"),
+    })
+    .await;
+    h.act(UiAction::SearchPanelGo { slot_id: slot }).await;
+    h.settle().await;
+    let s = h.panel(slot).await;
+    assert!(
+        matches!(&s.rows[..], [
+            SearchPanelRowView::Folder { .. },
+            SearchPanelRowView::File { .. },
+            SearchPanelRowView::Line { line: 7, ranges, .. },
+        ] if ranges == &vec![(2, 7)]),
+        "{:?}",
+        s.rows
+    );
+    assert_eq!((s.first_row, s.total_rows, s.cursor), (0, 3, Some(0)));
+    assert!(s.running, "the walk goes on until it is cancelled");
+}
+
+/// A fake whose `mem:///casa/a.txt` is `lines` lines, `x aguja` on line
+/// `at`; returns it and the byte offset of that line.
+fn fake_with_file(lines: usize, at: usize) -> (Fake, u64) {
+    let mut f = panel_fake();
+    let mut body = Vec::new();
+    let mut offset = 0;
+    for i in 1..=lines {
+        if i == at {
+            offset = body.len() as u64;
+            body.extend_from_slice(b"x aguja\n");
+        } else {
+            body.extend_from_slice(format!("line {i:08} of the file\n").as_bytes());
+        }
+    }
+    f.content.insert("mem:///casa/a.txt".to_owned(), body);
+    (f, offset)
+}
+
+/// Searches `aguja` with `hits` answering, then activates row 2 (the line).
+async fn activate_the_line(h: &mut Harness, fake: &Fake, slot: u32, line: u64, offset: u64) {
+    fake.answer_search_with(one_file_one_line(
+        "mem:///casa/a.txt",
+        line,
+        Some(offset),
+        "x aguja",
+        (2, 7),
+    ));
+    h.act(UiAction::SearchPanelEdit {
+        slot_id: slot,
+        field: "content".into(),
+        value: text("aguja"),
+    })
+    .await;
+    h.act(UiAction::SearchPanelGo { slot_id: slot }).await;
+    h.settle().await;
+    let ack = h
+        .act(UiAction::SearchPanelActivate {
+            slot_id: slot,
+            row: 2,
+        })
+        .await;
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    h.settle().await;
+}
+
+/// Clicking a line opens the viewer at it, highlighted.
+#[tokio::test(start_paused = true)]
+async fn activating_a_line_opens_the_viewer_at_it() {
+    let (f, offset) = fake_with_file(200, 7);
+    let (mut h, fake) = harness_over(f).await;
+    let slot = h.open_slot("layout.search").await;
+    activate_the_line(&mut h, &fake, slot, 7, offset).await;
+    let v = h.snapshot().await.viewer.expect("the viewer opened");
+    let lit = v.highlight.expect("the line is lit");
+    assert_eq!((lit.row, v.first_line), (6, 6));
+    assert_eq!(lit.ranges, vec![(2, 7)]);
+    assert_eq!(v.lines_from, 1, "inside the cap: the file from its head");
+}
+
+/// A line past the viewer's cap: the read starts `CONTEXT_BEFORE` bytes
+/// before the line, and the viewer says which line its window starts at.
+#[tokio::test(start_paused = true)]
+async fn a_line_past_the_cap_reads_a_window_around_it() {
+    // 25-byte lines: 20 000 of them is ~488 KiB, the match on line 15 000
+    // starts ~366 KiB in, past the 256 KiB cap.
+    let (f, offset) = fake_with_file(20_000, 15_000);
+    assert!(offset > 256 * 1024);
+    let (mut h, fake) = harness_over(f).await;
+    let slot = h.open_slot("layout.search").await;
+    activate_the_line(&mut h, &fake, slot, 15_000, offset).await;
+    let reads = fake.reads.lock().expect("reads mutex").clone();
+    let (_, range) = reads
+        .iter()
+        .rev()
+        .find(|(p, _)| p.to_wire() == "mem:///casa/a.txt")
+        .expect("the file was read");
+    assert_eq!(
+        range.map(|r| r.offset),
+        Some(offset - norte_frontend::viewer::CONTEXT_BEFORE)
+    );
+    let v = h.snapshot().await.viewer.expect("the viewer opened");
+    assert!(v.lines_from > 1, "a window, not the head: {}", v.lines_from);
+    let lit = v.highlight.expect("the line is lit");
+    assert_eq!(lit.ranges, vec![(2, 7)]);
+}
+
+/// Review Focus 5: closing the panel cancels the run and forgets its row.
+#[tokio::test(start_paused = true)]
+async fn closing_the_panel_cancels_its_run() {
+    let (mut h, fake) = harness_with_fake().await;
+    let slot = h.open_slot("layout.search").await;
+    h.act(UiAction::SearchPanelEdit {
+        slot_id: slot,
+        field: "content".into(),
+        value: text("aguja"),
+    })
+    .await;
+    tokio::time::advance(DEBOUNCE).await;
+    h.settle().await;
+    assert_eq!(fake.searches_launched(), 1);
+    assert_eq!(
+        search_rows(&h.snapshot().await),
+        1,
+        "the run is on the board"
+    );
+    assert_eq!(h.open_slot("layout.search").await, 0, "the panel closed");
+    assert_eq!(fake.cancellations.load(Ordering::SeqCst), 1);
+    assert_eq!(search_rows(&h.snapshot().await), 0, "and its row went");
+}
+
+/// A run relaunched before the daemon acknowledged the previous one: the
+/// old run never reaches the board, and it is cancelled once it lands.
+#[tokio::test(start_paused = true)]
+async fn a_run_replaced_before_its_id_is_known_is_cancelled_when_it_lands() {
+    let (mut h, fake) = harness_with_fake().await;
+    let gate = Arc::new(tokio::sync::Notify::new());
+    *fake.search_ack_gate.lock().expect("gate mutex") = Some(Arc::clone(&gate));
+    let slot = h.open_slot("layout.search").await;
+    for t in ["aguja", "pajar"] {
+        h.act(UiAction::SearchPanelEdit {
+            slot_id: slot,
+            field: "content".into(),
+            value: text(t),
+        })
+        .await;
+        h.act(UiAction::SearchPanelGo { slot_id: slot }).await;
+        h.settle().await;
+    }
+    assert_eq!(fake.searches_launched(), 2);
+    assert_eq!(fake.cancellations.load(Ordering::SeqCst), 0);
+    gate.notify_one();
+    h.settle().await;
+    assert_eq!(fake.cancellations.load(Ordering::SeqCst), 1);
+    assert_eq!(search_rows(&h.snapshot().await), 1, "only the live run");
+}
+
+/// Enter in an empty form clears: nothing launches, and the status says
+/// what to type.
+#[tokio::test(start_paused = true)]
+async fn an_empty_form_launches_nothing() {
+    let (mut h, fake) = harness_with_fake().await;
+    let slot = h.open_slot("layout.search").await;
+    h.act(UiAction::SearchPanelGo { slot_id: slot }).await;
+    h.settle().await;
+    assert_eq!(fake.searches_launched(), 0);
+    let s = h.panel(slot).await;
+    assert_eq!(
+        s.status,
+        norte_i18n::t_in(norte_i18n::Lang::Es, "search-panel-idle")
+    );
+    assert!(s.rows.is_empty() && s.cursor.is_none());
+}
+
+/// An action naming another slot, or a row that is not there, is a race:
+/// stale, and nothing happens.
+#[tokio::test(start_paused = true)]
+async fn a_stale_slot_or_row_is_refused() {
+    let (mut h, _fake) = harness_with_fake().await;
+    let slot = h.open_slot("layout.search").await;
+    let ack = h
+        .act(UiAction::SearchPanelGo {
+            slot_id: slot + 100,
+        })
+        .await;
+    assert!(matches!(ack, ActionAck::Stale { .. }), "{ack:?}");
+    let ack = h
+        .act(UiAction::SearchPanelActivate {
+            slot_id: slot,
+            row: 9,
+        })
+        .await;
+    assert!(matches!(ack, ActionAck::Stale { .. }), "{ack:?}");
+    let ack = h
+        .act(UiAction::SearchPanelEdit {
+            slot_id: slot,
+            field: "nope".into(),
+            value: text("x"),
+        })
+        .await;
+    assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
+}
