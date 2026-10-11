@@ -55,6 +55,8 @@ interface Controls {
   lastRange: { first: number; count: number } | null;
   lastCursor: number | null;
   measuring: boolean;
+  /** The slot was the active one on the last paint. */
+  wasActive: boolean;
 }
 
 const controlsOf = new WeakMap<SlotDom, Controls>();
@@ -83,6 +85,7 @@ export function paintSearchPanel(
     dom.scroller.replaceChildren(c.body);
   }
   paintControls(this, c, slot);
+  followTheKeyboard(c, dom.root.dataset["role"] === "active");
 
   const h = this.cell().h;
   const treeSignature = JSON.stringify([slot.first_row, slot.total_rows, slot.rows, h]);
@@ -160,12 +163,30 @@ function createControls(
         edit(current, f.id, { set: "text", text: input.value });
       });
       input.addEventListener("keydown", (e) => {
+        if (e.ctrlKey || e.altKey || e.metaKey) {
+          return;
+        }
         if (e.key === "Enter") {
           // The host searches NOW; the document's handler must not also send
           // the Enter as a key for the listing.
           e.preventDefault();
           e.stopPropagation();
           screen.send({ action: "search_panel_go", slot_id: current().slotId });
+        } else if (e.key === "ArrowDown" || e.key === "Tab" || e.key === "ArrowUp") {
+          // The terminal's ring: the inputs, then the results. Kept from
+          // the document's handler, which would send them to the host as
+          // a cursor move or a pane switch with the caret still here.
+          e.preventDefault();
+          e.stopPropagation();
+          const back = e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey);
+          // Up from the first input goes nowhere, as in the terminal.
+          if (!(e.key === "ArrowUp" && stopsOf(current())[0] === input)) {
+            step(current(), input, back);
+          }
+        } else if (e.key === "Escape") {
+          // Out of the input, and on to the host, which gives the keys
+          // back to the listing: typing must not keep landing here.
+          input.blur();
         }
       });
       inputs.set(f.id, input);
@@ -253,6 +274,21 @@ function createControls(
       generation: current().generation,
     });
   });
+  tree.addEventListener("keydown", (e) => {
+    if (e.ctrlKey || e.altKey || e.metaKey) {
+      return;
+    }
+    if (e.key === "Tab") {
+      e.preventDefault();
+      e.stopPropagation();
+      step(current(), tree, e.shiftKey);
+    } else if (e.key === "Escape") {
+      // The host gives the keys back to the listing; the DOM focus goes too.
+      tree.blur();
+    }
+    // The rest — arrows, pages, Enter, ←/→ — goes on to the host, which
+    // moves the cursor of the active panel.
+  });
   scroll.addEventListener("scroll", () => {
     measureRange(screen, current());
   });
@@ -279,9 +315,47 @@ function createControls(
     lastRange: null,
     lastCursor: null,
     measuring: false,
+    wasActive: false,
   };
   self.c = c;
   return c;
+}
+
+/**
+ * The DOM focus follows the host's: the panel becoming the active slot (it
+ * was opened, or Tab reached it) puts the caret in the name input — unless
+ * a click already put the focus somewhere inside it — and losing it takes
+ * the focus out, so typing does not keep landing in an input the host no
+ * longer reads as the keyboard's.
+ */
+function followTheKeyboard(c: Controls, active: boolean): void {
+  if (active === c.wasActive) {
+    return;
+  }
+  c.wasActive = active;
+  const focused = document.activeElement;
+  const inside = focused !== null && c.body.contains(focused);
+  if (active && !inside) {
+    stopsOf(c)[0]?.focus();
+  } else if (!active && inside && focused instanceof HTMLElement) {
+    focused.blur();
+  }
+}
+
+/** Tab's stops, in the terminal's order: the inputs in view, then the results. */
+function stopsOf(c: Controls): HTMLElement[] {
+  const inputs = [...c.inputs.values()].filter(
+    (i) => !(c.filters.hidden && c.filters.contains(i)),
+  );
+  return [...inputs, c.tree];
+}
+
+/** Moves the focus from `from` to the next stop (or the previous, `back`). */
+function step(c: Controls, from: HTMLElement, back: boolean): void {
+  const stops = stopsOf(c);
+  const at = stops.indexOf(from);
+  const next = (at + (back ? stops.length - 1 : 1)) % stops.length;
+  stops[next]?.focus();
 }
 
 /** Everything that is not the tree, brought in line with the host's view. */

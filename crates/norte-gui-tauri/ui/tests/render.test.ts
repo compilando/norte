@@ -6933,12 +6933,15 @@ const panelSlot = (over: Partial<SearchPanelSlotView> = {}): SearchPanelSlotView
   ...over,
 });
 
-function withPanel(slot: SearchPanelSlotView): ViewSnapshot {
+function withPanel(
+  slot: SearchPanelSlotView,
+  role: "active" | null = null,
+): ViewSnapshot {
   const v = view({});
   v.slots = [...v.slots, slot];
   v.layout.placements = [
-    ...v.layout.placements,
-    { slot_id: 9, x: 0, y: 0, width: 40, height: 20, role: null, focus_index: 2 },
+    ...v.layout.placements.map((p) => (role === "active" ? { ...p, role: null } : p)),
+    { slot_id: 9, x: 0, y: 0, width: 40, height: 20, role, focus_index: 2 },
   ];
   return v;
 }
@@ -7166,6 +7169,82 @@ describe("the search panel", () => {
       row: 101,
       generation: 4,
     });
+  });
+
+  it("becoming the active slot puts the caret in the name input", () => {
+    const { screen } = mount();
+    screen.paint(withPanel(panelSlot()));
+    const name = document.querySelector<HTMLInputElement>(
+      ".searchpanel-input[data-field='name']",
+    )!;
+    expect(document.activeElement).not.toBe(name);
+    screen.paint(withPanel(panelSlot(), "active"));
+    expect(document.activeElement).toBe(name);
+  });
+
+  it("a click that made it active keeps the focus where the click put it", () => {
+    const { screen } = mount();
+    screen.paint(withPanel(panelSlot()));
+    const tree = document.querySelector<HTMLElement>(".searchpanel [role='tree']")!;
+    tree.focus();
+    screen.paint(withPanel(panelSlot(), "active"));
+    expect(document.activeElement).toBe(tree);
+  });
+
+  it("ArrowDown and Tab walk the inputs and then into the results", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPanel(panelSlot(), "active"));
+    const input = (id: string): HTMLInputElement =>
+      document.querySelector<HTMLInputElement>(`.searchpanel-input[data-field='${id}']`)!;
+    const tree = document.querySelector<HTMLElement>(".searchpanel [role='tree']")!;
+    const press = (key: string, shiftKey = false): void => {
+      document.activeElement!.dispatchEvent(
+        new KeyboardEvent("keydown", { key, shiftKey, bubbles: true, cancelable: true }),
+      );
+    };
+    const before = sent.length;
+    expect(document.activeElement).toBe(input("name"));
+    press("ArrowDown");
+    expect(document.activeElement).toBe(input("content"));
+    // The fold is closed: its inputs are not stops.
+    press("Tab");
+    expect(document.activeElement).toBe(tree);
+    press("Tab");
+    expect(document.activeElement).toBe(input("name"));
+    press("Tab", true);
+    expect(document.activeElement).toBe(tree);
+    press("Tab", true);
+    expect(document.activeElement).toBe(input("content"));
+    press("ArrowUp");
+    expect(document.activeElement).toBe(input("name"));
+    expect(sent.slice(before).filter((a) => a.action === "key")).toEqual([]);
+  });
+
+  it("Escape leaves the input and lets the host give the keys back", () => {
+    const { screen } = mount();
+    screen.paint(withPanel(panelSlot(), "active"));
+    const name = document.querySelector<HTMLInputElement>(
+      ".searchpanel-input[data-field='name']",
+    )!;
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    name.dispatchEvent(escape);
+    expect(document.activeElement).not.toBe(name);
+    expect(escape.defaultPrevented).toBe(false);
+  });
+
+  it("losing the keyboard takes the caret out of the panel", () => {
+    const { screen } = mount();
+    screen.paint(withPanel(panelSlot(), "active"));
+    const name = document.querySelector<HTMLInputElement>(
+      ".searchpanel-input[data-field='name']",
+    )!;
+    expect(document.activeElement).toBe(name);
+    screen.paint(withPanel(panelSlot()));
+    expect(document.activeElement).not.toBe(name);
   });
 
   it("a cursor that moved says the visible range again, even unscrolled", () => {

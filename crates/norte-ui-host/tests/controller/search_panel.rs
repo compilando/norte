@@ -144,6 +144,23 @@ fn search_rows(snap: &norte_ui_host::ViewSnapshot) -> usize {
     snap.tasks.iter().filter(|t| t.kind == "search").count()
 }
 
+/// Opening the panel gives it the keyboard, as in the terminal: it opens
+/// to be typed into, and the renderer focuses its input when it is the
+/// active slot.
+#[tokio::test(start_paused = true)]
+async fn opening_the_panel_makes_it_the_active_slot() {
+    let (mut h, _fake) = harness_with_fake().await;
+    let slot = h.open_slot("layout.search").await;
+    let snap = h.snapshot().await;
+    let role = snap
+        .layout
+        .placements
+        .iter()
+        .find(|p| p.slot_id == slot)
+        .and_then(|p| p.role.clone());
+    assert_eq!(role, Some(norte_ui_host::dto::SlotRole::Active));
+}
+
 /// Review Focus 2: edits within the pause launch ONE search; a later edit
 /// cancels it, and the board keeps one row for the panel.
 #[tokio::test(start_paused = true)]
