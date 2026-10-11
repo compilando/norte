@@ -595,6 +595,8 @@ pub struct Viewer {
     /// The lit line (0-based in this viewer) and its spans, as CHAR ranges
     /// of the decoded source line (before tab expansion and scroll).
     highlight: Option<(usize, Vec<(usize, usize)>)>,
+    /// The last [`Viewer::aim`] missed: see [`Viewer::target_past_cap`].
+    target_past_cap: bool,
     // ---- decoding cache (recomputed when the encoding changes) ----
     text: String,
     encoding_name: &'static str,
@@ -623,6 +625,7 @@ impl Viewer {
             plugin_preview: None,
             first_line: 1,
             highlight: None,
+            target_past_cap: false,
             text: String::new(),
             encoding_name: "",
             eol: Eol::None,
@@ -1032,22 +1035,30 @@ impl Viewer {
     }
 
     /// Scroll to `t`'s line and light up its ranges (text mode only; hex and
-    /// plugin previews keep their scroll and light nothing).
+    /// plugin previews keep their scroll and light nothing). A line not
+    /// held whose offset nobody knew opens at the top instead, and
+    /// [`Self::target_past_cap`] says so.
     pub fn aim(&mut self, t: &ViewerTarget) {
+        self.target_past_cap = false;
         if self.hex || self.plugin_preview.is_some() {
             return;
         }
         let rel = usize::try_from(t.line.saturating_sub(self.first_line)).unwrap_or(usize::MAX);
         let idx = rel.min(self.lines.saturating_sub(1));
         self.scroll = idx;
-        // A line this viewer does not hold (no offset, past the cap) keeps
-        // the clamped scroll and lights nothing: the last line held is
-        // another line.
+        // A line this viewer does not hold lights nothing: the last line
+        // held is another line. With no offset there was no window to read
+        // around it, so the top — not the end of the read, which looks like
+        // an answer — and the frontend says why (C9).
         self.highlight = if rel < self.lines {
             self.text.lines().nth(idx).map(|l| (idx, locate(l, t)))
         } else {
             None
         };
+        if self.highlight.is_none() && t.offset.is_none() {
+            self.scroll = 0;
+            self.target_past_cap = true;
+        }
         // The first lit span in sight: past the margin, scroll sideways to
         // a little before it.
         self.hscroll = 0;
@@ -1060,6 +1071,15 @@ impl Viewer {
                 self.hscroll = cell.saturating_sub(AIM_LEAD);
             }
         }
+    }
+
+    /// Did the last [`Self::aim`] miss? The target's line is not in what
+    /// was read and nobody knew its byte offset (a UTF-16 file, a legacy
+    /// encoding a regex search decoded, past the cap): the viewer is at the
+    /// top, and the frontend says so (`viewer-target-past-cap`).
+    #[must_use]
+    pub const fn target_past_cap(&self) -> bool {
+        self.target_past_cap
     }
 
     /// The first line's number: 1, or N for a window past the cap.
@@ -2172,15 +2192,22 @@ mod tests {
             assert_eq!((v.hscroll(), v.highlight_chars(0)), (33, vec![(8, 13)]));
         }
 
-        /// A line the viewer does not hold (no offset, far past what it
-        /// read): the scroll goes to the end, and no other line is lit.
+        /// A line the viewer does not hold and nobody knew the byte offset
+        /// of (UTF-16, some legacy encodings, past the cap): the viewer
+        /// opens at the TOP, lights nothing, and says it missed — the same
+        /// rule in both frontends, which each put it in words.
         #[test]
-        fn a_line_not_held_lights_nothing() {
+        fn a_line_not_held_without_an_offset_opens_at_the_top_and_says_so() {
             let mut v = Viewer::new(vp("mem:///a.txt"), b"uno\ndos\ntres\n".to_vec(), true);
             v.aim(&target(500, None, "aguja", &[(0, 5)]));
-            assert_eq!(v.scroll, 2);
+            assert_eq!(v.scroll, 0);
             assert_eq!(v.highlight_line(), None);
             assert!(v.highlight_chars(2).is_empty());
+            assert!(v.target_past_cap());
+            // A line it holds says nothing.
+            v.aim(&target(2, None, "dos", &[(0, 3)]));
+            assert!(!v.target_past_cap());
+            assert_eq!(v.highlight_line(), Some(1));
         }
 
         /// A UTF-16 hit carries no offset: the viewer reads from the top,

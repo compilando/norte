@@ -724,6 +724,37 @@ async fn a_match_past_the_cap_opens_a_window() {
     assert_eq!(v.highlight_chars(lit), vec![(0, 5)]);
 }
 
+/// A target with no byte offset on a line the head does not hold opens at
+/// the top and says so — the shared viewer's rule, the window's too.
+#[tokio::test]
+async fn a_line_not_held_without_an_offset_opens_at_the_top_and_says_so() {
+    use norte_frontend::viewer::ViewerTarget;
+    let (mut app, backend, _work, _resolver, _mem) =
+        harness_with_tree(&[("notes", "uno\ndos\naguja aqui\ncuatro\n")]).await;
+    let mut stream = futures::stream::pending();
+    let mut events = norte_tui::console::Console::detached(&mut stream);
+    let target = ViewerTarget {
+        line: 500,
+        offset: None,
+        preview: "aguja".to_owned(),
+        ranges: vec![(0, 5)],
+    };
+    norte_tui::viewer_open::open_viewer_at(
+        &mut app,
+        &backend,
+        &mut events,
+        vp("mem:///notes"),
+        target,
+    )
+    .await;
+    let v = app.viewer.as_ref().expect("the viewer opened");
+    assert_eq!((v.scroll, v.highlight_line()), (0, None));
+    assert_eq!(
+        app.message.as_deref(),
+        Some(norte_i18n::t("viewer-target-past-cap").as_str())
+    );
+}
+
 /// The viewer paints the lit span.
 #[tokio::test]
 async fn snapshot_viewer_lights_the_match() {

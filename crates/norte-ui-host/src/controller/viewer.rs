@@ -442,6 +442,15 @@ impl State {
                     None => aimed_viewer(path, bytes, truncated, aim),
                 };
                 opened.set_image_by_bytes(by_bytes);
+                // The result's line is not in what was read and nobody knew
+                // its offset: the viewer is at the top, and it is said, as
+                // in the terminal (C9).
+                if opened.target_past_cap() {
+                    self.status.message = Some(clamp_display(norte_i18n::t_in(
+                        self.lang,
+                        "viewer-target-past-cap",
+                    )));
+                }
                 self.visor = Some(opened);
                 // An image the window paints ON ITS OWN goes through no
                 // plugin (ADR 0141): neither the styled view — which turned

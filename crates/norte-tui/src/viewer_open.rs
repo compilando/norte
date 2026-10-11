@@ -730,17 +730,10 @@ async fn open(
     let waited = crate::console::wait_painting(events, app, started, read).await;
     app.busy = None;
     match waited {
-        Waited::Done(Ok((mut viewer, thumbnail))) => {
+        Waited::Done(Ok((viewer, thumbnail))) => {
             // The line is not in what was read and nobody knew its byte
-            // offset: the top, and a word about it (C9).
-            // (A plugin's preview is not aimed, so it never says "lines from".)
-            if let Some(tg) = &target
-                && tg.offset.is_none()
-                && !viewer.hex
-                && viewer.preview_plugin().is_none()
-                && viewer.highlight_line().is_none()
-            {
-                viewer.scroll = 0;
+            // offset: the shared viewer is at the top, and it is said (C9).
+            if viewer.target_past_cap() {
                 app.message = Some(t("viewer-target-past-cap"));
             }
             // The mismatched format is noted BEFORE consuming the

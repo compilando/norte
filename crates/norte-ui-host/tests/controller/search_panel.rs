@@ -329,6 +329,32 @@ async fn a_line_past_the_cap_reads_a_window_around_it() {
     assert_aimed_open_asks_no_previewer(&mut h, &fake).await;
 }
 
+/// A hit with no byte offset (UTF-16, some legacy encodings) on a line the
+/// head does not hold: the viewer opens at the top and SAYS so, as the
+/// terminal does — not near the end of the read, which looks like an answer.
+#[tokio::test(start_paused = true)]
+async fn a_line_not_held_without_an_offset_opens_at_the_top_and_says_so() {
+    let (f, _) = fake_with_file(200, 7);
+    let (mut h, fake) = harness_over(f).await;
+    let slot = h.open_slot("layout.search").await;
+    search_answered(
+        &mut h,
+        &fake,
+        slot,
+        one_file_one_line("mem:///casa/a.txt", 90_000, None, "x aguja", (2, 7)),
+    )
+    .await;
+    activate_row(&mut h, slot, 2).await;
+    h.settle().await;
+    let snap = h.snapshot().await;
+    let v = snap.viewer.expect("the viewer opened");
+    assert_eq!((v.first_line, v.highlight), (0, None));
+    assert_eq!(
+        snap.status.message.as_deref(),
+        Some(norte_i18n::t_in(norte_i18n::Lang::Es, "viewer-target-past-cap").as_str())
+    );
+}
+
 /// Review Focus 5: closing the panel cancels the run and forgets its row.
 #[tokio::test(start_paused = true)]
 async fn closing_the_panel_cancels_its_run() {
