@@ -1082,8 +1082,8 @@ impl Viewer {
     /// [`Self::rows`] returns for it — after tab expansion and horizontal
     /// scroll. Empty for any other line.
     ///
-    /// The source chars are measured in cells by [`render_line`]'s own rule
-    /// ([`next_col`]), the scroll is subtracted in cells, and the cells are
+    /// The source chars are measured in cells by `render_line`'s own rule
+    /// (`next_col`), the scroll is subtracted in cells, and the cells are
     /// mapped back to chars of the painted row: a frontend slices that string
     /// by chars and never counts columns of its own.
     #[must_use]
