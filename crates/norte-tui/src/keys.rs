@@ -1054,6 +1054,7 @@ pub async fn on_key(
                     }
                     PromptKind::TransferName => {
                         if let Some((kind, from, dest)) = app.transfer_name_confirm() {
+                            let source = from.clone();
                             // Closes ONLY if it was queued
                             // (MINOR-1 discipline from #104): a
                             // failed submit keeps the name; the
@@ -1068,6 +1069,12 @@ pub async fn on_key(
                             )
                             .await
                             {
+                                // A rename (or a one-item move) from a
+                                // results tab: the SOURCE leaves the tab
+                                // once it is gone (C11).
+                                if kind == crate::app::TransferKind::Move {
+                                    crate::mutations::expect_gone_from_results(app, source);
+                                }
                                 app.transfer_name_submitted();
                             } else {
                                 app.transfer_name_set_error(t("msg-transfer-name-failed"));

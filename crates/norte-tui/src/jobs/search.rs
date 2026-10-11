@@ -119,7 +119,9 @@ fn now_ms() -> i64 {
 /// - `into: Some(slot)` re-runs that tab (refresh, restore): it starts over
 ///   empty under a fresh set capped at [`MAX_HITS`]. Any run already filed
 ///   for the slot is cancelled first. On error the tab's outcome becomes
-///   `Failed`, so it never reads as "found nothing".
+///   `Failed`, so it never reads as "found nothing"; the hits it had stay,
+///   the way a folder whose refresh fails keeps its listing (a restored tab
+///   has none yet, so it shows the failure over an empty list).
 pub async fn launch_results(
     app: &mut App,
     backend: &Backend,
@@ -169,21 +171,78 @@ pub async fn launch_results(
         // sanitized to the status bar (the error's category — never the raw
         // pattern).
         Err(e) => {
-            let category = error_category(&e);
-            app.message = Some(ta(
-                "search-status-failed",
-                &[("error", &detail_for_bar(&category))],
-            ));
-            if let Some(slot) = into
-                && let Some(set) = app
-                    .panes
-                    .browser_mut(slot)
-                    .and_then(crate::app::Pane::results_mut)
-            {
-                set.set_outcome(Outcome::Failed(category));
-            }
+            fail_results(app, into, &e);
             None
         }
+    }
+}
+
+/// A results run that could not start: `search-status-failed` in the bar
+/// and, for a re-run, on the tab itself (its outcome keeps the category).
+fn fail_results(app: &mut App, into: Option<SlotId>, e: &norte_proto::Error) {
+    let category = error_category(e);
+    app.message = Some(ta(
+        "search-status-failed",
+        &[("error", &detail_for_bar(&category))],
+    ));
+    if let Some(slot) = into
+        && let Some(set) = app
+            .panes
+            .browser_mut(slot)
+            .and_then(crate::app::Pane::results_mut)
+    {
+        set.set_outcome(Outcome::Failed(category));
+    }
+}
+
+/// Re-runs the query of the results tab in `slot` (C2: `pane.refresh` on a
+/// results tab), through [`launch_results`] with `into: Some(slot)`.
+///
+/// Only while the slot is still a results tab in the layout: between the
+/// request and this call the tab may have been closed or turned into a
+/// folder, and re-running then would turn a folder back into results.
+///
+/// The ROOT is stat'ed first, and a root that cannot be reached fails the
+/// tab with `search-status-failed` (Review Focus 5): the core's walk counts
+/// an unreadable root as one more skipped entry and ends `Completed` with no
+/// hits, which on a tab restored over a folder that is gone would read as
+/// "the search found nothing". Any run already filed for the slot is
+/// cancelled, as [`launch_results`] would have.
+pub async fn rerun_results(
+    app: &mut App,
+    backend: &Backend,
+    runs: &mut BySlot<SearchRun>,
+    slot: SlotId,
+) {
+    if app.layout.kind_of(slot).is_none() {
+        return;
+    }
+    let Some(search) = app
+        .panes
+        .browser(slot)
+        .and_then(crate::app::Pane::results)
+        .map(|r| r.search().clone())
+    else {
+        return;
+    };
+    if let Err(e) = backend.stat(&search.root).await {
+        if let Some(old) = runs.remove(slot) {
+            old.task.cancel();
+        }
+        fail_results(app, Some(slot), &e);
+        return;
+    }
+    let _ = launch_results(app, backend, runs, search, Some(slot)).await;
+}
+
+/// Re-runs every results tab a session just restored
+/// ([`crate::app::SessionUi::rerun`]), visible or not (C7): a results tab
+/// has no other content, so one left cold would read as a search that found
+/// nothing. Drained in the turn header, so start-up, a profile switch and a
+/// handoff all go through it.
+pub async fn rerun_restored(app: &mut App, backend: &Backend, runs: &mut BySlot<SearchRun>) {
+    for slot in std::mem::take(&mut app.session.rerun) {
+        rerun_results(app, backend, runs, slot).await;
     }
 }
 

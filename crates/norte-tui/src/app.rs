@@ -515,6 +515,12 @@ pub struct SessionUi {
     /// directory every time they entered and left it, which is ADR 0098's
     /// decision 2 turned backwards.
     seeded: std::collections::BTreeSet<u32>,
+    /// The results tabs a session just restored, waiting for the run loop
+    /// to re-run their query (C7): every one of them, visible or not. A
+    /// results tab has no other content, and left cold it would read as a
+    /// search that found nothing. Drained by
+    /// [`crate::jobs::rerun_restored`] in the turn header.
+    pub rerun: Vec<norte_frontend::layout::SlotId>,
 }
 
 /// Rows `cursor.page-up/down` jumps (fixed until the pane's real height
@@ -1062,6 +1068,11 @@ pub struct App {
     /// operand is the focused directory, whole. The PLUGIN path does not go
     /// through here — the palette already dispatches with `work` in hand.
     pub pending_organize: bool,
+    /// The results tab `pane.refresh` asked to re-run (C2), not launched
+    /// yet. Same split as [`Self::pending_organize`]: dispatch decides WHICH
+    /// tab, the run loop — owner of the per-slot runs — launches the query
+    /// again.
+    pub pending_results_rerun: Option<norte_frontend::layout::SlotId>,
     /// Open sync panel (`Ctrl+Y`, or `s`/`m` inside the compare panel):
     /// `None` = closed. Painted OVER the compare one, which stays alive
     /// behind it with its marks.
@@ -1491,6 +1502,7 @@ impl App {
             pending_compare: None,
             pending_checksum: None,
             pending_organize: false,
+            pending_results_rerun: None,
             pending_dest_check: None,
             sync: None,
             pending_sync: None,

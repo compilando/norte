@@ -565,14 +565,20 @@ pub async fn dispatch(
         }
         // #106: Ctrl+R — manual reload. Reuses the post-mutation refresh
         // (cancelable rule 3; marks survive via refill with VISIBLE pruning,
-        // cursor by index; the virtual search pane is skipped — its hits do
-        // not live in a dir). Both panes, as after one of our own tasks: an
+        // cursor by index). Both panes, as after one of our own tasks: an
         // external change rarely respects focus.
+        // C2: on a results tab, refreshing re-runs the SAME query — its hits
+        // do not live in a dir. The run loop owns the runs, so it is left
+        // requested (`pending_results_rerun`) and launched in the turn
+        // header; the other panes still refresh as usual.
         // #118: the outcome TRAVELS to the run loop (`Cd::Refreshed`) —
         // dispatch does not see `fill`/`last_probed`, and without the ritual
         // a live paginated drainer would duplicate rows over the freshly
         // completed listing.
         Command::PaneRefresh => {
+            if app.focused().is_results() {
+                app.pending_results_rerun = Some(app.focused_slot());
+            }
             cd_outcome = Cd::Refreshed(refresh_panes(app, backend, events).await);
         }
         // Insert/Ctrl+A/Ctrl+Shift+A/`*` (#103): mc/Total Commander —

@@ -435,12 +435,15 @@ pub async fn refresh_panes_where(
         if !which.get(i).copied().unwrap_or(false) {
             continue;
         }
-        // A pane in virtual search mode (liveSearch T6) does NOT
-        // auto-refresh: `refresh_listing` would pull it out of virtual mode
-        // and `reap` would cancel the Task without the user leaving (review
-        // MINOR-1). Its hits live outside the FS: there is no real dir to
-        // reload.
+        // A results tab is NOT re-listed: `refresh_listing` would turn it
+        // into its root folder and the reap would cancel its run. Its hits
+        // live outside any one dir; what a mutation may have changed is
+        // checked hit by hit instead (C11).
         if app.panes[i].is_results() {
+            recheck_results(app, backend, events, i).await;
+            if app.quit {
+                return refreshed;
+            }
             continue;
         }
         let dir = app.panes[i].dir().clone();
@@ -509,6 +512,78 @@ pub async fn refresh_panes_where(
         }
     }
     refreshed
+}
+
+/// Checks the hits a mutation submitted from the results tab on side `side`
+/// was expected to remove (C11: [`norte_frontend::results::ResultSet::expect`]).
+///
+/// Each expected path is stat'ed, all of them under ONE cancellable wait
+/// ([`crate::console::wait_painting`], the same one listings use):
+///
+/// - `NotFound`: the hit left (moved, deleted, renamed away — a renamed hit
+///   may no longer match the query), so it is taken out of the tab and no
+///   longer expected;
+/// - it is still there: no longer expected, but only once the board has no
+///   live task — while one runs, its move or delete may simply not have
+///   happened YET, and the path must be looked at again by the refresh its
+///   end fires. A move that FAILED (or a collision answered "skip") leaves
+///   the hit in the tab;
+/// - any other error: no longer expected, and the hit stays — a hit that
+///   cannot be checked is not removed on a guess.
+///
+/// Esc abandons the check and keeps every path expected; Ctrl-C quits.
+///
+/// `side` is a VISIBLE pane: [`refresh_panes_where`] walks sides, not
+/// slots, so a results tab hidden behind another tab is checked the next
+/// time it is visible and a mutation's refresh fires. That is acceptable:
+/// its expected set simply waits.
+pub async fn recheck_results(
+    app: &mut App,
+    backend: &Backend,
+    events: &mut crate::console::Console<'_>,
+    side: usize,
+) {
+    let Some(expected) = app.panes[side]
+        .results()
+        .map(norte_frontend::results::ResultSet::expected)
+    else {
+        return;
+    };
+    if expected.is_empty() {
+        return;
+    }
+    let root = app.panes[side].dir().clone();
+    let started = std::time::Instant::now();
+    app.busy = Some(Busy::new(BusyKind::Listing, Some(root), Some(side)));
+    let stats = futures::future::join_all(expected.iter().map(|p| backend.stat(p)));
+    let waited = crate::console::wait_painting(events, app, started, stats).await;
+    app.busy = None;
+    let results = match waited {
+        Waited::Done(results) => results,
+        Waited::Cancelled => return,
+        Waited::Quit => {
+            app.quit = true;
+            return;
+        }
+    };
+    let live = app.board.has_active();
+    let gone: Vec<norte_proto::VPath> = expected
+        .iter()
+        .zip(&results)
+        .filter(|(_, r)| matches!(r, Err(Error::NotFound)))
+        .map(|(p, _)| p.clone())
+        .collect();
+    let pane = &mut app.panes[side];
+    pane.forget(&gone);
+    let Some(set) = pane.results_mut() else {
+        return;
+    };
+    for (path, result) in expected.iter().zip(&results) {
+        match result {
+            Ok(_) if live => {}
+            _ => set.settle(path),
+        }
+    }
 }
 
 /// The ritual after a [`refresh_panes`], SINGLE for its three triggers (a

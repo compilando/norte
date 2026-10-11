@@ -404,6 +404,207 @@ async fn same_named_hits_meet_the_collision_policy() {
     assert_eq!(landed, expected_winner, "nothing was overwritten");
 }
 
+/// Runs the tick (and the refresh it triggers) until the board has no live
+/// task, then once more the refresh a finished mutation fires: the order in
+/// which concurrent tasks finish is not fixed, and the last refresh is the
+/// one that must leave the tab settled.
+async fn settle_board(app: &mut App, backend: &Backend) {
+    let mut stream = console_stream();
+    let mut events = norte_tui::console::Console::detached(&mut stream);
+    for _ in 0..500 {
+        let _ = norte_tui::refresh::on_tick(app, backend, &mut events).await;
+        if !app.board.has_active() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(!app.board.has_active(), "the board settles");
+    let _ = norte_tui::refresh::on_tick(app, backend, &mut events).await;
+    let _ = norte_tui::refresh::refresh_panes(app, backend, &mut events).await;
+}
+
+fn hit_paths(app: &App, slot: norte_frontend::layout::SlotId) -> Vec<VPath> {
+    let mut v: Vec<VPath> = app
+        .panes
+        .browser(slot)
+        .expect("tab")
+        .real_entries()
+        .iter()
+        .map(|e| e.path.clone())
+        .collect();
+    v.sort();
+    v
+}
+
+fn expected_of(app: &App, slot: norte_frontend::layout::SlotId) -> Vec<VPath> {
+    app.panes
+        .browser(slot)
+        .and_then(Pane::results)
+        .expect("still a results tab")
+        .expected()
+}
+
+/// C2: `pane.refresh` on a results tab re-runs the SAME query and picks
+/// up a file created since.
+#[tokio::test]
+async fn refresh_re_runs_the_query() {
+    let (mut app, backend, mut work, mem) = harness_with_tree(&[("a/x.txt", "aguja\n")]).await;
+    let root = app.focused().dir().clone();
+    let slot = launch_results(
+        &mut app,
+        &backend,
+        &mut work.search,
+        saved_content(&root, "aguja"),
+        None,
+    )
+    .await
+    .expect("tab");
+    drain_until_closed(&mut app, &mut work, slot).await;
+    assert_eq!(app.focused().entries().len(), 1);
+    write_file(&mem, "b/y.txt", "aguja\n").await;
+
+    let cfg = norte_tui::config::load(&norte_config::Layers { dirs: vec![] }).expect("config");
+    let mut cap = norte_tui::mouse::Capture::new();
+    let mut stream = console_stream();
+    let mut events = norte_tui::console::Console::detached(&mut stream);
+    assert_eq!(app.focused_slot(), slot, "the tab has the focus");
+    let _ = norte_tui::dispatch::dispatch(
+        &mut app,
+        &backend,
+        &mut events,
+        &[],
+        norte_i18n::Lang::Es,
+        norte_tui::nav::Mode::default(),
+        norte_tui::config::ConfirmQuit::default(),
+        &cfg,
+        norte_tui::keymap::Command::PaneRefresh,
+    )
+    .await;
+    // The turn header launches what dispatch left requested.
+    norte_tui::turn::drain_pending(&mut app, &backend, &mut cap, &mut events, &mut work).await;
+    drain_until_closed(&mut app, &mut work, slot).await;
+
+    let tab = app.panes.browser(slot).expect("tab");
+    assert!(tab.is_results(), "still a results tab");
+    assert_eq!(
+        hit_paths(&app, slot),
+        vec![vp("mem:///a/x.txt"), vp("mem:///b/y.txt")],
+        "the same query, run again, finds the new file"
+    );
+    assert_eq!(
+        app.panes
+            .browser(slot)
+            .and_then(Pane::results)
+            .map(|r| r.outcome().clone()),
+        Some(norte_frontend::search_status::Outcome::Done)
+    );
+}
+
+/// C11: deleting a hit from a results tab removes it from the tab when
+/// the task finishes; the other hits stay; nothing is re-listed.
+#[tokio::test]
+async fn a_deleted_hit_leaves_the_tab() {
+    let (mut app, backend, mut work, _mem) =
+        harness_with_tree(&[("a/x.txt", "aguja\n"), ("b/y.txt", "aguja\n")]).await;
+    let root = app.focused().dir().clone();
+    let slot = launch_results(
+        &mut app,
+        &backend,
+        &mut work.search,
+        saved_content(&root, "aguja"),
+        None,
+    )
+    .await
+    .expect("tab");
+    drain_until_closed(&mut app, &mut work, slot).await;
+    let x = vp("mem:///a/x.txt");
+    cursor_on(&mut app, &x);
+    app.focused_mut().toggle_mark();
+    norte_tui::mutations::submit_deletes(&mut app, &backend, std::slice::from_ref(&x), true).await;
+    assert_eq!(
+        expected_of(&app, slot),
+        vec![x.clone()],
+        "the source is expected"
+    );
+
+    settle_board(&mut app, &backend).await;
+
+    let tab = app.panes.browser(slot).expect("tab");
+    assert!(tab.is_results(), "still a results tab, not a folder");
+    assert_eq!(
+        hit_paths(&app, slot),
+        vec![vp("mem:///b/y.txt")],
+        "the deleted hit left"
+    );
+    assert!(expected_of(&app, slot).is_empty(), "nothing left to check");
+}
+
+/// C11: a moved hit leaves; a hit whose move FAILED stays.
+#[tokio::test]
+async fn a_moved_hit_leaves_and_a_failed_move_stays() {
+    let (mut app, backend, mut work, _mem) = harness_with_tree(&[
+        ("a/x.txt", "aguja\n"),
+        ("b/y.txt", "aguja\n"),
+        // Already in the destination, under the name of the second hit.
+        ("dest/y.txt", "otro\n"),
+    ])
+    .await;
+    let root = app.focused().dir().clone();
+    let slot = launch_results(
+        &mut app,
+        &backend,
+        &mut work.search,
+        saved_content(&root, "aguja"),
+        None,
+    )
+    .await
+    .expect("tab");
+    drain_until_closed(&mut app, &mut work, slot).await;
+    let (x, y) = (vp("mem:///a/x.txt"), vp("mem:///b/y.txt"));
+    assert_eq!(hit_paths(&app, slot), vec![x.clone(), y.clone()]);
+    for p in [&x, &y] {
+        cursor_on(&mut app, p);
+        app.focused_mut().toggle_mark();
+    }
+    norte_tui::mutations::submit_transfers(
+        &mut app,
+        &backend,
+        TransferKind::Move,
+        &[x.clone(), y.clone()],
+        &vp("mem:///dest"),
+        norte_core::TransferOptions::default(),
+    )
+    .await;
+    assert_eq!(expected_of(&app, slot), vec![x.clone(), y.clone()]);
+
+    settle_board(&mut app, &backend).await;
+    // The second move met `dest/y.txt`: the collision dialog asks, and the
+    // reader answers "skip" — the same retry `on_dialog_key` sends.
+    app.open_next_pending();
+    let retry = match app.modal.take() {
+        Some(Modal::Collision { retry }) => retry,
+        other => panic!("expected the collision dialog, got {other:?}"),
+    };
+    assert_eq!(retry.from, y);
+    let opts = norte_core::TransferOptions {
+        on_collision: norte_proto::CollisionPolicy::Skip,
+        ..retry.opts
+    };
+    let _ = norte_tui::mutations::submit_transfer(
+        &mut app, &backend, retry.kind, retry.from, retry.to, opts,
+    )
+    .await;
+    settle_board(&mut app, &backend).await;
+
+    assert!(app.panes.browser(slot).expect("tab").is_results());
+    assert_eq!(
+        hit_paths(&app, slot),
+        vec![y],
+        "the moved hit left; the skipped one stays"
+    );
+    assert!(expected_of(&app, slot).is_empty(), "nothing left to check");
+}
+
 /// Review Focus 4: the 🔍 title is two cells wide; the click zones of the
 /// tab strip are measured with the painted width, so a click on the third
 /// tab selects the third tab. The query is hostile and mixes CJK (two

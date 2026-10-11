@@ -47,7 +47,7 @@ pub use inflight::{
 };
 pub use search::{
     SearchRun, drain_search, finalize_outcome, launch_results, on_search_dialog_key,
-    open_hit_folder,
+    open_hit_folder, rerun_restored, rerun_results,
 };
 pub use sync::{
     SyncKey, SyncRun, SyncTick, approve_sync, drain_sync_plan, harvest_sync_apply,

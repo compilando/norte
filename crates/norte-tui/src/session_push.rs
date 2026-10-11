@@ -130,7 +130,14 @@ async fn restore_slots(app: &mut App, backend: &Backend, budget: std::time::Dura
         .slot_ids()
         .into_iter()
         .filter_map(|id| {
-            let dir = app.panes.browser(id).map(|p| p.dir().clone())?;
+            // A restored results tab is not a folder: its `dir()` is the
+            // search root, and listing it here would replace the tab with
+            // that folder. The run loop re-runs its query instead (C7).
+            let dir = app
+                .panes
+                .browser(id)
+                .filter(|p| !p.is_results())
+                .map(|p| p.dir().clone())?;
             let attrs = app.columns.attr_ids_for(dir.scheme());
             Some((id, dir, attrs))
         })

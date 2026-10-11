@@ -80,11 +80,9 @@ pub async fn drain_pending(
     if let Some(req) = app.pending_checksum.take() {
         crate::mutations::checksum_start(app, backend, work, req).await;
     }
-    // Phase 8: dispatch requested an organize plan; the request lives in
-    // `work`, which belongs to the run loop. Same split.
-    if std::mem::take(&mut app.pending_organize) {
-        crate::jobs::spawn_organize_plan(app, backend, work, None);
-    }
+    // An organize plan, and results tabs to re-run: their requests and
+    // runs live in `work`, which belongs to the run loop. Same split.
+    launch_requested_runs(app, backend, work).await;
     // #149 and #164: does it fit at the destination, and can the
     // destination hold what gets written to it? Both are I/O, so the modal
     // opens WITHOUT the notices and this turn fills them in. The split is
@@ -217,6 +215,26 @@ pub async fn drain_pending(
     }
     if std::mem::take(&mut app.pending_subshell) {
         handle_subshell(app, backend, capture, events, work).await;
+    }
+}
+
+/// Launches the runs dispatch or a session left requested: the organize
+/// plan (phase 8), the results tab `pane.refresh` asked to re-run (C2), and
+/// every results tab a session just restored, visible or not (C7) —
+/// start-up, a profile switch and a handoff all apply a session before some
+/// turn header.
+///
+/// A [`drain_pending`] piece, split out for size: it must not be called
+/// from anywhere else.
+async fn launch_requested_runs(app: &mut App, backend: &Backend, work: &mut InFlight) {
+    if std::mem::take(&mut app.pending_organize) {
+        crate::jobs::spawn_organize_plan(app, backend, work, None);
+    }
+    if let Some(slot) = app.pending_results_rerun.take() {
+        crate::jobs::rerun_results(app, backend, &mut work.search, slot).await;
+    }
+    if !app.session.rerun.is_empty() {
+        crate::jobs::rerun_restored(app, backend, &mut work.search).await;
     }
 }
 
