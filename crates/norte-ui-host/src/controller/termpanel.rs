@@ -72,6 +72,9 @@ pub(super) const COMMAND: &str = "layout.terminal";
 /// the shared list, the TUI's too (ADR 0077).
 use norte_frontend::terminals::PASS_THROUGH;
 
+/// An answer and what it publishes.
+type Acked = (ActionAck, Vec<BridgeEnvelope<UiUpdate>>);
+
 impl State {
     /// Opens the terminal panel, or brings it to the front.
     ///
@@ -163,10 +166,7 @@ impl State {
         &mut self,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
-    ) -> Result<
-        (ActionAck, Vec<BridgeEnvelope<UiUpdate>>),
-        (ActionAck, Vec<BridgeEnvelope<UiUpdate>>),
-    > {
+    ) -> Result<Acked, Acked> {
         // A shell sits in a filesystem directory: over an `sftp://` there is
         // nowhere to sit it, and opening it in `$HOME` without saying
         // anything would be opening it somewhere else. It is the same gate as
