@@ -54,3 +54,36 @@ describe("document order", () => {
     expect(position("program-output")).toBeLessThan(position("dialogs"));
   });
 });
+
+describe("overlay veils", () => {
+  // An overlay root with no rule of its own sits in the flow under the
+  // screen, which `body { overflow: hidden }` cuts: compare, sync and a
+  // program's output opened unseen. And its veil is what a click outside the
+  // box lands on (bridge 112).
+  const css = readFileSync(resolve(process.cwd(), "src/style.css"), "utf8");
+  for (const id of [
+    "help",
+    "settings",
+    "extensions",
+    "agents",
+    "theme",
+    "picker",
+    "profiles",
+    "layouts",
+    "columns",
+    "search",
+    "compare",
+    "sync",
+    "plugin-output",
+    "program-output",
+    "goto",
+  ]) {
+    it(`#${id} covers the window when open`, () => {
+      const at = css.indexOf(`#${id}[data-open="true"]`);
+      expect(at, `#${id} has an open rule`).toBeGreaterThanOrEqual(0);
+      const body = css.slice(css.indexOf("{", at), css.indexOf("}", at));
+      expect(body).toContain("position: fixed");
+      expect(body).toContain("inset: 0");
+    });
+  }
+});
