@@ -171,7 +171,7 @@ function createControls(
       input.type = "text";
       input.className = "searchpanel-input";
       input.dataset["field"] = f.id;
-      input.placeholder = label;
+      input.placeholder = screen.catalog.strings[`${f.label_key}-hint`] ?? label;
       input.setAttribute("aria-label", label);
       input.spellcheck = false;
       input.addEventListener("input", () => {

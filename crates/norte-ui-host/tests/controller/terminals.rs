@@ -152,6 +152,39 @@ async fn a_pass_through_chord_switches_instead_of_typing() {
     terminal_until(&mut sub, |t| t.active == first).await;
 }
 
+/// Closing the LAST shell closes its panel. It used to leave an empty "no
+/// shell" box that the panel's key could not close.
+#[tokio::test]
+async fn closing_the_last_shell_closes_the_panel() {
+    let (h, mut sub, _tmp) = local_host(None).await;
+    let t = open_panel(&h, &mut sub).await;
+    let id = t.active.expect("a shell in front");
+    h.dispatch(UiAction::TerminalClose { id })
+        .await
+        .expect("host alive");
+    snapshot_until(&h, &mut sub, "the terminal slot gone", |s| {
+        (!s.slots.iter().any(|x| matches!(x, SlotView::Terminal(_)))).then_some(())
+    })
+    .await;
+}
+
+/// A shell that EXITS on its own leaves the panel, empty; the panel's ✕
+/// (a close naming no live shell) closes it. Nothing could before.
+#[tokio::test]
+async fn an_empty_panel_closes_with_its_close_button() {
+    let (h, mut sub, _tmp) = local_host(None).await;
+    open_panel(&h, &mut sub).await;
+    type_line(&h, "exit").await;
+    terminal_until(&mut sub, |t| t.instances.is_empty()).await;
+    h.dispatch(UiAction::TerminalClose { id: 0 })
+        .await
+        .expect("host alive");
+    snapshot_until(&h, &mut sub, "the empty terminal slot gone", |s| {
+        (!s.slots.iter().any(|x| matches!(x, SlotView::Terminal(_)))).then_some(())
+    })
+    .await;
+}
+
 /// `alt+x` inside the panel is the shell's (Emacs's `M-x`), NOT
 /// `layout.close-slot`: closing the slot would kill every shell in it.
 #[tokio::test]

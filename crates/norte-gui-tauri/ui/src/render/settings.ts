@@ -12,6 +12,7 @@ import type {
   ThemeView,
 } from "../types";
 import { revealInView, badge } from "./dom";
+import { modalHeader } from "./help";
 
 /**
  * Settings (F11).
@@ -43,6 +44,9 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
     field instanceof HTMLInputElement
       ? [field.selectionStart, field.selectionEnd]
       : [null, null];
+  // Opening is the moment the search box takes the focus, as in any settings
+  // editor: what you type filters, and the arrows still reach the host.
+  const opening = this.settingsRoot.dataset["open"] !== "true";
   this.settingsRoot.dataset["open"] = "true";
   const box = document.createElement("section");
   box.className = "settings";
@@ -50,9 +54,7 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
   box.setAttribute("aria-modal", "true");
   box.setAttribute("aria-label", this.t("settings-title"));
 
-  const title = document.createElement("h1");
-  title.textContent = this.t("settings-title");
-  box.append(title);
+  box.append(modalHeader.call(this, this.t("settings-title"), "settings-head"));
 
   // The search box. A real `<input>` and not a key that travels: printable
   // characters do not reach the host, which is why this screen had no filter
@@ -70,6 +72,7 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
     input.className = "settings-search";
     input.type = "search";
     input.setAttribute("aria-label", this.t("settings-title"));
+    input.placeholder = this.t("settings-search-placeholder");
     input.addEventListener("input", () => {
       this.send({ action: "settings_query", text: input.value });
     });
@@ -235,7 +238,7 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
   // the focus — and the caret — it had at the start. Same cure a dialog's
   // field needed for the same reason.
   this.settingsRoot.replaceChildren(box);
-  if (focused && search instanceof HTMLInputElement) {
+  if ((focused || opening) && search instanceof HTMLInputElement) {
     search.focus();
     if (caret[0] !== null && caret[1] !== null) {
       search.setSelectionRange(caret[0], caret[1]);

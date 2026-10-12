@@ -508,11 +508,19 @@ impl State {
     pub(super) fn close_terminal(
         &mut self,
         id: Option<u32>,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // By key (`None`) with the panel behind a tab: refused. The reader
         // cannot see WHICH shell that would kill. A click names its shell,
         // on something on screen.
         let hidden = self.slot_of_kind(KIND).is_none_or(|s| self.hidden(s.0));
+        // A panel left empty by a shell that exited on its own: no shell to
+        // kill, so the key — or the panel's ✕, which then names no shell —
+        // closes the panel; otherwise nothing could.
+        if self.terminals.is_empty() && (id.is_some() || !hidden) {
+            return self.close_slot_of_kind(KIND, backend, mailbox);
+        }
         let Some(id) = id
             .map(InstanceId)
             .or(self.terminals.active_id().filter(|_| !hidden))
@@ -523,6 +531,15 @@ impl State {
             return not_here();
         };
         bury(vec![gone]);
+        // The last shell takes its panel with it, as in VS Code: left open it
+        // was an empty box the panel's key could not close.
+        if self.terminals.is_empty() && self.slot_of_kind(KIND).is_some() {
+            let (ack, updates) = self.close_slot_of_kind(KIND, backend, mailbox);
+            // A slot that could not close still has to stop showing the shell.
+            if !updates.is_empty() {
+                return (ack, updates);
+            }
+        }
         (self.applied(), self.republicar_terminal())
     }
 

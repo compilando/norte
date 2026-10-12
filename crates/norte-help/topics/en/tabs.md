@@ -38,7 +38,7 @@ is not what anyone wanted.
 {{cmd:pane.tab-close}} closes the current one. When only one is left the group
 disappears and the panel is a panel again — a tab bar with a single tab says
 nothing. Closing the last panel on a side is **not** this; that is
-`layout.close-slot`.
+{{cmd:layout.close-slot}}.
 
 A tab you cannot see costs nothing: it does not watch its directory and asks
 for nothing. It catches up when you come back to it.

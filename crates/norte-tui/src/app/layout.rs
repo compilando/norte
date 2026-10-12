@@ -1316,6 +1316,23 @@ impl App {
         }
     }
 
+    /// Closes the terminal panel, keyboard included. Only for a panel with
+    /// no shell left: closing one that has shells would kill them. A panel
+    /// that is the layout's last slot cannot close and stays as it is.
+    pub fn close_terminal_slot(&mut self) {
+        if let Some(id) = self.terminal_slot()
+            && let Some(new_layout) = self.layout.close_slot(id)
+        {
+            self.layout = new_layout;
+            self.panes.refresh_visible(&self.layout);
+            self.prune_by_tree();
+        }
+        if self.key_owner == KeyOwner::Terminal {
+            self.key_owner = KeyOwner::Panes;
+        }
+        self.settle_key_owner();
+    }
+
     /// The log panel's slot **only if it's really on screen**.
     ///
     /// Different from [`Self::log_slot`], which says whether it EXISTS: a

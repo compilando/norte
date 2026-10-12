@@ -179,3 +179,4 @@ edits.
 | [0176](0176-the-terminal-panel-holds-several-shells.md) | The terminal panel holds several shells | accepted |
 | [0177](0177-user-commands-run-programs-on-a-key.md) | User commands run programs on a key | accepted |
 | [0178](0178-a-click-outside-closes-a-light-popup.md) | A click outside closes a light popup, never a question | accepted |
+| [0179](0179-a-plain-word-searches-inside-names.md) | A plain word in a search form searches inside names | accepted |

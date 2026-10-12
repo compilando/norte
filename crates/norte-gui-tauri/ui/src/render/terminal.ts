@@ -176,9 +176,9 @@ function titleActions(this: Screen, slot: TerminalSlotView): HTMLElement {
     }
   });
   button("✕", "terminal-close", () => {
-    if (slot.active != null) {
-      this.send({ action: "terminal_close", id: slot.active });
-    }
+    // With no shell left (it exited on its own) there is no id to name: the
+    // host reads a close on an empty panel as closing the panel.
+    this.send({ action: "terminal_close", id: slot.active ?? 0 });
   });
   return box;
 }

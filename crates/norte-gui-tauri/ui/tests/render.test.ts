@@ -994,6 +994,21 @@ describe("Screen", () => {
     expect(err.textContent).toContain("EACCES");
   });
 
+  // The failure's notice used to stay painted over the first row once the
+  // listing came back: only rows were swept, and it is not a row.
+  it("a listing that recovers from an error drops the error notice", () => {
+    const { screen, root } = mount();
+    screen.paint(
+      view({
+        state: { state: "error", reason_key: "listing-failed", detail: "EACCES" },
+      }),
+    );
+    expect(root.querySelector(".error")).not.toBeNull();
+    screen.paint(view({ rows: [row(0, "a.txt")] }));
+    expect(root.querySelector(".error")).toBeNull();
+    expect(root.querySelector(".slot-retry")).toBeNull();
+  });
+
   it("rows carry roles and state for the screen reader", () => {
     const { screen, root } = mount();
     screen.paint(view({ rows: [row(0, "a.txt", { selected: true }), row(1, "b.txt")] }));

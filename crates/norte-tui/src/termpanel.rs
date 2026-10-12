@@ -349,6 +349,12 @@ pub fn cmd_new(
 
 /// `terminal.close`: the one in front, killing its shell.
 pub fn cmd_close(app: &mut crate::app::App) {
+    // A panel left empty by a shell that exited on its own: there is no
+    // shell to kill, so the key closes the panel — otherwise nothing could.
+    if app.terminals.is_empty() && app.terminal_visible() {
+        app.close_terminal_slot();
+        return;
+    }
     // Not with the panel behind a tab: the reader cannot see WHICH shell
     // that would kill, and closing one is a destruction.
     let Some(id) = app.terminals.active_id().filter(|_| app.terminal_visible()) else {
@@ -357,8 +363,11 @@ pub fn cmd_close(app: &mut crate::app::App) {
     if let Some(gone) = app.terminals.close(id) {
         bury(vec![gone]);
     }
-    if app.terminals.is_empty() && app.key_owner() == crate::app::KeyOwner::Terminal {
-        app.release_keyboard();
+    // The last shell takes its panel with it, as in VS Code. Left open, it
+    // was an empty box that no key could close: the panel's key only moves
+    // the keyboard, and `layout.close-slot` cannot reach it from inside.
+    if app.terminals.is_empty() {
+        app.close_terminal_slot();
     }
 }
 

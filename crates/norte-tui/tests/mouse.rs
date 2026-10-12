@@ -2413,6 +2413,38 @@ fn closing_a_hidden_terminal_kills_nothing() {
     assert!(app.message.is_some(), "and the refusal is said");
 }
 
+/// Closing the LAST shell closes its panel and hands the keyboard back. It
+/// used to leave an empty "no shell" box that no key could close: the
+/// panel's key only moves the keyboard.
+#[cfg(unix)]
+#[test]
+fn closing_the_last_shell_closes_the_panel() {
+    let (mut app, _) = app_with_shells(1);
+    let _ = paint_at(&mut app, 100, 30);
+    assert!(app.terminal_visible());
+    norte_tui::termpanel::cmd_close(&mut app);
+    assert!(app.terminals.is_empty());
+    assert!(
+        app.terminal_slot().is_none(),
+        "the panel goes with its shell"
+    );
+    assert_ne!(app.key_owner(), norte_tui::app::KeyOwner::Terminal);
+}
+
+/// A panel left EMPTY (its shell exited on its own) closes with
+/// `terminal.close`: there is no shell to kill, and no other key closed it.
+#[cfg(unix)]
+#[test]
+fn closing_an_empty_terminal_panel_closes_it() {
+    let (mut app, _) = app_with_shells(1);
+    let _ = paint_at(&mut app, 100, 30);
+    let id = app.terminals.active_id().expect("a shell");
+    let _ = app.terminals.close(id);
+    assert!(app.terminal_slot().is_some(), "the slot outlives its shell");
+    norte_tui::termpanel::cmd_close(&mut app);
+    assert!(app.terminal_slot().is_none());
+}
+
 /// With the terminal's list open on top, a click behind it does nothing.
 #[cfg(unix)]
 #[test]
