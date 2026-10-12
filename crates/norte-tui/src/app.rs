@@ -866,6 +866,12 @@ pub struct App {
     /// reopened. What kills them is closing the slot (`layout.close-slot`),
     /// closing an instance by name, or quitting norte.
     pub terminals: crate::termpanel::Shells,
+    /// Per shell, whether its output wakes the screen
+    /// ([`crate::termpanel::refresh_wakes`]).
+    pub term_wakes: std::collections::HashMap<
+        norte_frontend::terminals::InstanceId,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    >,
     /// Rung by the terminal panel's reader thread when its shell writes
     /// (#405): the loop paints the echo at once, and a quiet terminal no
     /// longer keeps the 100 ms tick drawing.
@@ -1404,6 +1410,7 @@ impl App {
             // going to use is a process, a pty and someone's `.bashrc`
             // running just in case.
             terminals: crate::termpanel::Shells::new(),
+            term_wakes: std::collections::HashMap::new(),
             term_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
             log_panel: norte_frontend::logpanel::LogPanel::default(),
             log_filter_input: None,

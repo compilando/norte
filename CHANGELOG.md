@@ -7,6 +7,19 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Changed
+
+- **The terminal list names a shell by its directory**: bash's and zsh's
+  `user@host:~/dir` title reads `~/dir`, which is what tells two shells
+  apart in a narrow list. A name you give is shown as you wrote it.
+- **`Ctrl+Alt+w` no longer closes a shell you cannot see**: with the
+  terminal panel behind another tab it refuses and says so. The `✕`
+  button and the list still close the shell they show.
+- **When the last shell ends, the window gives the keyboard back** to the
+  listing, as the terminal frontend already did.
+- A busy shell behind another no longer repaints the terminal frontend at
+  its output rate once it carries its `●`.
+
 ### Added
 
 - **Search panel** (protocol 0.86, bridge 111). `Alt+Shift+F`

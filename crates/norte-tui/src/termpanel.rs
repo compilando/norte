@@ -218,10 +218,48 @@ pub fn start_instance_in(
         "TUI opened a shell in a terminal panel (not journalled: no actor, no reversal)"
     );
     let wake = std::sync::Arc::clone(&app.term_wake);
-    t.set_waker(std::sync::Arc::new(move || wake.notify_one()));
-    app.terminals
+    let armed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let gate = std::sync::Arc::clone(&armed);
+    t.set_waker(std::sync::Arc::new(move || {
+        if gate.load(std::sync::atomic::Ordering::Relaxed) {
+            wake.notify_one();
+        }
+    }));
+    let id = app
+        .terminals
         .push(profile.name.clone(), profile.icon, profile.color, Pty(t));
+    app.term_wakes.insert(id, armed);
     Ok(())
+}
+
+/// Which shells may wake the screen when they write: the one in front, and
+/// one behind until it is marked `●` — after that its output changes
+/// nothing on screen, and a `yes` behind a tab repainted the TUI at its
+/// output rate. It is still pumped every frame (the tick), so its screen
+/// stays whole. Called after each tick.
+pub fn refresh_wakes(app: &mut crate::app::App) {
+    let front = app.terminals.active_id();
+    let live: Vec<_> = app
+        .terminals
+        .iter()
+        .map(|i| (i.id, Some(i.id) == front || !i.unseen))
+        .collect();
+    app.term_wakes
+        .retain(|id, _| live.iter().any(|(l, _)| l == id));
+    for (id, armed) in live {
+        app.term_wakes
+            .entry(id)
+            .or_insert_with(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)))
+            .store(armed, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Does this shell wake the screen when it writes? (See [`refresh_wakes`].)
+#[must_use]
+pub fn wakes(app: &crate::app::App, id: norte_frontend::terminals::InstanceId) -> bool {
+    app.term_wakes
+        .get(&id)
+        .is_some_and(|a| a.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// What a row of the terminal picker does.
@@ -311,7 +349,9 @@ pub fn cmd_new(
 
 /// `terminal.close`: the one in front, killing its shell.
 pub fn cmd_close(app: &mut crate::app::App) {
-    let Some(id) = app.terminals.active_id() else {
+    // Not with the panel behind a tab: the reader cannot see WHICH shell
+    // that would kill, and closing one is a destruction.
+    let Some(id) = app.terminals.active_id().filter(|_| app.terminal_visible()) else {
         return not_here(app);
     };
     if let Some(gone) = app.terminals.close(id) {
