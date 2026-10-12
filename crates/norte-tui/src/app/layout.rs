@@ -1252,6 +1252,12 @@ impl App {
         self.key_owner = KeyOwner::Panes;
     }
 
+    /// Is the terminal panel in front of the reader (not behind a tab)?
+    #[must_use]
+    pub fn terminal_visible(&self) -> bool {
+        self.slot_of_kind_visible(crate::termpanel::KIND).is_some()
+    }
+
     /// The terminal panel's slot, if it exists.
     #[must_use]
     pub fn terminal_slot(&self) -> Option<norte_frontend::layout::SlotId> {

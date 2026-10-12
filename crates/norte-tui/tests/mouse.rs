@@ -2327,6 +2327,81 @@ fn the_door_key_on_an_empty_panel_starts_a_shell() {
     assert_eq!(app.key_owner(), KeyOwner::Panes);
 }
 
+/// A shell behind another wakes the screen until it is marked `●`, and then
+/// no more: a `yes` behind a tab no longer repaints the TUI at its output
+/// rate. The one in front always wakes it.
+#[cfg(unix)]
+#[test]
+fn a_marked_shell_behind_stops_waking_the_screen() {
+    let (mut app, _) = app_with_shells(2);
+    let [behind, front]: [_; 2] = app
+        .terminals
+        .iter()
+        .map(|i| i.id)
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("two");
+    // Its prompt may already have marked it: seen once, then behind again.
+    app.terminals.select(behind);
+    app.terminals.select(front);
+    norte_tui::termpanel::refresh_wakes(&mut app);
+    assert!(norte_tui::termpanel::wakes(&app, behind), "not marked yet");
+    app.terminals.on_output(behind);
+    norte_tui::termpanel::refresh_wakes(&mut app);
+    assert!(!norte_tui::termpanel::wakes(&app, behind), "marked: quiet");
+    assert!(norte_tui::termpanel::wakes(&app, front));
+    app.terminals.select(behind);
+    norte_tui::termpanel::refresh_wakes(&mut app);
+    assert!(norte_tui::termpanel::wakes(&app, behind), "in front again");
+}
+
+/// Every shell failed (kept, with its last screen): the panel's key starts
+/// a live one instead of leaving — the TUI half of the window's test.
+#[cfg(unix)]
+#[test]
+fn the_door_key_with_only_failed_shells_starts_a_live_one() {
+    let (mut app, _) = app_with_shells(1);
+    assert_eq!(app.key_owner(), KeyOwner::Terminal);
+    if let Some(i) = app.terminals.active_mut() {
+        i.shell.0.write(b"exit 3\n");
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while app.terminals.active().and_then(|i| i.exited).is_none()
+        && std::time::Instant::now() < deadline
+    {
+        let _ = paint_at(&mut app, 100, 30);
+        std::thread::yield_now();
+    }
+    assert_eq!(app.terminals.active().and_then(|i| i.exited), Some(3));
+    let cfg = norte_frontend::config::load(&norte_config::Layers { dirs: Vec::new() })
+        .expect("factory config");
+    // `app_with_shells` sits on a made-up `file:///casa`: a shell needs a
+    // real directory, so the focused pane goes to the temp dir first.
+    let tmp = vp(&format!("file://{}", std::env::temp_dir().display()));
+    app.panes[0] = Pane::new(tmp.clone(), Vec::new());
+    app.panes[1] = Pane::new(tmp, Vec::new());
+    norte_tui::termpanel::on_door(&mut app, &cfg);
+    assert_eq!(app.terminals.len(), 2, "{:?}", app.message);
+    assert_eq!(app.terminals.active().and_then(|i| i.exited), None);
+}
+
+/// `terminal.close` with the panel BEHIND a tab kills nothing: the reader
+/// cannot see which shell that would be, and closing is a destruction.
+#[cfg(unix)]
+#[test]
+fn closing_a_hidden_terminal_kills_nothing() {
+    let (mut app, _) = app_with_shells(1);
+    app.toggle_log();
+    let _ = paint_at(&mut app, 100, 30);
+    assert!(
+        !app.terminal_visible(),
+        "the log is in front of the terminal"
+    );
+    norte_tui::termpanel::cmd_close(&mut app);
+    assert_eq!(app.terminals.len(), 1, "the shell lives");
+    assert!(app.message.is_some(), "and the refusal is said");
+}
+
 /// With the terminal's list open on top, a click behind it does nothing.
 #[cfg(unix)]
 #[test]

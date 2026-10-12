@@ -98,6 +98,7 @@ pub fn before_frame(app: &mut App, area: Rect) {
             (grid.width, grid.height)
         });
         let _ = app.terminals.tick(size);
+        crate::termpanel::refresh_wakes(app);
         // The last shell left cleanly: the slot says "no shell" and stays —
         // closing it on its own would move the reader's layout without them
         // asking. A failed one stays listed, so the keyboard does too.

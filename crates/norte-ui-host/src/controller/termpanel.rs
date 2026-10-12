@@ -382,7 +382,7 @@ impl State {
         let Some(slot) = self.slot_of_kind(KIND) else {
             return not_here();
         };
-        let names = self.panel_de_terminal(slot.0).profiles;
+        let names = self.profile_names();
         self.open_terminal_picker(crate::pickers::Selector::shell_profiles(slot.0, &names))
     }
 
@@ -509,7 +509,14 @@ impl State {
         &mut self,
         id: Option<u32>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(id) = id.map(InstanceId).or(self.terminals.active_id()) else {
+        // By key (`None`) with the panel behind a tab: refused. The reader
+        // cannot see WHICH shell that would kill. A click names its shell,
+        // on something on screen.
+        let hidden = self.slot_of_kind(KIND).is_none_or(|s| self.hidden(s.0));
+        let Some(id) = id
+            .map(InstanceId)
+            .or(self.terminals.active_id().filter(|_| !hidden))
+        else {
             return not_here();
         };
         let Some(gone) = self.terminals.close(id) else {
@@ -607,6 +614,21 @@ impl State {
             self.probe_terminal(mailbox);
         } else {
             self.terminal_epoch += 1;
+        }
+        // The last shell left cleanly with the keyboard inside: it goes back
+        // to the listing, as in the TUI — keys typed into a panel with no
+        // shell went nowhere. The active role travels in the layout, so the
+        // whole frame goes.
+        let slot = self.slot_of_kind(KIND);
+        let inside =
+            slot.is_some() && self.roles.get(norte_frontend::layout::RoleId::Active) == slot;
+        if self.terminals.is_empty() && inside {
+            let listing = norte_frontend::layout::SlotId(self.active());
+            self.roles
+                .set(norte_frontend::layout::RoleId::Active, listing);
+            self.reconciles_roles();
+            let snap = self.snapshot();
+            return vec![self.over(UiUpdate::Snapshot(Box::new(snap)))];
         }
         // A quiet tick produces no patch: a quiet shell does not wake the
         // renderer thirty times a second.
@@ -758,17 +780,22 @@ impl State {
             .collect();
         view.active = self.terminals.active_id().map(|id| id.0);
         view.list_cols = self.list_cols();
+        view.profiles = self.profile_names();
+        view
+    }
+
+    /// The shell profiles' names, the default first: the `▾` menu's rows.
+    fn profile_names(&self) -> Vec<String> {
         let profiles = &self.config.shell_profiles;
         let default = &profiles.default_profile().name;
-        view.profiles = std::iter::once(default.clone())
+        std::iter::once(default.clone())
             .chain(
                 profiles
                     .iter()
                     .filter(|p| &p.name != default)
                     .map(|p| p.name.clone()),
             )
-            .collect();
-        view
+            .collect()
     }
 }
 

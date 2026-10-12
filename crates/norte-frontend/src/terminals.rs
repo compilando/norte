@@ -108,6 +108,23 @@ impl TerminalIcon {
     }
 }
 
+/// A program's title as a list shows it: bash's and zsh's `user@host:dir`
+/// becomes `dir` — in a narrow list the user and host fill the row and are
+/// the same for every shell. Any other shape is left alone.
+fn short_title(t: &str) -> &str {
+    let Some((who, dir)) = t.split_once(':') else {
+        return t;
+    };
+    let user_at_host = who
+        .split_once('@')
+        .is_some_and(|(u, h)| !u.is_empty() && !h.is_empty() && !who.contains(' '));
+    if user_at_host && !dir.is_empty() {
+        dir
+    } else {
+        t
+    }
+}
+
 /// What [`Terminals::tick`] needs from a shell. A trait so the rules are
 /// tested without a pty; each frontend implements it over `norte-term`'s.
 pub trait TerminalShell {
@@ -368,7 +385,7 @@ impl<S> Terminals<S> {
         Some(
             i.name
                 .as_deref()
-                .or(i.title.as_deref())
+                .or(i.title.as_deref().map(short_title))
                 .unwrap_or(&i.profile),
         )
     }
@@ -587,6 +604,27 @@ mod tests {
         assert_eq!(t.display_title(a), Some("build"));
         t.rename(a, "   ");
         assert_eq!(t.display_title(a), Some("vim"), "blank name clears it");
+    }
+
+    /// bash and zsh title themselves `user@host:dir`: in an 18-column list
+    /// that is the user and host and nothing else. The DIRECTORY is what
+    /// tells two shells apart, so that is what is shown. A name the reader
+    /// gave is never shortened, nor a title of another shape.
+    #[test]
+    fn a_user_at_host_title_shows_its_directory() {
+        let (mut t, [a, ..]) = three();
+        t.set_title(a, "oscar@gp76:~/src/norte".into());
+        assert_eq!(t.display_title(a), Some("~/src/norte"));
+        t.set_title(a, "vim notes.md".into());
+        assert_eq!(t.display_title(a), Some("vim notes.md"));
+        t.set_title(a, "a@b:".into());
+        assert_eq!(t.display_title(a), Some("a@b:"), "nothing after: kept");
+        t.rename(a, "me@host:x");
+        assert_eq!(
+            t.display_title(a),
+            Some("me@host:x"),
+            "a name is the reader's"
+        );
     }
 
     /// An empty OSC title is a program clearing it: back to the profile.
