@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 111;
+export const BRIDGE_VERSION = 112;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -2089,6 +2089,8 @@ export type UiAction =
   | { action: "context_menu_point_row"; row: number }
   | { action: "context_menu_activate_row"; row: number }
   | { action: "context_menu_close" }
+  /** A press on an overlay's veil, outside its box (bridge 112). */
+  | { action: "overlay_dismiss" }
   | { action: "goto_point_row"; row: number }
   | { action: "goto_activate_row"; row: number }
   | { action: "goto_paste"; text: string }

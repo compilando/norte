@@ -196,6 +196,86 @@ impl State {
             || self.ir_a.is_some()
     }
 
+    /// A press on the veil of the overlay in front, outside its box
+    /// (`overlay_dismiss`, bridge 112).
+    ///
+    /// A LIGHT popup — the search box, a picker, the search form, help, an
+    /// output — closes as `Escape` closes it, through the same key path. A
+    /// question (a dialog, the wizard) or a whole screen that approves a
+    /// mutation or edits settings stays: a stray click must not answer it.
+    /// The order below is `key_of_an_overlay`'s, so "in front" is the same
+    /// overlay for the mouse as for the keys.
+    pub(super) fn dismiss_overlay(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let light = if let Some(d) = self.dialogs.last() {
+            // The search form travels as a dialog here and is a popup in
+            // the terminal (`draw_search_dialog`): a form, not a question.
+            d.vista.title_key == "modal-search-title"
+        } else if self.wizard.is_some() {
+            false
+        } else if self.desktop.output.is_some() || self.desktop.program.is_some() {
+            true
+        } else if let Some(h) = self.help.as_mut() {
+            // `Escape` while filtering only ends the filter; a click outside
+            // closes help all the same.
+            if h.state.filtering() {
+                h.state.end_filter();
+            }
+            true
+        } else if self.sync.is_some()
+            || self.comparison.is_some()
+            || self.revision_ia.is_some()
+            || self.revision_organize.is_some()
+        {
+            false
+        } else if self.search.is_some()
+            || self.selector_layout.is_some()
+            || self.selector_columns.is_some()
+            || self.selector.is_some()
+            || self.selector_profile.is_some()
+            || self.theme_chosen.is_some()
+        {
+            true
+        } else if self.extensions.is_some()
+            || self.agency.panel
+            || self.settings.is_some()
+            || self.visor.is_some()
+        {
+            false
+        } else {
+            self.context_menu.is_some() || self.menu.is_some() || self.ir_a.is_some()
+        };
+        if !light {
+            return (self.applied(), Vec::new());
+        }
+        // A filtered history selector takes `Escape` as "drop the filter";
+        // the click closes it all the same, as it does help. Its patch is
+        // superseded by the close below.
+        if self.dialogs.is_empty()
+            && self.desktop.output.is_none()
+            && self.desktop.program.is_none()
+            && self.help.is_none()
+            && self.search.is_none()
+            && self.selector_layout.is_none()
+            && self.selector_columns.is_none()
+            && self.selector.as_ref().is_some_and(|s| s.filter().is_some())
+        {
+            let _ = self.filter_history(None);
+        }
+        let esc = crate::keys::KeyInput {
+            key: "Escape".to_owned(),
+            ctrl: false,
+            alt: false,
+            shift: false,
+            meta: false,
+        };
+        self.key_of_an_overlay(&esc, backend, mailbox)
+            .unwrap_or_else(|| (self.applied(), Vec::new()))
+    }
+
     pub(super) fn key_of_an_overlay(
         &mut self,
         k: &crate::keys::KeyInput,

@@ -6243,6 +6243,18 @@ describe("context menu", () => {
     expect(box.querySelectorAll(".context-menu-rule")).toHaveLength(1);
   });
 
+  it("a press on an overlay's veil asks to dismiss it; one inside its box does not", () => {
+    const { screen, sent } = mount();
+    screen.paint(view({}));
+    const columns = screen.columnsRoot;
+    const box = document.createElement("div");
+    columns.append(box);
+    box.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    expect(sent.filter((a) => a.action === "overlay_dismiss")).toEqual([]);
+    columns.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    expect(sent.at(-1)).toEqual({ action: "overlay_dismiss" });
+  });
+
   it("hover points, click activates, outside closes, blur closes", () => {
     const { screen, sent } = mount();
     screen.paint({ ...view({}), context_menu: menuView() });

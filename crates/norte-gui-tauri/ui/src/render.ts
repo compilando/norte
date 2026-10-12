@@ -209,7 +209,38 @@ export class Screen {
       Promise.resolve(new ArrayBuffer(0)),
     /** The window's own title bar (ADR 0136): what it asks the window for. */
     readonly windowControl: (verb: WindowVerb) => void = () => undefined,
-  ) {}
+  ) {
+    // A press on an overlay's VEIL — the root itself, outside its box — is
+    // a click outside the popup (bridge 112). The host decides whether the
+    // one in front is light enough to close; a question stays.
+    const veils = [
+      helpRoot,
+      settingsRoot,
+      extensionsRoot,
+      themeRoot,
+      pickerRoot,
+      profilesRoot,
+      layoutsRoot,
+      columnsRoot,
+      searchRoot,
+      compareRoot,
+      syncRoot,
+      agentsRoot,
+      pluginOutputRoot,
+      programOutputRoot,
+      dialogsRoot,
+      aiRenameRoot,
+      organizeRoot,
+      gotoRoot,
+    ];
+    for (const veil of veils) {
+      veil.addEventListener("pointerdown", (e: PointerEvent) => {
+        if (e.target === veil && e.button === 0) {
+          send({ action: "overlay_dismiss" });
+        }
+      });
+    }
+  }
 
   /**
    * Did what the menu bar reserves change since it was last asked? A

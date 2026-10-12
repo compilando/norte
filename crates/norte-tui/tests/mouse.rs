@@ -91,33 +91,39 @@ fn paint_at(app: &mut App, w: u16, h: u16) -> Vec<String> {
     // the geometry. Without the first step it would paint a window nobody
     // reconciled, i.e. a screen no user sees.
     ui::before_frame(app, ratatui::layout::Rect::new(0, 0, w, h));
-    let frame = terminal.draw(|f| ui::draw(f, app)).expect("draw");
-    let geometry = ui::pane_geometry(app, frame.area);
-    mouse::after_frame(
-        app,
-        geometry,
-        mouse::FrameZones {
-            tabs: ui::tab_zones(app, frame.area),
-            menus: ui::menu_zones(app, frame.area),
-            panels: ui::panel_zones(app, frame.area),
-            keys: ui::key_zones(app, frame.area),
-            modal: ui::modal_zones(app, frame.area),
-            places: ui::places_zones(app, frame.area),
-            tree: ui::tree_zones(app, frame.area),
-            extensions: ui::extension_zones(app, frame.area),
-            help: ui::help_zones(app, frame.area),
-            session: ui::session_zone(app, frame.area),
-            status_items: ui::status_item_zones(app, frame.area),
-            borders: ui::resize_borders(app, frame.area),
-            slots: ui::panel_slots(app, frame.area),
-        },
-    );
+    let area = terminal.draw(|f| ui::draw(f, app)).expect("draw").area;
+    hand_back(app, area);
     terminal
         .backend()
         .to_string()
         .lines()
         .map(ToOwned::to_owned)
         .collect()
+}
+
+/// Returns a painted frame's geometry to the model, as the run loop does
+/// after the paint.
+fn hand_back(app: &mut App, area: ratatui::layout::Rect) {
+    let geometry = ui::pane_geometry(app, area);
+    mouse::after_frame(
+        app,
+        geometry,
+        mouse::FrameZones {
+            tabs: ui::tab_zones(app, area),
+            menus: ui::menu_zones(app, area),
+            panels: ui::panel_zones(app, area),
+            keys: ui::key_zones(app, area),
+            modal: ui::modal_zones(app, area),
+            places: ui::places_zones(app, area),
+            tree: ui::tree_zones(app, area),
+            extensions: ui::extension_zones(app, area),
+            help: ui::help_zones(app, area),
+            session: ui::session_zone(app, area),
+            status_items: ui::status_item_zones(app, area),
+            borders: ui::resize_borders(app, area),
+            slots: ui::panel_slots(app, area),
+        },
+    );
 }
 
 /// Checks that row `row` of the frame paints entry `index` of the LEFT
@@ -2203,11 +2209,16 @@ fn the_wheel_scrolls_down_through_help_and_a_click_chooses_a_page() {
         "the click selected THAT row's page"
     );
 
-    // And none of this reaches the panes below.
+    // And none of this reaches the panes below: a click outside help closes
+    // it as `Esc` does (ADR 0178), it is not a click on the listing.
     assert_eq!(
         mouse::handle(&mut app, ev(DOWN, 0, 0)),
-        After::Nothing,
-        "with help in front, a click outside it does nothing"
+        After::SynthKey,
+        "with help in front, a click outside it closes help"
+    );
+    assert_eq!(
+        app.pending_key.map(|k| k.code),
+        Some(crossterm::event::KeyCode::Esc)
     );
 }
 
@@ -2495,4 +2506,69 @@ fn a_click_on_a_search_result_selects_the_row_under_it() {
         After::SearchPanelActivate
     );
     assert_eq!(app.panes.search_panel(slot).expect("model").cursor(), 3);
+}
+
+/// A click outside the search box closes it as `Esc` does; one inside it
+/// does not.
+#[test]
+fn a_click_outside_a_light_popup_sends_esc() {
+    let mut app = app_painted(20);
+    app.goto = Some(norte_frontend::goto::Goto::new(Vec::new()));
+    let _ = paint(&mut app);
+    assert_eq!(
+        mouse::handle(&mut app, ev(DOWN, W / 2, H / 2 - 1)),
+        After::Nothing
+    );
+    assert!(app.pending_key.is_none(), "inside the box");
+    assert_eq!(mouse::handle(&mut app, ev(DOWN, 0, H - 3)), After::SynthKey);
+    assert_eq!(
+        app.pending_key.map(|k| k.code),
+        Some(crossterm::event::KeyCode::Esc)
+    );
+}
+
+/// The run loop awaits between the paint and the mouse, and the runtime may
+/// resume it on another thread: the popup's box travels in the app, not in
+/// the painting thread. Kept on that thread, the real `ntc` ignored the
+/// click.
+#[test]
+fn the_popup_box_survives_a_thread_hop() {
+    let mut app = app_painted(20);
+    app.goto = Some(norte_frontend::goto::Goto::new(Vec::new()));
+    let area = std::thread::scope(|s| {
+        s.spawn(|| {
+            let mut terminal = Terminal::new(TestBackend::new(W, H)).expect("test terminal");
+            ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, W, H));
+            terminal.draw(|f| ui::draw(f, &app)).expect("draw").area
+        })
+        .join()
+        .expect("paint thread")
+    });
+    hand_back(&mut app, area);
+    assert_eq!(mouse::handle(&mut app, ev(DOWN, 0, H - 3)), After::SynthKey);
+}
+
+/// A double click INSIDE the profiles picker does not reach the listing it
+/// covers: the picker was missing from `overlay_open`, and a click there
+/// entered the row underneath.
+#[test]
+fn a_click_inside_the_profiles_picker_stays_in_it() {
+    let mut app = app_painted(20);
+    app.open_profile_picker(Vec::new());
+    let _ = paint(&mut app);
+    let (col, row) = (W / 2, H / 2);
+    assert_eq!(mouse::handle(&mut app, ev(DOWN, col, row)), After::Nothing);
+    assert_eq!(mouse::handle(&mut app, ev(DOWN, col, row)), After::Nothing);
+    assert!(app.pending_key.is_none());
+}
+
+/// A question painted over the popup is not answered by a click outside.
+#[test]
+fn a_click_outside_leaves_a_question_open() {
+    let mut app = app_painted(20);
+    app.goto = Some(norte_frontend::goto::Goto::new(Vec::new()));
+    app.modal = Some(Modal::ConfirmQuit);
+    let _ = paint(&mut app);
+    assert_eq!(mouse::handle(&mut app, ev(DOWN, 0, H - 3)), After::Nothing);
+    assert!(app.pending_key.is_none());
 }

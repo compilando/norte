@@ -992,6 +992,11 @@ pub enum UiAction {
     /// Closes the context menu without running anything (a click outside,
     /// `Escape`). The marks it dropped on opening stay dropped.
     ContextMenuClose,
+    /// A press on the veil behind the overlay in front, outside its box
+    /// (bridge 112). The host decides: a light popup (the search box, a
+    /// picker, the search form, help, an output) closes as with `Escape`;
+    /// a question or a whole screen stays, and the press does nothing.
+    OverlayDismiss,
     /// Alt pressed and released ALONE, with no other key in between
     /// (bridge 68).
     ///

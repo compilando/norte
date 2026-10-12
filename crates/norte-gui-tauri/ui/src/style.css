@@ -4045,7 +4045,8 @@ button.status-item:hover {
   opacity: 0.8;
 }
 
-#plugin-output[data-open="true"] {
+#plugin-output[data-open="true"],
+#program-output[data-open="true"] {
   position: fixed;
   inset: 0;
   display: flex;
@@ -4054,7 +4055,8 @@ button.status-item:hover {
   background: rgb(0 0 0 / 55%);
 }
 
-#plugin-output[data-open="false"] {
+#plugin-output[data-open="false"],
+#program-output[data-open="false"] {
   display: none;
 }
 
@@ -5499,6 +5501,54 @@ button.status-item:hover {
 
 .layouts-legend dd {
   margin: 0;
+}
+
+/* --- Compare and sync -------------------------------------------------- */
+
+/* Without a rule of their own both roots sat in the flow under the screen,
+   which `body { overflow: hidden }` cuts: the panels opened unseen. */
+#compare[data-open="true"],
+#sync[data-open="true"] {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 55%);
+}
+
+#compare[data-open="false"],
+#sync[data-open="false"] {
+  display: none;
+}
+
+.compare,
+.sync {
+  width: min(140ch, 94vw);
+  max-height: min(85vh, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-focus);
+  overflow: auto;
+}
+
+.compare ul,
+.compare ol,
+.sync ul,
+.sync ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.compare-row,
+.sync-step {
+  display: flex;
+  gap: 1ch;
+  white-space: pre;
 }
 
 /* --- Subtree search --------------------------------------------------- */

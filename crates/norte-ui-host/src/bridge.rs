@@ -621,7 +621,9 @@ use serde::{Deserialize, Serialize};
 ///   2026-10-09). `SearchPanelSlotView.generation` numbers the rows'
 ///   indexing, and `_activate` and `_fold` echo it back: a row renumbered
 ///   since that generation is refused as `StaleAction::Generation`.
-pub const BRIDGE_VERSION: u32 = 111;
+/// - **112**: the action `overlay_dismiss`: a press on the veil behind the
+///   overlay in front closes it when it is a light popup.
+pub const BRIDGE_VERSION: u32 = 112;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///
