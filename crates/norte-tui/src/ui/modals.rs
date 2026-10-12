@@ -25,7 +25,7 @@ use unicode_width::UnicodeWidthStr;
 use ratatui::layout::Rect;
 
 use super::text::{badge_prefixed, clamp_chars, tail_window};
-use super::{HOSTILE_BADGE, centered, clear_themed};
+use super::{HOSTILE_BADGE, centered, clear_modal};
 use crate::app::{AI_RENAME_PAIR_LIMIT, App, SEMANTIC_HIT_LIMIT, display_name};
 use crate::theme::TuiTheme;
 use norte_frontend::middle_ellipsis;
@@ -883,7 +883,7 @@ pub(crate) fn draw_modal(
         wraps,
         interior,
     } = modal_frame(modal, reinterpret, hints, frame.area());
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
     let text_lines: Vec<ratatui::text::Line<'_>> = body
         .iter()
         .map(|l| {

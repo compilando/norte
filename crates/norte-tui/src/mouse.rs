@@ -246,6 +246,9 @@ pub struct MouseState {
     /// The last frame's active modal buttons (spec 2026-09-10). Empty = no
     /// modal, or its key line painted as a hint.
     modal_zones: Vec<crate::ui::ModalZone>,
+    /// The last frame's light popup box in front (a picker, the search box,
+    /// help): a click outside it closes it as `Esc` does.
+    popup_box: Option<ratatui::layout::Rect>,
     /// The last frame's clickable tab-bar zones.
     ///
     /// Empty = no panel has tabs, which is the usual case.
@@ -478,6 +481,7 @@ pub fn after_frame(app: &mut App, geometry: Option<Vec<PaneGeometry>>, zones: Fr
     app.mouse.panel_zones = panel_zones;
     app.mouse.key_zones = key_zones;
     app.mouse.modal_zones = modal_zones;
+    app.mouse.popup_box = app.painted_popup.get();
     app.mouse.places_zones = places_zones;
     app.mouse.tree_zones = tree_zones;
     app.mouse.extension_zones = extension_zones;
@@ -709,6 +713,9 @@ pub(crate) fn overlay_open(app: &App) -> bool {
         || app.shortcuts.is_some()
         || app.theme_picker.is_some()
         || app.columns_picker.is_some()
+        || app.layout_picker.is_some()
+        || app.profile_picker.is_some()
+        || app.connections_picker.is_some()
         // The terminal panel's list and rename field.
         || app.term_picker.is_some()
         || app.term_rename.is_some()
@@ -1361,6 +1368,30 @@ fn above_the_panes(app: &mut App, ev: MouseEvent) -> Option<After> {
         } else {
             After::Nothing
         });
+    }
+    // A click outside the light popup in front closes it as `Esc` does,
+    // through `on_key` like a modal's button — the pinned menu bar's row
+    // included: the popup covers whatever its dropdown would open. A
+    // question painted over it leaves no box (`ui::clear_modal`), so it is
+    // never answered this way.
+    if click
+        && let Some(r) = app.mouse.popup_box
+        && !(ev.column >= r.x && ev.column < r.right() && ev.row >= r.y && ev.row < r.bottom())
+    {
+        // `Esc` in a filtering help only ends the filter; the click closes
+        // help, as in the window.
+        if let Some(h) = app.help.as_mut()
+            && h.state.filtering()
+        {
+            h.state.end_filter();
+        }
+        app.mouse.drag.cancel();
+        app.mouse.last_click = None;
+        app.pending_key = Some(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            KeyModifiers::NONE,
+        ));
+        return Some(After::SynthKey);
     }
     // With the menu CLOSED but the bar pinned, a click on the bar's row opens
     // it. Goes here and not further down because that row does not belong to

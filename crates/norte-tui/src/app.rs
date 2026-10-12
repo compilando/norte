@@ -1243,6 +1243,10 @@ pub struct App {
     /// pressing the key, and the loop dispatches it through `on_key`, which
     /// is the only path with all three resolvers at hand.
     pub pending_key: Option<crossterm::event::KeyEvent>,
+    /// The light popup box in front in the last frame, written by the paint
+    /// (`ui::draw` takes `&App`) and read by the mouse: a click outside it
+    /// closes the popup as `Esc` does.
+    pub painted_popup: std::cell::Cell<Option<ratatui::layout::Rect>>,
     /// Keys typed while a wait painted its spinner (#390): kept and run
     /// afterwards, one per loop turn, instead of thrown away. A watcher
     /// refresh starts a wait nobody asked for, and the reader's typing used
@@ -1530,6 +1534,7 @@ impl App {
             key_bars: KeyBars::default(),
             chord_split_h: None,
             pending_key: None,
+            painted_popup: std::cell::Cell::new(None),
             typed_ahead: std::collections::VecDeque::new(),
             version_line: "",
             help_chords: default_help_chords(),

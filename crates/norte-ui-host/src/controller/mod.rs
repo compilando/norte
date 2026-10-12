@@ -4093,6 +4093,7 @@ impl State {
             UiAction::GotoActivateRow { row } => self.activate_in_goto(*row, backend, mailbox),
             UiAction::GotoPaste { text } => self.paste_in_goto(text, backend, mailbox),
             UiAction::ContextMenuClose => self.close_context_menu(),
+            UiAction::OverlayDismiss => self.dismiss_overlay(backend, mailbox),
             UiAction::ContextMenuActivateRow { row } => {
                 self.activate_context_menu(*row, backend, mailbox)
             }

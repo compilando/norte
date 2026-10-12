@@ -14,7 +14,7 @@ use ratatui::widgets::{
 };
 
 use super::text::{cells, fit_hint_groups, right_ellipsis};
-use super::{centered, clear_themed};
+use super::{centered, clear_popup};
 use crate::app::display_name;
 use crate::theme::TuiTheme;
 use norte_frontend::middle_ellipsis;
@@ -216,7 +216,7 @@ pub fn draw_help(
 
     let (area, sidebar, body_area, footer_area) =
         help_layout(frame.area(), help_sidebar_desired(help.state.lang()));
-    clear_themed(frame, area, theme);
+    clear_popup(frame, area, theme);
     let mut frame_block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", t("help-title")))

@@ -126,6 +126,31 @@ fn clear_themed(frame: &mut Frame<'_>, area: Rect, theme: &TuiTheme) {
     frame.render_widget(Block::default().style(base_style(theme)), area);
 }
 
+/// [`clear_themed`] for a box a click outside must NOT close — a question,
+/// the wizard, settings: painted over a light popup, it is the one in front
+/// now, so the popup's box is forgotten. Chrome bars use plain
+/// `clear_themed`: they are painted after the popups and cover nothing.
+fn clear_modal(frame: &mut Frame<'_>, area: Rect, theme: &TuiTheme) {
+    clear_themed(frame, area, theme);
+    POPUP_BOX.with(|b| b.set(None));
+}
+
+thread_local! {
+    /// The box of the LIGHT popup in front, while ONE [`draw`] runs: the
+    /// popup painters take a theme, not the app. `draw` hands it to
+    /// `App::painted_popup` before returning — the loop awaits between the
+    /// paint and the mouse, and a multi-thread runtime may resume it on
+    /// another thread, where this cell is someone else's.
+    static POPUP_BOX: std::cell::Cell<Option<Rect>> = const { std::cell::Cell::new(None) };
+}
+
+/// [`clear_themed`] for a light popup (a picker, the search box, help): one
+/// a click outside closes, as `Esc` does.
+fn clear_popup(frame: &mut Frame<'_>, area: Rect, theme: &TuiTheme) {
+    clear_themed(frame, area, theme);
+    POPUP_BOX.with(|b| b.set(Some(area)));
+}
+
 /// Whether panel `i` carries the DESTINATION mark.
 ///
 /// Two questions: who has the role, and whether with these panels the mark
@@ -438,6 +463,12 @@ pub(crate) fn extensions_footer<'a>(
 /// Paints the whole frame: panes (or viewer) + tasks panel + status bar +
 /// modal on top.
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
+    POPUP_BOX.with(|b| b.set(None));
+    draw_frame(frame, app);
+    app.painted_popup.set(POPUP_BOX.with(std::cell::Cell::get));
+}
+
+fn draw_frame(frame: &mut Frame<'_>, app: &App) {
     // The theme's BASE background (ADR 0020): painted first; text styles
     // (fg only) keep it. No `background` in the theme = the terminal's
     // background.
@@ -838,7 +869,7 @@ fn draw_search_dialog(
         .unwrap_or(u16::MAX)
         .min(frame.area().height);
     let area = centered(frame.area(), 60, height);
-    clear_themed(frame, area, theme);
+    clear_popup(frame, area, theme);
     frame.render_widget(
         Paragraph::new(body).block(
             Block::default()
@@ -920,7 +951,7 @@ fn draw_nav_popup(
         .max(64);
     let rows = u16::try_from(popup.items().len().max(1)).unwrap_or(8) + 2;
     let area = centered(frame.area(), width, rows.min(frame.area().height.max(3)));
-    clear_themed(frame, area, theme);
+    clear_popup(frame, area, theme);
     // Long items: MIDDLE ellipsis (head + tail, like the path modals) at the
     // inner width — ratatui's right truncation would make two paths with a
     // common prefix indistinguishable (BAJA-3).

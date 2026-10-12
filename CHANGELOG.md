@@ -7,6 +7,17 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A click outside a popup closes it**, as `Esc` does, in both
+  frontends (ADR 0178, bridge 112): the sort menu at the foot, the search
+  box, the pickers, the search form, help and a command's output. A
+  question — a delete confirmation, the wizard, a plan waiting for
+  approval — stays open: a stray click does not answer it.
+- **The window shows the compare and sync panels and a program's
+  output**: they had no style of their own and opened below the window's
+  edge, unseen.
+
 ## [0.3.0-alpha.11] - 2026-10-12
 
 ### Changed

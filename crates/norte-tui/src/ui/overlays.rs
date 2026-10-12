@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::{HOSTILE_BADGE, centered, clear_themed};
+use super::{HOSTILE_BADGE, centered, clear_modal, clear_popup, clear_themed};
 use crate::app::display_name;
 use crate::theme::TuiTheme;
 use norte_frontend::display::cells;
@@ -32,7 +32,7 @@ pub(crate) fn draw_extensions(
     hint: &str,
 ) {
     let area = extensions_area(frame.area(), hint);
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", t("ext-title")))
@@ -639,7 +639,7 @@ pub(crate) fn draw_plugin_config_panel(
         width,
         frame.area().height.saturating_sub(4).max(6),
     );
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
     let lines = plugin_config_lines(panel, theme);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1009,7 +1009,7 @@ pub(crate) fn draw_goto(
         .saturating_add(2);
     let width = frame.area().width.saturating_sub(8).clamp(40, 88);
     let area = centered(frame.area(), width, height.min(frame.area().height.max(3)));
-    clear_themed(frame, area, theme);
+    clear_popup(frame, area, theme);
     let inner = usize::from(area.width.saturating_sub(3));
     let dim = theme.role(Role::BorderUnfocused);
     // The chord column is as wide as the widest chord on screen, so every
@@ -1108,7 +1108,7 @@ pub(crate) fn draw_splash(
     let height = u16::try_from(art + 3 + section_rows + 2).unwrap_or(u16::MAX);
     let width = 60.min(frame.area().width.max(20));
     let area = centered(frame.area(), width, height.min(frame.area().height.max(3)));
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", t("splash-title")))
@@ -1177,7 +1177,7 @@ fn draw_splash_cover(
 ) {
     let lang = norte_i18n::active();
     let area = frame.area();
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
 
     let mut lines: Vec<Line<'_>> = splash
         .art
@@ -1232,7 +1232,7 @@ pub(crate) fn draw_wizard(
         .saturating_add(6)
         .min(frame.area().height.max(3));
     let area = centered(frame.area(), width, height);
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", wizard.title(lang)))
@@ -1465,7 +1465,7 @@ pub(crate) fn draw_settings(
         .min(frame.area().width);
     let height = frame.area().height.saturating_sub(4).max(6);
     let area = centered(frame.area(), width, height);
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
 
     let footer = if settings.is_editing() {
         let (buf, _) = display_name(settings.edit_buffer().unwrap_or_default().as_bytes());
@@ -1603,7 +1603,7 @@ pub fn draw_shortcuts(frame: &mut Frame<'_>, sc: &crate::app::Shortcuts, theme: 
         .min(frame.area().width);
     let height = frame.area().height.saturating_sub(2).max(6);
     let area = centered(frame.area(), width, height);
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
 
     let capture = sc.capture();
     let footer = match capture {

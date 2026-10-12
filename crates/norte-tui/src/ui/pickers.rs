@@ -7,7 +7,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 
-use super::{centered, clear_themed};
+use super::{centered, clear_popup};
 use crate::theme::TuiTheme;
 use norte_i18n::{t, ta};
 
@@ -26,7 +26,7 @@ pub fn draw_theme_picker(
         .min(frame.area().width);
     let rows = u16::try_from(picker.names.len()).unwrap_or(8) + 2;
     let area = centered(frame.area(), width, rows.min(frame.area().height.max(3)));
-    clear_themed(frame, area, theme);
+    clear_popup(frame, area, theme);
     let items: Vec<ListItem<'_>> = picker
         .names
         .iter()
@@ -123,7 +123,7 @@ pub(crate) fn draw_columns_picker(
         .unwrap_or(u16::MAX)
         .saturating_add(2);
     let area = centered(frame.area(), width, rows.min(frame.area().height.max(3)));
-    clear_themed(frame, area, theme);
+    clear_popup(frame, area, theme);
     let items: Vec<ListItem<'_>> = rows_text.into_iter().map(ListItem::new).collect();
     let block = Block::default()
         .borders(Borders::ALL)
@@ -203,7 +203,7 @@ pub(crate) fn draw_connections_picker(
         .unwrap_or(u16::MAX)
         .saturating_add(2);
     let area = centered(frame.area(), width.saturating_add(2), height);
-    clear_themed(frame, area, theme);
+    clear_popup(frame, area, theme);
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", t("connections-picker-title")))
@@ -281,7 +281,7 @@ pub(crate) fn draw_term_overlay(frame: &mut Frame<'_>, app: &crate::app::App) {
         .saturating_add(2)
         .min(frame.area().height.max(3));
     let area = centered(frame.area(), width, height);
-    clear_themed(frame, area, theme);
+    clear_popup(frame, area, theme);
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {title} "))
@@ -389,7 +389,7 @@ pub(crate) fn draw_profile_picker(
         .saturating_add(note_height)
         .min(frame.area().height.max(3));
     let area = centered(frame.area(), width, height);
-    clear_themed(frame, area, theme);
+    clear_popup(frame, area, theme);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -507,7 +507,7 @@ pub(crate) fn draw_layout_picker(
         .saturating_add(note_height)
         .min(frame.area().height.max(3));
     let area = centered(frame.area(), width, height);
-    clear_themed(frame, area, theme);
+    clear_popup(frame, area, theme);
 
     let block = Block::default()
         .borders(Borders::ALL)

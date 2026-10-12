@@ -251,6 +251,7 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::GotoActivateRow { .. } => "goto_activate_row",
         UiAction::GotoPaste { .. } => "goto_paste",
         UiAction::ContextMenuClose => "context_menu_close",
+        UiAction::OverlayDismiss => "overlay_dismiss",
         UiAction::WizardOpen => "wizard_open",
         UiAction::SplashOpen => "splash_open",
         UiAction::SplashClose => "splash_close",
@@ -805,6 +806,7 @@ fn context_menu_actions() -> Vec<(&'static str, UiAction)> {
             UiAction::ContextMenuActivateRow { row: 3 },
         ),
         ("context_menu_close", UiAction::ContextMenuClose),
+        ("overlay_dismiss", UiAction::OverlayDismiss),
         ("goto_point_row", UiAction::GotoPointRow { row: 2 }),
         ("goto_activate_row", UiAction::GotoActivateRow { row: 2 }),
         (

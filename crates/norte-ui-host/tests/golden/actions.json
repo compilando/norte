@@ -256,6 +256,9 @@
     "action": "organize_scroll",
     "down": true
   },
+  "overlay_dismiss": {
+    "action": "overlay_dismiss"
+  },
   "panel_bar_activate": {
     "action": "panel_bar_activate",
     "button": 2
