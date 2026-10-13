@@ -598,11 +598,11 @@ pub async fn run(
         // frame to repaint its cells from. With nothing to place and
         // nothing placed it writes nothing.
         if !skip_frame {
-            crate::rail_icons::sync(
-                terminal.backend_mut(),
-                &ui::rail_icons_to_place(app, painted_area, crate::rail_icons::cell_px()),
-                drawn.as_ref(),
-            );
+            let cell = crate::rail_icons::cell_px();
+            let mut icons = ui::rail_icons_to_place(app, painted_area, cell);
+            // And the chrome's own (the layout buttons), in their own slots.
+            icons.extend(ui::chrome_icons_to_place(app, painted_area, cell));
+            crate::rail_icons::sync(terminal.backend_mut(), &icons, drawn.as_ref());
         }
         if app.quit {
             // The last snapshot, and waiting for it. The one-second tick

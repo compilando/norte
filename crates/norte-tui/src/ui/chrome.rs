@@ -317,11 +317,16 @@ pub(crate) fn layout_button_cells(
 /// shortcut's hint has to leave them.
 fn draw_layout_buttons(frame: &mut Frame<'_>, app: &App, area: Rect, bar: Rect) -> u16 {
     let buttons = layout_button_cells(app, area);
+    // With pixels, the shared icon is placed over the cells
+    // (`chrome_icons_to_place`): the glyph is not painted under it, and the
+    // cells and the click zones stay the same.
+    let pixels = super::layout_pixels_shown(app);
     for (x, b) in &buttons {
         let w = u16::try_from(b.glyph.len()).unwrap_or(0);
+        let glyph = if pixels { "   " } else { b.glyph };
         frame.render_widget(
             Paragraph::new(ratatui::text::Line::styled(
-                b.glyph,
+                glyph,
                 app.theme.role(Role::Title),
             )),
             Rect {

@@ -79,6 +79,23 @@ pub fn canvas_for(cell_px: (u16, u16)) -> (u32, u32) {
     (w * k, h * k)
 }
 
+/// [`canvas_for`] for an icon `cols` × `rows` cells wide (the chrome's
+/// one-row icons are 2 × 1), scaled up the same way for a crisp kitty
+/// image; `exact` for sixel, which paints cell by cell.
+#[must_use]
+pub fn canvas_cells(cell_px: (u16, u16), cols: u32, rows: u32, exact: bool) -> (u32, u32) {
+    let (cw, ch) = match cell_px {
+        (0, _) | (_, 0) => (10, 20),
+        (w, h) => (u32::from(w), u32::from(h)),
+    };
+    let (w, h) = (cols * cw, rows * ch);
+    if exact {
+        return (w, h);
+    }
+    let k = 64_u32.div_ceil(w.min(h)).clamp(1, 8);
+    (w * k, h * k)
+}
+
 /// One cell's size in pixels; `(0, 0)` when nobody says, which
 /// [`canvas_for`] takes as 1:2.
 #[must_use]

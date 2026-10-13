@@ -715,6 +715,61 @@ pub(crate) fn rail_pixels_shown(app: &App, area: Rect) -> Option<(Rect, geometry
     rail.big.then_some((bar, rail))
 }
 
+/// Whether the menu row's layout buttons are drawn in pixels this frame: a
+/// terminal that shows images, and nothing painted over the body (kitty's
+/// pixels sit above the text). ONE answer for the painter, which then
+/// leaves the glyph cells blank, and for [`chrome_icons_to_place`].
+pub(crate) fn layout_pixels_shown(app: &App) -> bool {
+    (app.menu_bar || app.menu.is_some())
+        && !something_above_the_viewer(app)
+        && crate::rail_icons::backend(app) != crate::rail_icons::RailBackend::Glyph
+}
+
+/// The first image slot the chrome's icons use; the panel column's come
+/// before it.
+const CHROME_SLOTS: usize = 48;
+
+/// The chrome's icons to place this frame: the layout buttons' shared
+/// drawings (`layout:*`), two cells of the menu row each, in the title's
+/// colour. Empty unless `layout_pixels_shown`.
+#[must_use]
+pub fn chrome_icons_to_place(
+    app: &App,
+    area: Rect,
+    cell_px: (u16, u16),
+) -> Vec<crate::rail_icons::RailIcon> {
+    if !layout_pixels_shown(app) {
+        return Vec::new();
+    }
+    let backend = crate::rail_icons::backend(app);
+    let exact = backend == crate::rail_icons::RailBackend::Sixel;
+    let canvas = crate::rail_icons::canvas_cells(cell_px, 2, 1, exact);
+    let Some(rgb) = app
+        .theme
+        .role_rgb(Role::Title)
+        .or_else(|| app.theme.role_rgb(Role::Regular))
+    else {
+        return Vec::new();
+    };
+    let bg = app
+        .theme
+        .role_bg_shown(Role::Background)
+        .unwrap_or([0, 0, 0]);
+    chrome::layout_button_cells(app, area)
+        .into_iter()
+        .enumerate()
+        .map(|(i, (x, b))| crate::rail_icons::RailIcon {
+            kind: format!("layout:{}", b.id),
+            rgb,
+            rect: Rect::new(x, area.y, 2, 1),
+            canvas,
+            backend,
+            bg,
+            slot: CHROME_SLOTS + i,
+        })
+        .collect()
+}
+
 /// The panel column's big icons to place this frame (spec 2026-10-05): one
 /// per slot `draw_rail` left blank, in the state's colour, rasterised for
 /// cells of `cell_px` pixels (`(0, 0)` if the terminal does not say). Empty
