@@ -15,6 +15,12 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **A plugin built against an older compatible WIT version keeps
+  working.** It used to be listed as broken on any version change. From
+  now on a WIT change that only adds is a compatible bump, so
+  already-compiled plugins keep loading (ADR 0182). From the beta on, the
+  protocol and the WIT are `1.0.0`. A newer norte opens what an older one
+  left on disk. Going back to an older version is not supported.
 - **The command bar has a key in every keymap**: `Ctrl+↓` in orthodox and
   cua (Krusader's), `!` in vim (as `:!`), `Alt+F8` in Far and Total
   Commander (their command-line history). Norton keeps none, as its header
