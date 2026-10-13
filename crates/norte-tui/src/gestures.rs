@@ -215,6 +215,55 @@ async fn spawn_detached(
     Ok(())
 }
 
+/// "Terminal here" (`app.terminal`, ADR 0180): an emulator in the focused
+/// pane's directory when there is a desktop to put it on, the suspended
+/// login shell otherwise — and also when no emulator starts, saying so.
+///
+/// Resolving the candidates stats `PATH` on the loop turn: a handful of
+/// `stat`s, the price `pane.open` already pays for an opener's program.
+pub fn terminal_here(app: &mut App) {
+    let dir = match shell_cwd(app) {
+        Ok(dir) => dir,
+        Err(msg) => {
+            app.message = Some(msg);
+            return;
+        }
+    };
+    let mut fallback = false;
+    if app.has_desktop {
+        for argv in norte_frontend::shell::terminal_candidates(app.ui_terminal.as_deref(), &dir) {
+            let Some(path) = argv
+                .first()
+                .and_then(|p| norte_frontend::openers::resolve_program(p))
+            else {
+                continue;
+            };
+            if norte_frontend::shell::spawn_detached(&path, &argv[1..], &dir).is_ok() {
+                let program = path
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                app.message = Some(ta(
+                    "msg-terminal-opened",
+                    &[("program", &norte_encoding::mask_terminal_hazards(&program))],
+                ));
+                return;
+            }
+        }
+        fallback = true;
+    }
+    app.pending_shell = Some(crate::app::PendingShell {
+        argv: vec![norte_frontend::shell::login_shell().into_os_string()],
+        cwd: Some(dir),
+        // The shell is already interactive: on leaving it, returning to the
+        // panels is exactly what is wanted.
+        wait_for_key: false,
+        check_regular: None,
+    });
+    if fallback {
+        app.message = Some(norte_i18n::t("msg-terminal-fallback"));
+    }
+}
+
 /// The Enter of [`Modal::CommandLine`](crate::app::Modal::CommandLine)
 /// (#135): leaves `$SHELL -c CMD` pending and closes the prompt.
 ///
@@ -2449,5 +2498,65 @@ mod send_tests {
         assert_eq!(send_plan(&app, Side::Right), Ok(None));
         app.panes[0].virtual_search = true;
         assert_eq!(send_plan(&app, Side::Right), Err("msg-pane-not-a-location"));
+    }
+}
+
+#[cfg(test)]
+mod terminal_here_tests {
+    use super::{App, terminal_here};
+    use crate::app::Pane;
+    use norte_proto::VPath;
+
+    fn app_in(dir: &std::path::Path) -> App {
+        let vp = VPath::parse(&format!("file://{}", dir.display())).expect("vpath");
+        let mut app = App::new(Pane::new(vp.clone(), Vec::new()), Pane::new(vp, Vec::new()));
+        app.set_focus(0);
+        app
+    }
+
+    /// Over ssh with no display there is no window to open: today's shell.
+    #[test]
+    fn without_a_desktop_it_is_the_suspended_shell() {
+        let d = tempfile::tempdir().unwrap();
+        let mut app = app_in(d.path());
+        app.has_desktop = false;
+        app.ui_terminal = Some(vec!["/bin/true".into()]);
+        terminal_here(&mut app);
+        let shell = app.pending_shell.as_ref().expect("a shell");
+        assert_eq!(
+            shell.argv,
+            vec![norte_frontend::shell::login_shell().into_os_string()]
+        );
+        assert_eq!(shell.cwd.as_deref(), Some(d.path()));
+        assert!(app.message.is_none(), "nothing failed: {:?}", app.message);
+    }
+
+    /// With a desktop and an emulator that does not start, the reader still
+    /// gets a shell there, and is TOLD it is the fallback.
+    #[test]
+    fn a_terminal_that_does_not_start_falls_back_and_says_so() {
+        let d = tempfile::tempdir().unwrap();
+        let mut app = app_in(d.path());
+        app.has_desktop = true;
+        app.ui_terminal = Some(vec!["/nonexistent/norte-test-term".into()]);
+        terminal_here(&mut app);
+        assert!(app.pending_shell.is_some());
+        assert_eq!(
+            app.message.as_deref(),
+            Some(&*norte_i18n::t("msg-terminal-fallback"))
+        );
+    }
+
+    /// With a desktop and an emulator that starts, nothing suspends.
+    #[cfg(unix)]
+    #[test]
+    fn with_a_desktop_the_emulator_opens_and_nothing_suspends() {
+        let d = tempfile::tempdir().unwrap();
+        let mut app = app_in(d.path());
+        app.has_desktop = true;
+        app.ui_terminal = Some(vec!["/bin/true".into()]);
+        terminal_here(&mut app);
+        assert!(app.pending_shell.is_none());
+        assert!(app.message.as_deref().is_some_and(|m| m.contains("true")));
     }
 }

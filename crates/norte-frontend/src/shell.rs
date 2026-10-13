@@ -918,6 +918,71 @@ pub fn terminal_candidates(
     terminal_candidates_from(configured, std::env::var_os("TERMINAL").as_deref(), dir)
 }
 
+/// Whether a window opened by this process lands in front of the reader:
+/// where "terminal here" may launch an emulator instead of suspending into a
+/// shell, and where the handoff has a desktop to go to (ADR 0180).
+#[must_use]
+pub fn has_desktop() -> bool {
+    has_desktop_from(|k| std::env::var_os(k))
+}
+
+/// Starts `program` in `cwd` and lets it go: a terminal emulator that must
+/// outlive the frontend that opened it.
+///
+/// Its own process group on unix, so the hangup sent when the reader's
+/// terminal closes does not take the emulator with it; a console of its own
+/// on Windows, so a `cmd` does not share the TUI's. Stdio is null, and a
+/// thread reaps the child so a long session does not collect zombies.
+///
+/// # Errors
+/// The program did not start.
+pub fn spawn_detached(
+    program: &std::path::Path,
+    args: &[std::ffi::OsString],
+    cwd: &std::path::Path,
+) -> std::io::Result<()> {
+    use std::process::Stdio;
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP);
+    }
+    let mut child = cmd.spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+/// Testable core of [`has_desktop`]; `var` reads one environment variable.
+///
+/// Linux/BSD: a display (`WAYLAND_DISPLAY` or `DISPLAY`), which an `ssh -X`
+/// session also has — the window goes where the reader is. macOS and
+/// Windows always have a screen, but over ssh (`SSH_CONNECTION`/`SSH_TTY`)
+/// it is the remote machine's, so there is none for the reader.
+#[must_use]
+pub fn has_desktop_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    let set = |k: &str| var(k).is_some_and(|v| !v.is_empty());
+    if cfg!(any(target_os = "macos", windows)) {
+        !set("SSH_CONNECTION") && !set("SSH_TTY")
+    } else {
+        set("WAYLAND_DISPLAY") || set("DISPLAY")
+    }
+}
+
 /// Testable core of [`terminal_candidates`].
 ///
 /// `configured` is `[ui] terminal`, an argv template with `openers.toml`'s
@@ -1442,6 +1507,74 @@ mod tests {
         let cfg = ["foot", "-D", "%d"].map(str::to_owned);
         let all = terminal_candidates_from(Some(&cfg), None, dir);
         assert_eq!(all[0][2].as_bytes(), b"/tmp/caf\xE9");
+    }
+
+    /// A detached launch runs in `cwd` and does not wait for the child: the
+    /// call returns while the program is still running.
+    #[cfg(unix)]
+    #[test]
+    fn a_detached_launch_sits_in_its_dir_and_does_not_wait() {
+        let d = tempfile::tempdir().unwrap();
+        let start = std::time::Instant::now();
+        spawn_detached(
+            std::path::Path::new("/bin/sh"),
+            &["-c".into(), "pwd > out; sleep 3".into()],
+            d.path(),
+        )
+        .expect("spawns");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "it waited"
+        );
+        let out = d.path().join("out");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !std::fs::read_to_string(&out).is_ok_and(|s| s.ends_with('\n')) {
+            assert!(std::time::Instant::now() < deadline, "never ran");
+            std::thread::yield_now();
+        }
+        let pwd = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(
+            std::fs::canonicalize(pwd.trim_end()).unwrap(),
+            std::fs::canonicalize(d.path()).unwrap()
+        );
+    }
+
+    fn env<'a>(
+        pairs: &'a [(&'a str, &'a str)],
+    ) -> impl Fn(&str) -> Option<std::ffi::OsString> + 'a {
+        move |k| {
+            pairs
+                .iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| std::ffi::OsString::from(v))
+        }
+    }
+
+    /// On Linux a desktop is a display, and an `ssh -X` session counts: the
+    /// window opens where the reader is.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn a_desktop_on_linux_is_a_display_even_over_ssh_x() {
+        assert!(!has_desktop_from(env(&[])));
+        assert!(!has_desktop_from(env(&[("DISPLAY", "")])));
+        assert!(has_desktop_from(env(&[("WAYLAND_DISPLAY", "wayland-0")])));
+        assert!(has_desktop_from(env(&[
+            ("DISPLAY", "localhost:10.0"),
+            ("SSH_CONNECTION", "x")
+        ])));
+    }
+
+    /// On macOS and Windows the screen is always there, and over ssh it is
+    /// the REMOTE machine's: `open -a Terminal` would open where nobody is.
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn over_ssh_a_mac_or_windows_screen_is_not_the_readers() {
+        assert!(has_desktop_from(env(&[])));
+        assert!(!has_desktop_from(env(&[(
+            "SSH_CONNECTION",
+            "1.2.3.4 5 6.7.8.9 22"
+        )])));
+        assert!(!has_desktop_from(env(&[("SSH_TTY", "/dev/ttys001")])));
     }
 
     /// The default terminals of current desktops (GNOME's ptyxis and

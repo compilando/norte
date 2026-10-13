@@ -778,19 +778,7 @@ pub async fn dispatch(
         // mutation (there is no actor to attribute nor a reversal to
         // record), and whatever changes on disk is picked up by the watcher
         // and the refresh on return.
-        Command::AppTerminal => match shell_cwd(app) {
-            Ok(dir) => {
-                app.pending_shell = Some(crate::app::PendingShell {
-                    argv: vec![norte_frontend::shell::login_shell().into_os_string()],
-                    cwd: Some(dir),
-                    // The shell is already interactive: on leaving it,
-                    // returning to the panels is exactly what is wanted.
-                    wait_for_key: false,
-                    check_regular: None,
-                });
-            }
-            Err(msg) => app.message = Some(msg),
-        },
+        Command::AppTerminal => crate::gestures::terminal_here(app),
         // Phase 9: the HANDOFF to the window. Here it only CHECKS and
         // requests; dumping the screen, releasing the session and launching
         // the window are three trips that do not fit in dispatching a key,

@@ -1176,6 +1176,9 @@ pub struct App {
     /// because it is the same deal: norte chooses the operand, the program
     /// chooses the format.
     pub diff: Option<EditorSpec>,
+    /// `[ui] terminal`: the emulator "terminal here" opens, if the reader
+    /// chose one (`None` = probe).
+    pub ui_terminal: Option<Vec<String>>,
     /// External command resolved by `pane.open` and pending launch (#28).
     /// `dispatch` sets it after validating; the run loop —owner of the
     /// terminal— executes it.
@@ -1524,6 +1527,7 @@ impl App {
             user_chords: std::collections::HashMap::new(),
             editor: None,
             diff: None,
+            ui_terminal: None,
             pending_open: None,
             pending_shell: None,
             pending_subshell: false,
