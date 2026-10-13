@@ -24,6 +24,9 @@ independently through `PROTOCOL_VERSION`.
   area, a column header, a Places row and a tree branch, with the same
   entries, dimmed with the same reasons. `shift+F10` and the Menu key open
   it on the listing's cursor row.
+- **The terminal's layout buttons draw the window's icons** where the
+  terminal shows images (kitty graphics or sixel); elsewhere they keep
+  their `[|] [-] [=] [/] [#]` glyphs.
 
 ### Changed
 
@@ -31,6 +34,9 @@ independently through `PROTOCOL_VERSION`.
   is a desktop, like the window does (ADR 0180); over ssh it still opens a
   shell in place. On macOS and Windows the terminal now also offers the
   handoff to the window when it is not running over ssh.
+- **The key that opens the menu leads the terminal's menu bar** (`Alt+m │
+  File  Operate …`) instead of sitting at the right edge, where it read as
+  the label of the layout buttons. Narrow, it gives way to the titles.
 
 - **A plain word in the search form finds the names that contain it**
   (ADR 0179): `bash` now finds `.bashrc`. A pattern with a wildcard
