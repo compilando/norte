@@ -1,0 +1,30 @@
+[global]
+prepend_keymap = [
+    { on = ["ctrl+alt+g"], run = "app.goto" },
+    { on = ["ctrl+alt+d"], run = "user:disk-usage" },
+]
+append_keymap = [
+    { on = ["ctrl+alt+x"], run = "terminal.new" },
+]
+
+[pane]
+prepend_keymap = [
+    { on = ["ctrl+alt+h"], run = "pane.toggle-hidden" },
+    { on = ["ctrl+alt+o"], run = "user:optimize-png" },
+]
+append_keymap = [
+    { on = ["ctrl+alt+y"], run = "pane.history" },
+]
+
+[viewer]
+prepend_keymap = [
+    { on = ["alt+e"], run = "viewer.encoding" },
+]
+append_keymap = [
+    { on = ["alt+t"], run = "viewer.top" },
+]
+
+[dialog]
+prepend_keymap = [
+    { on = ["ctrl+s"], run = "dialog.skip" },
+]

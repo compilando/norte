@@ -203,6 +203,7 @@ pub(crate) async fn doctor_cmd(json: bool) -> anyhow::Result<ExitCode> {
         findings.extend(doctor::check_keymaps(&layers));
         findings.extend(doctor::check_plugins(&config_dir));
         findings.extend(doctor::check_connections(&config_dir, &env));
+        findings.extend(doctor::check_policy(&config_dir));
         // Roadmap item 9: where the log is. Without this row the file
         // exists and nobody knows to ask for it when needed — and it has
         // to resolve the SAME `[log] dir` the frontends resolve: pointing

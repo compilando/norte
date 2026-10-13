@@ -405,7 +405,9 @@ pub struct JournalEntry {
     pub op: String,
     /// Affected path (`to_wire` bytes).
     pub path: Vec<u8>,
-    /// Destination of a `renamed` (`to_wire` bytes).
+    /// The name a `renamed` HAD before (`to_wire` bytes) — the new one is
+    /// `path` — or the new mode of a `mode_changed`. The column name reads
+    /// backwards and is hashed into the chain, so it stays.
     pub path_to: Option<Vec<u8>>,
     /// Persisted reversal label ([`Reversal::as_str`]).
     pub reversal: String,
@@ -918,7 +920,8 @@ pub struct NewEntry<'a> {
     pub op: &'a str,
     /// Affected path (`to_wire` bytes).
     pub path: &'a [u8],
-    /// Destination of a `renamed` (`to_wire` bytes).
+    /// The name a `renamed` HAD before (`to_wire` bytes); see
+    /// [`JournalEntry::path_to`].
     pub path_to: Option<&'a [u8]>,
     /// How to revert.
     pub reversal: Reversal,

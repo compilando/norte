@@ -7,6 +7,12 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **`norte doctor` checks `policy.toml`.** A file that does not parse
+  keeps the daemon from starting, and doctor now says so instead of
+  staying silent.
+
 ### Changed
 
 - **The command bar has a key in every keymap**: `Ctrl+↓` in orthodox and
