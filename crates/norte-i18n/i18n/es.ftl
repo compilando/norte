@@ -912,7 +912,8 @@ msg-palette-no-help = ninguna página de la ayuda documenta este comando todaví
 # paleta de arriba (decisión 8): la búsqueda está SIEMPRE activa, Enter
 # togglea/cicla/edita.
 settings-title = Ajustes
-settings-hint = [tab] lado · [[/]] sección · [enter] editar · [ctrl+r] restablecer · [esc] cerrar
+settings-search-placeholder = Buscar ajustes
+settings-hint = [tab] lado · [ y ] sección · [enter] editar · [ctrl+r] restablecer · [esc] cerrar
 
 settings-edit-hint = [enter] guardar · [esc] cancelar
 # obsoleta: las 33 entradas vivían aquí. Se borra en el ciclo siguiente.
@@ -1699,18 +1700,21 @@ help-cmd-pane-compare-files = compara DOS ficheros con el programa de `[ui] diff
 help-cmd-pane-sync-dirs = planifica una sincronización de un sentido de este panel al otro
 help-cmd-pane-copy-path = copia la ruta de la selección al portapapeles
 search-title = Búsqueda
-search-name = nombre (glob):
-search-content = contenido:
-search-exclude = saltar carpetas:
-search-min-size = al menos:
-search-max-size = como mucho:
-search-days = cambiado hace (días):
-search-encoding = leer el texto como:
-search-regex = [F2] regex: { $on }
-search-case = [F3] mayús: { $on }
-search-whole-word = [F4] palabra entera: { $on }
-search-recursive = [F5] subcarpetas: { $on }
-search-kinds = [F6] busco: { $what }
+search-name = Nombre
+search-content = Contenido
+search-exclude = Saltar carpetas
+search-min-size = Tamaño mínimo
+search-max-size = Tamaño máximo
+search-days = Cambiado en los últimos
+search-encoding = Codificación
+search-name-hint = parte del nombre, o un glob como *.jpg
+search-content-hint = texto dentro del fichero
+search-exclude-hint = p. ej. node_modules, .git
+search-min-size-hint = p. ej. 500K, 10M, 1.5G
+search-max-size-hint = p. ej. 500K, 10M, 1.5G
+search-days-hint = días, p. ej. 7
+search-encoding-hint = automática (o latin1, cp1252…)
+search-in = Buscar en
 search-kinds-any = cualquier cosa
 search-kinds-files = ficheros
 search-kinds-dirs = carpetas
@@ -1727,10 +1731,10 @@ search-toggle-kinds = busco
 search-query-filters-only = (solo filtros)
 search-empty = introduce un nombre, un contenido o un filtro
 search-bad-field = ese campo no se entiende — arréglalo o déjalo vacío
-search-status-running = búsqueda: { $n } hits (buscando…)
-search-status-done = búsqueda: { $n } hits
-search-status-truncated = búsqueda: { $n } hits (truncada)
-search-status-cancelled = búsqueda: { $n } hits (cancelada)
+search-status-running = búsqueda: { $n } encontrados (buscando…)
+search-status-done = búsqueda: { $n } encontrados
+search-status-truncated = búsqueda: { $n } encontrados (hay más; afina la búsqueda)
+search-status-cancelled = búsqueda: { $n } encontrados (cancelada)
 search-status-failed = búsqueda fallida: { $error }
 # El panel de búsqueda (2026-10-09-search-panel): busca mientras escribes y
 # agrupa los resultados por carpeta y fichero, con sus líneas coincidentes.

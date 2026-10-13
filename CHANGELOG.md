@@ -7,7 +7,41 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Changed
+
+- **A plain word in the search form finds the names that contain it**
+  (ADR 0179): `bash` now finds `.bashrc`. A pattern with a wildcard
+  (`*.rs`) is still the glob it says; the CLI and agents are unaffected.
+- **The search form in the terminal reads as a form**: each field is a
+  box with an example of what it takes — sizes say `500K, 10M, 1.5G`,
+  and `10MB` or `1 KiB` are understood — the toggles are checkboxes, and
+  the folder searched is labelled. The window's fields show the same
+  examples.
+- **Help and settings in the window are one kind of window**: the same
+  size, frame, header and close button; help reads in the proportional
+  font with keys as keycaps; settings opens with the search box focused,
+  marks the chosen row with a tint instead of a solid band, and its
+  controls share one height and style.
+- **Settings in the terminal**: the index runs full height beside the list,
+  counts align, long names no longer run into their value, switches say
+  on/off, and the description wraps over two lines instead of being cut
+  in the middle.
+
 ### Fixed
+
+- **Closing the last shell closes the terminal panel**, in both frontends.
+  It used to leave an empty "no shell" panel that no key could close.
+- **The window no longer leaves a listing's error over its first row**
+  after the listing recovers ("permission denied — retry" stayed painted).
+- **The search status counts results, not the `..` row**, and says
+  "found" instead of "hits".
+- **Help's "What the screen shows" page has its section titles back**: they
+  were underlined with dashes, which help printed as text. Help now reads
+  a `---`/`===` underline as a heading, plugin pages included.
+- **The terminal panel left empty by a shell that exited closes** with
+  `terminal.close` or its ✕; nothing closed it before.
+- **The window's search form lines its fields up** in one column, with
+  themed checkboxes, and a single path is no longer numbered "1.".
 
 - **A click outside a popup closes it**, as `Esc` does, in both
   frontends (ADR 0178, bridge 112): the sort menu at the foot, the search

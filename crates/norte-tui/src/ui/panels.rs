@@ -1817,7 +1817,10 @@ fn search_input_line(
     width: usize,
     theme: &TuiTheme,
 ) -> Line<'static> {
-    let label = format!("{label} ");
+    // The labels are bare nouns («Nombre»), shared with the dialog that
+    // paints them in a column; on one line the colon is what separates it
+    // from what was typed.
+    let label = format!("{label}: ");
     let room = width
         .saturating_sub(super::text::cells(&label))
         .saturating_sub(usize::from(caret));

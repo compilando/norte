@@ -215,7 +215,7 @@ impl State {
             // read-only gate as opening the panel (`spawn_instance`).
             Effect::TerminalNew { pick: false } => self.new_terminal(None, mailbox),
             Effect::TerminalNew { pick: true } => self.request_shell_profile(),
-            Effect::TerminalClose => self.close_terminal(None),
+            Effect::TerminalClose => self.close_terminal(None, backend, mailbox),
             Effect::TerminalStep { forward } => self.step_terminal(forward),
             Effect::TerminalRename => self.request_terminal_rename(),
             Effect::TerminalDecorate => self.request_terminal_decorate(),

@@ -1405,7 +1405,8 @@ fn the_viewer_paints_the_bars_only_when_there_is_more() {
         false,
     ));
     let fits = render(&app);
-    assert!(!fits.contains('█'), "it all fits: no bar to drag\n{fits}");
+    // `┃` is the scrollbars' thumb (`render_scrollbar`).
+    assert!(!fits.contains('┃'), "it all fits: no bar to drag\n{fits}");
 
     // Tall: forty lines on a sixteen-row screen.
     let alto: Vec<u8> = (0..40)
@@ -1413,7 +1414,7 @@ fn the_viewer_paints_the_bars_only_when_there_is_more() {
         .collect();
     app.viewer = Some(Viewer::new(vp("file:///casa/alto.txt"), alto, false));
     assert!(
-        render(&app).contains('█'),
+        render(&app).contains('┃'),
         "there is more BELOW and it shows"
     );
 
@@ -2510,13 +2511,14 @@ fn the_settings_list_follows_the_cursor() {
     assert!(
         screen
             .lines()
-            .any(|l| l.contains(&format!("> {entry_name}"))),
+            .any(|l| l.contains(&format!("› {entry_name}"))),
         "the cursor's row (\"{entry_name}\") has to be visible, with its mark:\n{screen}"
     );
     // And the window has moved: the first row no longer fits.
     assert!(
-        !screen.contains("Theme                        default")
-            && !screen.contains("Tema                         default"),
+        !screen
+            .lines()
+            .any(|l| (l.contains(" Theme ") || l.contains(" Tema ")) && l.contains("default")),
         "with the cursor at the end, the first row scrolls off the top:\n{screen}"
     );
 }

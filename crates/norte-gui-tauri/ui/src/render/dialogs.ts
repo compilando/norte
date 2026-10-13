@@ -334,6 +334,10 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
           text.type = "text";
           text.id = `dialog-field-${f.id}`;
           text.value = f.value;
+          // An example of what the field takes, units included, when the
+          // catalogue has one (`<label>-hint`): «Tamaño mínimo» alone does
+          // not say in what.
+          text.placeholder = this.catalog.strings[`${f.label_key}-hint`] ?? "";
           text.dataset["campo"] = f.id;
           const live = text;
           live.addEventListener("input", () => {

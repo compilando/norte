@@ -65,6 +65,32 @@ impl SearchField {
         }
     }
 
+    /// The Fluent key of what an EMPTY field shows: an example of what it
+    /// accepts, units included. A bare "al menos:" did not say of what.
+    ///
+    /// Always [`Self::key`] plus `-hint`: the window finds it from the label
+    /// key it already receives, with no field of its own on the bridge.
+    ///
+    /// ```
+    /// use norte_frontend::search::SearchField;
+    ///
+    /// for f in SearchField::ORDEN {
+    ///     assert_eq!(f.hint_key(), format!("{}-hint", f.key()));
+    /// }
+    /// ```
+    #[must_use]
+    pub fn hint_key(self) -> &'static str {
+        match self {
+            Self::Name => "search-name-hint",
+            Self::Content => "search-content-hint",
+            Self::Exclude => "search-exclude-hint",
+            Self::MinSize => "search-min-size-hint",
+            Self::MaxSize => "search-max-size-hint",
+            Self::Days => "search-days-hint",
+            Self::Encoding => "search-encoding-hint",
+        }
+    }
+
     /// A STABLE id for the wire and for tests.
     ///
     /// It is not the Fluent key —that can change name with the wording— nor
@@ -171,11 +197,18 @@ impl SearchKinds {
 /// ```
 #[must_use]
 pub fn parse_size(s: &str) -> Option<u64> {
-    let s = s.trim();
+    // `10MB`, `10 MiB` and `500B` are how sizes get written: the trailing
+    // byte unit says nothing the letter before it does not.
+    let lower = s.trim().to_ascii_lowercase();
+    let s = lower
+        .strip_suffix("ib")
+        .or_else(|| lower.strip_suffix('b'))
+        .unwrap_or(&lower)
+        .trim_end();
     if s.is_empty() {
         return None;
     }
-    let (number, mult) = match s.chars().last()?.to_ascii_lowercase() {
+    let (number, mult) = match s.chars().last()? {
         'k' => (&s[..s.len() - 1], 1024_u64),
         'm' => (&s[..s.len() - 1], 1024 * 1024),
         'g' => (&s[..s.len() - 1], 1024 * 1024 * 1024),
@@ -392,7 +425,7 @@ impl SearchForm {
     /// has asked for yet.
     #[must_use]
     pub fn has_criteria(&self) -> bool {
-        !self.name.is_empty()
+        !self.name.trim().is_empty()
             || !self.content.is_empty()
             || self.kinds != SearchKinds::All
             || parse_size(&self.min_size).is_some()
@@ -469,6 +502,29 @@ impl SearchForm {
     }
 }
 
+/// What the name field means as a glob: a word with no wildcard is "names
+/// CONTAINING it", the way every search box reads. Taken literally, `bash`
+/// matched only a file called exactly `bash` and never `.bashrc`. A pattern
+/// with a wildcard (`*.rs`, `a?c`, `[ab]*`, `{x,y}`) is the glob it says.
+///
+/// Here and not in the core: `name_glob` on the wire keeps its exact
+/// meaning for the CLI and agents, which write globs on purpose.
+///
+/// ```
+/// use norte_frontend::search::name_glob_of;
+///
+/// assert_eq!(name_glob_of("bash"), "*bash*");
+/// assert_eq!(name_glob_of("*.rs"), "*.rs");
+/// ```
+#[must_use]
+pub fn name_glob_of(name: &str) -> String {
+    if name.contains(['*', '?', '[', '{']) {
+        name.to_owned()
+    } else {
+        format!("*{name}*")
+    }
+}
+
 /// A form's [`FsSearchParams`], with the clock TOLD.
 ///
 /// The `regex` toggle decides, per axis, `name_glob` vs `name_regex` and
@@ -494,9 +550,11 @@ impl SearchForm {
 /// ```
 #[must_use]
 pub fn params(form: &SearchForm, root: VPath, now_ms: i64, max_hits: u32) -> FsSearchParams {
-    let (name_glob, name_regex) = match (form.name.is_empty(), form.regex) {
+    // Blank is empty: spaces alone would become `*  *`, a search nobody asked
+    // for.
+    let (name_glob, name_regex) = match (form.name.trim().is_empty(), form.regex) {
         (true, _) => (None, None),
-        (false, false) => (Some(form.name.clone()), None),
+        (false, false) => (Some(name_glob_of(&form.name)), None),
         (false, true) => (None, Some(form.name.clone())),
     };
     let (content, content_regex) = match (form.content.is_empty(), form.regex) {
@@ -552,6 +610,13 @@ mod tests {
         assert_eq!(parse_size(" 1 M "), Some(1024 * 1024), "and the spaces");
         assert_eq!(parse_size("2.5G"), Some(2_684_354_560), "and the decimals");
         assert_eq!(parse_size("1T"), Some(1024_u64.pow(4)));
+        assert_eq!(parse_size("10MB"), Some(10 * 1024 * 1024), "a byte unit");
+        assert_eq!(parse_size("1 KiB"), Some(1024));
+        assert_eq!(parse_size("500B"), Some(500));
+        assert_eq!(parse_size("B"), None);
+        assert_eq!(parse_size("KB"), None, "a unit with no number");
+        assert_eq!(parse_size("1ıb"), None, "non-ASCII is refused, not a panic");
+        assert_eq!(parse_size("5é"), None);
     }
 
     /// And what is NOT understood is said to be not understood, instead of
@@ -651,6 +716,31 @@ mod tests {
         // beginning of time": a filter that was not asked for is not sent.
         f.days = String::new();
         assert_eq!(params(&f, root(), now, 10_000).mtime_after, None);
+    }
+
+    /// A plain word finds the names that CONTAIN it; a glob stays a glob.
+    #[test]
+    fn a_plain_word_searches_inside_names() {
+        let mut f = SearchForm::new();
+        f.name = "bash".into();
+        assert_eq!(
+            params(&f, root(), 0, 10).name_glob.as_deref(),
+            Some("*bash*")
+        );
+        for g in ["*.rs", "a?c", "[ab]*", "{x,y}.txt"] {
+            f.name = g.into();
+            assert_eq!(params(&f, root(), 0, 10).name_glob.as_deref(), Some(g));
+        }
+        // Blank is no name criterion at all.
+        f.name = "   ".into();
+        assert_eq!(params(&f, root(), 0, 10).name_glob, None);
+        // With regex on, the text is the reader's regex, untouched.
+        f.name = "bash".into();
+        f.toggle_regex();
+        assert_eq!(
+            params(&f, root(), 0, 10).name_regex.as_deref(),
+            Some("bash")
+        );
     }
 
     /// The `regex` switch changes axis for BOTH patterns at once, which is

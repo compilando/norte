@@ -1540,6 +1540,10 @@ export class Screen {
       return;
     }
 
+    // A failure's notice is not a row, so the sweep below never removes it:
+    // without this it stayed painted over the first row once the listing
+    // came back.
+    dom.canvas.querySelector(":scope > .error")?.remove();
     // The row stripes (bridge 80): turned on by the CONTAINER, not the row.
     // Every row always carries its parity, so a row recycled by scrolling
     // does not drag along the band from the spot it used to occupy.

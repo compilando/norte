@@ -101,7 +101,8 @@ pub fn before_frame(app: &mut App, area: Rect) {
         crate::termpanel::refresh_wakes(app);
         // The last shell left cleanly: the slot says "no shell" and stays —
         // closing it on its own would move the reader's layout without them
-        // asking. A failed one stays listed, so the keyboard does too.
+        // asking; `terminal.close` closes it. A failed one stays listed, so
+        // the keyboard does too.
         if app.terminals.is_empty() && app.key_owner() == crate::app::KeyOwner::Terminal {
             app.release_keyboard();
         }

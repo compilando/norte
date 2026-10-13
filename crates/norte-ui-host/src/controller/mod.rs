@@ -4220,7 +4220,7 @@ impl State {
             } => self.user_command_finished(label, finished, *refresh, backend, mailbox),
             UiAction::FilesDropped { paths } => self.released(paths, backend, mailbox),
             UiAction::TerminalSelect { id } => self.select_terminal(*id),
-            UiAction::TerminalClose { id } => self.close_terminal(Some(*id)),
+            UiAction::TerminalClose { id } => self.close_terminal(Some(*id), backend, mailbox),
             UiAction::TerminalNew { profile } => self.new_terminal(profile.as_deref(), mailbox),
             UiAction::TerminalRename { id, name } => self.rename_terminal(*id, name),
             UiAction::TerminalDecorate { id, icon, color } => {

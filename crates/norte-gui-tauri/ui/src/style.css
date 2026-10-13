@@ -151,6 +151,7 @@ body {
 .dialog,
 .palette,
 .settings,
+.help,
 #whichkey,
 #fatal {
   font-family: var(--font-ui);
@@ -2275,29 +2276,107 @@ button.status-item:hover {
 /* A FORM field (bridge 91): label and control in one row. A toggle's
    checkbox does not stretch — `.dialog input` wants them at 100% and a
    full-width checkbox does not read as a checkbox. */
+/* A dialog with a FORM gets room for it: at the confirmation's width the
+   boxes cut their own examples. */
+.dialog:has(.dialog-fields) {
+  min-width: min(620px, 92vw);
+}
+
+/* The path list is numbered so that no file name can forge a position; with
+   ONE path there is no position to forge, and «1.» was noise. */
+.dialog-body:has(> li:only-child) {
+  padding-left: 0;
+  list-style: none;
+}
+
+/* A form is a GRID: every label in one column, every control starting at
+   the same x. As flex rows, each box began where its own label ended and
+   the fields read as a ragged list. `subgrid` lets each `<p>` keep its
+   label and control together for the screen reader. */
 .dialog-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin: 8px 0;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 14px;
+  align-items: center;
+  margin: 12px 0;
 }
 
 .dialog-field {
-  display: flex;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
-  gap: 8px;
   margin: 0;
 }
 
 .dialog-field-label {
-  flex: 0 0 auto;
-  min-width: 12ch;
   color: var(--fg);
 }
 
+.dialog-fields input[type="text"] {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 5px;
+}
+
+.dialog-fields input[type="text"]::placeholder {
+  color: var(--fg);
+  opacity: 0.45;
+}
+
+.dialog-fields input[type="text"]:focus {
+  outline: none;
+  border-color: var(--focus-border, var(--border-focus));
+  box-shadow: 0 0 0 1px var(--focus-border, var(--border-focus));
+}
+
+/* A checkbox drawn by the theme: WebKit's own was a white square on any
+   dark one. */
 .dialog-fields input[type="checkbox"] {
-  width: auto;
-  flex: 0 0 auto;
+  justify-self: start;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border-radius: 4px;
+  appearance: none;
+  cursor: pointer;
+}
+
+.dialog-fields input[type="checkbox"]:checked {
+  background: var(--border-focus);
+  border-color: var(--border-focus);
+}
+
+.dialog-fields input[type="checkbox"]:checked::after {
+  content: "";
+  display: block;
+  width: 5px;
+  height: 9px;
+  margin: 2px 0 0 5px;
+  border: solid var(--panel-bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* The cycling value (what to look for): a control, like a select, and not
+   WebKit's white button. */
+.dialog-fields button {
+  justify-self: start;
+  min-width: 160px;
+  height: 30px;
+  padding: 0 12px;
+  font: inherit;
+  color: var(--fg);
+  text-align: left;
+  background: var(--input-bg, var(--panel-bg));
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.dialog-fields button:hover {
+  border-color: var(--focus-border, var(--border-focus));
 }
 
 .dialog input {
@@ -2544,34 +2623,90 @@ button.status-item:hover {
   display: none;
 }
 
-.help {
-  width: min(120ch, 94vw);
-  height: min(80vh, 100%);
-  display: grid;
-  grid-template-columns: 28ch 1fr;
-  grid-template-rows: 1fr auto;
+/* Help and settings are the SAME kind of window: one size, one frame, one
+   header. They used to be two (80vh with a monospace body, 90vh with a
+   proportional one) and opening one after the other read as two apps. */
+.help,
+.settings {
+  width: min(1120px, 92vw);
+  height: min(800px, 88vh);
   background: var(--panel-bg);
-  border: 1px solid var(--border-focus);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 18px 48px var(--widget-shadow, rgb(0 0 0 / 35%));
   overflow: hidden;
 }
 
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 20px;
+  border-bottom: 1px solid var(--separator, var(--border));
+}
+
+/* The title in the TEXT color: the accent belongs to what can be pressed
+   and to where the keyboard is, and a title is neither. */
+.modal-title {
+  flex: 1;
+  margin: 0;
+  font-size: 1.15em;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--fg);
+}
+
+.modal-close {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font: inherit;
+  font-size: 1.3em;
+  line-height: 1;
+  color: var(--fg);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.modal-close:hover {
+  background: var(--hover, var(--panel-focus-bg));
+  opacity: 1;
+}
+
+.help {
+  display: grid;
+  grid-template-columns: 264px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.help-head {
+  grid-column: 1 / -1;
+}
+
 .help-topics {
-  grid-row: 1;
+  grid-row: 2;
+  padding: 6px 8px 12px;
+  background: var(--bg);
   border-right: 1px solid var(--separator, var(--border));
   overflow: auto;
+  line-height: 1.4;
   /* A page's name can come from a plugin: isolated so a directional mark
      does not reorder what is around it. */
   unicode-bidi: isolate;
 }
 
-.help-topics[data-focused="true"] {
-  border-right-color: var(--border-focus);
-}
-
 .help-filter {
-  padding: 0 6px;
-  color: var(--border-focus);
+  margin: 4px 0 6px;
+  padding: 4px 10px;
+  font-family: var(--font-mono);
+  color: var(--fg);
   white-space: nowrap;
+  background: var(--input-bg, var(--panel-bg));
+  border: 1px solid var(--focus-border, var(--border-focus));
+  border-radius: 6px;
 }
 
 .help-topic-rows {
@@ -2583,28 +2718,33 @@ button.status-item:hover {
 /* A group header reads as one and not as one more page: small caps and
    space above, which is what separates a group from the previous one. */
 .help-group {
-  padding: 12px 8px 2px;
-  color: var(--title-fg);
-  opacity: 0.85;
-  font-size: 0.8em;
-  letter-spacing: 0.06em;
+  padding: 16px 10px 4px;
+  color: var(--muted, var(--title-fg));
+  font-size: 0.72em;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .help-group:first-child {
-  padding-top: 6px;
+  padding-top: 8px;
 }
 
 .help-topic {
-  padding: 1px 8px 1px 16px;
+  padding: 4px 10px;
+  border-radius: 5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
 }
 
+.help-topic:hover {
+  background: var(--hover, var(--panel-focus-bg));
+}
+
 .help-topic[data-current="true"] {
-  color: var(--title-fg);
+  font-weight: 600;
 }
 
 .help-topic[aria-selected="true"] {
@@ -2628,16 +2768,17 @@ button.status-item:hover {
   /* `relative` so a heading's `offsetTop` is measured from this box: it is
      where `[`, `]` and the page's table of contents jump to. */
   position: relative;
-  grid-row: 1;
-  padding: 12px 24px 24px;
+  grid-row: 2;
+  padding: 24px 40px 40px;
   overflow: auto;
-  line-height: 1.5;
+  font-size: 1.04em;
+  line-height: 1.6;
   unicode-bidi: isolate;
 }
 
-/* Reading measure: the prose does not grow with the window. 72 characters
-   is the same as the terminal's (`HELP_MEASURE`); wider, the eye loses the
-   line coming back. Tables and code can go beyond it if they need to. */
+/* Reading measure: the prose does not grow with the window. ~70 characters
+   of the proportional font, the terminal's `HELP_MEASURE`; wider, the eye
+   loses the line coming back. Tables and code can go beyond it. */
 .help-body > p,
 .help-body > .help-bullets,
 .help-body > .help-callout,
@@ -2645,7 +2786,7 @@ button.status-item:hover {
 .help-body > h2,
 .help-body > h3,
 .help-body > h4 {
-  max-width: 72ch;
+  max-width: 68ch;
 }
 
 /* ONE vertical rhythm for every block. Paragraphs used to carry the
@@ -2661,26 +2802,29 @@ button.status-item:hover {
 }
 
 .help-body h1 {
-  margin: 0 0 0.8em;
-  padding-bottom: 6px;
-  font-size: 1.35em;
+  margin: 0 0 0.6em;
+  font-size: 1.6em;
+  font-weight: 650;
   line-height: 1.25;
-  color: var(--title-fg);
-  border-bottom: 1px solid var(--separator, var(--border));
+  letter-spacing: -0.01em;
+  color: var(--fg);
 }
 
 .help-body h2,
 .help-body h3,
 .help-body h4 {
-  margin: 1.4em 0 0.5em;
-  font-size: 1.05em;
+  margin: 1.8em 0 0.5em;
+  font-size: 1.2em;
+  font-weight: 600;
   line-height: 1.3;
-  color: var(--title-fg);
+  color: var(--fg);
 }
 
 .help-body h3,
 .help-body h4 {
-  font-size: 1em;
+  margin-top: 1.4em;
+  font-size: 1.05em;
+  color: var(--title-fg);
 }
 
 .help-badge {
@@ -2692,40 +2836,62 @@ button.status-item:hover {
 .help-toc {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 8px;
-  max-width: 72ch;
-  margin: 0 0 1em;
+  gap: 6px;
+  max-width: 68ch;
+  margin: 0 0 1.4em;
 }
 
 .help-toc-item {
-  padding: 1px 8px;
+  padding: 2px 10px;
   font: inherit;
-  font-size: 0.9em;
-  color: var(--border-focus);
-  background: transparent;
+  font-size: 0.85em;
+  line-height: 1.6;
+  color: var(--fg);
+  background: var(--widget-bg, var(--panel-bg));
   border: 1px solid var(--separator, var(--border));
-  border-radius: 3px;
+  border-radius: 999px;
+  opacity: 0.85;
   cursor: pointer;
 }
 
 .help-toc-item:hover {
   border-color: var(--border-focus);
+  opacity: 1;
 }
 
 .help-bullets {
-  padding-left: 3ch;
+  padding-left: 1.4em;
 }
 
 .help-bullets > li + li {
-  margin-top: 0.2em;
+  margin-top: 0.35em;
+}
+
+.help-bullets > li::marker {
+  color: var(--muted, var(--title-fg));
+}
+
+/* Code in the monospace font, the body being proportional: a path or a
+   command line has to keep its columns. */
+.help-body code,
+.help-code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.help-body :not(pre) > code {
+  padding: 1px 5px;
+  background: var(--bg);
+  border-radius: 4px;
 }
 
 .help-code {
-  padding: 6px 10px;
+  padding: 10px 14px;
   overflow-x: auto;
-  line-height: 1.35;
+  line-height: 1.45;
   background: var(--bg);
-  border-left: 2px solid var(--border);
+  border: 1px solid var(--separator, var(--border));
+  border-radius: 6px;
 }
 
 .help-table,
@@ -2764,17 +2930,34 @@ button.status-item:hover {
   opacity: 0.55;
 }
 
-.help-key-chord,
+/* A key is a KEYCAP, not a link: in the accent color it read as something
+   to click, the same blue as the real links two words away. */
 .help-chord {
-  color: var(--border-focus);
-  font: inherit;
+  display: inline-block;
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  line-height: 1.6;
+  color: var(--fg);
+  white-space: nowrap;
+  background: var(--bg);
+  border: 1px solid var(--separator, var(--border));
+  border-bottom-width: 2px;
+  border-radius: 4px;
+}
+
+.help-key-chord {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  font-weight: 500;
+  color: var(--fg);
   white-space: nowrap;
 }
 
 /* Fixed column: with the width set to the content, each row's label starts
    at a different spot and the sheet stops reading as a list of keys. */
 .help-key-chord {
-  width: 12ch;
+  width: 14ch;
 }
 
 .help-key-reason {
@@ -2816,6 +2999,7 @@ button.status-item:hover {
 .help-link {
   color: var(--border-focus);
   text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .help-link[data-live="true"] {
@@ -2828,9 +3012,10 @@ button.status-item:hover {
 
 .help-callout {
   display: block;
-  padding: 6px 12px;
+  padding: 10px 14px;
   background: var(--bg);
   border-left: 3px solid var(--border-focus);
+  border-radius: 0 6px 6px 0;
 }
 
 .help-callout[data-kind="warn"] {
@@ -2839,13 +3024,17 @@ button.status-item:hover {
 
 .help-callout-kind {
   margin-right: 8px;
+  font-size: 0.8em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--title-fg);
 }
 
 .help-actions {
-  margin: 1.2em 0 0;
-  padding: 6px 0 0;
+  max-width: 68ch;
+  margin: 2em 0 0;
+  padding: 10px 0 0;
   list-style: none;
   border-top: 1px solid var(--separator, var(--border));
 }
@@ -2853,9 +3042,14 @@ button.status-item:hover {
 .help-action {
   display: flex;
   gap: 12px;
-  padding: 2px 8px;
+  padding: 5px 10px;
+  border-radius: 5px;
   white-space: nowrap;
   cursor: pointer;
+}
+
+.help-action:hover {
+  background: var(--hover, var(--panel-focus-bg));
 }
 
 /* The body with the keyboard: an accent rule on the left, the same one the
@@ -2884,7 +3078,8 @@ button.status-item:hover {
 
 .help-action-chord {
   flex: 0 0 14ch;
-  color: var(--border-focus);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
 }
 
 .help-action-label {
@@ -2898,10 +3093,13 @@ button.status-item:hover {
   opacity: 0.9;
 }
 
+/* Quiet: it is a reminder, not a bar. On `--status-bg` it was the loudest
+   thing on screen in every theme whose status bar is the accent. */
 .help-hint {
   grid-column: 1 / -1;
-  padding: 3px 10px;
-  background: var(--status-bg);
+  padding: 7px 20px;
+  font-size: 0.85em;
+  color: var(--muted, var(--title-fg));
   border-top: 1px solid var(--separator, var(--border));
   white-space: nowrap;
   overflow: hidden;
@@ -2923,27 +3121,11 @@ button.status-item:hover {
   display: none;
 }
 
+/* Size and frame: shared with help, see `.help, .settings`. */
 .settings {
-  /* Large: there are 34 settings with their value and their actions on the
-     right, and at 110ch the value column ate into the name. The cap in
-     `vw`/`vh` still lets the listing behind it show through, which is what
-     says this is a modal and not another screen. */
-  width: min(150ch, 96vw);
-  height: min(90vh, 100%);
   display: flex;
   flex-direction: column;
-  padding: 0 12px 8px;
-  background: var(--panel-bg);
-  border: 1px solid var(--border-focus);
-  overflow: hidden;
-}
-
-.settings h1 {
-  margin-bottom: 2px;
-  padding-bottom: 4px;
-  font-size: 1.35em;
-  color: var(--title-fg);
-  border-bottom: 1px solid var(--separator, var(--border));
+  line-height: 1.45;
 }
 
 /* The search box and the two figures. The count ALWAYS shows: without the
@@ -2951,22 +3133,64 @@ button.status-item:hover {
    same. */
 .settings-search-bar {
   display: flex;
-  gap: 8px;
+  gap: 12px;
   align-items: center;
-  padding: 6px 0;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--separator, var(--border));
 }
 
+/* The magnifier is a drawn background and not a glyph, for the same reason
+   as the dropdown's arrow: it must not depend on an installed font. */
 .settings-search {
   flex: 1;
-  padding: 4px 8px;
+  height: 34px;
+  padding: 0 12px 0 34px;
   color: var(--fg);
   font: inherit;
-  background: var(--input-bg, var(--bg));
-  border: 1px solid var(--border);
+  background-color: var(--input-bg, var(--bg));
+  background-image:
+    radial-gradient(
+      circle at 15px 15px,
+      transparent 5px,
+      currentcolor 5.5px,
+      currentcolor 6.5px,
+      transparent 7px
+    ),
+    linear-gradient(
+      45deg,
+      transparent 47%,
+      currentcolor 47%,
+      currentcolor 60%,
+      transparent 60%
+    );
+  background-position:
+    0 0,
+    19px 19px;
+  background-size:
+    30px 30px,
+    6px 6px;
+  background-repeat: no-repeat;
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: 6px;
+  appearance: none;
+}
+
+.settings-search::placeholder {
+  color: var(--fg);
+  opacity: 0.45;
+}
+
+.settings-search:focus {
+  outline: none;
+  border-color: var(--focus-border, var(--border-focus));
+  box-shadow: 0 0 0 1px var(--focus-border, var(--border-focus));
 }
 
 .settings-count {
-  color: var(--info-fg, var(--fg));
+  min-width: 6ch;
+  font-size: 0.9em;
+  text-align: right;
+  opacity: 0.6;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2975,8 +3199,7 @@ button.status-item:hover {
    name with no room. */
 .settings-body {
   display: grid;
-  grid-template-columns: 26ch 1fr;
-  gap: 0 12px;
+  grid-template-columns: 240px minmax(0, 1fr);
   min-height: 0;
   flex: 1;
 }
@@ -2996,7 +3219,9 @@ button.status-item:hover {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  padding: 10px 8px;
   overflow-y: auto;
+  background: var(--bg);
   border-right: 1px solid var(--separator, var(--border));
 }
 
@@ -3006,13 +3231,16 @@ button.status-item:hover {
      `space-between` and three children, the title drifted to the center
      and each section started in a different column. */
   justify-content: flex-start;
-  gap: 8px;
-  padding: 3px 8px 3px 4px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 8px;
   color: var(--fg);
   font: inherit;
+  line-height: 1.4;
   text-align: left;
   background: none;
   border: 0;
+  border-radius: 6px;
   cursor: pointer;
 }
 
@@ -3034,8 +3262,8 @@ button.status-item:hover {
 }
 
 .settings-rows:not([data-focused="true"]) .settings-row[aria-selected="true"] {
-  background: var(--selection-unfocused-bg);
-  color: var(--selection-unfocused-fg);
+  background: var(--hover, var(--panel-focus-bg));
+  box-shadow: none;
 }
 
 /* Emptied by the filter: it stays, dimmed. An index that changes length
@@ -3057,13 +3285,14 @@ button.status-item:hover {
 }
 
 .settings-index-count {
+  font-size: 0.85em;
   font-variant-numeric: tabular-nums;
-  opacity: 0.8;
+  opacity: 0.55;
 }
 
 .settings-rows {
   margin: 0;
-  padding: 0;
+  padding: 0 24px 24px;
   list-style: none;
   overflow: auto;
 }
@@ -3078,10 +3307,10 @@ button.status-item:hover {
   position: sticky;
   top: 0;
   z-index: 1;
-  margin-top: 10px;
-  padding: 6px 0 4px;
-  color: var(--title-fg);
-  font-size: 1.25em;
+  margin: 0 0 4px;
+  padding: 18px 0 8px;
+  color: var(--fg);
+  font-size: 1.2em;
   font-weight: 600;
   background: var(--panel-bg);
   border-bottom: 1px solid var(--separator, var(--border));
@@ -3125,20 +3354,23 @@ button.status-item:hover {
 /* Reset: an ICON. The text used to eat thirty cells of every touched row
    to say the same thing as an undo arrow. */
 .settings-reset {
-  width: 2.2em;
+  width: 28px;
+  height: 28px;
   padding: 0;
   color: var(--fg);
   font: inherit;
-  line-height: inherit;
+  font-size: 1.1em;
+  line-height: 1;
   background: none;
-  border: 1px solid var(--border);
-  border-radius: 3px;
+  border: 0;
+  border-radius: 6px;
+  opacity: 0.65;
   cursor: pointer;
 }
 
 .settings-reset:hover {
-  color: var(--title-fg);
-  border-color: var(--border-focus);
+  background: var(--widget-bg, var(--panel-bg));
+  opacity: 1;
 }
 
 /* --- A row's controls ---------------------------------------------------- */
@@ -3147,34 +3379,38 @@ button.status-item:hover {
    because a position alone is not told apart without staring. */
 .settings-switch {
   position: relative;
-  width: 2.4em;
-  height: 1.2em;
+  display: block;
+  width: 36px;
+  height: 20px;
+  margin: 5px 0;
   padding: 0;
   background: var(--widget-bg, var(--panel-bg));
-  border: 1px solid var(--border);
-  border-radius: 1em;
+  border: 1px solid var(--input-border, var(--border));
+  border-radius: 999px;
   cursor: pointer;
 }
 
 .settings-switch[data-on="true"] {
-  background: var(--selection-bg);
+  background: var(--border-focus);
   border-color: var(--border-focus);
 }
 
 .settings-switch-knob {
   position: absolute;
-  top: 1px;
+  top: 2px;
   left: 2px;
-  width: 0.9em;
-  height: 0.9em;
+  width: 14px;
+  height: 14px;
   background: var(--fg);
   border-radius: 50%;
-  transition: left 80ms ease-out;
+  opacity: 0.75;
+  transition: left 100ms ease-out;
 }
 
 .settings-switch[data-on="true"] .settings-switch-knob {
-  left: calc(100% - 0.9em - 3px);
-  background: var(--selection-fg);
+  left: 18px;
+  background: var(--panel-bg);
+  opacity: 1;
 }
 
 /* Reduced motion: the knob jumps instead of sliding. */
@@ -3187,14 +3423,16 @@ button.status-item:hover {
 .settings-select,
 .settings-number,
 .settings-text {
+  display: block;
   width: 100%;
-  max-width: 28ch;
-  padding: 0 4px;
+  max-width: 320px;
+  height: 30px;
+  padding: 0 10px;
   color: var(--fg);
   font: inherit;
-  background: var(--input-bg, var(--bg));
+  background-color: var(--input-bg, var(--bg));
   border: 1px solid var(--input-border, var(--border));
-  border-radius: 3px;
+  border-radius: 5px;
   /* WITHOUT the system's appearance. WebKit painted its own background and
      its own color over these, and the controls came out gray — looking
      disabled — over a dark theme. */
@@ -3205,14 +3443,14 @@ button.status-item:hover {
    with a gradient and not a character: a glyph would depend on whatever
    font is installed, and this control has to look the same everywhere. */
 .settings-select {
-  padding-right: 2ch;
+  padding-right: 28px;
   background-image:
     linear-gradient(45deg, transparent 50%, currentcolor 50%),
     linear-gradient(135deg, currentcolor 50%, transparent 50%);
   background-repeat: no-repeat;
   background-position:
-    right 1ch top 55%,
-    right calc(1ch - 4px) top 55%;
+    right 14px top 52%,
+    right 10px top 52%;
   background-size:
     4px 4px,
     4px 4px;
@@ -3222,24 +3460,42 @@ button.status-item:hover {
    said, instead of leaving a gray box that looks broken. */
 .settings-text::placeholder,
 .settings-number::placeholder {
-  color: var(--info-fg, var(--fg));
-  opacity: 0.7;
+  color: var(--fg);
+  opacity: 0.45;
 }
 
-/* Width for the number AND its arrows: at eight cells the buttons covered
-   the value, so the field looked empty with the number hidden behind it. */
+/* WebKit's own spin buttons came out white on any dark theme; the arrow
+   keys and the wheel still step the value. */
 .settings-number {
-  width: 12ch;
-  max-width: 12ch;
+  width: 10ch;
+  max-width: 10ch;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-number::-webkit-inner-spin-button,
+.settings-number::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.settings-select:hover,
+.settings-number:hover,
+.settings-text:hover {
+  border-color: var(--focus-border, var(--border-focus));
 }
 
 .settings-select:focus,
 .settings-number:focus,
-.settings-text:focus,
+.settings-text:focus {
+  outline: none;
+  border-color: var(--focus-border, var(--border-focus));
+  box-shadow: 0 0 0 1px var(--focus-border, var(--border-focus));
+}
+
 .settings-switch:focus-visible,
 .settings-reset:focus-visible {
-  outline: 1px solid var(--border-focus);
-  outline-offset: 1px;
+  outline: 2px solid var(--focus-border, var(--border-focus));
+  outline-offset: 2px;
 }
 
 /* The sidebar's icons carry their own stack: Inter does not have the
@@ -3270,18 +3526,27 @@ button.status-item:hover {
     "mark name actions"
     "mark desc actions"
     "mark control control";
-  align-items: baseline;
-  gap: 2px 10px;
-  padding: 6px 8px;
+  align-items: start;
+  gap: 2px 14px;
+  margin: 2px -12px;
+  padding: 12px 12px 14px;
+  border-radius: 6px;
   cursor: pointer;
   /* A value can be a PATH, and a path can carry directional marks: each
      cell is its own bidi run. */
   unicode-bidi: isolate;
 }
 
+.settings-row:hover {
+  background: var(--hover, var(--panel-focus-bg));
+}
+
+/* The cursor is a TINT and a hairline, not the listing's selection: a
+   saturated band behind a block of prose and a dark control turned the
+   chosen row into the least readable one on screen. */
 .settings-row[aria-selected="true"] {
-  background: var(--selection-bg);
-  color: var(--selection-fg);
+  background: var(--hover, var(--panel-focus-bg));
+  box-shadow: inset 0 0 0 1px var(--focus-border, var(--border-focus));
 }
 
 /* The name is the block's TITLE: semi-bold, because it is what the eye
@@ -3297,7 +3562,7 @@ button.status-item:hover {
 
 .settings-value {
   grid-area: control;
-  margin-top: 2px;
+  margin-top: 8px;
   unicode-bidi: isolate;
 }
 
@@ -3321,6 +3586,15 @@ button.status-item:hover {
   unicode-bidi: isolate;
 }
 
+/* In a section header the pill is a note beside the title, not a second
+   title: the header's 1.2em made it as loud as the section's name. */
+.settings-group .settings-badge {
+  margin-left: 8px;
+  font-size: 0.6em;
+  font-weight: 500;
+  vertical-align: 0.25em;
+}
+
 /* A missing location's is still a different kind of warning: there the
    hostile color is the correct one, because it is talking about a path. */
 .settings-missing {
@@ -3334,11 +3608,13 @@ button.status-item:hover {
    the cursor to be able to read it. Dimmed, so the name still rules. */
 .settings-desc {
   grid-area: desc;
+  max-width: 76ch;
+  font-size: 0.93em;
   /* Dimmed, NOT blue. `--info-fg`'s blue reads as "this can be clicked",
      and a description is not clicked: the bright color belongs to controls
      and links, not to the prose that explains them. */
   color: inherit;
-  opacity: 0.72;
+  opacity: 0.7;
   unicode-bidi: isolate;
 }
 

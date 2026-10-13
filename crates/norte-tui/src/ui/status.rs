@@ -288,7 +288,7 @@ fn compose_line(app: &App, area: Rect) -> Composed {
     // A pending message (error by category, result) displaces the rest of
     // the bar until the next key (issue #20). With no message: a pane with
     // a live search (liveSearch T6) paints `search-status-*` (hits =
-    // `entries.len()`); otherwise, the statusbar Lua hook (M4, already
+    // `real_entries.len()`); otherwise, the statusbar Lua hook (M4, already
     // sanitized by the host) replaces the focused pane's default line.
     // A drag IN FLIGHT overrides everything else while it lasts. It is the
     // only thing on this line that announces a MUTATION about to be
@@ -354,7 +354,9 @@ fn compose_line(app: &App, area: Rect) -> Composed {
                 });
             format!(
                 " {}{hit}{seq}",
-                ta(key, &[("n", &pane.entries().len().to_string())])
+                // REAL entries: the `..` row is not a hit, and counted it
+                // made an empty search say "1".
+                ta(key, &[("n", &pane.real_entries().len().to_string())])
             )
         }
     } else if let Some(lua) = &app.lua_status {

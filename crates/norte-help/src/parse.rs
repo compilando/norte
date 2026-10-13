@@ -987,6 +987,31 @@ pub fn parse_untrusted(bytes: &[u8], fallback_id: &str, publisher: Option<String
 /// Turns the body into blocks. `mask` masks terminal hazards in every text
 /// produced (hostile mode, task 6).
 ///
+/// A heading block, its text masked when the mode asks.
+fn heading(level: u8, text: &str, mode: Mode<'_>) -> Block {
+    Block::Heading {
+        level,
+        text: mask_if(text.to_owned(), mode.masks()),
+    }
+}
+
+/// The heading level a setext underline gives the line above it: `===` is 1,
+/// `---` is 2. Three characters at least, all the same, so a lone `-` or a
+/// dash in prose is never one.
+fn setext_level(line: &str) -> Option<u8> {
+    let t = line.trim();
+    if t.len() < 3 {
+        return None;
+    }
+    if t.bytes().all(|b| b == b'=') {
+        Some(1)
+    } else if t.bytes().all(|b| b == b'-') {
+        Some(2)
+    } else {
+        None
+    }
+}
+
 /// Line-oriented and single-pass: the grammar has no nesting, so a block is
 /// decided by the prefix of its first line and nothing needs to be
 /// backtracked. Returns the blocks and whether a [`Limits`] ceiling was hit.
@@ -1011,6 +1036,10 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
 
         if line.trim().is_empty() {
             flush(&mut for_, &mut out, mode);
+        } else if let Some(level) = setext_level(line).filter(|_| for_.len() == 1) {
+            // `---`/`===` under a one-line paragraph: a heading, as in Markdown.
+            let text = for_.pop().unwrap_or_default();
+            out.push(heading(level, text.trim(), mode));
         } else if let Some(rest) = line.strip_prefix("```") {
             flush(&mut for_, &mut out, mode);
             let lang =
@@ -1046,11 +1075,7 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
                 1 => 2,
                 _ => 3,
             };
-            let text = rest.trim_start_matches('#').trim();
-            out.push(Block::Heading {
-                level,
-                text: mask_if(text.to_owned(), mode.masks()),
-            });
+            out.push(heading(level, rest.trim_start_matches('#').trim(), mode));
         } else if let Some(rest) = line.strip_prefix("> ") {
             flush(&mut for_, &mut out, mode);
             let (kind, body) = callout_kind(rest);
@@ -1718,6 +1743,33 @@ key = 1\n\
 | a | b |\n\
 |---|---|\n\
 | 1 | 2 |\n";
+
+    /// A title underlined with `---`/`===` is a heading, not a paragraph
+    /// followed by a row of dashes; a dash rule under two lines of prose is
+    /// left alone.
+    #[test]
+    fn a_setext_underline_makes_a_heading() {
+        let src =
+            "+++\nid = \"t\"\ntitle = \"T\"\n+++\nThe key bar\n---\n\nTop\n===\n\nOne\ntwo\n---\n";
+        let blocks = parse_trusted(src).expect("valid").topic.blocks;
+        assert_eq!(
+            blocks[0],
+            Block::Heading {
+                level: 2,
+                text: "The key bar".to_owned()
+            }
+        );
+        assert_eq!(
+            blocks[1],
+            Block::Heading {
+                level: 1,
+                text: "Top".to_owned()
+            }
+        );
+        assert!(matches!(blocks[2], Block::Paragraph(_)), "{blocks:?}");
+        assert_eq!(setext_level("--"), None, "two dashes are prose");
+        assert_eq!(setext_level("-=-"), None);
+    }
 
     #[test]
     fn parses_the_six_block_kinds() {

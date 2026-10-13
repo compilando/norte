@@ -38,7 +38,7 @@ pulsación de más no es lo que nadie quería.
 {{cmd:pane.tab-close}} cierra la actual. Cuando solo queda una, el grupo
 desaparece y el panel vuelve a ser un panel — una barra de pestañas con una
 sola pestaña no dice nada. Cerrar el último panel de un lado **no** es esto:
-para eso está `layout.close-slot`.
+para eso está {{cmd:layout.close-slot}}.
 
 Una pestaña que no se ve no gasta: no vigila su directorio ni pide nada. Al
 volver a ella se pone al día.

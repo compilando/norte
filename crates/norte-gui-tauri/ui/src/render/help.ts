@@ -47,7 +47,11 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
   box.setAttribute("aria-modal", "true");
   box.setAttribute("aria-label", this.t("help-title"));
 
-  box.append(this.helpSidebar(help), this.helpBody(help));
+  box.append(
+    modalHeader.call(this, this.t("help-title"), "help-head"),
+    this.helpSidebar(help),
+    this.helpBody(help),
+  );
 
   const footer = document.createElement("footer");
   footer.className = "help-hint";
@@ -66,6 +70,41 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
     this.helpScrollSeq = help.scroll.seq;
     this.scrollHelp(help.scroll.to);
   }
+}
+
+/**
+ * A modal's header: its title and a close button, shared by help and
+ * settings so both read as the same kind of window.
+ *
+ * The button sends `Escape`, the same key that closes (as the extension
+ * manager's does): what the first `esc` undoes is the host's decision.
+ */
+export function modalHeader(this: Screen, title: string, className: string): HTMLElement {
+  const head = document.createElement("header");
+  head.className = `modal-head ${className}`;
+  // Not a heading: the dialog's `aria-label` already names it, and help's
+  // page title is the one `h1` — two roots would break its hierarchy.
+  const h = document.createElement("div");
+  h.className = "modal-title";
+  h.textContent = title;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "modal-close";
+  close.setAttribute("aria-label", this.t("dialog-close"));
+  close.title = this.t("dialog-close");
+  close.textContent = "×";
+  close.addEventListener("click", () => {
+    this.send({
+      action: "key",
+      key: "Escape",
+      ctrl: false,
+      alt: false,
+      shift: false,
+      meta: false,
+    });
+  });
+  head.append(h, close);
+  return head;
 }
 
 /**
