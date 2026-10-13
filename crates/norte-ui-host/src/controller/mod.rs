@@ -40,6 +40,7 @@ use crate::dto::{
 mod agents;
 mod ai;
 mod approvals;
+mod command_bar;
 mod context_menu;
 mod dialogs;
 mod diskmap;
@@ -2740,6 +2741,12 @@ struct State {
     /// Its target, facts and entries are decided ONCE at opening, here,
     /// and the renderer only paints its projection.
     context_menu: Option<context_menu::ContextMenu>,
+    /// The command bar's line and history (ADR 0181).
+    command_bar: norte_frontend::command_bar::CommandBar,
+    /// The bar has the keyboard.
+    command_bar_focus: bool,
+    /// Where the bar's history is saved; `None` = not saved.
+    command_history_path: Option<std::path::PathBuf>,
     /// The configuration this window started with, to show it.
     config: norte_frontend::config::FrontendConfig,
     /// Where each thing lives.
@@ -3434,6 +3441,14 @@ impl State {
             footer_in_flight: false,
             menu: None,
             context_menu: None,
+            command_bar: norte_frontend::command_bar::CommandBar::new(
+                norte_config::command_history::path()
+                    .as_deref()
+                    .map(norte_config::command_history::load)
+                    .unwrap_or_default(),
+            ),
+            command_bar_focus: false,
+            command_history_path: norte_config::command_history::path(),
             help: None,
             settings: None,
             extensions: None,
@@ -4093,6 +4108,8 @@ impl State {
             UiAction::GotoActivateRow { row } => self.activate_in_goto(*row, backend, mailbox),
             UiAction::GotoPaste { text } => self.paste_in_goto(text, backend, mailbox),
             UiAction::ContextMenuClose => self.close_context_menu(),
+            UiAction::CommandBarFocus => self.focus_command_bar(),
+            UiAction::CommandBarPaste { text } => self.paste_in_command_bar(text),
             UiAction::OverlayDismiss => self.dismiss_overlay(backend, mailbox),
             UiAction::ContextMenuActivateRow { row } => {
                 self.activate_context_menu(*row, backend, mailbox)

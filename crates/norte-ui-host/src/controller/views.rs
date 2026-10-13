@@ -154,6 +154,7 @@ impl State {
             tasks: self.vistas_de_tasks(),
             menu: self.vista_menu(),
             context_menu: self.vista_context_menu(),
+            command_bar: self.vista_command_bar(),
             panel_bar: self.view_pane_bar(),
             status_items: self.status_items_view(),
             layout_buttons: self.view_layout_buttons(),

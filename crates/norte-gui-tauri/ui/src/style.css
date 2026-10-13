@@ -171,8 +171,62 @@ body {
      because the bar is `fixed` — it has to come later in the document to
      paint over the panels — and therefore takes no space in the flow. With
      `[ui] menu_bar` off the variable is zero and nothing is lost. */
-  height: calc(100vh - var(--menubar-h, 0px) - var(--panelbar-h, 0px));
+  height: calc(
+    100vh - var(--menubar-h, 0px) - var(--panelbar-h, 0px) - var(--commandbar-h, 0px)
+  );
   margin-top: calc(var(--menubar-h, 0px) + var(--panelbar-h, 0px));
+}
+
+/* The command bar (ADR 0181): a fixed row at the bottom, reserved through
+   `--commandbar-h` like the bars up top. */
+#commandbar[data-open="true"] {
+  position: fixed;
+  left: var(--activity-w, 0px);
+  right: 0;
+  bottom: 0;
+  display: flex;
+  gap: 1ch;
+  align-items: center;
+  height: var(--cell-h);
+  padding: 0 8px;
+  font-family: var(--font-mono);
+  color: var(--fg);
+  background: var(--panel-bg);
+  border-top: 1px solid var(--separator, var(--border));
+  cursor: text;
+  overflow: hidden;
+  white-space: pre;
+}
+
+#commandbar[data-open="false"] {
+  display: none;
+}
+
+.commandbar-prompt {
+  flex: 0 1 auto;
+  max-width: 33%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted, var(--title-fg));
+}
+
+#commandbar[data-focused="true"] .commandbar-sign {
+  color: var(--border-focus);
+}
+
+.commandbar-line {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.commandbar-line[data-reason="true"] {
+  color: var(--muted, var(--title-fg));
+}
+
+.commandbar-caret {
+  color: var(--panel-bg);
+  background: var(--fg);
 }
 
 /* The panel bar (#324): a fixed row under the menu bar, reserved the same

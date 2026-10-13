@@ -188,6 +188,8 @@ impl State {
             | Effect::EditExternal
             | Effect::CompareFiles
             | Effect::Terminal
+            // The command bar runs every order as a shell in the panel below.
+            | Effect::CommandLine
             // The terminal PANEL (#362), and with more reason than
             // `Terminal`: that one launches an outside emulator, and this one
             // runs a shell INSIDE the window. In one that promises not to
@@ -229,6 +231,7 @@ impl State {
             Effect::EditExternal => self.edit_external(),
             Effect::CompareFiles => self.compare_files(),
             Effect::Terminal => self.open_terminal(),
+            Effect::CommandLine => self.focus_command_bar(),
             Effect::Handoff => self.request_handoff(backend, mailbox),
             Effect::Compare => self.request_comparison(backend, mailbox),
             Effect::Disconnect => self.disconnect(backend, mailbox),

@@ -148,6 +148,16 @@
       "title": "Columnas — sftp"
     }
   },
+  "command_bar": {
+    "change": "command_bar",
+    "command_bar": {
+      "cursor": 4,
+      "focused": true,
+      "prompt": "/home/u/src",
+      "reason": "",
+      "text": "make test"
+    }
+  },
   "compare": {
     "change": "compare",
     "compare": {

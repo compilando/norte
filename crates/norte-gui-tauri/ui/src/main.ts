@@ -373,7 +373,8 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
       return;
     }
     // The open search box's paste chord: its text comes by the `paste` event.
-    if (isPasteIntoTheBox(k, gotoEl.dataset["open"] === "true")) {
+    const barFocused = doc.getElementById("commandbar")?.dataset["focused"] === "true";
+    if (isPasteIntoTheBox(k, gotoEl.dataset["open"] === "true" || barFocused)) {
       return;
     }
     // The keys that scroll help also go to the host (bridge 76): it resolves

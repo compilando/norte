@@ -56,6 +56,10 @@ pub struct ViewSnapshot {
     /// Absent in an older host = none.
     #[serde(default)]
     pub context_menu: Option<ContextMenuView>,
+    /// The command bar (ADR 0181, bridge 113), when it is on screen. Absent
+    /// in an older host = hidden.
+    #[serde(default)]
+    pub command_bar: Option<CommandBarView>,
     /// The panel bar (#324): which panels exist, their state, and whether
     /// any has something to report. Bridge 51.
     pub panel_bar: PanelBarView,
@@ -247,6 +251,25 @@ pub struct MenuItemView {
     /// (carries the AI mark). Decided by `norte_frontend::menu::role`, the
     /// same one the terminal reads.
     pub role: String,
+}
+
+/// The command bar (ADR 0181, bridge 113): one line under the panels whose
+/// orders run as terminal-panel entries. The host owns the line; the
+/// renderer paints it and sends keys, as with the search box.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandBarView {
+    /// The focused pane's folder, masked; the renderer cuts it from the
+    /// start.
+    pub prompt: String,
+    /// The line, masked for display.
+    pub text: String,
+    /// The cursor, in chars of `text`.
+    pub cursor: u32,
+    /// The bar has the keyboard.
+    pub focused: bool,
+    /// Why an order cannot run here (off disk), translated; empty when it
+    /// can.
+    pub reason: String,
 }
 
 /// The right-click menu (spec 2026-10-09, bridge 107).
@@ -4194,6 +4217,12 @@ pub enum ViewChange {
     ContextMenu {
         /// The menu, or `None` if it closed.
         context_menu: Option<ContextMenuView>,
+    },
+    /// The command bar changed: shown, hidden, focused, or its line moved
+    /// (bridge 113). Whole, like [`Self::ContextMenu`].
+    CommandBar {
+        /// The bar, or `None` when it is hidden.
+        command_bar: Option<CommandBarView>,
     },
     /// The panel bar changed: a panel opened or closed, the keyboard moved,
     /// or something started having something to report.

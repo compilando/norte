@@ -983,3 +983,39 @@ async fn the_terminal_panel_opens_and_exits_with_the_same_key() {
         "over a panel that is not local it refuses and says so: {ack:?}"
     );
 }
+
+/// The command bar (ADR 0181): `pane.command-line` shows and focuses it,
+/// keys edit its line, and over a folder that is not on this disk `Enter`
+/// refuses with the shared table's reason and starts nothing.
+#[tokio::test]
+async fn the_command_bar_takes_keys_and_refuses_off_disk() {
+    let backend = Arc::new(tree_as_fake());
+    let (h, _snap) = host_with_tree(
+        Arc::clone(&backend),
+        norte_frontend::layout::presets::tree("simple").expect("layout"),
+        (120, 40),
+    )
+    .await;
+    let mut sub = h.subscribe();
+    let ack = execute_via_palette_ack(&h, &mut sub, "pane.command-line").await;
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    for c in ["l", "s"] {
+        h.dispatch(press(c)).await.expect("host alive");
+    }
+    let bar = snapshot_until(&h, &mut sub, "the bar with `ls`", |s| {
+        s.command_bar.clone().filter(|b| b.text == "ls")
+    })
+    .await;
+    assert!(bar.focused);
+    assert_eq!(bar.cursor, 2);
+    let ack = h.dispatch(press("Enter")).await.expect("host alive");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "reason-not-on-this-disk"),
+        "{ack:?}"
+    );
+    h.dispatch(press("Escape")).await.expect("host alive");
+    snapshot_until(&h, &mut sub, "the bar hidden again", |s| {
+        s.command_bar.is_none().then_some(())
+    })
+    .await;
+}

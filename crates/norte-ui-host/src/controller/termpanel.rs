@@ -759,6 +759,14 @@ impl State {
     /// Only the panel (#401): the shell's output touches nothing else, and
     /// the whole frame at up to 30 Hz rebuilt every slot. Without a placed
     /// slot there is nothing to send.
+    /// Marks the entry in front to stay after a clean exit: a command-bar
+    /// order, whose output is why it ran (ADR 0181).
+    pub(super) fn keep_active_terminal(&mut self) {
+        if let Some(id) = self.terminals.active_id() {
+            self.terminals.keep_on_success(id);
+        }
+    }
+
     fn republicar_terminal(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
         let Some(slot) = self.slot_of_kind(KIND) else {
             return Vec::new();

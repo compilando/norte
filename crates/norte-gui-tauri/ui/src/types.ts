@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 112;
+export const BRIDGE_VERSION = 113;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -1112,6 +1112,20 @@ export interface ContextItemView {
 
 /** The right-click menu (bridge 107), owned by the host: the renderer paints
  *  it and reports where the pointer went. */
+/** The command bar (ADR 0181, bridge 113). The host owns the line. */
+export interface CommandBarView {
+  /** The focused pane's folder, masked. */
+  prompt: string;
+  /** The line, masked. */
+  text: string;
+  /** The cursor, in chars of `text`. */
+  cursor: number;
+  /** The bar has the keyboard. */
+  focused: boolean;
+  /** Why an order cannot run here, translated; empty when it can. */
+  reason: string;
+}
+
 export interface ContextMenuView {
   /** What the menu acts on, already worded and masked. */
   header: string;
@@ -1750,6 +1764,9 @@ export interface ViewSnapshot {
   /** The right-click menu (bridge 107), if one is open. Optional: an earlier
    *  host does not send it. */
   context_menu?: ContextMenuView | null;
+  /** The command bar (ADR 0181, bridge 113), when on screen. Optional: an
+   *  earlier host does not send it. */
+  command_bar?: CommandBarView | null;
   panel_bar: PanelBarView;
   /** The status bar's right half (ADR 0132, bridge 85). Optional: an
    *  earlier host does not send it. */
@@ -1847,6 +1864,7 @@ export type ViewChange =
   | { change: "which_key"; whichkey: WhichKeyView | null }
   | { change: "menu"; menu: MenuView }
   | { change: "context_menu"; context_menu: ContextMenuView | null }
+  | { change: "command_bar"; command_bar: CommandBarView | null }
   | { change: "panel_bar"; panel_bar: PanelBarView }
   | { change: "status_items"; status_items: StatusItemView[] }
   | { change: "profiles"; profiles: ProfilePickerView | null }
@@ -2094,6 +2112,10 @@ export type UiAction =
   | { action: "goto_point_row"; row: number }
   | { action: "goto_activate_row"; row: number }
   | { action: "goto_paste"; text: string }
+  /** A click on the command bar: it takes the keys (bridge 113). */
+  | { action: "command_bar_focus" }
+  /** A paste into the focused command bar (bridge 113). */
+  | { action: "command_bar_paste"; text: string }
   /** Alt pressed and released alone: folds or opens the menu (bridge 68). */
   | { action: "menu_toggle" }
   | { action: "wizard_open" }

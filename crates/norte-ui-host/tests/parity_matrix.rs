@@ -19,9 +19,6 @@
 
 /// Live commands a WINDOW will never have, and why.
 const DOES_NOT_APPLY: &[&str] = &[
-    // The TUI's command line is a terminal surface; the window's answer is
-    // the palette.
-    "pane.command-line",
     // `--pick` is a CLI mode: a window has no pipe to answer to.
     "app.pick-accept",
     // `app.quit` used to be here with "the window manager closes it", and it

@@ -623,7 +623,10 @@ use serde::{Deserialize, Serialize};
 ///   since that generation is refused as `StaleAction::Generation`.
 /// - **112**: the action `overlay_dismiss`: a press on the veil behind the
 ///   overlay in front closes it when it is a light popup.
-pub const BRIDGE_VERSION: u32 = 112;
+/// - **113**: the command bar (ADR 0181): `ViewSnapshot.command_bar`,
+///   `ViewChange::CommandBar` (`CommandBarView`), and the actions
+///   `command_bar_focus` and `command_bar_paste`.
+pub const BRIDGE_VERSION: u32 = 113;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///
