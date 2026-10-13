@@ -7,7 +7,20 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **"Terminal here" on the right-click menu**, dimmed with its reason
+  inside an archive or on a remote folder. A new `[ui] terminal` setting
+  (Settings › Open with) picks the emulator, e.g. iTerm2 on macOS; the
+  probe also knows ptyxis, GNOME Console, foot, xfce4-terminal and
+  Debian's `x-terminal-emulator`.
+
 ### Changed
+
+- **"Terminal here" in the terminal opens an emulator window** when there
+  is a desktop, like the window does (ADR 0180); over ssh it still opens a
+  shell in place. On macOS and Windows the terminal now also offers the
+  handoff to the window when it is not running over ssh.
 
 - **A plain word in the search form finds the names that contain it**
   (ADR 0179): `bash` now finds `.bashrc`. A pattern with a wildcard

@@ -359,7 +359,10 @@ fn open_path(path: &norte_proto::VPath) -> RunOutcome {
 
 /// Opens a terminal sitting in `dir`.
 fn terminal(dir: &norte_proto::VPath, configured: Option<&[String]>) -> RunOutcome {
-    let Ok(native) = norte_vfs::native::vpath_to_native(dir) else {
+    // Through `shell_dir`, like the terminal: on Windows the raw native path
+    // is verbatim (`\\?\`), which `cmd`'s cwd and `%d` mishandle, and a
+    // reserved name must be refused, not opened somewhere else.
+    let Some(native) = norte_frontend::shell::shell_dir(dir) else {
         return RunOutcome::NoProgram;
     };
     for argv in norte_frontend::shell::terminal_candidates(configured, &native) {
@@ -380,10 +383,9 @@ fn terminal(dir: &norte_proto::VPath, configured: Option<&[String]>) -> RunOutco
 /// The HANDOFF to the terminal (phase 9): opens an emulator with
 /// `ntc --attach` inside.
 ///
-/// Reuses `terminal_candidates`, the shared list of emulators and their
-/// command flag, and sets `ntc` as the program to run: this way the handoff
-/// opens the same emulator as `app.terminal`, and a desktop where that one
-/// works needs nothing else configured for this one.
+/// Uses `terminal_command_candidates`, the shared list of emulators and
+/// their run-this-command flag, with `ntc` as the program. `[ui] terminal`
+/// does NOT apply here: its template has no way to say where a command goes.
 ///
 /// `--daemon` travels if this window carries it, and it has to: the session
 /// that was just let go of is the daemon's, and an `ntc` against its embedded

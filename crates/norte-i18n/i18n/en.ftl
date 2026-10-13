@@ -2374,7 +2374,7 @@ setting-ui-diff-desc = The program that compares TWO files, as a command line wi
 setting-ui-diff-detached-name = The comparison tool opens a window
 setting-ui-diff-detached-desc = Whether that comparison tool opens a window of its own (Meld, Kompare) instead of taking over the terminal. Same deal as the editor, for the same reason.
 setting-ui-terminal-name = External terminal
-setting-ui-terminal-desc = The emulator "Terminal here" opens, as a command line with the field codes of `openers.toml`: `%d` is the pane's directory. Examples: `foot -D %d`, `open -a iTerm %d`, `wt -d %d`. Empty = `$TERMINAL`, then the desktop's own and a list of known emulators. When set, it is the only one tried. Not read from the project layer: it names a program to execute.
+setting-ui-terminal-desc = The emulator "Terminal here" opens, as a command line with the field codes of `openers.toml`: `%d` is the pane's directory. Examples: `foot -D %d`, `open -a iTerm %d`, `wt -d .` (the terminal starts in the pane's folder; Windows Terminal splits `%d` at a `;`). Empty = `$TERMINAL`, then the desktop's own and a list of known emulators. When set, it is the only one tried. Not read from the project layer: it names a program to execute.
 setting-ui-confirm-quit-name = Confirm before quitting
 setting-ui-confirm-quit-desc = When quitting asks for confirmation: only with pending work (auto), always, or never. An emergency-exit shortcut, where bound (e.g. the TUI's Ctrl+C), always bypasses this.
 setting-ui-key-bar-name = Key bar
@@ -2677,6 +2677,7 @@ msg-opening-external = opening with the desktop’s application…
 msg-opening-terminal = opening a terminal here…
 msg-terminal-opened = opened { $program } here
 msg-terminal-fallback = no terminal emulator started: opening a shell here instead
+msg-terminal-configured-failed = { $program } (from [ui] terminal) did not start: { $error }; opening a shell here instead
 host-plugin-running = running the extension command…
 host-not-an-int = that is not a whole number
 host-out-of-range = the schema bounds it between { $min } and { $max }

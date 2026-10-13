@@ -918,6 +918,39 @@ pub fn terminal_candidates(
     terminal_candidates_from(configured, std::env::var_os("TERMINAL").as_deref(), dir)
 }
 
+/// The directory a child process launched "in" pane `dir` sits in, or
+/// `None` when there is none: a remote or archive pane, or (Windows) a
+/// path [`child_cwd`] refuses. The ONE door every launcher goes through,
+/// and what `Facts::pane_on_disk` asks, so the menu that dims "terminal
+/// here" and the launch that refuses agree.
+#[must_use]
+pub fn shell_dir(dir: &norte_proto::VPath) -> Option<std::path::PathBuf> {
+    norte_vfs::native::vpath_to_native(dir)
+        .ok()
+        .and_then(|native| child_cwd(&native))
+}
+
+/// Windows' probe list, outside the `cfg` so every platform tests it.
+///
+/// The directory is NOT in any argv: it travels only as the process's cwd,
+/// which every launcher sets. `wt` re-parses its own command line and
+/// splits on `;` even inside a quoted argument, so `-d C:\x\a;calc` opened
+/// a tab in `C:\x\a` and ran `calc` (corpus `win_wt_semicolon`); `-d .`
+/// gives it nothing to parse.
+#[cfg_attr(not(any(windows, test)), expect(dead_code, reason = "Windows only"))]
+fn windows_terminals(dir: &std::path::Path) -> Vec<Vec<std::ffi::OsString>> {
+    use std::ffi::OsString;
+    let _ = dir;
+    vec![
+        vec![
+            OsString::from("wt"),
+            OsString::from("-d"),
+            OsString::from("."),
+        ],
+        vec![OsString::from("cmd")],
+    ]
+}
+
 /// Whether a window opened by this process lands in front of the reader:
 /// where "terminal here" may launch an emulator instead of suspending into a
 /// shell, and where the handoff has a desktop to go to (ADR 0180).
@@ -931,8 +964,13 @@ pub fn has_desktop() -> bool {
 ///
 /// Its own process group on unix, so the hangup sent when the reader's
 /// terminal closes does not take the emulator with it; a console of its own
-/// on Windows, so a `cmd` does not share the TUI's. Stdio is null, and a
-/// thread reaps the child so a long session does not collect zombies.
+/// on Windows, so a `cmd` does not share the TUI's — and NOT a new process
+/// group there, which would disable Ctrl+C in everything run from that
+/// `cmd`. Stdio is null, and a thread reaps the child so a long session
+/// does not collect zombies.
+///
+/// `cwd` must come from [`shell_dir`]: on Windows a verbatim path is not a
+/// usable working directory.
 ///
 /// # Errors
 /// The program did not start.
@@ -957,13 +995,15 @@ pub fn spawn_detached(
     {
         use std::os::windows::process::CommandExt as _;
         const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP);
+        cmd.creation_flags(CREATE_NEW_CONSOLE);
     }
     let mut child = cmd.spawn()?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
+    // A reaper that cannot be created costs one zombie, not a crash.
+    let _ = std::thread::Builder::new()
+        .name("norte-reap".into())
+        .spawn(move || {
+            let _ = child.wait();
+        });
     Ok(())
 }
 
@@ -1053,14 +1093,7 @@ pub fn terminal_candidates_from(
         }
     }
     #[cfg(windows)]
-    {
-        out.push(vec![
-            OsString::from("wt"),
-            OsString::from("-d"),
-            OsString::from(dir.as_os_str()),
-        ]);
-        out.push(vec![OsString::from("cmd")]);
-    }
+    out.extend(windows_terminals(dir));
     // `dir` is genuinely unused on a platform with no branch above; naming it
     // keeps the signature stable rather than cfg-ing the parameter itself.
     let _ = dir;
@@ -1518,25 +1551,65 @@ mod tests {
         let start = std::time::Instant::now();
         spawn_detached(
             std::path::Path::new("/bin/sh"),
-            &["-c".into(), "pwd > out; sleep 3".into()],
+            &["-c".into(), "pwd > out; exec sleep 20".into()],
             d.path(),
         )
         .expect("spawns");
+        // The child lives 20 s; a launcher that waited would be caught by a
+        // margin no load eats.
         assert!(
-            start.elapsed() < std::time::Duration::from_secs(2),
+            start.elapsed() < std::time::Duration::from_secs(15),
             "it waited"
         );
         let out = d.path().join("out");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         while !std::fs::read_to_string(&out).is_ok_and(|s| s.ends_with('\n')) {
             assert!(std::time::Instant::now() < deadline, "never ran");
-            std::thread::yield_now();
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let pwd = std::fs::read_to_string(&out).unwrap();
         assert_eq!(
             std::fs::canonicalize(pwd.trim_end()).unwrap(),
             std::fs::canonicalize(d.path()).unwrap()
         );
+    }
+
+    /// The one door from a pane's location to the directory a child process
+    /// sits in: a remote or archive pane has none.
+    #[cfg(unix)]
+    #[test]
+    fn shell_dir_is_the_native_dir_or_nothing() {
+        let tmp = std::env::temp_dir();
+        let vp = norte_vfs::native::vpath_from_native(&tmp).expect("vpath");
+        assert_eq!(shell_dir(&vp), Some(tmp));
+        for wire in ["mem:///", "sftp://h/x", "zip+file:///tmp/a.zip/!/inner"] {
+            let vp = VPath::parse(wire).expect(wire);
+            assert_eq!(shell_dir(&vp), None, "{wire}");
+        }
+    }
+
+    /// No Windows candidate carries the directory: `wt` re-parses its own
+    /// command line and splits on `;` even inside a quoted argument, so a
+    /// folder named `a;calc` became a second subcommand. The directory
+    /// travels only as the process's cwd (`-d .`). Over the whole corpus,
+    /// `win_wt_semicolon` included.
+    #[test]
+    fn no_windows_candidate_carries_the_directory() {
+        for name in norte_testkit::corpus::hostile_names() {
+            let lossy = String::from_utf8_lossy(&name.bytes);
+            let dir = std::path::PathBuf::from(format!("C:\\tmp\\{lossy}"));
+            let all = windows_terminals(&dir);
+            assert_eq!(all[0][0], "wt");
+            for argv in &all {
+                for a in argv {
+                    assert!(
+                        !a.to_string_lossy().contains(&*lossy),
+                        "{}: {argv:?} carries the directory",
+                        name.id
+                    );
+                }
+            }
+        }
     }
 
     fn env<'a>(

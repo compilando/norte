@@ -778,7 +778,7 @@ pub async fn dispatch(
         // mutation (there is no actor to attribute nor a reversal to
         // record), and whatever changes on disk is picked up by the watcher
         // and the refresh on return.
-        Command::AppTerminal => crate::gestures::terminal_here(app),
+        Command::AppTerminal => crate::gestures::terminal_here(app).await,
         // Phase 9: the HANDOFF to the window. Here it only CHECKS and
         // requests; dumping the screen, releasing the session and launching
         // the window are three trips that do not fit in dispatching a key,

@@ -53,7 +53,16 @@ Option 3.
   fallback (`msg-terminal-fallback`) so a missing emulator is not mistaken
   for the intended behaviour.
 - Remote and archive panes keep refusing with their reason; there is no
-  local directory to sit in.
+  local directory to sit in. Every launcher gets its directory from
+  `shell::shell_dir` (on Windows: no verbatim `\\?\`, reserved names
+  refused), which is also what `Facts::pane_on_disk` asks, so the dimmed
+  menu entry and the refusal agree.
+- **No Windows candidate carries the directory in its argv.** Windows
+  Terminal re-parses its own command line and splits on `;` even inside a
+  quoted argument: `wt -d C:\x\a;calc` ran `calc`. It gets `-d .`, and the
+  directory travels only as the process's cwd (corpus `win_wt_semicolon`).
+  A user's `[ui] terminal = ["wt", "-d", "%d"]` reintroduces the problem;
+  the settings help says to use `.`.
 
 ## Consequences
 

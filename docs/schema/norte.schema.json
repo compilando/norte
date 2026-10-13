@@ -749,7 +749,7 @@
         },
         "terminal": {
           "default": null,
-          "description": "`[ui] terminal`: the terminal emulator \"terminal here\" opens, as an\nargv template with `openers.toml`'s field codes — `%d` is the pane's\ndirectory: `terminal = [\"open\", \"-a\", \"iTerm\", \"%d\"]`. When set it is\nthe only one tried. Absent = `$TERMINAL`, then the desktop's own\nanswer and a short list of known emulators.\n\n**Never honoured from the PROJECT layer**, same rule as\n[`Self::editor`]: it names a program to run.",
+          "description": "`[ui] terminal`: the terminal emulator \"terminal here\" opens, as an\nargv template with `openers.toml`'s field codes — `%d` is the pane's\ndirectory: `terminal = [\"open\", \"-a\", \"iTerm\", \"%d\"]`. `%d` is\nreplaced only as a WHOLE element (`\"--cwd=%d\"` stays literal), and\n`%f`/`%F` expand to nothing here. When set it is the only one tried.\nAbsent = `$TERMINAL`, then the desktop's own answer and a short list\nof known emulators.\n\n**Never honoured from the PROJECT layer**, same rule as\n[`Self::editor`]: it names a program to run.",
           "items": {
             "type": "string"
           },

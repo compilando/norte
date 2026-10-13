@@ -219,9 +219,16 @@ async fn spawn_detached(
 /// pane's directory when there is a desktop to put it on, the suspended
 /// login shell otherwise — and also when no emulator starts, saying so.
 ///
-/// Resolving the candidates stats `PATH` on the loop turn: a handful of
-/// `stat`s, the price `pane.open` already pays for an opener's program.
-pub fn terminal_here(app: &mut App) {
+/// The refusal is the shared table's (`Facts::pane_on_disk`), so the menu
+/// that dims the entry and the key say the same thing; resolving `PATH`
+/// and spawning run off the loop turn (rule 2).
+pub async fn terminal_here(app: &mut App) {
+    if let Some(r) =
+        norte_frontend::availability::verdict("app.terminal", &app.help_facts()).reason()
+    {
+        app.message = Some(t(norte_frontend::availability::reason_key(r)));
+        return;
+    }
     let dir = match shell_cwd(app) {
         Ok(dir) => dir,
         Err(msg) => {
@@ -229,27 +236,35 @@ pub fn terminal_here(app: &mut App) {
             return;
         }
     };
-    let mut fallback = false;
     if app.has_desktop {
-        for argv in norte_frontend::shell::terminal_candidates(app.ui_terminal.as_deref(), &dir) {
-            let Some(path) = argv
-                .first()
-                .and_then(|p| norte_frontend::openers::resolve_program(p))
-            else {
-                continue;
-            };
-            if norte_frontend::shell::spawn_detached(&path, &argv[1..], &dir).is_ok() {
-                let program = path
-                    .file_name()
-                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let configured = app.ui_terminal.clone();
+        let cwd = dir.clone();
+        let launched =
+            tokio::task::spawn_blocking(move || launch_terminal(configured.as_deref(), &cwd))
+                .await
+                .unwrap_or_else(|e| Err(std::io::Error::other(e)));
+        match launched {
+            Ok(program) => {
                 app.message = Some(ta(
                     "msg-terminal-opened",
                     &[("program", &norte_encoding::mask_terminal_hazards(&program))],
                 ));
                 return;
             }
+            Err(e) => {
+                app.message = Some(match app.ui_terminal.as_deref().and_then(<[_]>::first) {
+                    // A choice that fails says so, with what failed.
+                    Some(program) => ta(
+                        "msg-terminal-configured-failed",
+                        &[
+                            ("program", &norte_encoding::mask_terminal_hazards(program)),
+                            ("error", &crate::app::detail_for_bar(&e.to_string())),
+                        ],
+                    ),
+                    None => t("msg-terminal-fallback"),
+                });
+            }
         }
-        fallback = true;
     }
     app.pending_shell = Some(crate::app::PendingShell {
         argv: vec![norte_frontend::shell::login_shell().into_os_string()],
@@ -259,9 +274,35 @@ pub fn terminal_here(app: &mut App) {
         wait_for_key: false,
         check_regular: None,
     });
-    if fallback {
-        app.message = Some(norte_i18n::t("msg-terminal-fallback"));
+}
+
+/// Starts the first candidate that resolves and spawns; its file name, or
+/// the last error. Blocking: `PATH` stats and a fork.
+fn launch_terminal(
+    configured: Option<&[String]>,
+    dir: &std::path::Path,
+) -> std::io::Result<String> {
+    let mut last = std::io::Error::from(std::io::ErrorKind::NotFound);
+    for argv in norte_frontend::shell::terminal_candidates(configured, dir) {
+        let Some(path) = argv
+            .first()
+            .and_then(|p| norte_frontend::openers::resolve_program(p))
+        else {
+            continue;
+        };
+        match norte_frontend::shell::spawn_detached(&path, &argv[1..], dir) {
+            Ok(()) => {
+                // The audit trail of what norte executed: the program, never
+                // the directory nor the arguments.
+                tracing::info!(program = %path.display(), "terminal here: emulator launched");
+                return Ok(path
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned()));
+            }
+            Err(e) => last = e,
+        }
     }
+    Err(last)
 }
 
 /// The Enter of [`Modal::CommandLine`](crate::app::Modal::CommandLine)
@@ -2508,55 +2549,68 @@ mod terminal_here_tests {
     use norte_proto::VPath;
 
     fn app_in(dir: &std::path::Path) -> App {
-        let vp = VPath::parse(&format!("file://{}", dir.display())).expect("vpath");
+        let vp = norte_vfs::native::vpath_from_native(dir).expect("vpath");
         let mut app = App::new(Pane::new(vp.clone(), Vec::new()), Pane::new(vp, Vec::new()));
         app.set_focus(0);
         app
     }
 
     /// Over ssh with no display there is no window to open: today's shell.
-    #[test]
-    fn without_a_desktop_it_is_the_suspended_shell() {
+    #[tokio::test]
+    async fn without_a_desktop_it_is_the_suspended_shell() {
         let d = tempfile::tempdir().unwrap();
         let mut app = app_in(d.path());
         app.has_desktop = false;
         app.ui_terminal = Some(vec!["/bin/true".into()]);
-        terminal_here(&mut app);
+        terminal_here(&mut app).await;
         let shell = app.pending_shell.as_ref().expect("a shell");
         assert_eq!(
             shell.argv,
             vec![norte_frontend::shell::login_shell().into_os_string()]
         );
-        assert_eq!(shell.cwd.as_deref(), Some(d.path()));
+        assert!(shell.cwd.is_some());
         assert!(app.message.is_none(), "nothing failed: {:?}", app.message);
     }
 
-    /// With a desktop and an emulator that does not start, the reader still
-    /// gets a shell there, and is TOLD it is the fallback.
-    #[test]
-    fn a_terminal_that_does_not_start_falls_back_and_says_so() {
+    /// With a desktop and a configured emulator that does not start, the
+    /// reader still gets a shell there, and is told WHICH program failed.
+    #[tokio::test]
+    async fn a_configured_terminal_that_does_not_start_falls_back_and_names_it() {
         let d = tempfile::tempdir().unwrap();
         let mut app = app_in(d.path());
         app.has_desktop = true;
         app.ui_terminal = Some(vec!["/nonexistent/norte-test-term".into()]);
-        terminal_here(&mut app);
+        terminal_here(&mut app).await;
         assert!(app.pending_shell.is_some());
-        assert_eq!(
-            app.message.as_deref(),
-            Some(&*norte_i18n::t("msg-terminal-fallback"))
-        );
+        let msg = app.message.clone().unwrap_or_default();
+        assert!(msg.contains("norte-test-term"), "{msg}");
     }
 
     /// With a desktop and an emulator that starts, nothing suspends.
     #[cfg(unix)]
-    #[test]
-    fn with_a_desktop_the_emulator_opens_and_nothing_suspends() {
+    #[tokio::test]
+    async fn with_a_desktop_the_emulator_opens_and_nothing_suspends() {
         let d = tempfile::tempdir().unwrap();
         let mut app = app_in(d.path());
         app.has_desktop = true;
         app.ui_terminal = Some(vec!["/bin/true".into()]);
-        terminal_here(&mut app);
+        terminal_here(&mut app).await;
         assert!(app.pending_shell.is_none());
         assert!(app.message.as_deref().is_some_and(|m| m.contains("true")));
+    }
+
+    /// Off disk the refusal is the shared table's, the one the context menu
+    /// shows next to the dimmed entry.
+    #[tokio::test]
+    async fn off_disk_it_refuses_with_the_menus_reason() {
+        let vp = VPath::parse("mem:///x").expect("vpath");
+        let mut app = App::new(Pane::new(vp.clone(), Vec::new()), Pane::new(vp, Vec::new()));
+        app.set_focus(0);
+        terminal_here(&mut app).await;
+        assert!(app.pending_shell.is_none());
+        assert_eq!(
+            app.message.as_deref(),
+            Some(&*norte_i18n::t("reason-not-on-this-disk"))
+        );
     }
 }

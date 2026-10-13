@@ -380,9 +380,11 @@ pub struct UiSection {
     pub diff_detached: Option<bool>,
     /// `[ui] terminal`: the terminal emulator "terminal here" opens, as an
     /// argv template with `openers.toml`'s field codes — `%d` is the pane's
-    /// directory: `terminal = ["open", "-a", "iTerm", "%d"]`. When set it is
-    /// the only one tried. Absent = `$TERMINAL`, then the desktop's own
-    /// answer and a short list of known emulators.
+    /// directory: `terminal = ["open", "-a", "iTerm", "%d"]`. `%d` is
+    /// replaced only as a WHOLE element (`"--cwd=%d"` stays literal), and
+    /// `%f`/`%F` expand to nothing here. When set it is the only one tried.
+    /// Absent = `$TERMINAL`, then the desktop's own answer and a short list
+    /// of known emulators.
     ///
     /// **Never honoured from the PROJECT layer**, same rule as
     /// [`Self::editor`]: it names a program to run.

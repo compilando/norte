@@ -2319,7 +2319,7 @@ setting-ui-diff-desc = El programa que compara DOS ficheros, como línea de órd
 setting-ui-diff-detached-name = El comparador abre ventana
 setting-ui-diff-detached-desc = Si ese comparador abre una ventana propia (Meld, Kompare) en vez de ocupar el terminal. Mismo trato que el editor, y por lo mismo.
 setting-ui-terminal-name = Terminal externo
-setting-ui-terminal-desc = El emulador que abre «Terminal aquí», como línea de órdenes con los códigos de campo de `openers.toml`: `%d` es el directorio del panel. Ejemplos: `foot -D %d`, `open -a iTerm %d`, `wt -d %d`. Vacío = `$TERMINAL`, luego el del escritorio y una lista de emuladores conocidos. Si lo pones, es el único que se intenta. No se lee de la capa de proyecto: nombra un programa que se ejecuta.
+setting-ui-terminal-desc = El emulador que abre «Terminal aquí», como línea de órdenes con los códigos de campo de `openers.toml`: `%d` es el directorio del panel. Ejemplos: `foot -D %d`, `open -a iTerm %d`, `wt -d .` (el terminal arranca en la carpeta del panel; Windows Terminal parte `%d` por un `;`). Vacío = `$TERMINAL`, luego el del escritorio y una lista de emuladores conocidos. Si lo pones, es el único que se intenta. No se lee de la capa de proyecto: nombra un programa que se ejecuta.
 setting-ui-confirm-quit-name = Confirmar antes de salir
 setting-ui-confirm-quit-desc = Al salir pide confirmación: solo con trabajo pendiente (auto), siempre, o nunca. Un atajo de salida de emergencia, donde esté ligado (p. ej. Ctrl+C en la TUI), siempre lo evita.
 setting-ui-key-bar-name = Barra de teclas
@@ -2700,6 +2700,7 @@ msg-opening-external = abriendo con la aplicación del escritorio…
 msg-opening-terminal = abriendo un terminal aquí…
 msg-terminal-opened = abierto { $program } aquí
 msg-terminal-fallback = ningún emulador de terminal arrancó: abro una shell aquí
+msg-terminal-configured-failed = { $program } (de [ui] terminal) no arrancó: { $error }; abro una shell aquí
 host-plugin-running = ejecutando el comando de la extensión…
 host-not-an-int = eso no es un número entero
 host-out-of-range = el esquema lo acota entre { $min } y { $max }
