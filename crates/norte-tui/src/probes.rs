@@ -271,6 +271,22 @@ pub struct PanelsProbe {
     pub rx: tokio::sync::oneshot::Receiver<Result<norte_proto::methods::PluginListResult, Error>>,
 }
 
+/// The release check (ADR 0183), launched at start when `[updates] check`
+/// is on. `None` without a state directory: there is nowhere to keep the
+/// once-a-day cache, and asking on every start is what it exists to avoid.
+#[must_use]
+pub fn spawn_update_check() -> Option<tokio::task::JoinHandle<Option<String>>> {
+    let state = norte_config::dirs::state_dir()?;
+    Some(tokio::spawn(async move {
+        // Fail-soft: no network and no cache is no notice, never an error
+        // on the screen of someone who only wanted to browse.
+        norte_update::check_if_due(state, env!("CARGO_PKG_VERSION"), norte_update::now_ms())
+            .await
+            .ok()
+            .flatten()
+    }))
+}
+
 /// Requests the catalogue to declare the panels plugins contribute.
 ///
 /// Fail-soft like the rest of the cosmetic stuff: if the RPC fails, there

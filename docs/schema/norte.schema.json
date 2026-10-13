@@ -801,6 +801,21 @@
       },
       "type": "object"
     },
+    "UpdatesSection": {
+      "additionalProperties": false,
+      "description": "`[updates]`: whether norte may ask GitHub, once a day, if a newer release\nexists (ADR 0183). Off unless the reader says so: it is the one thing\nthat leaves the machine without a request in front of it.\n\nNever honoured from the project layer nor a profile: a repository does\nnot decide that this machine talks to the network.",
+      "properties": {
+        "check": {
+          "default": null,
+          "description": "`true` = check at start, at most once a day. Absent = `false`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "WidthSection": {
       "anyOf": [
         {
@@ -889,6 +904,10 @@
     "ui": {
       "$ref": "#/$defs/UiSection",
       "description": "User-interface settings."
+    },
+    "updates": {
+      "$ref": "#/$defs/UpdatesSection",
+      "description": "The opt-in release check (`[updates]`, ADR 0183)."
     }
   },
   "title": "NorteToml",

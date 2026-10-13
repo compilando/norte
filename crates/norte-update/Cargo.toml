@@ -1,0 +1,26 @@
+[package]
+name = "norte-update"
+description = "Opt-in check for a newer norte release (ADR 0183): version comparison, a once-a-day cache, and the fetch of the release list"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# The release list is JSON over HTTPS. reqwest already lives in the tree
+# (norte-ai, opendal) with the one rustls provider: nothing new is built.
+reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+# `check_if_due` reads and writes its cache off the executor (rule 2).
+tokio = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

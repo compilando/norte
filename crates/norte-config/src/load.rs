@@ -2103,6 +2103,9 @@ pub struct CommonConfig {
     /// `[log]` merged (last-wins per key; never from Project or a profile —
     /// choosing where a process writes is not presentation).
     pub log: crate::LogSettings,
+    /// `[updates] check` merged (last-wins; never from Project or a profile;
+    /// absent = `false`, ADR 0183).
+    pub check_updates: bool,
     /// `[ai]` merged (never from Project).
     pub ai: AiSettings,
     /// Files that participated (watcher + diagnostics).
@@ -2845,6 +2848,12 @@ fn carve_out_warnings(parsed: &NorteToml, path: &std::path::Path, kind: Layer) -
     if crate::ArchiveSettings::declares(&parsed.archive) {
         say("archive", "does not raise the anti-bomb limits");
     }
+    if parsed.updates != crate::schema::UpdatesSection::default() {
+        say(
+            "updates",
+            "does not decide that this machine talks to the network",
+        );
+    }
     out
 }
 
@@ -2940,6 +2949,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_status_plugins: Vec<(String, String)> = Vec::new();
     let mut daemon = crate::DaemonSettings::default();
     let mut log = crate::LogSettings::default();
+    let mut check_updates: Option<bool> = None;
     let mut hotlist: Vec<HotlistItem> = Vec::new();
     let mut archive = crate::ArchiveSettings::default();
     let mut ai = AiSettings::default();
@@ -3063,6 +3073,8 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             //   redirect its providers.
             // - **`[log]`** (roadmap item 9): does not decide where this
             //   process writes.
+            // - **`[updates]`** (ADR 0183): does not make this machine talk
+            //   to the network.
             //
             // The UI SCALARS (quick_search, theme, lang) ARE honored from a
             // project: they are presentation, and none of them launches,
@@ -3101,6 +3113,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 archive.merge(parsed.archive);
                 daemon.merge(parsed.daemon);
                 log.merge(parsed.log);
+                check_updates = parsed.updates.check.or(check_updates);
                 merge_ai_layer(&mut ai, parsed.ai, &norte)?;
             }
             sources.push(norte);
@@ -3141,6 +3154,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_status_plugins,
         daemon,
         log,
+        check_updates: check_updates.unwrap_or(false),
         hotlist,
         archive,
         ai,
@@ -3743,6 +3757,14 @@ mod hotlist_tests {
 
     fn load_one_layer(toml: &str) -> CommonConfig {
         load_one_layer_result(toml).expect("loads")
+    }
+
+    /// ADR 0183: off unless the user's own file says so.
+    #[test]
+    fn the_release_check_is_off_unless_the_user_turns_it_on() {
+        assert!(!load_one_layer("").check_updates);
+        assert!(load_one_layer("[updates]\ncheck = true\n").check_updates);
+        assert!(load_one_layer_result("[updates]\nchek = true\n").is_err());
     }
 
     /// `[[ui.columns.spec]]` (#108 7b): parsing a single layer — global spec
@@ -5907,12 +5929,15 @@ enabled = true
 dir = "/tmp/foreign-logs"
 [archive]
 max_entries = 999999999
+[updates]
+check = true
 "#,
         )
         .expect("write");
 
         let cfg = load(&layers(user.path(), profile.path())).expect("loads");
 
+        assert!(!cfg.check_updates, "the network is not turned on");
         assert_eq!(cfg.daemon.socket, None, "the transport is not redirected");
         assert!(!cfg.ai.enabled, "AI does not turn on by itself");
         assert_eq!(cfg.log.dir, None, "the logs do not move");
@@ -5922,11 +5947,11 @@ max_entries = 999999999
         );
         assert_eq!(
             cfg.profile_warnings.len(),
-            4,
-            "and all four ARE said: staying silent about them turns the \
+            5,
+            "and all five ARE said: staying silent about them turns the \
              picker into a privilege escalator"
         );
-        for section in ["daemon", "ai", "log", "archive"] {
+        for section in ["daemon", "ai", "log", "archive", "updates"] {
             assert!(
                 cfg.profile_warnings.iter().any(|w| w.contains(section)),
                 "missing the warning for [{section}]: {:?}",

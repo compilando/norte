@@ -373,6 +373,10 @@ cli-enqueue-mkdir = could not enqueue the mkdir
 # does, because this one is a closed set, not a corpus the user could plausibly
 # have misspelled a new page against.
 cli-shell-init-unknown = unknown shell "{ $shell }" — supported: bash, zsh, fish
+# `norte update check` (ADR 0183).
+cli-update-available = norte { $version } is available (you have { $current }): { $url }
+cli-update-current = norte { $current } is the latest release.
+cli-update-failed = could not check for a newer release: { $reason }
 # `norte theme import` (spec 2026-09-11, F5).
 cli-theme-imported = imported theme { $name } → { $path } (over { $base })
 cli-theme-ignored = warning: { $count } entries are not colours and were skipped: { $ids }
@@ -544,6 +548,7 @@ degraded-reason-unknown = unknown reason
 # saying it switched a plugin's hooks off. `$plugin` and `$text` are wire
 # text, already masked.
 msg-plugin-notice = ⚑ { $plugin }: { $text }
+msg-update-available = norte { $version } is available — `norte update check` says where
 msg-plugin-hooks-disabled = ⚑ { $plugin }: its hooks were switched off after three failures in a row — disable and re-enable it in the extension manager to try again
 msg-plugin-effect-denied = ⚑ { $plugin }: your policy denied a file this plugin asked to write (rule for actor "plugin"); said once while norte runs
 status-connection-failed = ✗ could not connect
@@ -1326,6 +1331,10 @@ wizard-ask-theme = Pick a theme. What you see while you move is what you are cho
 wizard-ask-icons = Can you see three icons here: 📁 🖼 ⚙ ? If they show as boxes, your terminal font has no emoji.
 wizard-icons-yes = Yes, I see them — use icons
 wizard-icons-no = No — plain ASCII badges
+wizard-step-updates = new releases
+wizard-ask-updates = Should norte ask GitHub, once a day at start, whether a newer release exists? It installs nothing, and it is the only thing it sends over the network without you asking. You can change it in Settings.
+wizard-updates-no = No — never check by itself
+wizard-updates-yes = Yes — once a day, and say so in the status bar
 # Fits WHOLE in the wizard box (66 cells): cut in the middle, it lost exactly
 # `[Esc]`, the one key that says how not to answer.
 wizard-hint = [Enter] next · [Backspace] back · [Esc] keep defaults, never ask
@@ -2356,6 +2365,8 @@ setting-ui-menu-bar-name = Menu bar
 setting-ui-menu-bar-desc = Whether the menu bar stays pinned to the top row. On by default: several commands are only reachable through the menu, and nothing on screen said it was there. Turning it off gives the row back — the menu still opens with its key. Ignored by the GUI.
 setting-ui-mouse-name = Mouse
 setting-ui-mouse-desc = Whether the TUI captures the mouse (click, wheel, drag to mark). While it is captured the terminal cannot select text with the mouse; hold Shift to select anyway, or turn this off. Ignored by the GUI.
+setting-updates-check-name = Check for new releases
+setting-updates-check-desc = Once a day at start, asks GitHub whether a newer norte exists and says so in the status bar. It installs nothing. Off by default: it is the only thing norte sends over the network without you asking. `norte update check` asks once, whatever this says. Takes effect on the next start.
 setting-ui-alt-menu-name = Alt opens the menu
 setting-ui-alt-menu-desc = Whether pressing and releasing Alt on its own opens the menu bar in the TUI. Needs a terminal with the kitty keyboard protocol (kitty, foot, WezTerm, Ghostty); tmux, xterm and GNOME Terminal cannot report a lone Alt. Off by default: in that mode the terminal sends keys, not text, so a letter typed with a dead key (é) or a symbol typed with AltGr (@, #) arrives as its base key. The GUI always has it.
 setting-ui-parent-entry-name = Row to go up

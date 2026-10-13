@@ -17,6 +17,8 @@ norte-client.workspace = true
 norte-encoding.workspace = true
 norte-vfs.workspace = true
 norte-frontend.workspace = true
+# The opt-in release check at start (ADR 0183).
+norte-update.workspace = true
 # The terminal panel's grid (#362), the SAME one that paints the terminal:
 # it is what makes the two frontends show the same thing by construction
 # instead of by comparing two emulators. It is in-house and its only

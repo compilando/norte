@@ -107,14 +107,15 @@ pub async fn finish(app: &mut App, backend: &norte_core::backend::Backend, outco
     // With `Dismissed` the theme the wizard was OPENED with is written, not
     // `default`: `ntc --setup` + Esc over a `theme = "nord"` used to leave it
     // at `default`, burying a system layer's theme (review B1).
-    let (preset, theme, icons) = match outcome {
+    let (preset, theme, icons, updates) = match outcome {
         Outcome::Done(c) => (
             c.preset,
             c.theme.or_else(|| Some("default".to_owned())),
             c.icons,
+            c.updates,
         ),
-        Outcome::Dismissed { keep_theme } => (None, Some(keep_theme), None),
-        Outcome::Continue => (None, None, None),
+        Outcome::Dismissed { keep_theme } => (None, Some(keep_theme), None, None),
+        Outcome::Continue => (None, None, None, None),
     };
     let write = tokio::task::spawn_blocking(move || {
         let mut res = Ok(());
@@ -123,6 +124,9 @@ pub async fn finish(app: &mut App, backend: &norte_core::backend::Backend, outco
         }
         if let Some(t) = theme {
             res = res.and(config::persist_set(&dir, "ui", "theme", t.into()).map(|_| ()));
+        }
+        if let Some(u) = updates {
+            res = res.and(config::persist_set(&dir, "updates", "check", u.into()).map(|_| ()));
         }
         res
     })
@@ -188,8 +192,16 @@ mod tests {
             None,
             "at the icons step"
         );
+        assert_eq!(
+            apply_key(&mut app, key(KeyCode::Enter)),
+            None,
+            "at the release-check step"
+        );
         let done = apply_key(&mut app, key(KeyCode::Enter)).expect("last step");
-        assert!(matches!(done, Outcome::Done(ref c) if c.theme.as_deref() == Some("nord")));
+        assert!(matches!(
+            done,
+            Outcome::Done(ref c) if c.theme.as_deref() == Some("nord") && c.updates == Some(false)
+        ));
         assert!(app.wizard.is_none(), "closed on finishing");
 
         app.wizard = Some(Wizard::new(

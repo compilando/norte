@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 113;
+export const BRIDGE_VERSION = 114;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -153,6 +153,11 @@ export interface RowView {
   icon: string;
   /** The icon paints different from what it is: a plugin writes it. */
   icon_hostile: boolean;
+  /**
+   * The window's own colored icon when `icon` is empty (bridge 114, ADR
+   * 0184): a file-type id the HOST chose from the raw name.
+   */
+  icon_kind: string;
   /**
    * The `#rrggbb` color the THEME paints this entry's name with, via
    * `[files.ext]` (wins) or `[files.kind]` (bridge 66). Empty = the theme

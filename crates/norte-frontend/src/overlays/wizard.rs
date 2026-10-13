@@ -1,5 +1,6 @@
-//! The first-run wizard (spec 2026-09-10): three questions —the key preset,
-//! the theme, and the icons— when there is no user `norte.toml`. Pure: which
+//! The first-run wizard (spec 2026-09-10): four questions —the key preset,
+//! the theme, the icons, and whether to check for new releases (ADR 0183)—
+//! when there is no user `norte.toml`. Pure: which
 //! step, which rows, what was chosen. Each frontend paints it and writes what
 //! was chosen through its own settings path.
 //!
@@ -8,7 +9,7 @@
 
 use norte_i18n::{Lang, t_in};
 
-/// The three steps, in order.
+/// The four steps, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
     /// Which key preset.
@@ -17,16 +18,22 @@ pub enum Step {
     Theme,
     /// Whether the font paints the icons.
     Icons,
+    /// Whether to check for new releases (ADR 0183).
+    Updates,
 }
 
+/// How many steps there are, for the title.
+const STEPS: u8 = 4;
+
 impl Step {
-    /// `1`..=`3`, for the title.
+    /// `1`..=`4`, for the title.
     #[must_use]
     pub fn number(self) -> u8 {
         match self {
             Self::Preset => 1,
             Self::Theme => 2,
             Self::Icons => 3,
+            Self::Updates => 4,
         }
     }
 
@@ -44,6 +51,8 @@ pub struct Choices {
     pub theme: Option<String>,
     /// `Some(true)` = the icons are shown (emoji); `Some(false)` = ASCII.
     pub icons: Option<bool>,
+    /// `Some(true)` = check for new releases once a day (`[updates] check`).
+    pub updates: Option<bool>,
 }
 
 /// What happened on confirming or on leaving.
@@ -69,7 +78,7 @@ pub struct Wizard {
     step: Step,
     presets: Vec<String>,
     themes: Vec<String>,
-    cursor: [usize; 3],
+    cursor: [usize; STEPS as usize],
     choices: Choices,
     /// The theme it was opened with: what is kept on leaving with Esc.
     current_theme: String,
@@ -97,7 +106,9 @@ impl Wizard {
             step: Step::Preset,
             presets,
             themes,
-            cursor: [p, t, 0],
+            // Updates starts on "no": Enter without reading keeps norte off
+            // the network, which is the default it is asking about.
+            cursor: [p, t, 0, 0],
             choices: Choices::default(),
             current_theme: current_theme.to_owned(),
         }
@@ -109,16 +120,17 @@ impl Wizard {
         self.step
     }
 
-    /// The step's title, in the given language: `norte · 1/3 · Keys`.
+    /// The step's title, in the given language: `norte · 1/4 · Keys`.
     #[must_use]
     pub fn title(&self, lang: Lang) -> String {
         let key = match self.step {
             Step::Preset => "wizard-step-preset",
             Step::Theme => "wizard-step-theme",
             Step::Icons => "wizard-step-icons",
+            Step::Updates => "wizard-step-updates",
         };
         format!(
-            "{} · {}/3 · {}",
+            "{} · {}/{STEPS} · {}",
             t_in(lang, "wizard-title"),
             self.step.number(),
             t_in(lang, key)
@@ -132,6 +144,7 @@ impl Wizard {
             Step::Preset => "wizard-ask-preset",
             Step::Theme => "wizard-ask-theme",
             Step::Icons => "wizard-ask-icons",
+            Step::Updates => "wizard-ask-updates",
         };
         t_in(lang, key)
     }
@@ -159,6 +172,10 @@ impl Wizard {
                 t_in(lang, "wizard-icons-yes"),
                 t_in(lang, "wizard-icons-no"),
             ],
+            Step::Updates => vec![
+                t_in(lang, "wizard-updates-no"),
+                t_in(lang, "wizard-updates-yes"),
+            ],
         }
     }
 
@@ -172,7 +189,7 @@ impl Wizard {
         match self.step {
             Step::Preset => self.presets.len(),
             Step::Theme => self.themes.len(),
-            Step::Icons => 2,
+            Step::Icons | Step::Updates => 2,
         }
     }
 
@@ -221,6 +238,11 @@ impl Wizard {
             }
             Step::Icons => {
                 self.choices.icons = Some(self.cursor() == 0);
+                self.step = Step::Updates;
+                Outcome::Continue
+            }
+            Step::Updates => {
+                self.choices.updates = Some(self.cursor() == 1);
                 Outcome::Done(self.choices.clone())
             }
         }
@@ -231,6 +253,7 @@ impl Wizard {
         self.step = match self.step {
             Step::Preset | Step::Theme => Step::Preset,
             Step::Icons => Step::Theme,
+            Step::Updates => Step::Icons,
         };
     }
 
@@ -252,14 +275,14 @@ mod tests {
         Wizard::new(&["orthodox", "vim"], &["default", "nord"], "vim", "nord")
     }
 
-    /// Starts on the current values; pressing Enter three times returns what
+    /// Starts on the current values; pressing Enter four times returns what
     /// was chosen; each step keeps its own cursor; Backspace goes back.
     #[test]
-    fn three_steps_and_what_was_chosen() {
+    fn four_steps_and_what_was_chosen() {
         let mut w = w();
         assert_eq!(w.step(), Step::Preset);
         assert_eq!(w.cursor(), 1, "starts on the current preset");
-        assert!(w.title(Lang::En).contains("1/3"));
+        assert!(w.title(Lang::En).contains("1/4"));
         assert!(w.rows(Lang::En)[0].starts_with("orthodox"));
         w.up();
         assert_eq!(w.confirm(), Outcome::Continue);
@@ -284,13 +307,21 @@ mod tests {
         w.down();
         w.down();
         assert_eq!(w.cursor(), 1, "stops at the bottom");
+        assert_eq!(w.confirm(), Outcome::Continue);
+        assert_eq!(w.step(), Step::Updates);
+        assert_eq!(w.cursor(), 0, "the release check starts on no");
+        w.back();
+        assert_eq!(w.step(), Step::Icons);
+        assert_eq!(w.confirm(), Outcome::Continue);
         assert_eq!(
             w.confirm(),
             Outcome::Done(Choices {
                 preset: Some("orthodox".into()),
                 theme: Some("default".into()),
                 icons: Some(false),
-            })
+                updates: Some(false),
+            }),
+            "Enter without reading keeps norte off the network"
         );
         assert_eq!(
             w.dismiss(),

@@ -182,3 +182,6 @@ edits.
 | [0179](0179-a-plain-word-searches-inside-names.md) | A plain word in a search form searches inside names | accepted |
 | [0180](0180-terminal-here-opens-an-emulator-when-there-is-a-desktop.md) | "Terminal here" opens an emulator when there is a desktop | accepted |
 | [0181](0181-the-command-bar-runs-each-order-as-a-terminal-panel-entry.md) | The command bar runs each order as a terminal-panel entry | accepted |
+| [0182](0182-what-a-release-promises-to-keep-working.md) | What a release promises to keep working | accepted |
+| [0183](0183-the-release-check-is-opt-in.md) | The release check is opt-in | accepted |
+| [0184](0184-the-window-paints-colored-file-type-icons.md) | The window paints colored file-type icons of its own | accepted |

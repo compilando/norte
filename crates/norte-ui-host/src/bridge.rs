@@ -626,7 +626,9 @@ use serde::{Deserialize, Serialize};
 /// - **113**: the command bar (ADR 0181): `ViewSnapshot.command_bar`,
 ///   `ViewChange::CommandBar` (`CommandBarView`), and the actions
 ///   `command_bar_focus` and `command_bar_paste`.
-pub const BRIDGE_VERSION: u32 = 113;
+/// - **114**: `RowView.icon_kind`, the window's own colored icon per file
+///   type (ADR 0184).
+pub const BRIDGE_VERSION: u32 = 114;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

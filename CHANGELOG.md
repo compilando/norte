@@ -7,8 +7,31 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **The window paints colored icons per file type**, as a desktop file
+  manager does: a red PDF, a blue document, a green spreadsheet, a picture
+  for an image, and more, plus a blue folder. They are on with no plugin
+  to approve. The `file-icons` plugin, when on, still wins (ADR 0184). The
+  terminal is unchanged.
+- **norte can tell you when a new release is out.** It is off unless you
+  turn it on: the first-run wizard asks, and Settings has "Check for new
+  releases". When on, it asks GitHub at most once a day, at start, and
+  says so in the status bar. It never installs anything.
+  `norte update check` asks once, whatever the setting says. The new
+  `norte.toml` key is `[updates] check` (ADR 0183).
+- **`norte doctor` checks `policy.toml`.** A file that does not parse
+  keeps the daemon from starting, and doctor now says so instead of
+  staying silent.
+
 ### Changed
 
+- **A plugin built against an older compatible WIT version keeps
+  working.** It used to be listed as broken on any version change. From
+  now on a WIT change that only adds is a compatible bump, so
+  already-compiled plugins keep loading (ADR 0182). From the beta on, the
+  protocol and the WIT are `1.0.0`. A newer norte opens what an older one
+  left on disk. Going back to an older version is not supported.
 - **The command bar has a key in every keymap**: `Ctrl+↓` in orthodox and
   cua (Krusader's), `!` in vim (as `:!`), `Alt+F8` in Far and Total
   Commander (their command-line history). Norton keeps none, as its header

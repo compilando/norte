@@ -994,6 +994,8 @@ enum Background {
     /// it brings is the DECLARATION of which slots exist, not any of their
     /// content.
     PluginPanes(Result<norte_proto::methods::PluginListResult, Error>),
+    /// The start-up release check found a newer version (ADR 0183).
+    UpdateAvailable(String),
     /// A plugin's page, requested on opening it in help.
     PluginPage(
         String,
@@ -1333,6 +1335,11 @@ impl UiHost {
         // kind repaints, and waiting for an RPC to show the screen would be
         // paying for something that is almost never there.
         State::request_panels(&backend, &tx2);
+        // The release check (ADR 0183), only when the reader turned it on.
+        // Arrives whenever it arrives; the screen does not wait for GitHub.
+        if state.config.common.check_updates {
+            State::request_update_check(&tx2);
+        }
         // And what is already visible is probed: the local listing carries
         // no size or date (#52), so without this the first screen is born
         // with two blank columns that do not fill in until something moves

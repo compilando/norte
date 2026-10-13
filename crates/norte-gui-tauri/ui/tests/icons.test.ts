@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { describe, expect, it } from "vitest";
-import { icon } from "../src/render/icons";
+import { fileIcon, icon } from "../src/render/icons";
 
 // The panel icons come from the files the terminal rasterises too
 // (`norte-frontend/assets/panel-icons`): this pins that the window draws
@@ -49,5 +49,53 @@ describe("panel icons", () => {
   it("still draws the window-only icons and the letter fallback", () => {
     expect(icon(document, "layout:pick")).not.toBeNull();
     expect(icon(document, "plugin:x:y")).toBeNull();
+  });
+});
+
+// The listing's colored file-type icons (bridge 114, ADR 0184): every
+// shape of every file drawn, with its colors, and nothing but paint.
+describe("file-type icons", () => {
+  const files = import.meta.glob<string>(
+    "../../../norte-frontend/assets/file-icons/*.svg",
+    {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    },
+  );
+
+  it("draws every shape of every file, colored", () => {
+    const entries = Object.entries(files);
+    expect(entries.length).toBe(14);
+    for (const [path, src] of entries) {
+      const id = path.replace(/^.*\//, "").replace(/\.svg$/, "");
+      const svg = fileIcon(document, id);
+      expect(svg, id).not.toBeNull();
+      const shapes = (src.match(/<(path|circle) /g) ?? []).length;
+      expect(svg?.querySelectorAll("path, circle").length, id).toBe(shapes);
+      expect(svg?.querySelector("[fill^='#']"), id).not.toBeNull();
+    }
+  });
+
+  it("keeps only paint attributes and refuses an unknown id", () => {
+    const svg = fileIcon(document, "pdf");
+    const first = svg?.querySelector("path");
+    expect(first?.getAttribute("fill")).toBe("#8a909a");
+    for (const el of svg?.querySelectorAll("*") ?? []) {
+      for (const a of Array.from(el.attributes)) {
+        expect([
+          "d",
+          "fill",
+          "stroke",
+          "stroke-width",
+          "stroke-linecap",
+          "stroke-linejoin",
+          "cx",
+          "cy",
+          "r",
+        ]).toContain(a.name);
+      }
+    }
+    expect(fileIcon(document, "no-such-type")).toBeNull();
   });
 });

@@ -369,6 +369,14 @@ const PLUGIN_ID_MAX: usize = 48;
 /// it to 200 characters; this is the width of a status bar.
 const PLUGIN_TEXT_MAX: usize = 160;
 
+/// The sentence that says a newer release exists (ADR 0183). `version`
+/// comes from `norte_update`, which only keeps strings shaped like a
+/// semver version, so it carries nothing to mask.
+#[must_use]
+pub fn update_line(lang: norte_i18n::Lang, version: &str) -> String {
+    norte_i18n::ta_in(lang, "msg-update-available", &[("version", version)])
+}
+
 /// The sentence for a `plugin.notice` (0.69.0, ADR 0100), or `None` if
 /// there is nothing to show: an unknown class with no text.
 ///

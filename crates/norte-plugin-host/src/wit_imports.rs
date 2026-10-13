@@ -2,7 +2,7 @@
 //!
 //! A WIT package's version travels INSIDE the name of every interface a
 //! component imports or exports (`norte:host/host-log@0.1.0`,
-//! `norte:plugin/previewer@0.8.0`), so a bump — any bump — makes an
+//! `norte:plugin/previewer@0.8.0`), so an incompatible bump makes an
 //! already-compiled `.wasm` fail to instantiate: wasmtime fails naming the
 //! missing interface, and nothing more. This module reads those names
 //! without compiling anything, so the catalog can say "compiled against
@@ -10,13 +10,13 @@
 //! as broken with that reason.
 //!
 //! Both imports AND exports are looked at: a previewer IMPORTS
-//! `norte:host` and EXPORTS `norte:plugin`, and both versions have to
-//! match.
+//! `norte:host` and EXPORTS `norte:plugin`, and both have to be served.
 //!
-//! The host serves ONE version of each package ([`SERVED_WIT`]), with no
-//! compatibility window: keeping one would mean leaving every old world
-//! linked forever, and the first plugin that asks for a WIT slot is the
-//! argument for not promising that yet.
+//! The host serves ONE version of each package ([`SERVED_WIT`]). A guest
+//! built against an older COMPATIBLE version of it (ADR 0182) still links:
+//! wasmtime resolves names by semver, so additive changes ship as a
+//! compatible bump and do not break every plugin already compiled. Old
+//! incompatible worlds are not kept linked.
 
 use wasmparser::{Parser, Payload};
 
@@ -36,8 +36,8 @@ pub const SERVED_WIT: &[(&str, &str)] = &[
     ("norte:panel", "0.1.0"),
 ];
 
-/// A guest compiled against one version of a package that the host serves
-/// as ANOTHER version.
+/// A guest compiled against a version of a package that the host's version
+/// does not serve (ADR 0182).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WitMismatch {
     /// The package (`norte:plugin`).
@@ -129,8 +129,8 @@ fn parse_norte_name(name: &str) -> Option<(String, String)> {
     Some((format!("norte:{pkg}"), version.to_owned()))
 }
 
-/// The first package the host serves as ANOTHER version, or `None` if
-/// everything matches (or the guest names nothing from norte).
+/// The first package the host cannot serve at the version the guest names,
+/// or `None` if all of them can (or the guest names nothing from norte).
 ///
 /// ```
 /// use norte_plugin_host::wit_mismatch;
@@ -144,7 +144,7 @@ fn parse_norte_name(name: &str) -> Option<(String, String)> {
 pub fn wit_mismatch(packages: &[(String, String)]) -> Option<WitMismatch> {
     packages.iter().find_map(|(package, version)| {
         let (_, served) = SERVED_WIT.iter().find(|(p, _)| *p == package)?;
-        (served != version).then(|| WitMismatch {
+        (!serves(served, version)).then(|| WitMismatch {
             package: package.clone(),
             built_against: version.clone(),
             served: (*served).to_owned(),
@@ -152,9 +152,70 @@ pub fn wit_mismatch(packages: &[(String, String)]) -> Option<WitMismatch> {
     })
 }
 
+/// Whether a host serving `served` links a guest built against `built`
+/// (ADR 0182). wasmtime resolves both imports and exports by the component
+/// model's semver key — `1.x` on the major, `0.y` on the minor, `0.0.z`
+/// exactly, a pre-release exactly — and so does this, plus one condition
+/// wasmtime leaves to instantiation: the guest may not be NEWER than the
+/// host, or it imports a function this host does not have.
+///
+/// The other direction is not checked and cannot be from the names: an
+/// older guest LACKS any export a compatible bump made required. ADR 0182
+/// forbids that bump; nothing here enforces it.
+fn serves(served: &str, built: &str) -> bool {
+    fn parse(v: &str) -> Option<(u64, u64, u64)> {
+        let mut it = v.split('.');
+        let n = |s: Option<&str>| {
+            // Semver digits: no sign, no leading zero (wasmparser rejects
+            // `010`, so passing it here would list a guest that cannot load).
+            let s = s.filter(|s| {
+                !s.is_empty()
+                    && s.bytes().all(|b| b.is_ascii_digit())
+                    && !(s.len() > 1 && s.starts_with('0'))
+            })?;
+            s.parse::<u64>().ok()
+        };
+        let triple = (n(it.next())?, n(it.next())?, n(it.next())?);
+        it.next().is_none().then_some(triple)
+    }
+    if served == built {
+        return true;
+    }
+    let (Some(s), Some(b)) = (parse(served), parse(built)) else {
+        // A pre-release or build tag only links to itself.
+        return false;
+    };
+    let same_key = match s {
+        (0, 0, _) => s == b,
+        (0, minor, _) => b.0 == 0 && b.1 == minor,
+        (major, _, _) => b.0 == major,
+    };
+    same_key && b <= s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_older_compatible_guest_links_and_a_newer_one_does_not() {
+        // 0.x: the minor is the key.
+        assert!(serves("0.10.2", "0.10.0"));
+        assert!(!serves("0.10.0", "0.10.2"));
+        assert!(!serves("0.11.0", "0.10.0"));
+        // 1.x: the major is the key.
+        assert!(serves("1.4.0", "1.0.3"));
+        assert!(!serves("1.0.0", "1.1.0"));
+        assert!(!serves("2.0.0", "1.9.0"));
+        // 0.0.z and pre-releases: exact only.
+        assert!(!serves("0.0.2", "0.0.1"));
+        assert!(serves("0.9.0-rc.1", "0.9.0-rc.1"));
+        assert!(!serves("0.9.0", "0.9.0-rc.1"));
+        // `u64::parse` takes a leading `+`; a version shaped like that is
+        // not a number here.
+        assert!(!serves("0.10.1", "0.10.+0"));
+        assert!(!serves("0.10.0", "0.010.0"));
+    }
 
     #[test]
     fn parses_the_name_of_a_norte_interface() {

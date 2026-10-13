@@ -496,7 +496,7 @@ pub fn section_of(id: &str) -> Option<Section> {
         }
         "keymap.preset" | "ui.mouse" | "ui.alt-menu" | "ui.quick-search" => Section::Input,
         "ui.confirm-quit" | "ui.dialog-buttons" | "ui.notice-seconds" | "ui.history-size"
-        | "ui.lang" => Section::Behavior,
+        | "ui.lang" | "updates.check" => Section::Behavior,
         _ => return None,
     };
     Some(s)
@@ -751,6 +751,12 @@ const CATALOG: &[SettingDef] = &[
         kind: SettingKind::PresetName,
         applies_live: true,
     },
+    SettingDef {
+        // ADR 0183: read once at start, so it takes effect on the next one.
+        id: "updates.check",
+        kind: SettingKind::Bool,
+        applies_live: false,
+    },
 ];
 
 /// The curated GENERAL settings list (v1). Plugin entries are NOT here —
@@ -887,6 +893,7 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
         "ui.theme-light" => cfg.common.ui_theme_light.clone().unwrap_or_default(),
         "ui.theme-dark" => cfg.common.ui_theme_dark.clone().unwrap_or_default(),
         "keymap.preset" => cfg.common.preset.clone(),
+        "updates.check" => cfg.common.check_updates.to_string(),
         // Unreachable for anything in `CATALOG` (pinned by the coverage
         // test below); an id typo'd into `current_value` but not `CATALOG`
         // — or vice versa — would only show up as a fallback, never panic.
@@ -1130,6 +1137,25 @@ impl PendingWrite {
             value: toml_edit::Value::from(value),
             name,
             display: value.to_owned(),
+        }
+    }
+
+    /// A write of a BOOL value, typed as a TOML boolean (the wizard's
+    /// release-check answer, ADR 0183).
+    ///
+    /// ```
+    /// use norte_frontend::settings::PendingWrite;
+    /// let w = PendingWrite::flag("updates", "check", true, "Check".to_owned());
+    /// assert_eq!(w.value.as_bool(), Some(true));
+    /// ```
+    #[must_use]
+    pub fn flag(section: &'static str, key: &str, value: bool, name: String) -> Self {
+        Self {
+            section,
+            key: key.to_owned(),
+            value: toml_edit::Value::from(value),
+            name,
+            display: value.to_string(),
         }
     }
 }

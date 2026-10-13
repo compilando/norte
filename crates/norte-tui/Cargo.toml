@@ -30,6 +30,8 @@ norte-config = { workspace = true, features = ["watch", "logging"] }
 norte-core.workspace = true
 norte-encoding.workspace = true
 norte-frontend.workspace = true
+# The opt-in release check at start (ADR 0183).
+norte-update.workspace = true
 # H3b: the binary now links the corpus — F1 paints it.
 norte-help.workspace = true
 norte-i18n.workspace = true

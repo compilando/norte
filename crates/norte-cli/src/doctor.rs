@@ -753,6 +753,40 @@ fn masked_and_capped(value: &str) -> String {
     truncated
 }
 
+/// `policy.toml`: [`Severity::Error`] if it does not parse, because then
+/// the daemon refuses to start (`daemon::compose`). Absent is not a
+/// finding: no file means no rules.
+#[must_use]
+pub fn check_policy(config_dir: &Path) -> Vec<Finding> {
+    let path = config_dir.join("policy.toml");
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            return vec![Finding {
+                section: "policy",
+                severity: Severity::Error,
+                code: "policy-parse",
+                detail: format!("{}: {e}", path.display()),
+            }];
+        }
+    };
+    let (severity, code, detail) = match norte_core::PolicyConfig::parse(&raw) {
+        Ok(_) => (Severity::Ok, "policy-ok", path.display().to_string()),
+        Err(e) => (
+            Severity::Error,
+            "policy-parse",
+            format!("{}: {e}", path.display()),
+        ),
+    };
+    vec![Finding {
+        section: "policy",
+        severity,
+        code,
+        detail,
+    }]
+}
+
 /// The local log's state (roadmap item 9): where it is, how much space it
 /// takes, and whether it can be written to.
 ///
@@ -2325,6 +2359,23 @@ max = 10
         std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o700)).expect("chmod");
         assert_eq!(f.severity, Severity::Warn);
         assert_eq!(f.code, "logs-unwritable");
+    }
+
+    #[test]
+    fn policy_absent_is_no_finding_valid_is_ok_broken_is_error() {
+        let dir = tempfile::tempdir().expect("tmp");
+        assert!(check_policy(dir.path()).is_empty());
+
+        let path = dir.path().join("policy.toml");
+        std::fs::write(&path, "[[rule]]\naction = \"ask\"\n").expect("write");
+        let findings = check_policy(dir.path());
+        assert_eq!(only(&findings, "policy").code, "policy-ok");
+
+        // An unknown key: what a newer norte's file looks like to this one.
+        std::fs::write(&path, "[[rule]]\naction = \"ask\"\nwhen = 1\n").expect("write");
+        let findings = check_policy(dir.path());
+        let f = only(&findings, "policy");
+        assert_eq!((f.severity, f.code), (Severity::Error, "policy-parse"));
     }
 
     /// The single `section` row in `findings`.

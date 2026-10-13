@@ -353,24 +353,38 @@ impl State {
         // With `Dismissed`, the theme the wizard OPENED with is written: the
         // model carries it, so the terminal and the window write the same
         // thing (ADR 0077, revision B1).
-        let (preset, theme, icons) = match outcome {
+        let (preset, theme, icons, updates) = match outcome {
             Outcome::Done(c) => (
                 c.preset,
                 c.theme.or_else(|| Some("default".to_owned())),
                 c.icons,
+                c.updates,
             ),
-            Outcome::Dismissed { keep_theme } => (None, Some(keep_theme), None),
-            Outcome::Continue => (None, None, None),
+            Outcome::Dismissed { keep_theme } => (None, Some(keep_theme), None, None),
+            Outcome::Continue => (None, None, None, None),
         };
         let mut outgoing = Vec::new();
+        let name = norte_i18n::t_in(self.lang, "wizard-title");
+        let mut writes = Vec::new();
         for (section, key, value) in [("keymap", "preset", preset), ("ui", "theme", theme)] {
-            let Some(v) = value else { continue };
-            let write = norte_frontend::settings::PendingWrite::text(
-                section,
-                key,
-                &v,
-                norte_i18n::t_in(self.lang, "wizard-title"),
-            );
+            if let Some(v) = value {
+                writes.push(norte_frontend::settings::PendingWrite::text(
+                    section,
+                    key,
+                    &v,
+                    name.clone(),
+                ));
+            }
+        }
+        if let Some(u) = updates {
+            writes.push(norte_frontend::settings::PendingWrite::flag(
+                "updates",
+                "check",
+                u,
+                name.clone(),
+            ));
+        }
+        for write in writes {
             let (_, envelopes) = self.write_setting(write, mailbox);
             outgoing.extend(envelopes);
         }

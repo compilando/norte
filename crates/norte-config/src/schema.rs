@@ -29,6 +29,9 @@ pub struct NorteToml {
     /// Local diagnostic log (`[log]`, roadmap item 9).
     #[serde(default)]
     pub log: LogSection,
+    /// The opt-in release check (`[updates]`, ADR 0183).
+    #[serde(default)]
+    pub updates: UpdatesSection,
     /// Favourite directories shown by `Ctrl+D`.
     ///
     /// Entries accumulate across layers instead of replacing lower-layer
@@ -160,6 +163,21 @@ pub struct LogSection {
     /// whatever this says: it is read by a person in a terminal.
     #[serde(default)]
     pub format: Option<LogFormat>,
+}
+
+/// `[updates]`: whether norte may ask GitHub, once a day, if a newer release
+/// exists (ADR 0183). Off unless the reader says so: it is the one thing
+/// that leaves the machine without a request in front of it.
+///
+/// Never honoured from the project layer nor a profile: a repository does
+/// not decide that this machine talks to the network.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct UpdatesSection {
+    /// `true` = check at start, at most once a day. Absent = `false`.
+    #[serde(default)]
+    pub check: Option<bool>,
 }
 
 /// `[log] format`: one line per event, for a person or for a program.
