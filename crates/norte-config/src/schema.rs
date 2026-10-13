@@ -378,6 +378,16 @@ pub struct UiSection {
     /// a graphical differ (Meld, Kompare) hands control straight back.
     #[serde(default)]
     pub diff_detached: Option<bool>,
+    /// `[ui] terminal`: the terminal emulator "terminal here" opens, as an
+    /// argv template with `openers.toml`'s field codes — `%d` is the pane's
+    /// directory: `terminal = ["open", "-a", "iTerm", "%d"]`. When set it is
+    /// the only one tried. Absent = `$TERMINAL`, then the desktop's own
+    /// answer and a short list of known emulators.
+    ///
+    /// **Never honoured from the PROJECT layer**, same rule as
+    /// [`Self::editor`]: it names a program to run.
+    #[serde(default)]
+    pub terminal: Option<Vec<String>>,
     /// Whether the row of function keys (F1–F10 with what each one does on
     /// the current screen) stays pinned at the bottom. Absent = `true`.
     ///

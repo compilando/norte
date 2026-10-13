@@ -4461,6 +4461,9 @@ pub enum NativeEffect {
     OpenTerminal {
         /// Where it sits.
         dir: norte_proto::VPath,
+        /// `[ui] terminal`, when the reader chose one: then it is the only
+        /// program tried (`shell::terminal_candidates`).
+        configured: Option<Vec<String>>,
     },
     /// The HANDOFF to the TERMINAL (phase 9): the screen is already
     /// written and the session, released; now launches `ntc --attach` and

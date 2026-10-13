@@ -4,7 +4,7 @@ expression: render_80x24(&app)
 ---
 " Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        "
 "   ┌/casa───────────────────────────────┐┌/otro────────────────────────────────┐"
-"   ┌ Ajustes · 1 de 37 ─────────────────────────────────────────────────────┐ha│"
+"   ┌ Ajustes · 1 de 38 ─────────────────────────────────────────────────────┐ha│"
 "   │                    │ Apariencia                                        │  │"
 "   │ Apariencia      1  │                                                   │  │"
 "   │ Paneles y list… 0  │ › Tipografía de la interfaz   —                   │  │"

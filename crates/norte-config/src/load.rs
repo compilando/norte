@@ -2070,6 +2070,11 @@ pub struct CommonConfig {
     /// `[ui] diff_detached` (last-wins; None = `false`): that comparator opens
     /// its OWN WINDOW. Same fail-closed layer as [`Self::ui_diff`].
     pub ui_diff_detached: Option<bool>,
+    /// `[ui] terminal` (last-wins; None = probe `$TERMINAL` and the known
+    /// emulators): the program "terminal here" opens, as an argv template
+    /// with `openers.toml`'s field codes (`%d` the pane's directory). Same
+    /// fail-closed layer as [`Self::ui_editor`]: it names a program to run.
+    pub ui_terminal: Option<Vec<String>>,
     /// The `[ui]` chrome keys (key bar, panel bar style, pane footer, date
     /// format, notice expiry, dialog buttons), last-wins per key from ALL
     /// layers including Project: presentation-only, like the scalars above.
@@ -2793,10 +2798,11 @@ fn carve_out_warnings(parsed: &NorteToml, path: &std::path::Path, kind: Layer) -
         || ui.editor_detached.is_some()
         || ui.diff.is_some()
         || ui.diff_detached.is_some()
+        || ui.terminal.is_some()
     {
         say(
             "ui",
-            "`editor` and `diff` choose a program that gets run, and that is not \
+            "`editor`, `diff` and `terminal` choose a program that gets run, and that is not \
              presentation",
         );
     }
@@ -2918,6 +2924,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_editor_detached: Option<bool> = None;
     let mut ui_diff: Option<Vec<String>> = None;
     let mut ui_diff_detached: Option<bool> = None;
+    let mut ui_terminal: Option<Vec<String>> = None;
     let mut ui_layout: Option<String> = None;
     let mut ui_columns = ColumnsConfig::default();
     let mut ui_chrome = UiChrome::default();
@@ -3081,6 +3088,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 // the editor: it is another program that gets run.
                 ui_diff = parsed.ui.diff.clone().or(ui_diff);
                 ui_diff_detached = parsed.ui.diff_detached.or(ui_diff_detached);
+                ui_terminal = parsed.ui.terminal.clone().or(ui_terminal);
                 archive.merge(parsed.archive);
                 daemon.merge(parsed.daemon);
                 log.merge(parsed.log);
@@ -3112,6 +3120,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_editor_detached,
         ui_diff,
         ui_diff_detached,
+        ui_terminal,
         ui_columns,
         ui_chrome,
         ui_status_plugins,
@@ -3308,6 +3317,40 @@ mod hotlist_tests {
         assert!(
             cfg.project_warnings.iter().any(|w| w.contains("[hotlist]")),
             "and it IS SAID that it does not get in: {:?}",
+            cfg.project_warnings
+        );
+    }
+
+    /// `[ui] terminal` names a program that gets run: a user's applies, a
+    /// cloned repository's is refused and said.
+    #[test]
+    fn a_project_cannot_choose_the_terminal_a_user_can() {
+        let user = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            user.path().join("norte.toml"),
+            "[ui]\nterminal = [\"foot\", \"-D\", \"%d\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.path().join("norte.toml"),
+            "[ui]\nterminal = [\"/tmp/evil\"]\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
+            ],
+        };
+        let cfg = load(&layers).expect("loads");
+        assert_eq!(
+            cfg.ui_terminal.as_deref(),
+            Some(&["foot".to_owned(), "-D".to_owned(), "%d".to_owned()][..])
+        );
+        assert!(
+            cfg.project_warnings.iter().any(|w| w.contains("terminal")),
+            "{:?}",
             cfg.project_warnings
         );
     }

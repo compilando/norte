@@ -621,7 +621,8 @@ impl State {
                 outgoing,
             );
         }
-        if !self.native(crate::dto::NativeEffect::OpenTerminal { dir }) {
+        let configured = self.config.common.ui_terminal.clone();
+        if !self.native(crate::dto::NativeEffect::OpenTerminal { dir, configured }) {
             return Self::without_desktop();
         }
         (self.applied(), self.say("msg-opening-terminal"))

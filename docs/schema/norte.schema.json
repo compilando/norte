@@ -747,6 +747,17 @@
             "null"
           ]
         },
+        "terminal": {
+          "default": null,
+          "description": "`[ui] terminal`: the terminal emulator \"terminal here\" opens, as an\nargv template with `openers.toml`'s field codes — `%d` is the pane's\ndirectory: `terminal = [\"open\", \"-a\", \"iTerm\", \"%d\"]`. When set it is\nthe only one tried. Absent = `$TERMINAL`, then the desktop's own\nanswer and a short list of known emulators.\n\n**Never honoured from the PROJECT layer**, same rule as\n[`Self::editor`]: it names a program to run.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "theme": {
           "default": null,
           "description": "Theme preset name or a path to a custom TOML theme (ADR 0020). When\nabsent, use `default`.\n\nThe bundled presets are `default`, `vscode-dark`, `vscode-light`,\n`catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`,\n`gruvbox-light`, `nord`, `retro-crt` and `retro-crt-amber`.\n`norte_theme::preset_names()` is the source of truth; this list is a\ncopy for readers of the schema, and it had gone stale before (it named\nsix of the eight that existed).",

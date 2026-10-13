@@ -185,7 +185,7 @@ pub fn execute(effect: &NativeEffect) -> RunOutcome {
     match effect {
         NativeEffect::CopyBytes { bytes, .. } => copy_bytes(bytes),
         NativeEffect::OpenPath { path } => open_path(path),
-        NativeEffect::OpenTerminal { dir } => terminal(dir),
+        NativeEffect::OpenTerminal { dir, configured } => terminal(dir, configured.as_deref()),
         // Phase 9: `pump` handles it, since it is the one that can close
         // the window and notify the host depending on how it turns out. This
         // is only reached if someone calls `execute` by hand, and then the
@@ -358,11 +358,11 @@ fn open_path(path: &norte_proto::VPath) -> RunOutcome {
 }
 
 /// Opens a terminal sitting in `dir`.
-fn terminal(dir: &norte_proto::VPath) -> RunOutcome {
+fn terminal(dir: &norte_proto::VPath, configured: Option<&[String]>) -> RunOutcome {
     let Ok(native) = norte_vfs::native::vpath_to_native(dir) else {
         return RunOutcome::NoProgram;
     };
-    for argv in norte_frontend::shell::terminal_candidates(&native) {
+    for argv in norte_frontend::shell::terminal_candidates(configured, &native) {
         let Some(program) = argv.first() else {
             continue;
         };
@@ -604,7 +604,10 @@ mod tests {
             RunOutcome::NoProgram
         );
         assert_eq!(
-            execute(&NativeEffect::OpenTerminal { dir: remote }),
+            execute(&NativeEffect::OpenTerminal {
+                dir: remote,
+                configured: None
+            }),
             RunOutcome::NoProgram
         );
     }

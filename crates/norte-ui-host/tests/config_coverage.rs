@@ -58,6 +58,7 @@ fn every_config_key_is_classified_for_the_window() {
         hotlist: _,
         ui_diff: _,
         ui_diff_detached: _,
+        ui_terminal: _,
         // The chrome (spec 2026-09-10): the key bar, the panel bar's style,
         // the panel's footer, the date format, notice expiry and the dialog
         // buttons. Every snapshot reads them.

@@ -2316,6 +2316,8 @@ setting-ui-diff-name = Comparar ficheros
 setting-ui-diff-desc = El programa que compara DOS ficheros, como línea de órdenes con los códigos de campo de `openers.toml`: `%F` son los dos ficheros, `%d` el directorio del panel. Ejemplo: `meld %F`. Vacío = `diff -u`, cuya salida se queda en pantalla hasta que pulsas una tecla. No se lee de la capa de proyecto: nombra un programa que se ejecuta.
 setting-ui-diff-detached-name = El comparador abre ventana
 setting-ui-diff-detached-desc = Si ese comparador abre una ventana propia (Meld, Kompare) en vez de ocupar el terminal. Mismo trato que el editor, y por lo mismo.
+setting-ui-terminal-name = Terminal externo
+setting-ui-terminal-desc = El emulador que abre «Terminal aquí», como línea de órdenes con los códigos de campo de `openers.toml`: `%d` es el directorio del panel. Ejemplos: `foot -D %d`, `open -a iTerm %d`, `wt -d %d`. Vacío = `$TERMINAL`, luego el del escritorio y una lista de emuladores conocidos. Si lo pones, es el único que se intenta. No se lee de la capa de proyecto: nombra un programa que se ejecuta.
 setting-ui-confirm-quit-name = Confirmar antes de salir
 setting-ui-confirm-quit-desc = Al salir pide confirmación: solo con trabajo pendiente (auto), siempre, o nunca. Un atajo de salida de emergencia, donde esté ligado (p. ej. Ctrl+C en la TUI), siempre lo evita.
 setting-ui-key-bar-name = Barra de teclas
