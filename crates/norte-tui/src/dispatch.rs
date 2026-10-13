@@ -796,14 +796,9 @@ pub async fn dispatch(
         // shell already exists between one keypress and the next, and where
         // it goes is decided when the terminal is handed to it.
         Command::AppTogglePanels => app.pending_subshell = true,
-        // Only opens the prompt; its Enter leaves the `$SHELL -c` pending,
-        // in the run loop (which is the one that reads a free-text modal's
-        // raw keys). The locality guard repeats there — the directory may
-        // have changed between opening the prompt and confirming it.
-        Command::PaneCommandLine => match shell_cwd(app) {
-            Ok(_) => app.open_command_line(),
-            Err(msg) => app.message = Some(msg),
-        },
+        // The command bar (ADR 0181) takes the keyboard; its Enter checks
+        // the folder again, since the pane may move while it is typed.
+        Command::PaneCommandLine => crate::command_bar::focus(app),
         Command::ViewerClose => {
             // With the preview docked, `viewer.close` RELEASES the keyboard
             // and leaves the panel where it is: closing it is

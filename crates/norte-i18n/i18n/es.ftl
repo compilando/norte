@@ -2323,6 +2323,8 @@ setting-ui-terminal-name = Terminal externo
 setting-ui-terminal-desc = El emulador que abre «Terminal aquí», como línea de órdenes con los códigos de campo de `openers.toml`: `%d` es el directorio del panel. Ejemplos: `foot -D %d`, `open -a iTerm %d`, `wt -d .` (el terminal arranca en la carpeta del panel; Windows Terminal parte `%d` por un `;`). Vacío = `$TERMINAL`, luego el del escritorio y una lista de emuladores conocidos. Si lo pones, es el único que se intenta. No se lee de la capa de proyecto: nombra un programa que se ejecuta.
 setting-ui-confirm-quit-name = Confirmar antes de salir
 setting-ui-confirm-quit-desc = Al salir pide confirmación: solo con trabajo pendiente (auto), siempre, o nunca. Un atajo de salida de emergencia, donde esté ligado (p. ej. Ctrl+C en la TUI), siempre lo evita.
+setting-ui-command-bar-name = Barra de órdenes
+setting-ui-command-bar-desc = Si la línea de órdenes se queda bajo los paneles. Cada orden que escribes ahí se ejecuta en el panel de terminal, en la carpeta del panel con el foco, como una entrada nueva que se queda abierta con su salida. La tecla de línea de órdenes la saca aunque esto esté apagado.
 setting-ui-key-bar-name = Barra de teclas
 setting-ui-key-bar-desc = Solo en el terminal. Si la fila de teclas de función (F1–F10 y qué hace cada una en la pantalla actual) se queda fijada abajo. Se lee del keymap, así que reatar una tecla cambia su etiqueta, y pulsar una celda con el ratón ejecuta el comando. La ventana no la tiene: sus comandos están en el menú y en la paleta.
 setting-ui-panel-bar-style-name = Etiquetas de la barra de paneles

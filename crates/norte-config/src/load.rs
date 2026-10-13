@@ -1679,6 +1679,8 @@ impl DirIndicator {
 pub struct UiChrome {
     /// `[ui] key_bar` (None = pinned).
     pub key_bar: Option<bool>,
+    /// `[ui] command_bar` (None = hidden until called up).
+    pub command_bar: Option<bool>,
     /// `[ui] panel_bar_style` (None = names), validated.
     pub panel_bar_style: Option<PanelBarStyle>,
     /// `[ui] panel_bar_position` (None = auto), validated.
@@ -1786,6 +1788,11 @@ impl UiChrome {
     #[must_use]
     pub fn key_bar(self) -> bool {
         self.key_bar.unwrap_or(true)
+    }
+    /// Effective `command_bar` (absent = hidden until called up).
+    #[must_use]
+    pub fn command_bar(self) -> bool {
+        self.command_bar.unwrap_or(false)
     }
     /// Effective `panel_bar_style` (absent = names).
     #[must_use]
@@ -2356,6 +2363,7 @@ fn merge_ui_chrome(
         message: message.to_owned(),
     };
     acc.key_bar = ui.key_bar.or(acc.key_bar);
+    acc.command_bar = ui.command_bar.or(acc.command_bar);
     acc.pane_footer = ui.pane_footer.or(acc.pane_footer);
     acc.row_stripes = ui.row_stripes.or(acc.row_stripes);
     acc.dialog_buttons = ui.dialog_buttons.or(acc.dialog_buttons);

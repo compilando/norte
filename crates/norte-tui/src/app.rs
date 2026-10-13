@@ -770,6 +770,14 @@ pub struct App {
     /// A context-menu verb the mouse picked, for the run loop to run
     /// (`mouse::After::ContextVerb`).
     pub pending_context_verb: Option<crate::context_menu::Picked>,
+    /// The command bar's line and history (ADR 0181).
+    pub command_bar: norte_frontend::command_bar::CommandBar,
+    /// The bar has the keyboard (`pane.command-line`).
+    pub command_bar_focus: bool,
+    /// Where the bar's history is saved; `None` = not saved (tests).
+    pub command_history_path: Option<std::path::PathBuf>,
+    /// A bar order for the run loop to start in the terminal panel.
+    pub pending_order: Option<crate::command_bar::Order>,
     /// The disk map's child to enter, if someone asked for it.
     ///
     /// Set by the key or the click and consumed by the LOOP, which is the one
@@ -1482,6 +1490,10 @@ impl App {
             volumes_stale: true,
             pending_panel_command: None,
             pending_context_verb: None,
+            command_bar: norte_frontend::command_bar::CommandBar::default(),
+            command_bar_focus: false,
+            command_history_path: None,
+            pending_order: None,
             pending_disk_map_enter: None,
             disk_map_stale: false,
             timeline_stale: false,
@@ -1660,6 +1672,13 @@ impl App {
             self.menu_last = m.menu();
         }
         self.menu = None;
+    }
+
+    /// Is the command bar on screen: pinned by `[ui] command_bar`, or
+    /// called up by `pane.command-line`.
+    #[must_use]
+    pub fn command_bar_visible(&self) -> bool {
+        self.chrome.command_bar() || self.command_bar_focus
     }
 
     /// The highlighted command in the menu, and the menu closed: what

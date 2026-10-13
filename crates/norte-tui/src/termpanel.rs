@@ -197,6 +197,39 @@ pub fn start_user_command(
     start_instance_in(app, &profile, &launch.cwd)
 }
 
+/// Starts a command-bar order (ADR 0181) as a NEW entry of the terminal
+/// panel, opening the panel if it is closed, kept after a clean exit so its
+/// output stays. Never typed into an existing shell (ADR 0153).
+///
+/// # Errors
+/// The panel could not open, or the shell did not start.
+pub fn start_order(
+    app: &mut crate::app::App,
+    order: &crate::command_bar::Order,
+) -> Result<(), String> {
+    if app.terminal_slot().is_none() {
+        app.toggle_terminal();
+    }
+    if app.terminal_slot().is_none() {
+        return Err(norte_i18n::t("cmd-not-here"));
+    }
+    let Some((program, args)) = order.argv.split_first() else {
+        return Ok(());
+    };
+    let profile = norte_frontend::shell_profiles::ShellProfile {
+        name: order.title.clone(),
+        program: std::path::PathBuf::from(program),
+        args: args.to_vec(),
+        icon: None,
+        color: None,
+    };
+    start_instance_in(app, &profile, &order.cwd)?;
+    if let Some(id) = app.terminals.active_id() {
+        app.terminals.keep_on_success(id);
+    }
+    Ok(())
+}
+
 /// [`start_instance`] in `dir` rather than the focused listing's.
 ///
 /// # Errors

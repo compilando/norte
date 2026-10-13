@@ -398,6 +398,11 @@ pub struct UiSection {
     /// empty cell there. Clicking a cell runs the command.
     #[serde(default)]
     pub key_bar: Option<bool>,
+    /// Whether the command bar (one line under the panels whose orders run
+    /// in the terminal panel, ADR 0181) stays on screen. Absent = `false`:
+    /// it costs a row, and the command-line key calls it up anyway.
+    #[serde(default)]
+    pub command_bar: Option<bool>,
     /// How the panel bar names its buttons: `"names"` (default) paints the
     /// localized panel name with its access letter underlined; `"letters"`
     /// paints only the letter, the row's original form. Below 60 usable

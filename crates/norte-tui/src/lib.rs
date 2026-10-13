@@ -5,6 +5,7 @@
 
 pub mod alt_menu;
 pub mod app;
+pub mod command_bar;
 pub mod config;
 pub mod config_reload;
 pub mod console;

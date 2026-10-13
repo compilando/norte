@@ -488,6 +488,7 @@ pub fn section_of(id: &str) -> Option<Section> {
         | "ui.status-items"
         | "ui.menu-bar"
         | "ui.key-bar"
+        | "ui.command-bar"
         | "ui.splash"
         | "ui.processes-panel" => Section::Panes,
         "ui.editor" | "ui.editor-detached" | "ui.diff" | "ui.diff-detached" | "ui.terminal" => {
@@ -643,6 +644,11 @@ const CATALOG: &[SettingDef] = &[
     //     file is a toggle nobody finds.
     SettingDef {
         id: "ui.key-bar",
+        kind: SettingKind::Bool,
+        applies_live: true,
+    },
+    SettingDef {
+        id: "ui.command-bar",
         kind: SettingKind::Bool,
         applies_live: true,
     },
@@ -857,6 +863,7 @@ pub fn current_value(def: &SettingDef, cfg: &FrontendConfig) -> String {
         "ui.confirm-quit" => cfg.common.ui_confirm_quit.as_str().to_owned(),
         // Absent = what the frontend really does, like `ui.menu-bar`.
         "ui.key-bar" => cfg.common.ui_chrome.key_bar().to_string(),
+        "ui.command-bar" => cfg.common.ui_chrome.command_bar().to_string(),
         "ui.panel-bar-style" => cfg.common.ui_chrome.panel_bar_style().as_str().to_owned(),
         "ui.panel-bar-position" => cfg
             .common

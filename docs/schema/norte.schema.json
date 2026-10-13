@@ -464,6 +464,14 @@
           ],
           "description": "`[ui.columns]` (#108 block 4): column selection and sort order."
         },
+        "command_bar": {
+          "default": null,
+          "description": "Whether the command bar (one line under the panels whose orders run\nin the terminal panel, ADR 0181) stays on screen. Absent = `false`:\nit costs a row, and the command-line key calls it up anyway.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "confirm_quit": {
           "default": null,
           "description": "Whether `app.quit` confirms before closing (S2): `\"auto\"` (default)\nconfirms only with pending work (active tasks in the TUI's board,\ntasks/marks in the GUI — the behavior before this setting existed,\npreserved as the default rather than a fixed point in time);\n`\"always\"` always confirms, even with nothing pending; `\"never\"`\ncloses immediately.\n\n[`crate::load::load`] rejects other values (same pattern as\n`quick_search`) so its diagnostic can include the source path.",

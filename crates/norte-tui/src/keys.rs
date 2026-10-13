@@ -79,7 +79,14 @@ pub async fn on_key(
     if app.context_menu.is_some() && modal_wins(app) {
         app.context_menu = None;
     }
-    if app.context_menu.is_some() {
+    if app.command_bar_focus && app.context_menu.is_none() && !modal_wins(app) {
+        crate::command_bar::on_key(app, key);
+        if let Some(order) = app.pending_order.take()
+            && let Err(msg) = crate::termpanel::start_order(app, &order)
+        {
+            app.message = Some(msg);
+        }
+    } else if app.context_menu.is_some() {
         // The context menu: fixed keys like the menu bar's, and what it
         // picks runs through the same path as its key.
         let picked = crate::context_menu::on_key(app, key.code);

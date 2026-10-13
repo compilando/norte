@@ -2378,6 +2378,8 @@ setting-ui-terminal-name = External terminal
 setting-ui-terminal-desc = The emulator "Terminal here" opens, as a command line with the field codes of `openers.toml`: `%d` is the pane's directory. Examples: `foot -D %d`, `open -a iTerm %d`, `wt -d .` (the terminal starts in the pane's folder; Windows Terminal splits `%d` at a `;`). Empty = `$TERMINAL`, then the desktop's own and a list of known emulators. When set, it is the only one tried. Not read from the project layer: it names a program to execute.
 setting-ui-confirm-quit-name = Confirm before quitting
 setting-ui-confirm-quit-desc = When quitting asks for confirmation: only with pending work (auto), always, or never. An emergency-exit shortcut, where bound (e.g. the TUI's Ctrl+C), always bypasses this.
+setting-ui-command-bar-name = Command bar
+setting-ui-command-bar-desc = Whether the command line stays under the panels. Each order you type there runs in the terminal panel, in the folder of the focused pane, as a new entry that stays open with its output. The command-line key calls it up even when this is off.
 setting-ui-key-bar-name = Key bar
 setting-ui-key-bar-desc = Terminal only. Whether the row of function keys (F1–F10 and what each does on the current screen) stays pinned at the bottom. It is read from the keymap, so rebinding a key changes its label, and clicking a cell runs the command. The window has none: its commands live in the menu and the palette.
 setting-ui-panel-bar-style-name = Panel bar labels
