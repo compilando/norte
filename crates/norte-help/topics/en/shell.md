@@ -22,7 +22,8 @@ nothing) right here instead; quit it and you are back in the listing,
 refreshed. It is also on the right-click menu.
 
 {{cmd:pane.command-line}} puts the keyboard in the **command bar**, the line
-under the panels (Settings › Panes › Command bar keeps it on screen). Type an
+under the panels (Settings › Panes › Command bar keeps it on screen; the
+krusader keymap shows it by default, as Krusader does). Type an
 order and press Enter: it runs as a new entry of the terminal panel, in the
 focused pane's folder, and the entry stays open with its output until you
 close it. The line is handed to your shell with `-c`, so pipes, quoting and

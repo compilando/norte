@@ -36,6 +36,10 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
     this.helpPainted === help.topic_id
       ? (this.helpRoot.querySelector(".help-body")?.scrollTop ?? 0)
       : 0;
+  // The topic list is rebuilt too, and on EVERY page: a click on a row
+  // near the bottom opened the page and threw the list back to the top,
+  // the clicked row out of sight.
+  const topicsScroll = this.helpRoot.querySelector(".help-topics")?.scrollTop ?? 0;
   this.helpPainted = help.topic_id;
   this.helpRoot.dataset["open"] = "true";
   this.helpBodyFocused = help.focus === "body";
@@ -58,6 +62,12 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
   footer.textContent = this.t("help-hint-gui");
   box.append(footer);
   this.helpRoot.replaceChildren(box);
+  const topics = this.helpRoot.querySelector(".help-topics");
+  if (topics instanceof HTMLElement) {
+    topics.scrollTop = topicsScroll;
+    // Revealed once in the document: on a detached node it does nothing.
+    revealInView(topics.querySelector(".help-topic-rows")?.children[help.cursor]);
+  }
   if (scroll > 0) {
     const body = this.helpRoot.querySelector(".help-body");
     if (body instanceof HTMLElement) {
@@ -206,10 +216,9 @@ export function helpSidebar(this: Screen, help: HelpView): HTMLElement {
     list.append(row);
   }
   list.setAttribute("aria-activedescendant", `help-topic-${String(help.cursor)}`);
+  // The sidebar is longer than its box: `paintHelp` reveals the cursor once
+  // the list is in the document.
   nav.append(list);
-  // The sidebar is longer than its box: without this, scrolling past the
-  // fold moves a cursor that is not visible.
-  revealInView(list.children[help.cursor]);
   return nav;
 }
 

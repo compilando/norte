@@ -1679,7 +1679,8 @@ impl DirIndicator {
 pub struct UiChrome {
     /// `[ui] key_bar` (None = pinned).
     pub key_bar: Option<bool>,
-    /// `[ui] command_bar` (None = hidden until called up).
+    /// `[ui] command_bar` (None = hidden until called up; the `krusader`
+    /// preset fills it in as shown).
     pub command_bar: Option<bool>,
     /// `[ui] panel_bar_style` (None = names), validated.
     pub panel_bar_style: Option<PanelBarStyle>,
@@ -3105,8 +3106,14 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             sources.push(norte);
         }
     }
+    let effective_preset = preset.unwrap_or_else(|| schema::DEFAULT_PRESET.to_owned());
+    // Krusader's command line is always on screen: its preset shows the
+    // command bar unless `[ui] command_bar` says otherwise (ADR 0181).
+    if effective_preset == "krusader" {
+        ui_chrome.command_bar = ui_chrome.command_bar.or(Some(true));
+    }
     Ok(CommonConfig {
-        preset: preset.unwrap_or_else(|| schema::DEFAULT_PRESET.to_owned()),
+        preset: effective_preset,
         ui_lang,
         ui_theme,
         ui_theme_light,
@@ -3361,6 +3368,27 @@ mod hotlist_tests {
             "{:?}",
             cfg.project_warnings
         );
+    }
+
+    /// Krusader keeps its command line on screen, so its preset shows the
+    /// command bar unless `[ui] command_bar` says otherwise; the others
+    /// keep it hidden until called up.
+    #[test]
+    fn the_krusader_preset_shows_the_command_bar() {
+        let load_with = |toml: &str| {
+            let user = tempfile::tempdir().unwrap();
+            std::fs::write(user.path().join("norte.toml"), toml).unwrap();
+            let layers = Layers {
+                dirs: vec![(user.path().to_path_buf(), Layer::User)],
+            };
+            load(&layers).expect("loads").ui_chrome.command_bar()
+        };
+        assert!(load_with("[keymap]\npreset = \"krusader\"\n"));
+        assert!(!load_with(
+            "[keymap]\npreset = \"krusader\"\n[ui]\ncommand_bar = false\n"
+        ));
+        assert!(!load_with("[keymap]\npreset = \"orthodox\"\n"));
+        assert!(load_with("[ui]\ncommand_bar = true\n"));
     }
 
     /// A profile is presentation too: it cannot choose the program either,

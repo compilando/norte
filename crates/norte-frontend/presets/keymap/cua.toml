@@ -128,6 +128,8 @@ keymap = [
     { on = ["alt+."], run = "pane.toggle-hidden" },
     { on = ["alt+c"], run = "pane.columns" },
     { on = ["ctrl+d"], run = "pane.hotlist" },
+    # The command bar (ADR 0181): below the panes, where the arrow points.
+    { on = ["ctrl+down"], run = "pane.command-line" },
     { on = ["insert"], run = "mark.toggle" },
     { on = ["space"], run = "mark.toggle" },
     { on = ["ctrl+a"], run = "mark.all" },

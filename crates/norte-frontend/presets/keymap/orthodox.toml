@@ -170,6 +170,9 @@ keymap = [
     { on = ["f4"], run = "pane.edit" },
     { on = ["shift+f4"], run = "pane.edit-new" },
     { on = ["alt+f4"], run = "pane.open" },
+    # The command bar (ADR 0181), on Krusader's key: below the panes, where
+    # the arrow points.
+    { on = ["ctrl+down"], run = "pane.command-line" },
     # #138: sort by key, with Far/TC's chords (Ctrl+F3..F6). The sort menu
     # is the columns dialog, which already has its own on `alt+c`.
     { on = ["ctrl+f3"], run = "pane.sort-name" },

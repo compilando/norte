@@ -154,6 +154,9 @@ keymap = [
     # collision; ctrl+b (free here) for pane.hotlist. Noted in the spec
     # (navTC T3/T6).
     { on = ["ctrl+b"], run = "pane.hotlist" },
+    # vim's `:!` runs a shell command; `!` opens the command bar (ADR 0181),
+    # where each order runs in a shell.
+    { on = ["!"], run = "pane.command-line" },
     { on = ["insert"], run = "mark.toggle" },
     { on = ["space"], run = "mark.toggle" },
     # `v` visual-select muscle memory, alongside `insert` (#103).

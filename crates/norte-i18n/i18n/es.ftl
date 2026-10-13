@@ -738,7 +738,7 @@ msg-terminal-none-unset = $TERMINAL no está definido y no se encontró ningún 
 help-cmd-app-terminal = abrir un shell en el directorio del pane activo
 help-cmd-app-handoff = entregar la pantalla al otro frontend y seguir allí (solo con daemon)
 help-cmd-app-toggle-panels = ocultar los paneles y enseñar la terminal
-help-cmd-pane-command-line = ejecutar un comando en el directorio del pane activo
+help-cmd-pane-command-line = abrir la barra de órdenes: cada orden se ejecuta en la carpeta del panel activo
 cli-ls-skipped = aviso: { $n } entradas del contenedor omitidas del índice (nombres hostiles/límites)
 
 # --- Ayuda (F1) — construida del keymap efectivo ---
@@ -1366,7 +1366,7 @@ menu-item-pane-history = Historial
 menu-item-pane-hotlist = Favoritos
 menu-item-pane-select-drive = Volúmenes
 menu-item-pane-refresh = Refrescar
-menu-item-pane-command-line = Línea de comandos
+menu-item-pane-command-line = Barra de órdenes
 menu-item-app-terminal = Terminal aquí
 menu-item-app-handoff = Seguir en la otra ventana
 menu-item-layout-focus-next = Panel siguiente

@@ -23,7 +23,8 @@ mismo; sal de él y vuelves al listado, ya refrescado. También está en el men�
 del botón derecho.
 
 {{cmd:pane.command-line}} pone el teclado en la **barra de órdenes**, la línea
-bajo los paneles (Ajustes › Paneles › Barra de órdenes la deja fija). Escribe
+bajo los paneles (Ajustes › Paneles › Barra de órdenes la deja fija; con el
+keymap krusader sale por defecto, como en Krusader). Escribe
 una orden y pulsa Intro: se ejecuta como una entrada nueva del panel de
 terminal, en la carpeta del panel con el foco, y la entrada se queda abierta
 con su salida hasta que la cierres. La línea va a tu shell con `-c`, así que
