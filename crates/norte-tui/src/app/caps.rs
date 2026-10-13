@@ -151,6 +151,8 @@ impl App {
             // life, and a desktop doesn't appear mid-session either).
             daemon: self.backend_daemon,
             windowed: self.has_desktop,
+            pane_on_disk: norte_frontend::shell::is_local(pane.dir()),
+            pane_in_archive: pane.dir().archive_split().is_ok_and(|a| a.is_some()),
         }
     }
 

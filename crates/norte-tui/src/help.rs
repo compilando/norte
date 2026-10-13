@@ -558,6 +558,8 @@ mod tests {
             journalled: true,
             daemon: true,
             windowed: true,
+            pane_on_disk: true,
+            pane_in_archive: false,
         }
     }
 

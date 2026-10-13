@@ -2950,13 +2950,15 @@ async fn a_path_that_is_not_local_does_not_open() {
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut native = h.native_effects();
     let mut sub = h.subscribe();
-    for cmd in ["pane.open", "app.terminal"] {
-        let ack = execute_via_palette_ack(&h, &mut sub, cmd).await;
-        assert!(
-            matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-not-local"),
-            "{cmd} over a `mem://`: {ack:?}"
-        );
-    }
+    let ack = execute_via_palette_ack(&h, &mut sub, "pane.open").await;
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-not-local"),
+        "pane.open over a `mem://`: {ack:?}"
+    );
+    // `app.terminal` is DIMMED in the palette by the shared table (ADR
+    // 0180), so Enter puts its reason on the bar instead of running it; the
+    // assertion below that no effect fired is what matters.
+    let _ = execute_via_palette_ack(&h, &mut sub, "app.terminal").await;
     assert!(
         matches!(
             native.try_recv(),

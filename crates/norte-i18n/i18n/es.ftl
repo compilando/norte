@@ -2019,6 +2019,8 @@ err-overlapping-roots-source-inside = el origen está dentro del destino
 err-overlapping-roots-dest-inside = el destino está dentro del origen
 reason-needs-daemon = necesita el daemon (--daemon)
 reason-needs-desktop = necesita un escritorio: aquí no hay dónde abrir una ventana
+reason-inside-archive = dentro de un archivo comprimido: sube con .. a su carpeta
+reason-not-on-this-disk = no es una carpeta de este disco
 
 on-yes = sí
 on-no = no

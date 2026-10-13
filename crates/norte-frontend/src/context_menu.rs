@@ -163,6 +163,11 @@ pub fn entries(surface: &Surface) -> Vec<Entry> {
                     Some("ctx-section-ai"),
                 ),
                 cmd("pane.organize", "menu-item-pane-organize", None),
+                cmd(
+                    "app.terminal",
+                    "menu-item-app-terminal",
+                    Some("ctx-section-more"),
+                ),
             ];
             if *remote {
                 v.push(cmd(
@@ -278,6 +283,7 @@ fn row_entries(t: &RowTarget) -> Vec<Entry> {
         Some("ctx-section-more"),
     ));
     v.push(cmd("pane.chmod", "menu-item-pane-chmod", None));
+    v.push(cmd("app.terminal", "menu-item-app-terminal", None));
     v
 }
 
@@ -414,6 +420,21 @@ mod tests {
         }
         assert!(!local.contains(&"pane.disconnect"));
         assert!(commands(&Surface::Empty { remote: true }).contains(&"pane.disconnect"));
+    }
+
+    /// "Terminal here" is on a row's menu and on the empty area's, always:
+    /// where it cannot run (remote, inside an archive) it shows dimmed with
+    /// its reason, like every other entry.
+    #[test]
+    fn terminal_here_is_on_the_row_and_empty_menus() {
+        for s in [
+            Surface::Empty { remote: false },
+            Surface::Empty { remote: true },
+            row(1, Some(EntryKind::File), false, true),
+            row(3, None, false, false),
+        ] {
+            assert!(commands(&s).contains(&"app.terminal"), "{s:?}");
+        }
     }
 
     #[test]

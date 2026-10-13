@@ -609,14 +609,19 @@ impl State {
     /// Opens a terminal sitting in the active panel's directory.
     pub(super) fn open_terminal(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let dir = self.slot().pane.dir().clone();
-        if !norte_frontend::shell::is_local(&dir) {
-            // A terminal sits in a filesystem directory: over an `sftp://`
-            // there is nowhere to sit it, and opening it in `$HOME` without
-            // saying anything would be opening it somewhere else.
-            let outgoing = self.say("host-not-local");
+        // A terminal sits in a filesystem directory: over an `sftp://` there
+        // is nowhere to sit it, and opening it in `$HOME` without saying
+        // anything would be opening it somewhere else. The reason is the
+        // shared table's, so the menu that dims the entry and the refusal
+        // say the same thing.
+        if let Some(r) =
+            norte_frontend::availability::verdict("app.terminal", &self.facts()).reason()
+        {
+            let key = norte_frontend::availability::reason_key(r);
+            let outgoing = self.say(key);
             return (
                 ActionAck::Unavailable {
-                    reason_key: "host-not-local".to_owned(),
+                    reason_key: key.to_owned(),
                 },
                 outgoing,
             );
