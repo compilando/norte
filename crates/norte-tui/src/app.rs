@@ -1197,8 +1197,7 @@ pub struct App {
     /// terminal— executes it.
     pub pending_open: Option<PendingOpen>,
     /// Suspension resolved by dispatch and pending execution (#135):
-    /// `app.terminal`, `app.toggle-panels` and the Enter of
-    /// [`Modal::CommandLine`]. Same split as [`Self::pending_open`], and
+    /// `app.terminal` and `app.toggle-panels`. Same split as [`Self::pending_open`], and
     /// drained in ONE single place in the run loop (at the very top of the
     /// turn, before the draw) so that none of the `continue`s that answer
     /// keys can leave it stuck.

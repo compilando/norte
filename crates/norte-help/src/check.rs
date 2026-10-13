@@ -868,7 +868,6 @@ pub fn check_contexts_in(lang: Lang, topics: &[Topic], known: &[&str]) -> Vec<Is
 ///     "dialog.mkdir",
 ///     "dialog.ai-rename",
 ///     "dialog.semantic-search",
-///     "dialog.command-line",
 ///     "dialog.properties",
 ///     "dialog.user-command",
 /// ];

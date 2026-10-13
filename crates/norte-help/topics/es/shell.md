@@ -4,7 +4,6 @@ title = "Salir a un shell"
 tags = ["doing"]
 see_also = ["panes", "settings"]
 commands = ["app.terminal", "app.toggle-panels", "pane.command-line", "pane.copy-path", "app.handoff"]
-context = ["dialog.command-line"]
 +++
 Un gestor de ficheros del que no puedes salir es un gestor de ficheros que
 dejas de usar. Tres comandos te devuelven la terminal y luego la recuperan.

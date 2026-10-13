@@ -80,12 +80,7 @@ modal-transfer-to = To
 modal-transfer-dest-copy = Copy to address
 modal-transfer-dest-move = Move to address
 modal-transfer-dest-hint = address, for example file:///home/you/work
-# `pane.command-line` (#135): the free-text prompt whose Enter runs
-# `$SHELL -c CMD` in the pane's directory, with the TUI suspended. Same mould
-# as the mkdir/AI-rename prompts.
-modal-command-line = Run a command
-modal-command-line-hint = runs in the active pane's directory
-modal-command-line-empty = type a command first
+# Shown by a free-text prompt that can open already long (the transfer address).
 modal-command-line-too-long = the command line is full ({ $max } characters); the rest was not typed
 # Batch rename WITHOUT AI (#310): a template and the same reviewable plan.
 # Checksums (#311).

@@ -1301,9 +1301,7 @@
           "label": "hand the screen to the other frontend and carry on there (daemon only)"
         }
       ],
-      "context": [
-        "dialog.command-line"
-      ],
+      "context": [],
       "id": "shell",
       "see_also": [
         "panes",

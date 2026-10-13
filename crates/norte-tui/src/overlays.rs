@@ -166,7 +166,7 @@ pub fn close_stale_overlays(app: &mut App) {
 /// Which modals allow it is a DECISION, not routing hangover: it is said by
 /// [`crate::help_context::help_over_modal_allowed`], exhaustive over `Modal`
 /// and with no wildcard (review MINOR-3). The six FREE-TEXT editors
-/// (`Mkdir`, `MarkPattern`, `CommandLine`, `AiRenameInstruction`,
+/// (`Mkdir`, `MarkPattern`, `AiRenameInstruction`,
 /// `SemanticQuery`, `TransferName`) and Lua's TOFU answer `false`: today they
 /// do not even reach here either — the run loop intercepts them earlier to
 /// read RAW keys (decision 8 of the H1 plan: the keymap must not

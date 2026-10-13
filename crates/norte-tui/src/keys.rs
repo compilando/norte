@@ -16,7 +16,7 @@ use crate::app::{App, Modal, PAGE, PromptKind, error_message};
 use crate::config::{self};
 use crate::dispatch::dispatch;
 use crate::event_loop::{launch_pending, run_command};
-use crate::gestures::{keyboard_owner, submit_command_line};
+use crate::gestures::keyboard_owner;
 use crate::jobs::{
     AiRenameRun, InFlight, RenameBatchRun, SemanticRun, launch_search, on_compare_key,
     on_search_dialog_key, on_search_enter, on_search_escape, on_sync_key,
@@ -964,11 +964,6 @@ pub async fn on_key(
                     }
                     PromptKind::TransferDest => {
                         let _ = app.transfer_dest_confirm();
-                    }
-                    PromptKind::CommandLine => {
-                        if let Some(cmd) = app.command_line_confirm() {
-                            submit_command_line(app, &cmd);
-                        }
                     }
                     PromptKind::AiRename => {
                         if let Some(instruction) = app.ai_rename_confirm() {

@@ -4,7 +4,6 @@ title = "Dropping to a shell"
 tags = ["doing"]
 see_also = ["panes", "settings"]
 commands = ["app.terminal", "app.toggle-panels", "pane.command-line", "pane.copy-path", "app.handoff"]
-context = ["dialog.command-line"]
 +++
 A file manager you cannot leave is a file manager you stop using. Three
 commands hand the terminal back to you and take it again afterwards. The

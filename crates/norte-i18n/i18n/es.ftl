@@ -81,12 +81,7 @@ modal-transfer-to = A
 modal-transfer-dest-copy = Copiar a la dirección
 modal-transfer-dest-move = Mover a la dirección
 modal-transfer-dest-hint = dirección, por ejemplo file:///home/tu/trabajo
-# `pane.command-line` (#135): el prompt de texto libre cuyo Enter corre
-# `$SHELL -c CMD` en el directorio del pane, con la TUI suspendida. Mismo
-# molde que los prompts de mkdir/renombrado IA.
-modal-command-line = Ejecutar un comando
-modal-command-line-hint = se ejecuta en el directorio del pane activo
-modal-command-line-empty = escribe un comando primero
+# Lo muestra un prompt de texto libre que puede abrirse ya largo (la dirección de destino).
 modal-command-line-too-long = la línea de comandos está llena ({ $max } caracteres); el resto no se escribió
 # El renombrado en lote SIN IA (#310): una plantilla y el mismo plan revisable.
 # Las sumas de comprobación (#311).

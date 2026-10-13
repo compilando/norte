@@ -8,7 +8,7 @@
 //!
 //! What ties these functions together is a shape, not a topic: ALL of them
 //! decide and NONE execute. `resolve_opener` leaves a `PendingOpen`,
-//! `submit_command_line` and `edit_under_cursor` leave a `PendingShell`, and
+//! `edit_under_cursor` leaves a `PendingShell`, and
 //! `mirror_plan`/`pull_plan` return a [`PaneMove`] instead of navigating. The
 //! terminal's owner —the event loop— is the one that launches. This is what
 //! lets the DECISION be tested with no `Backend` and no event stream, and
@@ -318,38 +318,6 @@ fn launch_terminal(
         }
     }
     Err(last)
-}
-
-/// The Enter of [`Modal::CommandLine`](crate::app::Modal::CommandLine)
-/// (#135): leaves `$SHELL -c CMD` pending and closes the prompt.
-///
-/// The locality guard is REPEATED here, the one from the dispatch that
-/// opened the prompt is not enough: between opening it and confirming it the
-/// pane may have gone off to an `sftp://`, and running the line in norte's
-/// own directory is not what was asked for — it would run it somewhere the
-/// user is not looking at. The prompt closes in both cases: leaving it open
-/// after a rejection would invite pressing Enter again against the same
-/// rejection.
-///
-/// The line travels as ONE argument: the shell parses it (pipes, quotes,
-/// globs), never norte. Splitting it here would be inventing a grammar that
-/// does not match the one the receiving shell has.
-pub fn submit_command_line(app: &mut App, cmd: &str) {
-    match shell_cwd(app) {
-        Ok(dir) => {
-            let shell = norte_frontend::shell::login_shell();
-            app.pending_shell = Some(crate::app::PendingShell {
-                // The flag is decided by `norte-frontend` per shell (rule
-                // 7): `cmd.exe` does not understand `-c`.
-                argv: norte_frontend::shell::shell_command_argv(&shell, cmd),
-                cwd: Some(dir),
-                wait_for_key: true,
-                check_regular: None,
-            });
-        }
-        Err(msg) => app.message = Some(msg),
-    }
-    app.command_line_submitted();
 }
 
 /// Where the focused panel goes when its session closes.
