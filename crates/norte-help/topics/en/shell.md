@@ -14,15 +14,24 @@ mouse capture all released — and the program you asked for gets the whole
 terminal. What differs is how you come back: two of them wait for the program
 to finish; the third leaves a LIVE shell you return to with the same key.
 
-{{cmd:app.terminal}} opens your shell (`$SHELL`, or `/bin/sh` if that says
-nothing) in the **active pane's directory**. Quit the shell and you are back in
-the listing, refreshed — anything you changed down there is already on screen.
+{{cmd:app.terminal}} opens a terminal emulator in the **active pane's
+directory** when there is a desktop to put its window on — the same one the
+window opens, chosen by `[ui] terminal`, `$TERMINAL` or the desktop. Over ssh,
+with no desktop, it opens your shell (`$SHELL`, or `/bin/sh` if that says
+nothing) right here instead; quit it and you are back in the listing,
+refreshed. It is also on the right-click menu.
 
-{{cmd:pane.command-line}} asks for one command and runs it in that same
-directory. The line is handed to the shell whole, so pipes, quoting and globs
-mean what they always mean; norte does not parse it. When the command
-finishes, its output stays on screen until you press a key, because output that
-vanishes under a redrawn listing may as well not have been printed.
+{{cmd:pane.command-line}} puts the keyboard in the **command bar**, the line
+under the panels (Settings › Panes › Command bar keeps it on screen). Type an
+order and press Enter: it runs as a new entry of the terminal panel, in the
+focused pane's folder, and the entry stays open with its output until you
+close it. The line is handed to your shell with `-c`, so pipes, quoting and
+globs mean what they always mean — but `-c` reads no rc file, so your aliases
+and functions are not there. Up and Down walk the history (kept between
+sessions, shared with the window), Tab completes against the pane's names,
+Alt+Enter inserts the name under the cursor quoted for your shell, Esc gives
+the keyboard back. The order is never typed into a shell that is already
+running: with something half-typed there, it would run joined to it.
 
 {{cmd:app.toggle-panels}} hides the panels and hands the terminal to a shell
 that **stays alive** behind them. Press it again and you are back in the
@@ -73,10 +82,8 @@ request that arrives during a long shell session times out and is refused,
 which is the safe direction but is worth knowing before you leave a shell open
 for an hour.
 
-Pasting into the command line behaves like pasting into a terminal that has no
-bracketed-paste support: the first newline in what you paste **submits**, and
-the rest is discarded rather than run. Type the command, or paste it and check
-what is in the field before pressing Enter.
+Pasting into the command bar keeps the first line only and never runs it: a
+newline in what you paste does not submit. Check the line and press Enter.
 
 `Ctrl+C` reaches the program, not norte. `Ctrl+Z` is not handled: suspending
 norte while it has handed the terminal over is not something it recovers from

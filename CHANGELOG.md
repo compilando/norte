@@ -14,6 +14,12 @@ independently through `PROTOCOL_VERSION`.
   (Settings › Open with) picks the emulator, e.g. iTerm2 on macOS; the
   probe also knows ptyxis, GNOME Console, foot, xfce4-terminal and
   Debian's `x-terminal-emulator`.
+- **A command bar under the panels, in both frontends** (ADR 0181):
+  `pane.command-line` puts the keyboard there and `[ui] command_bar = true`
+  keeps it on screen. Each order runs as a new entry of the terminal panel
+  in the focused pane's folder and stays open with its output; history,
+  Tab completion and Alt+Enter to insert the cursor's name, quoted for
+  your shell. It replaces the terminal's old command-line prompt.
 - **A right-click menu in the terminal**, the window's: on a row, the empty
   area, a column header, a Places row and a tree branch, with the same
   entries, dimmed with the same reasons. `shift+F10` and the Menu key open

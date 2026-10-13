@@ -181,3 +181,4 @@ edits.
 | [0178](0178-a-click-outside-closes-a-light-popup.md) | A click outside closes a light popup, never a question | accepted |
 | [0179](0179-a-plain-word-searches-inside-names.md) | A plain word in a search form searches inside names | accepted |
 | [0180](0180-terminal-here-opens-an-emulator-when-there-is-a-desktop.md) | "Terminal here" opens an emulator when there is a desktop | accepted |
+| [0181](0181-the-command-bar-runs-each-order-as-a-terminal-panel-entry.md) | The command bar runs each order as a terminal-panel entry | accepted |
