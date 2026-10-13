@@ -1494,6 +1494,14 @@ fn context_menu_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
         ev.kind,
         MouseEventKind::Down(MouseButton::Left | MouseButton::Right)
     );
+    // A modal that arrived while the menu was open (an approval, a secret
+    // prompt) is painted over it: the press is the modal's, and the menu
+    // goes — otherwise a click on the modal's button ran the hidden row
+    // under it.
+    if app.context_menu.is_some() && (overlay_open(app) || app.menu.is_some()) {
+        app.context_menu = None;
+        return None;
+    }
     if app.context_menu.is_some() {
         if !press {
             return Some(After::Nothing);
@@ -1520,9 +1528,14 @@ fn context_menu_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
             None => After::Nothing,
         });
     }
-    if !matches!(ev.kind, MouseEventKind::Down(MouseButton::Right)) || overlay_open(app) {
+    if !matches!(ev.kind, MouseEventKind::Down(MouseButton::Right))
+        || overlay_open(app)
+        || app.menu.is_some()
+    {
         return None;
     }
+    app.mouse.drag.cancel();
+    app.mouse.last_click = None;
     let anchor = (ev.column, ev.row.saturating_add(1));
     if let Some(z) = place_zone_at(app, ev.column, ev.row) {
         cm::open_place(app, z.index, anchor);
@@ -1537,8 +1550,6 @@ fn context_menu_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
         return Some(After::Nothing);
     }
     let hit = hit_test(app, ev.column, ev.row)?;
-    app.mouse.drag.cancel();
-    app.mouse.last_click = None;
     match hit.index {
         Some(i) => cm::open_row(app, hit.pane, i, anchor),
         None => cm::open_empty(app, hit.pane, anchor),
@@ -2549,7 +2560,7 @@ pub async fn on_mouse(
 fn subject_still_there(app: &crate::app::App, subject: &crate::context_menu::Subject) -> bool {
     use crate::context_menu::Subject;
     match subject {
-        Subject::Place { index, path, .. } => app.places_row_path(*index).as_ref() == path.as_ref(),
+        Subject::Place { index, row, .. } => app.places_row(*index).as_ref() == Some(row),
         Subject::Branch { index, path } => {
             app.tree()
                 .and_then(|t| t.rows().get(*index).map(|r| r.path.clone()))
@@ -2651,7 +2662,10 @@ pub(crate) async fn run_context_verb(
         }
         (Verb::OpenInOther, _) => {
             if let Some(p) = path {
-                let pane = app.target_index().unwrap_or_else(|| app.focus() ^ 1);
+                // The same "other pane" F5 and unpack use: `focus ^ 1` is
+                // the same pane with one panel and an arbitrary one with
+                // three.
+                let pane = app.target_index().unwrap_or_else(|| app.split_dest_pane());
                 let outcome = cd_in(app, backend, events, pane, p, Trail::Record).await;
                 settle_cd(
                     app,

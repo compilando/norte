@@ -422,17 +422,11 @@ impl App {
         }
     }
 
-    /// Where Places row `index` leads, if it leads anywhere (a drive, a
-    /// valid favorite).
+    /// Places row `index` as it is now, if there is one.
     #[must_use]
-    pub fn places_row_path(&self, index: usize) -> Option<VPath> {
-        use norte_frontend::places::PlaceRow;
+    pub fn places_row(&self, index: usize) -> Option<norte_frontend::places::PlaceRow> {
         let id = self.places_slot()?;
-        match self.panes.places(id)?.rows().get(index)? {
-            PlaceRow::Drive { mount, .. } => Some(mount.clone()),
-            PlaceRow::Favorite { target: Ok(t), .. } => Some(t.clone()),
-            _ => None,
-        }
+        self.panes.places(id)?.rows().get(index).cloned()
     }
 
     /// Puts the sidebar's cursor on row `index` (out of range is ignored).

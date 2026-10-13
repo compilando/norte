@@ -32,6 +32,8 @@ pub enum Subject {
     Place {
         /// Its index in the bar's rows.
         index: usize,
+        /// The whole row as it was, to refuse when another sits there now.
+        row: norte_frontend::places::PlaceRow,
         /// Where it leads; `None` for a section header.
         path: Option<VPath>,
         /// A favorite's raw name (the key `hotlist_remove` needs).
@@ -214,7 +216,8 @@ pub fn open_empty(app: &mut App, pane: usize, anchor: (u16, u16)) {
 
 /// The Menu key (`pane.context-menu`): on the cursor's row, or the folder's
 /// menu when the cursor is on `..` or the listing is empty. Anchored just
-/// under the cursor's painted row when it is visible.
+/// at the top of the pane's list area (the cursor row's painted position
+/// is not tracked here).
 pub fn open_on_cursor(app: &mut App) {
     let pane = app.focus();
     let anchor = app
@@ -264,6 +267,7 @@ pub fn open_place(app: &mut App, index: usize, anchor: (u16, u16)) {
         Surface::Place(target),
         Subject::Place {
             index,
+            row,
             path,
             favorite,
             broken,
@@ -341,7 +345,9 @@ pub fn rect(menu: &ContextMenu, frame: Rect) -> Rect {
 pub fn row_at(app: &App, col: u16, row: u16) -> Option<usize> {
     let menu = app.context_menu.as_ref()?;
     let r = rect(menu, app.last_frame?);
-    if col <= r.x || col >= r.x + r.width - 1 || row <= r.y || row >= r.y + r.height - 1 {
+    let right = (r.x + r.width).saturating_sub(1);
+    let bottom = (r.y + r.height).saturating_sub(1);
+    if col <= r.x || col >= right || row <= r.y || row >= bottom {
         return None;
     }
     match menu.lines().get(usize::from(row - r.y - 1))? {
@@ -385,14 +391,21 @@ pub fn choose(app: &mut App, i: usize) -> Option<Picked> {
     // A side-panel subject is re-checked when its verb runs (its row may
     // have moved); a listing's is its pane's fingerprint.
     let stale = match menu.subject {
+        // The command runs on the FOCUSED pane, so focus is part of it.
         Subject::Listing | Subject::Column { .. } => {
-            menu.pane >= app.panes.len() || fingerprint(app, menu.pane) != menu.fingerprint
+            menu.pane >= app.panes.len()
+                || app.focus() != menu.pane
+                || fingerprint(app, menu.pane) != menu.fingerprint
         }
         Subject::Place { .. } | Subject::Branch { .. } => false,
     };
     let subject = menu.subject.clone();
     app.context_menu = None;
-    (!stale).then_some(Picked { action, subject })
+    if stale {
+        app.message = Some(norte_i18n::t("msg-context-stale"));
+        return None;
+    }
+    Some(Picked { action, subject })
 }
 
 /// A key while the menu is open: arrows walk, `Enter` picks, `Esc` closes.

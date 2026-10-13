@@ -75,7 +75,11 @@ pub async fn on_key(
     key: KeyEvent,
 ) {
     app.message = None;
-    if app.context_menu.is_some() && !modal_wins(app) {
+    // A modal that arrived over the open menu owns the keys; the menu goes.
+    if app.context_menu.is_some() && modal_wins(app) {
+        app.context_menu = None;
+    }
+    if app.context_menu.is_some() {
         // The context menu: fixed keys like the menu bar's, and what it
         // picks runs through the same path as its key.
         let picked = crate::context_menu::on_key(app, key.code);

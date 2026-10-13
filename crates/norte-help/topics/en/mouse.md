@@ -69,8 +69,8 @@ Both frontends open a menu at the pointer, in five places:
 
 From the keyboard, {{cmd:pane.context-menu}} or the **Menu** key opens it on
 the focused item: the listing's cursor row, the Places cursor, the tree cursor.
-With any other panel focused there is nothing to open it on, and the key says
-so. In the terminal the key opens it on the listing's cursor row; in Places
+In the window, with any other panel focused there is nothing to open it on,
+and the key says so. In the terminal the key opens it on the listing's cursor row; in Places
 and the tree, use the right button. Inside it the arrows move, Enter runs the
 entry, Esc closes it, and a click outside closes it too.
 

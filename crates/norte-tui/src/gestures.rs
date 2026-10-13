@@ -942,6 +942,7 @@ pub async fn run_pane_gesture(
 pub fn keyboard_owner(app: &App) -> u16 {
     let bits = [
         app.menu.is_some(),
+        app.context_menu.is_some(),
         app.modal.is_some(),
         app.viewer.is_some(),
         app.help.is_some(),

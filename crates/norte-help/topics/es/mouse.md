@@ -70,8 +70,8 @@ Los dos frontends abren un menú en el puntero, en cinco sitios:
 
 Desde el teclado, {{cmd:pane.context-menu}} o la tecla **Menú** lo abren sobre
 el elemento con el foco: la fila del cursor del listado, el cursor de Lugares,
-el cursor del árbol. Con cualquier otro panel con el foco no hay sobre qué
-abrirlo, y la tecla lo dice. En el terminal la tecla lo abre sobre la fila del
+el cursor del árbol. En la ventana, con cualquier otro panel con el foco no hay
+sobre qué abrirlo, y la tecla lo dice. En el terminal la tecla lo abre sobre la fila del
 cursor del listado; en Lugares y en el árbol, usa el botón derecho. Dentro, las
 flechas se mueven, Intro ejecuta la entrada, Esc lo cierra y un click fuera
 también.

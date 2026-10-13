@@ -5,7 +5,7 @@
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use norte_frontend::context_menu::Action;
 use norte_proto::{Entry, EntryKind, Segment, VPath};
-use norte_tui::app::{App, Pane};
+use norte_tui::app::{App, Modal, Pane};
 use norte_tui::context_menu;
 use norte_tui::mouse::{self, After};
 use norte_tui::ui;
@@ -180,6 +180,37 @@ fn a_disabled_entry_runs_nothing_and_stays_open() {
     let after = mouse::handle(&mut app, ev(MouseEventKind::Down(MouseButton::Left), c, r));
     assert!(!matches!(after, After::PanelBar));
     assert!(app.context_menu.is_some());
+}
+
+/// A modal that arrives over an open menu (an approval, a secret prompt)
+/// takes the press: a click where a menu row sits under it runs nothing,
+/// and the menu goes.
+#[test]
+fn a_modal_over_the_menu_takes_the_click() {
+    let mut app = app_on("file:///casa");
+    let (col, row, _) = a_row(&app);
+    right_click(&mut app, col, row);
+    let (c, r) = context_menu::cell_of(&app, "pane.copy").expect("copy is painted");
+    app.modal = Some(Modal::ConfirmQuit);
+    let after = mouse::handle(&mut app, ev(MouseEventKind::Down(MouseButton::Left), c, r));
+    assert!(!matches!(after, After::PanelBar), "{after:?}");
+    assert!(app.pending_panel_command.is_none());
+    assert!(app.context_menu.is_none());
+}
+
+/// A stale target says so instead of closing silently.
+#[test]
+fn a_stale_target_says_why_nothing_ran() {
+    let mut app = app_on("file:///casa");
+    let (col, row, _) = a_row(&app);
+    right_click(&mut app, col, row);
+    let other = vp("file:///otra");
+    app.panes[0] = Pane::new(other.clone(), entries(&other, 5));
+    assert_eq!(context_menu::on_key(&mut app, KeyCode::Enter), None);
+    assert_eq!(
+        app.message.as_deref(),
+        Some(&*norte_i18n::t("msg-context-stale"))
+    );
 }
 
 /// ADR 0178: a click outside closes it.
