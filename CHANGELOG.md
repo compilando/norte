@@ -34,6 +34,9 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **Going up out of an archive's root lands in its folder** in the window,
+  with the cursor on the archive; it used to show "invalid path". The `..`
+  row did the same in both frontends.
 - **Closing the last shell closes the terminal panel**, in both frontends.
   It used to leave an empty "no shell" panel that no key could close.
 - **The window no longer leaves a listing's error over its first row**

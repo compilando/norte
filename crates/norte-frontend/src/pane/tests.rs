@@ -156,6 +156,22 @@ fn the_go_up_row_comes_first_and_is_not_at_the_root() {
     assert_eq!(root.parent_target(), None);
 }
 
+/// At an archive's inner root the `..` row leads to the folder that HOLDS
+/// the archive. The syntactic parent drops only the `!` marker and leaves
+/// `zip+file:///…/files.zip`, which no provider accepts: the window showed
+/// "invalid path" on the way out of every zip.
+#[test]
+fn the_go_up_row_leaves_an_archive_through_its_folder() {
+    let outer = VPath::parse("file:///home/u/files.zip").unwrap();
+    let root = VPath::archive_compose("zip", &outer, &[]).unwrap();
+    let mut p = PaneState::new(root, Vec::new());
+    p.set_parent_row(true);
+    assert_eq!(
+        p.parent_target(),
+        Some(&VPath::parse("file:///home/u").unwrap())
+    );
+}
+
 /// And it is NOT an operand. This is the invariant that makes the row safe:
 /// eighty-seven call sites ask "what is pointed at" to copy or delete it,
 /// and over it the answer is "nothing".

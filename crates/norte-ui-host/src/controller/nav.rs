@@ -72,9 +72,10 @@ impl State {
                 // depending on whether it was requested with the row or with
                 // the key, and going up and down stopped being reversible
                 // through one of the two doors.
-                if self.slot().pane.is_parent_row(i) {
-                    let current = self.slot().pane.dir().clone();
-                    self.slot_mut().pane.set_pending_focus(current);
+                if self.slot().pane.is_parent_row(i)
+                    && let Some((_, child)) = norte_frontend::nav::up_from(self.slot().pane.dir())
+                {
+                    self.slot_mut().pane.set_pending_focus(child);
                 }
                 (
                     self.applied(),
@@ -91,7 +92,7 @@ impl State {
                     return (Self::stale(StaleAction::Generation), Vec::new());
                 }
                 let current = self.slot().pane.dir().clone();
-                let Some(parent) = current.parent() else {
+                let Some((parent, child)) = norte_frontend::nav::up_from(&current) else {
                     return (
                         ActionAck::Unavailable {
                             reason_key: "msg-nav-at-root".to_owned(),
@@ -102,7 +103,7 @@ impl State {
                 // The cursor lands on the directory you left, not on the
                 // first row: that is what makes going up and down reversible.
                 // `PaneState` resolves it on receiving the listing.
-                self.slot_mut().pane.set_pending_focus(current);
+                self.slot_mut().pane.set_pending_focus(child);
                 (
                     self.applied(),
                     self.navigate(&parent, Trail::Record, backend, mailbox),
