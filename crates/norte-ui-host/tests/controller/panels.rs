@@ -1019,3 +1019,44 @@ async fn the_command_bar_takes_keys_and_refuses_off_disk() {
     })
     .await;
 }
+
+/// A read-only window runs no programs: a click on the command bar is
+/// refused like its key, before any order can be typed or remembered.
+#[tokio::test]
+async fn in_read_only_the_command_bar_does_not_take_the_keys() {
+    let backend = Arc::new(tree_as_fake());
+    let (h, _snap) = UiHost::start(UiHostOptions {
+        backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::backend::HostBackend>,
+        initial_dir: dir(),
+        initial_dir_requested: false,
+        attach: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset_con(
+            "orthodox",
+            norte_ui_host::commands::Effects::SoloRead,
+        )
+        .expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: test_settings(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::SoloRead,
+        log_ring: None,
+    })
+    .await
+    .expect("starts");
+    let ack = h
+        .dispatch(UiAction::CommandBarFocus)
+        .await
+        .expect("host alive");
+    assert!(
+        matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "reason-read-only"),
+        "{ack:?}"
+    );
+}

@@ -3709,6 +3709,31 @@ describe("command bar", () => {
     expect(sent).toContainEqual({ action: "command_bar_focus" });
   });
 
+  it("a paste goes to the focused bar, and a press elsewhere gives the keys back", () => {
+    const { screen, sent } = mount();
+    const v = view({});
+    v.command_bar = { prompt: "/x", text: "", cursor: 0, focused: true, reason: "" };
+    screen.paint(v);
+    const paste = new Event("paste", {
+      bubbles: true,
+      cancelable: true,
+    }) as ClipboardEvent;
+    Object.defineProperty(paste, "clipboardData", {
+      value: { getData: () => "make\nrm -rf x" },
+    });
+    document.body.dispatchEvent(paste);
+    expect(sent).toContainEqual({ action: "command_bar_paste", text: "make\nrm -rf x" });
+    document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(sent).toContainEqual({
+      action: "key",
+      key: "Escape",
+      ctrl: false,
+      alt: false,
+      shift: false,
+      meta: false,
+    });
+  });
+
   it("off disk an empty line shows why, and hidden it gives its row back", () => {
     const { screen } = mount();
     const v = view({});

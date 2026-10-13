@@ -216,8 +216,11 @@ pub fn start_order(
     let Some((program, args)) = order.argv.split_first() else {
         return Ok(());
     };
+    // The profile NAME is what gets logged: a fixed one, never the order,
+    // which can carry a password (`mysql -p…`). The order becomes the
+    // entry's title afterwards, in memory only.
     let profile = norte_frontend::shell_profiles::ShellProfile {
-        name: order.title.clone(),
+        name: "command bar".to_owned(),
         program: std::path::PathBuf::from(program),
         args: args.to_vec(),
         icon: None,
@@ -226,6 +229,7 @@ pub fn start_order(
     start_instance_in(app, &profile, &order.cwd)?;
     if let Some(id) = app.terminals.active_id() {
         app.terminals.keep_on_success(id);
+        app.terminals.rename(id, &order.title);
     }
     Ok(())
 }

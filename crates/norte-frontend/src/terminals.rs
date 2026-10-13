@@ -175,6 +175,9 @@ pub struct Instance<S> {
     pub shell: S,
 }
 
+/// How many finished command-bar entries stay with their output.
+pub const KEPT_MAX: usize = 20;
+
 /// The panel's instances and which one is in front.
 #[derive(Debug)]
 pub struct Terminals<S> {
@@ -365,7 +368,24 @@ impl<S> Terminals<S> {
     /// ended.
     pub fn on_exit(&mut self, id: InstanceId, code: i32) {
         let kept = self.get_mut(id).is_some_and(|i| i.keep);
-        if code == 0 && !kept {
+        if code == 0 && kept {
+            if let Some(i) = self.get_mut(id) {
+                i.exited = Some(0);
+            }
+            // Past the cap, the oldest finished kept entry goes.
+            let finished: Vec<InstanceId> = self
+                .instances
+                .iter()
+                .filter(|i| i.keep && i.exited.is_some())
+                .map(|i| i.id)
+                .collect();
+            for old in finished
+                .iter()
+                .take(finished.len().saturating_sub(KEPT_MAX))
+            {
+                self.close(*old);
+            }
+        } else if code == 0 {
             self.close(id);
         } else if let Some(i) = self.get_mut(id) {
             // The dead shell stays: it holds the last screen.
@@ -599,6 +619,25 @@ mod tests {
         assert_eq!(i.exited, Some(0));
         t.on_exit(b, 0);
         assert!(t.iter().all(|i| i.id != b));
+    }
+
+    /// Finished kept entries are capped: past `KEPT_MAX`, the oldest goes,
+    /// so a long session of orders does not keep every screen forever.
+    #[test]
+    fn finished_kept_entries_are_capped() {
+        let mut t: Terminals<&str> = Terminals::new();
+        let ids: Vec<_> = (0..KEPT_MAX + 3)
+            .map(|_| {
+                let id = t.push("o".into(), None, None, "s");
+                t.keep_on_success(id);
+                id
+            })
+            .collect();
+        for id in &ids {
+            t.on_exit(*id, 0);
+        }
+        assert_eq!(t.iter().count(), KEPT_MAX);
+        assert!(t.iter().all(|i| i.id != ids[0]), "the oldest went first");
     }
 
     /// A clean exit of the ACTIVE one moves the focus like a close does.

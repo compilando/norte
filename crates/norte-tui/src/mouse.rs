@@ -1484,6 +1484,24 @@ pub fn handle(app: &mut App, ev: MouseEvent) -> After {
     handle_at(app, ev, Instant::now())
 }
 
+/// The command bar: a press on its row gives it the keyboard; a press
+/// anywhere else takes the keyboard back to where the pointer went.
+fn command_bar_press(app: &mut App, ev: MouseEvent) -> Option<After> {
+    if !matches!(ev.kind, MouseEventKind::Down(_)) {
+        return None;
+    }
+    let on_bar = app
+        .last_frame
+        .and_then(|f| crate::ui::command_bar_area(app, f))
+        .is_some_and(|r| ev.row == r.y);
+    if on_bar && !overlay_open(app) {
+        app.command_bar_focus = true;
+        return Some(After::Nothing);
+    }
+    app.command_bar_focus = false;
+    None
+}
+
 /// The context menu: while open it takes every press — inside, a row runs
 /// through the same path as a panel-bar button; outside, it closes and the
 /// click goes no further (ADR 0178). Closed, a right press on a listing
@@ -1561,7 +1579,7 @@ fn context_menu_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
 /// window, and a test that depended on the machine's clock would be a test
 /// that fails in CI on a Tuesday.
 pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
-    if let Some(after) = context_menu_gesture(app, ev) {
+    if let Some(after) = command_bar_press(app, ev).or_else(|| context_menu_gesture(app, ev)) {
         return after;
     }
     if let Some(after) = above_the_panes(app, ev) {

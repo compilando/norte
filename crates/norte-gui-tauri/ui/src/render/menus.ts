@@ -652,13 +652,10 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
         return;
       }
       e.preventDefault();
-      const text = e.clipboardData?.getData("text/plain") ?? "";
-      // The focused command bar takes the paste; otherwise the search box.
-      if (document.getElementById("commandbar")?.dataset["focused"] === "true") {
-        this.send({ action: "command_bar_paste", text });
-        return;
-      }
-      this.send({ action: "goto_paste", text });
+      this.send({
+        action: "goto_paste",
+        text: e.clipboardData?.getData("text/plain") ?? "",
+      });
     });
   if (before === undefined) {
     doc.addEventListener("paste", onPaste, true);

@@ -73,6 +73,27 @@ impl State {
             });
             self.ultima_bar = Some(bar);
         }
+        // The command bar too (ADR 0181): its prompt is the focused pane's
+        // folder and its reason that folder's, so a `cd`, a pane switch or
+        // the setting changing must reach it, not only its own keys.
+        if !changes
+            .iter()
+            .any(|c| matches!(c, ViewChange::CommandBar { .. }))
+        {
+            let command_bar = self.vista_command_bar();
+            if self.last_command_bar != command_bar {
+                changes.push(ViewChange::CommandBar {
+                    command_bar: command_bar.clone(),
+                });
+            }
+        }
+        if let Some(ViewChange::CommandBar { command_bar }) = changes
+            .iter()
+            .rev()
+            .find(|c| matches!(c, ViewChange::CommandBar { .. }))
+        {
+            self.last_command_bar.clone_from(command_bar);
+        }
         // And the status bar items (ADR 0132), by the same mechanism: the
         // cursor, the marks, the sort order, and the board move them, and
         // none of those paths knows there is a bar counting them.

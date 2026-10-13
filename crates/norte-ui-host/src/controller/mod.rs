@@ -2747,6 +2747,8 @@ struct State {
     command_bar_focus: bool,
     /// Where the bar's history is saved; `None` = not saved.
     command_history_path: Option<std::path::PathBuf>,
+    /// The bar as it last crossed the bridge, to republish only changes.
+    last_command_bar: Option<crate::dto::CommandBarView>,
     /// The configuration this window started with, to show it.
     config: norte_frontend::config::FrontendConfig,
     /// Where each thing lives.
@@ -3449,6 +3451,7 @@ impl State {
             ),
             command_bar_focus: false,
             command_history_path: norte_config::command_history::path(),
+            last_command_bar: None,
             help: None,
             settings: None,
             extensions: None,

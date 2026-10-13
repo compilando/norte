@@ -53,6 +53,16 @@ Option 3.
   command: the setting pins it and the key calls it up.
 - The history lives in `<state dir>/command-history` (mode 0600, temp +
   rename), shared by both frontends; saving happens off the UI loop.
+- What enters the line is filtered (no control, bidi or zero-width
+  character), so what is painted is what runs. A completion inserts a
+  shared prefix only when it is plain text, and names are quoted only for
+  shells norte knows (bash, zsh, fish, POSIX sh); for cmd.exe, PowerShell
+  and the rest a name is inserted only if no shell gives its characters a
+  meaning, and otherwise the bar says so.
+- An order typed with a leading space runs but is not remembered
+  (`HISTCONTROL=ignorespace`). The order is never logged: the entry is
+  logged as "command bar" and titled with the order in memory only.
+- At most 20 finished bar entries stay; past that the oldest goes.
 - The window gets it through bridge 113 (`CommandBarView`,
   `command_bar_focus`, `command_bar_paste`); the host owns the line and the
   renderer reserves a bottom row like the panel bar's.

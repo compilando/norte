@@ -79,7 +79,14 @@ pub async fn on_key(
     if app.context_menu.is_some() && modal_wins(app) {
         app.context_menu = None;
     }
-    if app.command_bar_focus && app.context_menu.is_none() && !modal_wins(app) {
+    // The bar takes keys only with nothing in front of it, the order the
+    // window's host keeps: a menu, help or a picker opened over it own them.
+    if app.command_bar_focus
+        && app.context_menu.is_none()
+        && app.menu.is_none()
+        && !modal_wins(app)
+        && !crate::mouse::overlay_open(app)
+    {
         crate::command_bar::on_key(app, key);
         if let Some(order) = app.pending_order.take()
             && let Err(msg) = crate::termpanel::start_order(app, &order)

@@ -2017,6 +2017,7 @@ reason-needs-desktop = necesita un escritorio: aquí no hay dónde abrir una ven
 reason-inside-archive = dentro de un archivo comprimido: sube con .. a su carpeta
 reason-not-on-this-disk = no es una carpeta de este disco
 msg-context-stale = esa fila ha cambiado desde que abriste el menú: no hago nada
+msg-bar-cannot-quote = norte no sabe entrecomillar este nombre con seguridad para { $shell }: escríbelo
 
 on-yes = sí
 on-no = no

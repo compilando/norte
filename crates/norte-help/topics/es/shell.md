@@ -31,7 +31,10 @@ tuberías, comillas y globs significan lo de siempre —pero `-c` no lee ningún
 fichero rc, así que tus alias y funciones no están—. Arriba y abajo recorren el
 historial (se guarda entre sesiones, compartido con la ventana), Tab completa
 con los nombres del panel, Alt+Intro inserta el nombre bajo el cursor
-entrecomillado para tu shell y Esc devuelve el teclado. La orden nunca se
+entrecomillado para tu shell y Esc devuelve el teclado. Empieza una orden con un
+espacio y se ejecuta sin quedar en el historial. Con cmd.exe o PowerShell norte
+no sabe entrecomillar nombres con seguridad, así que solo inserta nombres de
+letras, dígitos y `._-/:`. La orden nunca se
 teclea en un shell que ya está abierto: con algo a medio escribir ahí, se
 ejecutaría pegada a ello.
 

@@ -2079,6 +2079,7 @@ reason-needs-desktop = needs a desktop: there is nowhere here to open a window
 reason-inside-archive = inside an archive: go up with .. to its folder
 reason-not-on-this-disk = not a folder on this disk
 msg-context-stale = that row changed since the menu opened: nothing done
+msg-bar-cannot-quote = norte cannot quote this name safely for { $shell }: type it
 
 on-yes = on
 on-no = off

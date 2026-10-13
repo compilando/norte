@@ -66,8 +66,8 @@ pub(crate) use chrome::{TARGET_BADGE, TabStrip, draw_tab_strip};
 pub(crate) use chrome::panel_buttons;
 use chrome::{draw_key_bar, draw_menu, draw_panel_bar};
 pub(crate) use geometry::{
-    body_rect, centered, chrome_body, pane_cols, placed_of_kind, resolved_frame, slot_content,
-    slot_rect, visor_split,
+    body_rect, centered, chrome_body, command_bar_area, pane_cols, placed_of_kind, resolved_frame,
+    slot_content, slot_rect, visor_split,
 };
 use modals::draw_modal;
 #[cfg(test)]

@@ -5,16 +5,6 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-use norte_frontend::shell::Shell;
-
-/// The reader's login shell, as the quoting knows it (`None` = POSIX sh).
-fn shell_kind() -> Option<Shell> {
-    norte_frontend::shell::login_shell()
-        .file_name()
-        .and_then(|n| n.to_str())
-        .and_then(Shell::parse)
-}
-
 impl State {
     /// Is the bar on screen: pinned by `[ui] command_bar`, or called up.
     pub(super) fn command_bar_visible(&self) -> bool {
@@ -54,6 +44,17 @@ impl State {
     /// `pane.command-line`: the bar takes the keyboard, showing it if
     /// hidden.
     pub(super) fn focus_command_bar(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // A read-only window runs no programs: the bar's click is refused
+        // like its key (`Effect::CommandLine` in the read-only arm).
+        if self.effects == crate::commands::Effects::SoloRead {
+            let said = self.say("reason-read-only");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "reason-read-only".to_owned(),
+                },
+                said,
+            );
+        }
         self.command_bar_focus = true;
         (self.applied(), self.command_bar_patch())
     }
@@ -66,7 +67,12 @@ impl State {
         if !self.command_bar_focus {
             return (self.applied(), Vec::new());
         }
-        let first = text.lines().next().unwrap_or_default();
+        // Any line break ends the first line (`\r`, NEL, U+2028 too), the
+        // same split the terminal's paste makes.
+        let first = text
+            .split(['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}'])
+            .next()
+            .unwrap_or_default();
         self.command_bar.insert(first);
         (self.applied(), self.command_bar_patch())
     }
@@ -88,8 +94,16 @@ impl State {
                     .cursor_entry()
                     .and_then(|e| e.path.file_name().map(|n| n.as_bytes().to_vec()))
                 {
-                    let word = norte_frontend::command_bar::quote_for(shell_kind(), &name);
-                    self.command_bar.insert(&word);
+                    let shell = norte_frontend::shell::login_shell();
+                    if !self.command_bar.insert_name(&shell, &name) {
+                        let program = shell
+                            .file_name()
+                            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                        let program = norte_encoding::mask_terminal_hazards(&program);
+                        let mut out = self.say_with("msg-bar-cannot-quote", &[("shell", &program)]);
+                        out.extend(self.command_bar_patch());
+                        return (self.applied(), out);
+                    }
                 }
             }
             "Enter" | "enter" => return self.submit_command_bar(backend, mailbox),
@@ -110,7 +124,8 @@ impl State {
                     .filter_map(|e| e.path.file_name().map(|n| n.as_bytes().to_vec()))
                     .collect();
                 let refs: Vec<&[u8]> = names.iter().map(Vec::as_slice).collect();
-                self.command_bar.complete(&refs, shell_kind());
+                let shell = norte_frontend::shell::login_shell();
+                self.command_bar.complete_for(&refs, &shell);
             }
             other if !k.ctrl && !k.alt && !k.meta && other.chars().count() == 1 => {
                 self.command_bar.insert(other);
@@ -141,22 +156,39 @@ impl State {
             );
         }
         let Some(cwd) = norte_frontend::shell::shell_dir(self.slot().pane.dir()) else {
-            return (self.applied(), Vec::new());
+            let said = self.say("reason-not-on-this-disk");
+            return (
+                ActionAck::Unavailable {
+                    reason_key: "reason-not-on-this-disk".to_owned(),
+                },
+                said,
+            );
         };
         let Some(order) = self.command_bar.take() else {
             return (self.applied(), self.command_bar_patch());
         };
-        if let Some(path) = self.command_history_path.clone() {
-            let history = self.command_bar.history().to_vec();
+        // Remembered (off the actor) unless typed with a leading space.
+        if self.command_bar.history().last() == Some(&order)
+            && let Some(path) = self.command_history_path.clone()
+        {
+            let o = order.clone();
             let _ = std::thread::Builder::new()
                 .name("command bar history".into())
-                .spawn(move || norte_config::command_history::save(&path, &history));
+                .spawn(move || {
+                    let max = norte_frontend::command_bar::HISTORY_MAX;
+                    if let Err(e) = norte_config::command_history::append(&path, &o, max) {
+                        tracing::warn!(error = %e, "command bar: history not saved");
+                    }
+                });
         }
         let shell = norte_frontend::shell::login_shell();
         let argv = norte_frontend::command_bar::argv(&shell, &order);
+        // The label is what gets LOGGED (the shell profile's name): a fixed
+        // one, never the order, which can carry a password. The order
+        // becomes the entry's title once it is in front.
         let launch = norte_frontend::user_commands::Launch {
             id: String::new(),
-            label: order,
+            label: "command bar".to_owned(),
             program: argv.first().cloned().unwrap_or_default(),
             args: argv.into_iter().skip(1).collect(),
             cwd,
@@ -170,7 +202,8 @@ impl State {
         out.extend(said);
         match res {
             Ok(()) => {
-                self.keep_active_terminal();
+                self.keep_active_terminal(&order);
+                out.extend(self.republish_terminal_panel());
                 (self.applied(), out)
             }
             Err(key) => (

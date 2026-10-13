@@ -4,7 +4,6 @@
 //! entry.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use norte_frontend::shell::Shell;
 
 use crate::app::App;
 
@@ -15,16 +14,8 @@ pub struct Order {
     pub argv: Vec<std::ffi::OsString>,
     /// The pane's directory.
     pub cwd: std::path::PathBuf,
-    /// The entry's title: the order.
+    /// The entry's title: the order. Never logged.
     pub title: String,
-}
-
-/// The reader's login shell, as the quoting knows it (`None` = POSIX sh).
-fn shell_kind() -> Option<Shell> {
-    norte_frontend::shell::login_shell()
-        .file_name()
-        .and_then(|n| n.to_str())
-        .and_then(Shell::parse)
 }
 
 /// Gives the bar the keyboard (`pane.command-line`), showing it if hidden.
@@ -61,14 +52,16 @@ pub fn on_key(app: &mut App, key: KeyEvent) -> bool {
                 .filter_map(|e| e.path.file_name().map(|n| n.as_bytes().to_vec()))
                 .collect();
             let refs: Vec<&[u8]> = names.iter().map(Vec::as_slice).collect();
-            app.command_bar.complete(&refs, shell_kind());
+            let shell = norte_frontend::shell::login_shell();
+            app.command_bar.complete_for(&refs, &shell);
         }
         _ => {}
     }
     true
 }
 
-/// `Alt+Enter`: the cursor entry's name, quoted for the reader's shell.
+/// `Alt+Enter`: the cursor entry's name, quoted for the reader's shell; a
+/// shell norte cannot quote for gets only names that mean nothing to it.
 fn insert_cursor_name(app: &mut App) {
     let Some(name) = app
         .focused()
@@ -77,12 +70,21 @@ fn insert_cursor_name(app: &mut App) {
     else {
         return;
     };
-    let word = norte_frontend::command_bar::quote_for(shell_kind(), &name);
-    app.command_bar.insert(&word);
+    let shell = norte_frontend::shell::login_shell();
+    if !app.command_bar.insert_name(&shell, &name) {
+        let program = shell
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        app.message = Some(norte_i18n::ta(
+            "msg-bar-cannot-quote",
+            &[("shell", &norte_encoding::mask_terminal_hazards(&program))],
+        ));
+    }
 }
 
 /// `Enter`: refuses off disk with the shared table's reason; otherwise the
-/// order goes to the history (saved off the loop) and is queued.
+/// order is queued, and remembered (off the loop) unless it was typed with
+/// a leading space.
 fn submit(app: &mut App) {
     if let Some(r) =
         norte_frontend::availability::verdict("app.terminal", &app.help_facts()).reason()
@@ -91,17 +93,24 @@ fn submit(app: &mut App) {
         return;
     }
     let Some(cwd) = norte_frontend::shell::shell_dir(app.focused().dir()) else {
+        app.message = Some(norte_i18n::t("reason-not-on-this-disk"));
         return;
     };
     let Some(order) = app.command_bar.take() else {
         return;
     };
-    let history = app.command_bar.history().to_vec();
-    if let Some(path) = app.command_history_path.clone() {
+    let remembered = app.command_bar.history().last() == Some(&order);
+    if remembered && let Some(path) = app.command_history_path.clone() {
+        let o = order.clone();
         // Off the loop: a slow disk must not freeze the keyboard.
         let _ = std::thread::Builder::new()
-            .name("norte-history".into())
-            .spawn(move || norte_config::command_history::save(&path, &history));
+            .name("command bar history".into())
+            .spawn(move || {
+                let max = norte_frontend::command_bar::HISTORY_MAX;
+                if let Err(e) = norte_config::command_history::append(&path, &o, max) {
+                    tracing::warn!(error = %e, "command bar: history not saved");
+                }
+            });
     }
     let shell = norte_frontend::shell::login_shell();
     app.pending_order = Some(Order {

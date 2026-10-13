@@ -40,6 +40,50 @@ export function paintCommandBar(this: Screen, bar: CommandBarView | null): void 
       e.preventDefault();
       this.send({ action: "command_bar_focus" });
     });
+    // A press anywhere else takes the keyboard back to where the pointer
+    // went: the bar gives up its keys, as with `Escape`.
+    document.addEventListener(
+      "mousedown",
+      (e) => {
+        const bar = document.getElementById("commandbar");
+        if (
+          bar?.dataset["focused"] === "true" &&
+          e.target instanceof Node &&
+          !bar.contains(e.target)
+        ) {
+          this.send({
+            action: "key",
+            key: "Escape",
+            ctrl: false,
+            alt: false,
+            shift: false,
+            meta: false,
+          });
+        }
+      },
+      true,
+    );
+    // Its own paste: the search box's listener only exists while the box
+    // is open. The first line only, decided by the host.
+    document.addEventListener(
+      "paste",
+      (e) => {
+        // The search box, when open, is in front of the bar and owns it.
+        if (
+          document.getElementById("commandbar")?.dataset["focused"] !== "true" ||
+          document.getElementById("goto")?.dataset["open"] === "true"
+        ) {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        this.send({
+          action: "command_bar_paste",
+          text: e.clipboardData?.getData("text/plain") ?? "",
+        });
+      },
+      true,
+    );
     document.body.append(root);
   }
   root.dataset["open"] = "true";
@@ -76,4 +120,10 @@ export function paintCommandBar(this: Screen, bar: CommandBarView | null): void 
     line.append(after);
   }
   root.replaceChildren(prompt, sign, line);
+  // A line longer than the row scrolls to keep the cursor in view: typing
+  // blind past the edge runs a tail nobody saw.
+  const caret = line.querySelector(".commandbar-caret");
+  if (caret instanceof HTMLElement && typeof caret.scrollIntoView === "function") {
+    caret.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
 }

@@ -26,16 +26,27 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &App) {
     let prompt = format!("{dir}> ");
     let used = UnicodeWidthStr::width(prompt.as_str());
     let rest = width.saturating_sub(used);
-    let (text, style) = match &blocked {
+    let (chars, cursor, style): (Vec<char>, usize, _) = match &blocked {
         Some(reason) if app.command_bar.text().is_empty() => {
-            (reason.clone(), app.theme.role(Role::Muted))
+            (reason.chars().collect(), 0, app.theme.role(Role::Muted))
         }
         _ => (
-            app.command_bar.text().to_owned(),
+            app.command_bar.text().chars().collect(),
+            app.command_bar.cursor(),
             app.theme.role(Role::Regular),
         ),
     };
-    let text = super::text::take_width(&text, rest);
+    // A line longer than the row scrolls so the CURSOR stays in view, the
+    // cut marked with `…`: typing blind past the edge runs a tail nobody saw.
+    let cursor = cursor.min(chars.len());
+    let cells = |s: &[char]| s.iter().collect::<String>().width();
+    let mut skip = 0;
+    while skip < cursor && cells(&chars[skip..cursor]) + 2 > rest {
+        skip += 1;
+    }
+    let lead = if skip > 0 { "…" } else { "" };
+    let shown = format!("{lead}{}", chars[skip..].iter().collect::<String>());
+    let shown = super::text::take_width(&shown, rest);
     let prompt_style = if app.command_bar_focus {
         app.theme.role(Role::BorderFocus)
     } else {
@@ -44,19 +55,13 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &App) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(prompt, prompt_style),
-            Span::styled(text, style),
+            Span::styled(shown, style),
         ])),
         area,
     );
-    if app.command_bar_focus {
+    if app.command_bar_focus && !crate::mouse::overlay_open(app) {
         // The terminal's own cursor, where the next char goes.
-        let before: String = app
-            .command_bar
-            .text()
-            .chars()
-            .take(app.command_bar.cursor())
-            .collect();
-        let x = used + UnicodeWidthStr::width(before.as_str());
+        let x = used + lead.width() + cells(&chars[skip..cursor]);
         if x < width {
             frame.set_cursor_position((
                 area.x.saturating_add(u16::try_from(x).unwrap_or(u16::MAX)),

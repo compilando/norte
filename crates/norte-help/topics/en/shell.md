@@ -30,7 +30,9 @@ globs mean what they always mean — but `-c` reads no rc file, so your aliases
 and functions are not there. Up and Down walk the history (kept between
 sessions, shared with the window), Tab completes against the pane's names,
 Alt+Enter inserts the name under the cursor quoted for your shell, Esc gives
-the keyboard back. The order is never typed into a shell that is already
+the keyboard back. Start an order with a space and it runs without being
+remembered. With cmd.exe or PowerShell norte cannot quote names safely, so
+only names of plain letters, digits and `._-/:` are inserted. The order is never typed into a shell that is already
 running: with something half-typed there, it would run joined to it.
 
 {{cmd:app.toggle-panels}} hides the panels and hands the terminal to a shell

