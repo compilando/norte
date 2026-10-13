@@ -41,6 +41,7 @@ import {
 } from "./render/dom";
 import type { Send, SlotDom } from "./render/dom";
 import { makeDraggable } from "./render/move";
+import * as commandbar from "./render/commandbar";
 import * as dialogs from "./render/dialogs";
 import * as sync from "./render/sync";
 import * as ai from "./render/ai";
@@ -161,6 +162,8 @@ export class Screen {
   menuBarHeight: string | null = null;
   /** The same for the panel bar (#324). */
   panelBarHeight: string | null = null;
+  /** The command bar's reserved height, as last set on the root. */
+  commandBarHeight: string | null = null;
   /** And the width it reserves when it is the activity bar (bridge 84). */
   activityWidth: string | null = null;
   /** The last frame painted: what gets repainted when something local changes. */
@@ -391,6 +394,7 @@ export class Screen {
     layer("ai_rename", view.ai_rename, this.paintAiRename);
     layer("organize", view.organize, this.paintOrganize);
     layer("context_menu", view.context_menu ?? null, this.paintContextMenu);
+    layer("command_bar", view.command_bar ?? null, this.paintCommandBar);
     layer("dialogs", view.dialogs, this.paintDialogs);
     // THE LAST ONE: the splash screen goes in front of everything else, and
     // on this sheet stacking is document order.
@@ -405,6 +409,9 @@ export class Screen {
 
   /** In `render/contextmenu.ts`. */
   readonly paintContextMenu = contextmenu.paintContextMenu;
+
+  /** In `render/commandbar.ts`. */
+  readonly paintCommandBar = commandbar.paintCommandBar;
 
   /** In `render/menus.ts`. */
   readonly paintGoto = menus.paintGoto;

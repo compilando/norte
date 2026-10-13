@@ -59,7 +59,7 @@ so pressing shift without moving updates it on the next row you cross.
 
 # The right-click menu
 
-The graphical frontend opens a menu at the pointer, in five places:
+Both frontends open a menu at the pointer, in five places:
 
 - a **listing row**
 - the **empty part of a listing**, and its `..` row
@@ -69,8 +69,10 @@ The graphical frontend opens a menu at the pointer, in five places:
 
 From the keyboard, {{cmd:pane.context-menu}} or the **Menu** key opens it on
 the focused item: the listing's cursor row, the Places cursor, the tree cursor.
-With any other panel focused there is nothing to open it on, and the key says
-so. Inside it the arrows move, Enter runs the entry and Esc closes it.
+In the window, with any other panel focused there is nothing to open it on,
+and the key says so. In the terminal the key opens it on the listing's cursor row; in Places
+and the tree, use the right button. Inside it the arrows move, Enter runs the
+entry, Esc closes it, and a click outside closes it too.
 
 A row's menu starts with the operations that already have keys: open
 ({{cmd:nav.enter}}), {{cmd:pane.view}}, {{cmd:pane.copy}}, {{cmd:pane.move}},
@@ -101,8 +103,8 @@ operations (rename, organize) and, on a remote, disconnect: those act on the
 whole folder or connection, so they live here and not on a row. They never run
 by themselves; each entry is you asking. The column header offers *sort by
 this column*, *hide this column* (not for Name) and *Columns…*; hiding from
-here affects this window only, like the column selector, and does not touch
-`norte.toml`. A drive or a favorite in Places, and a tree branch, offer open,
+here does what the column selector does in each frontend: the window keeps it
+for this window only, the terminal saves it to `norte.toml`. A drive or a favorite in Places, and a tree branch, offer open,
 open in the other pane, open in a new tab and copy path. A drive or a branch
 can be added to favorites — *Add to favorites…* asks for the name, prefilled,
 just as the favorites picker does — and a favorite can be removed from them. A

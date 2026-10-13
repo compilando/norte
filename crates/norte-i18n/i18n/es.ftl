@@ -81,12 +81,7 @@ modal-transfer-to = A
 modal-transfer-dest-copy = Copiar a la dirección
 modal-transfer-dest-move = Mover a la dirección
 modal-transfer-dest-hint = dirección, por ejemplo file:///home/tu/trabajo
-# `pane.command-line` (#135): el prompt de texto libre cuyo Enter corre
-# `$SHELL -c CMD` en el directorio del pane, con la TUI suspendida. Mismo
-# molde que los prompts de mkdir/renombrado IA.
-modal-command-line = Ejecutar un comando
-modal-command-line-hint = se ejecuta en el directorio del pane activo
-modal-command-line-empty = escribe un comando primero
+# Lo muestra un prompt de texto libre que puede abrirse ya largo (la dirección de destino).
 modal-command-line-too-long = la línea de comandos está llena ({ $max } caracteres); el resto no se escribió
 # El renombrado en lote SIN IA (#310): una plantilla y el mismo plan revisable.
 # Las sumas de comprobación (#311).
@@ -2019,6 +2014,10 @@ err-overlapping-roots-source-inside = el origen está dentro del destino
 err-overlapping-roots-dest-inside = el destino está dentro del origen
 reason-needs-daemon = necesita el daemon (--daemon)
 reason-needs-desktop = necesita un escritorio: aquí no hay dónde abrir una ventana
+reason-inside-archive = dentro de un archivo comprimido: sube con .. a su carpeta
+reason-not-on-this-disk = no es una carpeta de este disco
+msg-context-stale = esa fila ha cambiado desde que abriste el menú: no hago nada
+msg-bar-cannot-quote = norte no sabe entrecomillar este nombre con seguridad para { $shell }: escríbelo
 
 on-yes = sí
 on-no = no
@@ -2316,8 +2315,12 @@ setting-ui-diff-name = Comparar ficheros
 setting-ui-diff-desc = El programa que compara DOS ficheros, como línea de órdenes con los códigos de campo de `openers.toml`: `%F` son los dos ficheros, `%d` el directorio del panel. Ejemplo: `meld %F`. Vacío = `diff -u`, cuya salida se queda en pantalla hasta que pulsas una tecla. No se lee de la capa de proyecto: nombra un programa que se ejecuta.
 setting-ui-diff-detached-name = El comparador abre ventana
 setting-ui-diff-detached-desc = Si ese comparador abre una ventana propia (Meld, Kompare) en vez de ocupar el terminal. Mismo trato que el editor, y por lo mismo.
+setting-ui-terminal-name = Terminal externo
+setting-ui-terminal-desc = El emulador que abre «Terminal aquí», como línea de órdenes con los códigos de campo de `openers.toml`: `%d` es el directorio del panel. Ejemplos: `foot -D %d`, `open -a iTerm %d`, `wt -d .` (el terminal arranca en la carpeta del panel; Windows Terminal parte `%d` por un `;`). Vacío = `$TERMINAL`, luego el del escritorio y una lista de emuladores conocidos. Si lo pones, es el único que se intenta. No se lee de la capa de proyecto: nombra un programa que se ejecuta.
 setting-ui-confirm-quit-name = Confirmar antes de salir
 setting-ui-confirm-quit-desc = Al salir pide confirmación: solo con trabajo pendiente (auto), siempre, o nunca. Un atajo de salida de emergencia, donde esté ligado (p. ej. Ctrl+C en la TUI), siempre lo evita.
+setting-ui-command-bar-name = Barra de órdenes
+setting-ui-command-bar-desc = Si la línea de órdenes se queda bajo los paneles. Cada orden que escribes ahí se ejecuta en el panel de terminal, en la carpeta del panel con el foco, como una entrada nueva que se queda abierta con su salida. La tecla de línea de órdenes la saca aunque esto esté apagado.
 setting-ui-key-bar-name = Barra de teclas
 setting-ui-key-bar-desc = Solo en el terminal. Si la fila de teclas de función (F1–F10 y qué hace cada una en la pantalla actual) se queda fijada abajo. Se lee del keymap, así que reatar una tecla cambia su etiqueta, y pulsar una celda con el ratón ejecuta el comando. La ventana no la tiene: sus comandos están en el menú y en la paleta.
 setting-ui-panel-bar-style-name = Etiquetas de la barra de paneles
@@ -2694,6 +2697,9 @@ msg-paths-copied-osc52 = { $n } ruta(s) al portapapeles del terminal (OSC 52); c
 msg-clipboard-failed = el portapapeles no aceptó las rutas
 msg-opening-external = abriendo con la aplicación del escritorio…
 msg-opening-terminal = abriendo un terminal aquí…
+msg-terminal-opened = abierto { $program } aquí
+msg-terminal-fallback = ningún emulador de terminal arrancó: abro una shell aquí
+msg-terminal-configured-failed = { $program } (de [ui] terminal) no arrancó: { $error }; abro una shell aquí
 host-plugin-running = ejecutando el comando de la extensión…
 host-not-an-int = eso no es un número entero
 host-out-of-range = el esquema lo acota entre { $min } y { $max }

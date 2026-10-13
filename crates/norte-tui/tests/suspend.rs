@@ -89,7 +89,7 @@ fn the_inherited_level_marker_is_never_passed_through() {
 #[test]
 fn the_gui_terminal_list_is_probeable() {
     let dir = std::path::Path::new("/tmp");
-    let all = terminal_candidates_from(None, dir);
+    let all = terminal_candidates_from(None, None, dir);
     assert!(!all.is_empty(), "some candidate must exist to report on");
     for argv in &all {
         assert!(!argv.is_empty());

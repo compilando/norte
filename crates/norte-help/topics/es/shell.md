@@ -4,7 +4,6 @@ title = "Salir a un shell"
 tags = ["doing"]
 see_also = ["panes", "settings"]
 commands = ["app.terminal", "app.toggle-panels", "pane.command-line", "pane.copy-path", "app.handoff"]
-context = ["dialog.command-line"]
 +++
 Un gestor de ficheros del que no puedes salir es un gestor de ficheros que
 dejas de usar. Tres comandos te devuelven la terminal y luego la recuperan.
@@ -16,15 +15,28 @@ terminal entera. Lo que cambia es cómo vuelves: dos de ellos esperan a que el
 programa termine; el tercero te deja un shell VIVO al que vuelves con la misma
 tecla.
 
-{{cmd:app.terminal}} abre tu shell (`$SHELL`, o `/bin/sh` si eso no dice nada)
-en el **directorio del panel activo**. Sal del shell y vuelves al listado, ya
-refrescado: lo que hayas cambiado ahí abajo está en pantalla.
+{{cmd:app.terminal}} abre un emulador de terminal en el **directorio del panel
+activo** cuando hay escritorio donde poner su ventana —el mismo que abre la
+ventana, elegido por `[ui] terminal`, `$TERMINAL` o el escritorio—. Por ssh, sin
+escritorio, abre tu shell (`$SHELL`, o `/bin/sh` si eso no dice nada) aquí
+mismo; sal de él y vuelves al listado, ya refrescado. También está en el menú
+del botón derecho.
 
-{{cmd:pane.command-line}} pide un comando y lo ejecuta en ese mismo
-directorio. La línea se le entrega al shell ENTERA, así que las tuberías, las
-comillas y los globs significan lo de siempre; norte no la parsea. Al acabar,
-su salida se queda en pantalla hasta que pulses una tecla: una salida que
-desaparece bajo un listado repintado es como si no se hubiera impreso.
+{{cmd:pane.command-line}} pone el teclado en la **barra de órdenes**, la línea
+bajo los paneles (Ajustes › Paneles › Barra de órdenes la deja fija). Escribe
+una orden y pulsa Intro: se ejecuta como una entrada nueva del panel de
+terminal, en la carpeta del panel con el foco, y la entrada se queda abierta
+con su salida hasta que la cierres. La línea va a tu shell con `-c`, así que
+tuberías, comillas y globs significan lo de siempre —pero `-c` no lee ningún
+fichero rc, así que tus alias y funciones no están—. Arriba y abajo recorren el
+historial (se guarda entre sesiones, compartido con la ventana), Tab completa
+con los nombres del panel, Alt+Intro inserta el nombre bajo el cursor
+entrecomillado para tu shell y Esc devuelve el teclado. Empieza una orden con un
+espacio y se ejecuta sin quedar en el historial. Con cmd.exe o PowerShell norte
+no sabe entrecomillar nombres con seguridad, así que solo inserta nombres de
+letras, dígitos y `._-/:`. La orden nunca se
+teclea en un shell que ya está abierto: con algo a medio escribir ahí, se
+ejecutaría pegada a ello.
 
 {{cmd:app.toggle-panels}} esconde los paneles y le entrega la terminal a un
 shell que **se queda vivo** detrás. Púlsalo otra vez y vuelves al listado;
@@ -74,10 +86,8 @@ segundo plano. Una petición de aprobación que llegue durante una sesión larga
 de shell caduca y se deniega —la dirección segura—, pero conviene saberlo
 antes de dejar un shell abierto una hora.
 
-Pegar en la línea de comandos se comporta como pegar en una terminal sin
-soporte de bracketed paste: el primer salto de línea de lo que pegues
-**confirma**, y el resto se descarta en vez de ejecutarse. Escribe el comando,
-o pégalo y mira lo que hay en el campo antes de pulsar Enter.
+Pegar en la barra de órdenes guarda solo la primera línea y nunca la ejecuta:
+un salto de línea en lo que pegues no confirma. Revisa la línea y pulsa Intro.
 
 `Ctrl+C` llega al programa, no a norte. `Ctrl+Z` no está contemplado:
 suspender norte mientras tiene la terminal cedida no es algo de lo que se

@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod command_history;
 pub mod dirs;
 pub mod load;
 /// `tracing` setup for the binaries: a rotating file with closed permissions,

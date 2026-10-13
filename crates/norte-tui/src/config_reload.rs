@@ -51,6 +51,7 @@ fn apply_external_programs(app: &mut App, cfg: &config::LoadedConfig) {
             command,
             detached: cfg.common.ui_diff_detached.unwrap_or(false),
         });
+    app.ui_terminal.clone_from(&cfg.common.ui_terminal);
 }
 
 /// Hot-reload (ADR 0007): rereads ALL layers; on ANY error the current config

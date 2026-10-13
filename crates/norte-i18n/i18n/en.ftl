@@ -80,12 +80,7 @@ modal-transfer-to = To
 modal-transfer-dest-copy = Copy to address
 modal-transfer-dest-move = Move to address
 modal-transfer-dest-hint = address, for example file:///home/you/work
-# `pane.command-line` (#135): the free-text prompt whose Enter runs
-# `$SHELL -c CMD` in the pane's directory, with the TUI suspended. Same mould
-# as the mkdir/AI-rename prompts.
-modal-command-line = Run a command
-modal-command-line-hint = runs in the active pane's directory
-modal-command-line-empty = type a command first
+# Shown by a free-text prompt that can open already long (the transfer address).
 modal-command-line-too-long = the command line is full ({ $max } characters); the rest was not typed
 # Batch rename WITHOUT AI (#310): a template and the same reviewable plan.
 # Checksums (#311).
@@ -2081,6 +2076,10 @@ err-overlapping-roots-source-inside = the source is inside the destination
 err-overlapping-roots-dest-inside = the destination is inside the source
 reason-needs-daemon = needs the daemon (--daemon)
 reason-needs-desktop = needs a desktop: there is nowhere here to open a window
+reason-inside-archive = inside an archive: go up with .. to its folder
+reason-not-on-this-disk = not a folder on this disk
+msg-context-stale = that row changed since the menu opened: nothing done
+msg-bar-cannot-quote = norte cannot quote this name safely for { $shell }: type it
 
 on-yes = on
 on-no = off
@@ -2371,8 +2370,12 @@ setting-ui-diff-name = Compare files
 setting-ui-diff-desc = The program that compares TWO files, as a command line with the field codes of `openers.toml`: `%F` is both files, `%d` the pane's directory. Example: `meld %F`. Empty = `diff -u`, whose output stays on screen until you press a key. Not read from the project layer: it names a program to execute.
 setting-ui-diff-detached-name = The comparison tool opens a window
 setting-ui-diff-detached-desc = Whether that comparison tool opens a window of its own (Meld, Kompare) instead of taking over the terminal. Same deal as the editor, for the same reason.
+setting-ui-terminal-name = External terminal
+setting-ui-terminal-desc = The emulator "Terminal here" opens, as a command line with the field codes of `openers.toml`: `%d` is the pane's directory. Examples: `foot -D %d`, `open -a iTerm %d`, `wt -d .` (the terminal starts in the pane's folder; Windows Terminal splits `%d` at a `;`). Empty = `$TERMINAL`, then the desktop's own and a list of known emulators. When set, it is the only one tried. Not read from the project layer: it names a program to execute.
 setting-ui-confirm-quit-name = Confirm before quitting
 setting-ui-confirm-quit-desc = When quitting asks for confirmation: only with pending work (auto), always, or never. An emergency-exit shortcut, where bound (e.g. the TUI's Ctrl+C), always bypasses this.
+setting-ui-command-bar-name = Command bar
+setting-ui-command-bar-desc = Whether the command line stays under the panels. Each order you type there runs in the terminal panel, in the folder of the focused pane, as a new entry that stays open with its output. The command-line key calls it up even when this is off.
 setting-ui-key-bar-name = Key bar
 setting-ui-key-bar-desc = Terminal only. Whether the row of function keys (F1–F10 and what each does on the current screen) stays pinned at the bottom. It is read from the keymap, so rebinding a key changes its label, and clicking a cell runs the command. The window has none: its commands live in the menu and the palette.
 setting-ui-panel-bar-style-name = Panel bar labels
@@ -2671,6 +2674,9 @@ msg-paths-copied-osc52 = { $n } path(s) sent to the terminal clipboard (OSC 52);
 msg-clipboard-failed = the clipboard refused the paths
 msg-opening-external = opening with the desktop’s application…
 msg-opening-terminal = opening a terminal here…
+msg-terminal-opened = opened { $program } here
+msg-terminal-fallback = no terminal emulator started: opening a shell here instead
+msg-terminal-configured-failed = { $program } (from [ui] terminal) did not start: { $error }; opening a shell here instead
 host-plugin-running = running the extension command…
 host-not-an-int = that is not a whole number
 host-out-of-range = the schema bounds it between { $min } and { $max }

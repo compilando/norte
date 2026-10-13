@@ -449,7 +449,15 @@ const UNIX_TERMINALS: &[&str] = &[
     "alacritty",
     "wezterm",
     "konsole",
+    // GNOME's default since 47, then its earlier one.
+    "ptyxis",
+    "kgx",
     "gnome-terminal",
+    "foot",
+    "xfce4-terminal",
+    // Debian's alternative: whatever the system administrator chose, so
+    // after every emulator we can give a flag to.
+    "x-terminal-emulator",
     "xterm",
 ];
 
@@ -478,7 +486,9 @@ fn cwd_args(program: &str, dir: &std::path::Path) -> Vec<std::ffi::OsString> {
     };
     let separate = |flag: &str| vec![OsString::from(flag), OsString::from(dir.as_os_str())];
     match program {
-        "ghostty" | "gnome-terminal" => glued("--working-directory="),
+        "ghostty" | "gnome-terminal" | "ptyxis" | "kgx" | "foot" | "xfce4-terminal" => {
+            glued("--working-directory=")
+        }
         "kitty" => glued("--directory="),
         "alacritty" => separate("--working-directory"),
         "wezterm" => vec![
@@ -508,7 +518,12 @@ fn exec_flag(program: &str) -> &'static str {
         // `--` rather than `-e`: gnome-terminal deprecated `-e` and parses
         // what follows as ONE string, so a command with arguments arrived
         // mangled.
-        "gnome-terminal" => "--",
+        // ptyxis's `-x` takes the whole command as ONE string, like
+        // gnome-terminal's `-e`.
+        "gnome-terminal" | "ptyxis" => "--",
+        // xfce4-terminal's `-e` takes one string; `-x` takes the rest of
+        // the line.
+        "xfce4-terminal" => "-x",
         // Everything else on the list takes `-e` followed by the argv, and
         // ghostty takes `-e` too since 1.0.
         _ => "-e",
@@ -896,24 +911,141 @@ pub fn clipboard_candidates_from(
 /// Reads the environment; the decision itself is
 /// [`terminal_candidates_from`].
 #[must_use]
-pub fn terminal_candidates(dir: &std::path::Path) -> Vec<Vec<std::ffi::OsString>> {
-    terminal_candidates_from(std::env::var_os("TERMINAL").as_deref(), dir)
+pub fn terminal_candidates(
+    configured: Option<&[String]>,
+    dir: &std::path::Path,
+) -> Vec<Vec<std::ffi::OsString>> {
+    terminal_candidates_from(configured, std::env::var_os("TERMINAL").as_deref(), dir)
+}
+
+/// The directory a child process launched "in" pane `dir` sits in, or
+/// `None` when there is none: a remote or archive pane, or (Windows) a
+/// path [`child_cwd`] refuses. The ONE door every launcher goes through,
+/// and what `Facts::pane_on_disk` asks, so the menu that dims "terminal
+/// here" and the launch that refuses agree.
+#[must_use]
+pub fn shell_dir(dir: &norte_proto::VPath) -> Option<std::path::PathBuf> {
+    norte_vfs::native::vpath_to_native(dir)
+        .ok()
+        .and_then(|native| child_cwd(&native))
+}
+
+/// Windows' probe list, outside the `cfg` so every platform tests it.
+///
+/// The directory is NOT in any argv: it travels only as the process's cwd,
+/// which every launcher sets. `wt` re-parses its own command line and
+/// splits on `;` even inside a quoted argument, so `-d C:\x\a;calc` opened
+/// a tab in `C:\x\a` and ran `calc` (corpus `win_wt_semicolon`); `-d .`
+/// gives it nothing to parse.
+#[cfg_attr(not(any(windows, test)), expect(dead_code, reason = "Windows only"))]
+fn windows_terminals(dir: &std::path::Path) -> Vec<Vec<std::ffi::OsString>> {
+    use std::ffi::OsString;
+    let _ = dir;
+    vec![
+        vec![
+            OsString::from("wt"),
+            OsString::from("-d"),
+            OsString::from("."),
+        ],
+        vec![OsString::from("cmd")],
+    ]
+}
+
+/// Whether a window opened by this process lands in front of the reader:
+/// where "terminal here" may launch an emulator instead of suspending into a
+/// shell, and where the handoff has a desktop to go to (ADR 0180).
+#[must_use]
+pub fn has_desktop() -> bool {
+    has_desktop_from(|k| std::env::var_os(k))
+}
+
+/// Starts `program` in `cwd` and lets it go: a terminal emulator that must
+/// outlive the frontend that opened it.
+///
+/// Its own process group on unix, so the hangup sent when the reader's
+/// terminal closes does not take the emulator with it; a console of its own
+/// on Windows, so a `cmd` does not share the TUI's — and NOT a new process
+/// group there, which would disable Ctrl+C in everything run from that
+/// `cmd`. Stdio is null, and a thread reaps the child so a long session
+/// does not collect zombies.
+///
+/// `cwd` must come from [`shell_dir`]: on Windows a verbatim path is not a
+/// usable working directory.
+///
+/// # Errors
+/// The program did not start.
+pub fn spawn_detached(
+    program: &std::path::Path,
+    args: &[std::ffi::OsString],
+    cwd: &std::path::Path,
+) -> std::io::Result<()> {
+    use std::process::Stdio;
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        cmd.creation_flags(CREATE_NEW_CONSOLE);
+    }
+    let mut child = cmd.spawn()?;
+    // A reaper that cannot be created costs one zombie, not a crash.
+    let _ = std::thread::Builder::new()
+        .name("norte-reap".into())
+        .spawn(move || {
+            let _ = child.wait();
+        });
+    Ok(())
+}
+
+/// Testable core of [`has_desktop`]; `var` reads one environment variable.
+///
+/// Linux/BSD: a display (`WAYLAND_DISPLAY` or `DISPLAY`), which an `ssh -X`
+/// session also has — the window goes where the reader is. macOS and
+/// Windows always have a screen, but over ssh (`SSH_CONNECTION`/`SSH_TTY`)
+/// it is the remote machine's, so there is none for the reader.
+#[must_use]
+pub fn has_desktop_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    let set = |k: &str| var(k).is_some_and(|v| !v.is_empty());
+    if cfg!(any(target_os = "macos", windows)) {
+        !set("SSH_CONNECTION") && !set("SSH_TTY")
+    } else {
+        set("WAYLAND_DISPLAY") || set("DISPLAY")
+    }
 }
 
 /// Testable core of [`terminal_candidates`].
 ///
-/// Order on unix: `$TERMINAL` (the user's explicit answer, which beats every
-/// probe), then `xdg-terminal-exec` (the desktop's own answer), then the
-/// crate-private `UNIX_TERMINALS` probe list — a closed set, because the cwd
-/// flag differs per emulator and guessing one is how you launch a terminal in
-/// the wrong directory. macOS is `open -a Terminal <dir>`, which is the
-/// desktop's answer and the only one. Windows is `wt` then `cmd`.
+/// `configured` is `[ui] terminal`, an argv template with `openers.toml`'s
+/// field codes (`%d` = `dir`). When it is set and not empty it is the ONLY
+/// candidate: the reader chose it, and a choice that fails must say so
+/// rather than quietly open something else.
+///
+/// Otherwise, order on unix: `$TERMINAL` (the user's explicit answer, which
+/// beats every probe), then `xdg-terminal-exec` (the desktop's own answer),
+/// then the crate-private `UNIX_TERMINALS` probe list — a closed set, because
+/// the cwd flag differs per emulator and guessing one is how you launch a
+/// terminal in the wrong directory. macOS is `open -a Terminal <dir>`, which
+/// is the desktop's answer and the only one. Windows is `wt` then `cmd`.
 #[must_use]
 pub fn terminal_candidates_from(
+    configured: Option<&[String]>,
     env_terminal: Option<&std::ffi::OsStr>,
     dir: &std::path::Path,
 ) -> Vec<Vec<std::ffi::OsString>> {
     use std::ffi::OsString;
+    if let Some(cfg) = configured.filter(|c| !c.is_empty()) {
+        return vec![crate::openers::expand_argv(cfg, &[], dir)];
+    }
     let mut out: Vec<Vec<OsString>> = Vec::new();
     // `$TERMINAL` first on every platform: an explicit answer is never
     // overruled by a probe. Empty is treated as unset, like `$SHELL`.
@@ -961,14 +1093,7 @@ pub fn terminal_candidates_from(
         }
     }
     #[cfg(windows)]
-    {
-        out.push(vec![
-            OsString::from("wt"),
-            OsString::from("-d"),
-            OsString::from(dir.as_os_str()),
-        ]);
-        out.push(vec![OsString::from("cmd")]);
-    }
+    out.extend(windows_terminals(dir));
     // `dir` is genuinely unused on a platform with no branch above; naming it
     // keeps the signature stable rather than cfg-ing the parameter itself.
     let _ = dir;
@@ -984,7 +1109,7 @@ pub fn terminal_candidates_from(
 /// as the named first-choice question, rather than left as an accident).
 #[must_use]
 pub fn terminal_argv(dir: &std::path::Path) -> Option<Vec<std::ffi::OsString>> {
-    terminal_candidates(dir).into_iter().next()
+    terminal_candidates(None, dir).into_iter().next()
 }
 
 /// Testable core of [`terminal_argv`].
@@ -993,7 +1118,7 @@ pub fn terminal_argv_from(
     env_terminal: Option<&std::ffi::OsStr>,
     dir: &std::path::Path,
 ) -> Option<Vec<std::ffi::OsString>> {
-    terminal_candidates_from(env_terminal, dir)
+    terminal_candidates_from(None, env_terminal, dir)
         .into_iter()
         .next()
 }
@@ -1342,7 +1467,7 @@ mod tests {
     #[test]
     fn an_empty_terminal_variable_does_not_become_a_candidate() {
         let dir = std::path::Path::new("/tmp/x");
-        for c in terminal_candidates_from(Some("".as_ref()), dir) {
+        for c in terminal_candidates_from(None, Some("".as_ref()), dir) {
             assert!(!c[0].is_empty(), "an empty program name is not a candidate");
         }
     }
@@ -1352,7 +1477,7 @@ mod tests {
     #[test]
     fn the_candidate_list_is_ordered_and_never_carries_an_empty_argv() {
         let dir = std::path::Path::new("/tmp/x");
-        let all = terminal_candidates_from(Some("myterm".as_ref()), dir);
+        let all = terminal_candidates_from(None, Some("myterm".as_ref()), dir);
         assert_eq!(all[0], vec![std::ffi::OsString::from("myterm")]);
         assert!(all.iter().all(|c| !c.is_empty()));
         assert!(
@@ -1369,7 +1494,7 @@ mod tests {
     fn a_known_emulator_gets_the_directory_byte_for_byte() {
         use std::os::unix::ffi::{OsStrExt, OsStringExt};
         let dir = std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/w\xFFird".to_vec()));
-        let all = terminal_candidates_from(None, &dir);
+        let all = terminal_candidates_from(None, None, &dir);
         let konsole = all
             .iter()
             .find(|c| c[0] == "konsole")
@@ -1381,6 +1506,180 @@ mod tests {
             .find(|c| c[0] == "gnome-terminal")
             .expect("gnome-terminal is on the probe list");
         assert_eq!(gnome[1].as_bytes(), b"--working-directory=/tmp/w\xFFird");
+    }
+
+    /// `[ui] terminal` is the reader's explicit choice: the ONLY candidate,
+    /// so a configured program that fails says so instead of another one
+    /// opening, and its `%d` is the pane's directory.
+    #[test]
+    fn a_configured_terminal_is_the_only_candidate_and_expands_the_dir() {
+        use std::ffi::OsString;
+        let dir = std::path::Path::new("/home/u/src");
+        let cfg = ["wezterm", "start", "--cwd", "%d"].map(str::to_owned);
+        let all = terminal_candidates_from(Some(&cfg), Some("kitty".as_ref()), dir);
+        assert_eq!(
+            all.len(),
+            1,
+            "configured wins over $TERMINAL and every probe: {all:?}"
+        );
+        assert_eq!(
+            all[0],
+            ["wezterm", "start", "--cwd", "/home/u/src"]
+                .map(OsString::from)
+                .to_vec()
+        );
+        // An empty list is no configuration at all.
+        assert!(terminal_candidates_from(Some(&[]), Some("kitty".as_ref()), dir).len() > 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_dir_survives_the_configured_template() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = std::path::Path::new(std::ffi::OsStr::from_bytes(b"/tmp/caf\xE9"));
+        let cfg = ["foot", "-D", "%d"].map(str::to_owned);
+        let all = terminal_candidates_from(Some(&cfg), None, dir);
+        assert_eq!(all[0][2].as_bytes(), b"/tmp/caf\xE9");
+    }
+
+    /// A detached launch runs in `cwd` and does not wait for the child: the
+    /// call returns while the program is still running.
+    #[cfg(unix)]
+    #[test]
+    fn a_detached_launch_sits_in_its_dir_and_does_not_wait() {
+        let d = tempfile::tempdir().unwrap();
+        let start = std::time::Instant::now();
+        spawn_detached(
+            std::path::Path::new("/bin/sh"),
+            &["-c".into(), "pwd > out; exec sleep 20".into()],
+            d.path(),
+        )
+        .expect("spawns");
+        // The child lives 20 s; a launcher that waited would be caught by a
+        // margin no load eats.
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(15),
+            "it waited"
+        );
+        let out = d.path().join("out");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while !std::fs::read_to_string(&out).is_ok_and(|s| s.ends_with('\n')) {
+            assert!(std::time::Instant::now() < deadline, "never ran");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let pwd = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(
+            std::fs::canonicalize(pwd.trim_end()).unwrap(),
+            std::fs::canonicalize(d.path()).unwrap()
+        );
+    }
+
+    /// The one door from a pane's location to the directory a child process
+    /// sits in: a remote or archive pane has none.
+    #[cfg(unix)]
+    #[test]
+    fn shell_dir_is_the_native_dir_or_nothing() {
+        let tmp = std::env::temp_dir();
+        let vp = norte_vfs::native::vpath_from_native(&tmp).expect("vpath");
+        assert_eq!(shell_dir(&vp), Some(tmp));
+        for wire in ["mem:///", "sftp://h/x", "zip+file:///tmp/a.zip/!/inner"] {
+            let vp = VPath::parse(wire).expect(wire);
+            assert_eq!(shell_dir(&vp), None, "{wire}");
+        }
+    }
+
+    /// No Windows candidate carries the directory: `wt` re-parses its own
+    /// command line and splits on `;` even inside a quoted argument, so a
+    /// folder named `a;calc` became a second subcommand. The directory
+    /// travels only as the process's cwd (`-d .`). Over the whole corpus,
+    /// `win_wt_semicolon` included.
+    #[test]
+    fn no_windows_candidate_carries_the_directory() {
+        for name in norte_testkit::corpus::hostile_names() {
+            let lossy = String::from_utf8_lossy(&name.bytes);
+            let dir = std::path::PathBuf::from(format!("C:\\tmp\\{lossy}"));
+            let all = windows_terminals(&dir);
+            assert_eq!(all[0][0], "wt");
+            for argv in &all {
+                for a in argv {
+                    assert!(
+                        !a.to_string_lossy().contains(&*lossy),
+                        "{}: {argv:?} carries the directory",
+                        name.id
+                    );
+                }
+            }
+        }
+    }
+
+    fn env<'a>(
+        pairs: &'a [(&'a str, &'a str)],
+    ) -> impl Fn(&str) -> Option<std::ffi::OsString> + 'a {
+        move |k| {
+            pairs
+                .iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| std::ffi::OsString::from(v))
+        }
+    }
+
+    /// On Linux a desktop is a display, and an `ssh -X` session counts: the
+    /// window opens where the reader is.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn a_desktop_on_linux_is_a_display_even_over_ssh_x() {
+        assert!(!has_desktop_from(env(&[])));
+        assert!(!has_desktop_from(env(&[("DISPLAY", "")])));
+        assert!(has_desktop_from(env(&[("WAYLAND_DISPLAY", "wayland-0")])));
+        assert!(has_desktop_from(env(&[
+            ("DISPLAY", "localhost:10.0"),
+            ("SSH_CONNECTION", "x")
+        ])));
+    }
+
+    /// On macOS and Windows the screen is always there, and over ssh it is
+    /// the REMOTE machine's: `open -a Terminal` would open where nobody is.
+    #[cfg(any(target_os = "macos", windows))]
+    #[test]
+    fn over_ssh_a_mac_or_windows_screen_is_not_the_readers() {
+        assert!(has_desktop_from(env(&[])));
+        assert!(!has_desktop_from(env(&[(
+            "SSH_CONNECTION",
+            "1.2.3.4 5 6.7.8.9 22"
+        )])));
+        assert!(!has_desktop_from(env(&[("SSH_TTY", "/dev/ttys001")])));
+    }
+
+    /// The default terminals of current desktops (GNOME's ptyxis and
+    /// Console, sway's foot, Xfce's) and Debian's alternative, with the flags
+    /// their manuals give (verified 2026-10-13).
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn the_probe_list_knows_the_current_desktops_terminals() {
+        let dir = std::path::Path::new("/w");
+        let all = terminal_candidates_from(None, None, dir);
+        let find = |p: &str| {
+            all.iter()
+                .find(|a| a[0] == p)
+                .unwrap_or_else(|| panic!("{p} missing: {all:?}"))
+        };
+        for p in ["ptyxis", "kgx", "foot", "xfce4-terminal"] {
+            assert_eq!(find(p)[1], "--working-directory=/w", "{p}");
+        }
+        // An ALTERNATIVE names any program: no flag guessed at it.
+        assert_eq!(find("x-terminal-emulator").len(), 1);
+    }
+
+    /// And the flag before a command to RUN, per their manuals: ptyxis wants
+    /// `--` (its `-x` takes ONE string), xfce4-terminal `-x` (its `-e` takes
+    /// one string too).
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn each_new_emulator_runs_an_argv_with_its_own_flag() {
+        assert_eq!(exec_flag("ptyxis"), "--");
+        assert_eq!(exec_flag("xfce4-terminal"), "-x");
+        assert_eq!(exec_flag("kgx"), "-e");
+        assert_eq!(exec_flag("foot"), "-e");
     }
 
     /// `NORTE_LEVEL` is INHERITED, so it is untrusted input. Nothing a parent

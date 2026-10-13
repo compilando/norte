@@ -68,11 +68,11 @@ fn vocabulary() -> Vec<&'static str> {
 /// [`check_commands`] over [`vocabulary`], minus the window's own commands.
 ///
 /// The corpus is shared, and a page about the window may name a command
-/// only the window runs: `mouse` names `pane.context-menu`, which the TUI
-/// does not dispatch but answers "not here" for, because it is Live in the
-/// shared [`CATALOGUE`]. That command EXISTS, so `UnknownCommand` would be
-/// false. Only that direction is widened: the TUI's own vocabulary still
-/// has to be documented, and a typo is in no catalogue.
+/// only the window runs, which the TUI answers "not here" for because it is
+/// Live in the shared [`CATALOGUE`]. That command EXISTS, so
+/// `UnknownCommand` would be false. Only that direction is widened: the
+/// TUI's own vocabulary still has to be documented, and a typo is in no
+/// catalogue.
 fn command_issues() -> Vec<Issue> {
     check_commands(&vocabulary(), &[])
         .into_iter()

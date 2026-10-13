@@ -992,6 +992,14 @@ pub enum UiAction {
     /// Closes the context menu without running anything (a click outside,
     /// `Escape`). The marks it dropped on opening stay dropped.
     ContextMenuClose,
+    /// A click on the command bar: it takes the keyboard (bridge 113).
+    CommandBarFocus,
+    /// A paste into the focused command bar: the host keeps the first line;
+    /// a newline must never run an order (bridge 113).
+    CommandBarPaste {
+        /// What was pasted.
+        text: String,
+    },
     /// A press on the veil behind the overlay in front, outside its box
     /// (bridge 112). The host decides: a light popup (the search box, a
     /// picker, the search form, help, an output) closes as with `Escape`;

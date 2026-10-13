@@ -464,6 +464,14 @@
           ],
           "description": "`[ui.columns]` (#108 block 4): column selection and sort order."
         },
+        "command_bar": {
+          "default": null,
+          "description": "Whether the command bar (one line under the panels whose orders run\nin the terminal panel, ADR 0181) stays on screen. Absent = `false`:\nit costs a row, and the command-line key calls it up anyway.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "confirm_quit": {
           "default": null,
           "description": "Whether `app.quit` confirms before closing (S2): `\"auto\"` (default)\nconfirms only with pending work (active tasks in the TUI's board,\ntasks/marks in the GUI — the behavior before this setting existed,\npreserved as the default rather than a fixed point in time);\n`\"always\"` always confirms, even with nothing pending; `\"never\"`\ncloses immediately.\n\n[`crate::load::load`] rejects other values (same pattern as\n`quick_search`) so its diagnostic can include the source path.",
@@ -739,6 +747,17 @@
         "status_plugins": {
           "default": null,
           "description": "Status items contributed by PLUGINS (ADR 0137): plugin columns, as\n`\"plugin:<plugin>/<column>\"`, whose value for the entry under the\ncursor goes at the left of the status bar's right half. At most\nfour. A plugin that is not approved and enabled, or does not declare\nthat column, shows nothing.\n\n[`crate::load::load`] rejects malformed and repeated ids.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "terminal": {
+          "default": null,
+          "description": "`[ui] terminal`: the terminal emulator \"terminal here\" opens, as an\nargv template with `openers.toml`'s field codes — `%d` is the pane's\ndirectory: `terminal = [\"open\", \"-a\", \"iTerm\", \"%d\"]`. `%d` is\nreplaced only as a WHOLE element (`\"--cwd=%d\"` stays literal), and\n`%f`/`%F` expand to nothing here. When set it is the only one tried.\nAbsent = `$TERMINAL`, then the desktop's own answer and a short list\nof known emulators.\n\n**Never honoured from the PROJECT layer**, same rule as\n[`Self::editor`]: it names a program to run.",
           "items": {
             "type": "string"
           },

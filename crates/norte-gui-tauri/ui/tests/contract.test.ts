@@ -136,6 +136,7 @@ describe("the contract with the host", () => {
       "browser_header",
       "columns",
       "columns_picker",
+      "command_bar",
       "compare",
       "connection",
       "context_menu",

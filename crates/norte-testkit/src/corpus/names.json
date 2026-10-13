@@ -440,6 +440,11 @@
     "why": "UN nombre que renderiza la linea de veredicto de un informe de lote ('modal-batch-stuck-journalled'), que es la que le dice al lector que lo que quedo a medias se puede deshacer. Hoy la suplantacion esta DESACTIVADA por el prefijo '<scheme>/' que pone `path_display`, y ESE es su valor: nada afirma que ese prefijo sea el marcador de rol de una linea de ruta, asi que quien lo quite por 'ruido' no encuentra nada rojo."
   },
   {
+    "id": "win_wt_semicolon",
+    "hex": "613b63616c63",
+    "why": "'a;calc' — legal en NTFS y en unix. Windows Terminal parte su linea de ordenes por un ';' sin escapar AUNQUE vaya dentro de un argumento ya entrecomillado: `wt -d C:\\x\\a;calc` abria una pestana en `C:\\x\\a` y ejecutaba `calc` como segunda orden. Desde ADR 0180 la TUI llega a `wt` en cada 'terminal aqui' de Windows; por eso el directorio va a `wt` como `-d .` y viaja solo por el cwd del proceso."
+  },
+  {
     "id": "control_crlf",
     "hex": "610d0a62",
     "why": "'a\\r\\nb' — CR+LF dentro del nombre. Legal en unix (roundtrip intacto en mem/local), pero en FTP es el TERMINADOR del canal de control: un cliente que interpole el nombre en `RETR`/`DELE` sin filtrar ejecuta dos comandos (RUSTSEC-2026-0271, suppaftp <10.0.2). El guest ftp-provider lo rechaza LIMPIO como InvalidPath antes de tocar el socket (`ftp_provider_contract.rs`, probe `x\\r\\nDELE victima`); el corpus lo lleva para que TODO provider y TODA superficie que pinte nombres se enfrente a los dos controles juntos, no solo al LF de `control_newline`."

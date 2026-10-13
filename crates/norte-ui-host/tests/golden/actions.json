@@ -28,6 +28,13 @@
     "action": "cancel_task",
     "task_id": 42
   },
+  "command_bar_focus": {
+    "action": "command_bar_focus"
+  },
+  "command_bar_paste": {
+    "action": "command_bar_paste",
+    "text": "make test"
+  },
   "compare_activate_row": {
     "action": "compare_activate_row",
     "id": 7

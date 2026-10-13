@@ -74,7 +74,12 @@ pub fn route_paste(app: &mut App, text: &str) {
     let (first_line, discarded) = first_pasted_line(text);
     let first_line = first_line.as_str();
 
-    let outcome = if (app.theme_picker.is_some()
+    let outcome = if app.command_bar_focus && app.context_menu.is_none() && !modal_wins(app) {
+        // The bar owns the keys first (see `keys.rs`); the model drops
+        // control characters itself.
+        app.command_bar.insert(first_line);
+        PasteOutcome::Inserted
+    } else if (app.theme_picker.is_some()
         || app.layout_picker.is_some()
         || app.connections_picker.is_some()
         || app.columns_picker.is_some())
@@ -355,12 +360,9 @@ mod paste_tests {
         ));
 
         let mut a = app();
-        a.open_command_line();
+        crate::command_bar::focus(&mut a);
         route_paste(&mut a, "ls -la\ntail");
-        assert!(matches!(
-            &a.modal,
-            Some(Modal::CommandLine { command, .. }) if command == "ls -la"
-        ));
+        assert_eq!(a.command_bar.text(), "ls -la");
 
         let mut a = app();
         a.open_ai_rename();

@@ -251,6 +251,8 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::GotoActivateRow { .. } => "goto_activate_row",
         UiAction::GotoPaste { .. } => "goto_paste",
         UiAction::ContextMenuClose => "context_menu_close",
+        UiAction::CommandBarFocus => "command_bar_focus",
+        UiAction::CommandBarPaste { .. } => "command_bar_paste",
         UiAction::OverlayDismiss => "overlay_dismiss",
         UiAction::WizardOpen => "wizard_open",
         UiAction::SplashOpen => "splash_open",
@@ -806,6 +808,13 @@ fn context_menu_actions() -> Vec<(&'static str, UiAction)> {
             UiAction::ContextMenuActivateRow { row: 3 },
         ),
         ("context_menu_close", UiAction::ContextMenuClose),
+        ("command_bar_focus", UiAction::CommandBarFocus),
+        (
+            "command_bar_paste",
+            UiAction::CommandBarPaste {
+                text: "make test".to_owned(),
+            },
+        ),
         ("overlay_dismiss", UiAction::OverlayDismiss),
         ("goto_point_row", UiAction::GotoPointRow { row: 2 }),
         ("goto_activate_row", UiAction::GotoActivateRow { row: 2 }),
@@ -1971,6 +1980,16 @@ fn reference_context_menu() -> norte_ui_host::dto::ContextMenuView {
     }
 }
 
+fn reference_command_bar() -> norte_ui_host::dto::CommandBarView {
+    norte_ui_host::dto::CommandBarView {
+        prompt: "/home/u/src".to_owned(),
+        text: "make test".to_owned(),
+        cursor: 4,
+        focused: true,
+        reason: String::new(),
+    }
+}
+
 fn reference_snapshot() -> ViewSnapshot {
     ViewSnapshot {
         compare: None,
@@ -1994,6 +2013,7 @@ fn reference_snapshot() -> ViewSnapshot {
         tasks: vec![reference_task()],
         menu: reference_menu(),
         context_menu: Some(reference_context_menu()),
+        command_bar: Some(reference_command_bar()),
         panel_bar: reference_pane_bar(),
         status_items: reference_status_items(),
         layout_buttons: vec![norte_ui_host::dto::ChromeButtonView {
@@ -3121,6 +3141,12 @@ fn rest_changes() -> Vec<(&'static str, ViewChange)> {
             },
         ),
         (
+            "command_bar",
+            ViewChange::CommandBar {
+                command_bar: Some(reference_command_bar()),
+            },
+        ),
+        (
             "wizard",
             ViewChange::Wizard {
                 wizard: Some(reference_wizard()),
@@ -3353,7 +3379,7 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // change go; `app.palette` opens the go-to box with `>`.
     // 111 (spec 2026-10-09): `ViewerView.highlight`/`.lines_from`, and
     // `SlotView::Search` with its rows, the search panel.
-    const SHAPE: u64 = 1_408_676_155_775_652_974;
+    const SHAPE: u64 = 10_195_354_051_754_575_098;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

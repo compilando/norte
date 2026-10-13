@@ -40,7 +40,6 @@ pub const CONTEXTS: &[&str] = &[
     "dialog.transfer-name",
     "dialog.transfer-dest",
     "dialog.mkdir",
-    "dialog.command-line",
     "dialog.ai-rename",
     "dialog.semantic-search",
     // #139: an entry's properties are "what does the listing tell me about
@@ -108,7 +107,6 @@ fn modal_context(modal: &Modal) -> &'static str {
         // dialog that asks you to type a name.
         Modal::Mkdir { .. } | Modal::EditNew { .. } | Modal::ProfileSaveAs { .. } => "dialog.mkdir",
         Modal::TransferDest { .. } => "dialog.transfer-dest",
-        Modal::CommandLine { .. } => "dialog.command-line",
         // Organize shares a page with the AI-rename plan: it is the same
         // deal — a plan reviewed whole before it applies — with one more
         // freedom, and splitting the prose would force repeating it.
@@ -150,7 +148,7 @@ fn modal_context(modal: &Modal) -> &'static str {
 ///
 /// `false` for the SEVEN variants the run loop intercepts before the `dialog`
 /// keymap ever resolves — the six free-text editors (`Modal::Mkdir`,
-/// `Modal::MarkPattern`, `Modal::CommandLine`, `Modal::AiRenameInstruction`,
+/// `Modal::MarkPattern`, `Modal::AiRenameInstruction`,
 /// `Modal::SemanticQuery`, `Modal::TransferName`) plus the project `init.lua` TOFU
 /// (`Modal::TrustLuaInit`). They were already excluded, but only as the residue
 /// of that interception 3000 lines away in `main`: moving one onto the `dialog`
@@ -181,7 +179,6 @@ pub fn help_over_modal_allowed(modal: &Modal) -> bool {
         | Modal::ProfileSaveAs { .. }
         | Modal::EditNew { .. }
         | Modal::TransferDest { .. }
-        | Modal::CommandLine { .. }
         | Modal::AiRenameInstruction { .. }
         | Modal::RenameBatchPattern { .. }
         | Modal::SemanticQuery { .. }
@@ -397,10 +394,6 @@ mod tests {
             },
             Modal::Mkdir {
                 name: "new".into(),
-                error: None,
-            },
-            Modal::CommandLine {
-                command: "make test".into(),
                 error: None,
             },
             Modal::AiRenameInstruction {

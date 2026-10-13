@@ -3683,6 +3683,78 @@ describe("the menu bar", () => {
   });
 });
 
+describe("command bar", () => {
+  it("paints the folder and the line as text, and a press asks for the keys", () => {
+    const { screen, sent } = mount();
+    const v = view({});
+    v.command_bar = {
+      prompt: "/home/<b>x</b>",
+      text: "echo <i>hi</i>",
+      cursor: 2,
+      focused: true,
+      reason: "",
+    };
+    screen.paint(v);
+    const bar = document.getElementById("commandbar") as HTMLElement;
+    expect(bar.dataset["open"]).toBe("true");
+    expect(bar.querySelector("b")).toBeNull();
+    expect(bar.querySelector("i")).toBeNull();
+    expect(bar.textContent).toContain("/home/<b>x</b>");
+    expect(bar.textContent).toContain("echo <i>hi</i>");
+    expect(bar.querySelector(".commandbar-caret")?.textContent).toBe("h");
+    expect(document.documentElement.style.getPropertyValue("--commandbar-h")).toBe(
+      "var(--cell-h)",
+    );
+    bar.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(sent).toContainEqual({ action: "command_bar_focus" });
+  });
+
+  it("a paste goes to the focused bar, and a press elsewhere gives the keys back", () => {
+    const { screen, sent } = mount();
+    const v = view({});
+    v.command_bar = { prompt: "/x", text: "", cursor: 0, focused: true, reason: "" };
+    screen.paint(v);
+    const paste = new Event("paste", {
+      bubbles: true,
+      cancelable: true,
+    }) as ClipboardEvent;
+    Object.defineProperty(paste, "clipboardData", {
+      value: { getData: () => "make\nrm -rf x" },
+    });
+    document.body.dispatchEvent(paste);
+    expect(sent).toContainEqual({ action: "command_bar_paste", text: "make\nrm -rf x" });
+    document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(sent).toContainEqual({
+      action: "key",
+      key: "Escape",
+      ctrl: false,
+      alt: false,
+      shift: false,
+      meta: false,
+    });
+  });
+
+  it("off disk an empty line shows why, and hidden it gives its row back", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.command_bar = {
+      prompt: "sftp://h/x",
+      text: "",
+      cursor: 0,
+      focused: false,
+      reason: "no",
+    };
+    screen.paint(v);
+    const bar = document.getElementById("commandbar") as HTMLElement;
+    expect(bar.querySelector('.commandbar-line[data-reason="true"]')?.textContent).toBe(
+      "no",
+    );
+    screen.paint(view({}));
+    expect(bar.dataset["open"]).toBe("false");
+    expect(document.documentElement.style.getPropertyValue("--commandbar-h")).toBe("0px");
+  });
+});
+
 describe("help", () => {
   /** A page with prose, already-resolved marks and one disabled row. */
   function withHelp(): ViewSnapshot {

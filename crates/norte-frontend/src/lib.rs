@@ -56,6 +56,7 @@ pub mod availability;
 pub mod broken_plugin;
 pub mod busy;
 pub mod cli;
+pub mod command_bar;
 pub mod config;
 pub mod confine;
 pub mod context_menu;

@@ -548,6 +548,8 @@ pub struct App {
     /// The menu bar, if open. An overlay: it keeps ALL the keys while it is,
     /// like the rest.
     pub menu: Option<norte_frontend::menu::MenuState>,
+    /// The open context menu (right click, the Menu key), if any.
+    pub context_menu: Option<crate::context_menu::ContextMenu>,
     /// Which menu was opened last.
     ///
     /// Reopened from there ([`norte_frontend::menu::MenuState::reopen_at`]):
@@ -765,6 +767,17 @@ pub struct App {
     /// its own: two paths to open the same panel diverge the moment one of
     /// the two grows a detail.
     pub pending_panel_command: Option<String>,
+    /// A context-menu verb the mouse picked, for the run loop to run
+    /// (`mouse::After::ContextVerb`).
+    pub pending_context_verb: Option<crate::context_menu::Picked>,
+    /// The command bar's line and history (ADR 0181).
+    pub command_bar: norte_frontend::command_bar::CommandBar,
+    /// The bar has the keyboard (`pane.command-line`).
+    pub command_bar_focus: bool,
+    /// Where the bar's history is saved; `None` = not saved (tests).
+    pub command_history_path: Option<std::path::PathBuf>,
+    /// A bar order for the run loop to start in the terminal panel.
+    pub pending_order: Option<crate::command_bar::Order>,
     /// The disk map's child to enter, if someone asked for it.
     ///
     /// Set by the key or the click and consumed by the LOOP, which is the one
@@ -1176,13 +1189,15 @@ pub struct App {
     /// because it is the same deal: norte chooses the operand, the program
     /// chooses the format.
     pub diff: Option<EditorSpec>,
+    /// `[ui] terminal`: the emulator "terminal here" opens, if the reader
+    /// chose one (`None` = probe).
+    pub ui_terminal: Option<Vec<String>>,
     /// External command resolved by `pane.open` and pending launch (#28).
     /// `dispatch` sets it after validating; the run loop —owner of the
     /// terminal— executes it.
     pub pending_open: Option<PendingOpen>,
     /// Suspension resolved by dispatch and pending execution (#135):
-    /// `app.terminal`, `app.toggle-panels` and the Enter of
-    /// [`Modal::CommandLine`]. Same split as [`Self::pending_open`], and
+    /// `app.terminal` and `app.toggle-panels`. Same split as [`Self::pending_open`], and
     /// drained in ONE single place in the run loop (at the very top of the
     /// turn, before the draw) so that none of the `continue`s that answer
     /// keys can leave it stuck.
@@ -1423,6 +1438,7 @@ impl App {
             log_remote: crate::logview::LogRemote::default(),
             busy: None,
             menu: None,
+            context_menu: None,
             menu_last: 0,
             // The first four are the `orthodox` preset's.
             next_slot: 5,
@@ -1472,6 +1488,11 @@ impl App {
             volumes: Vec::new(),
             volumes_stale: true,
             pending_panel_command: None,
+            pending_context_verb: None,
+            command_bar: norte_frontend::command_bar::CommandBar::default(),
+            command_bar_focus: false,
+            command_history_path: None,
+            pending_order: None,
             pending_disk_map_enter: None,
             disk_map_stale: false,
             timeline_stale: false,
@@ -1524,6 +1545,7 @@ impl App {
             user_chords: std::collections::HashMap::new(),
             editor: None,
             diff: None,
+            ui_terminal: None,
             pending_open: None,
             pending_shell: None,
             pending_subshell: false,
@@ -1649,6 +1671,13 @@ impl App {
             self.menu_last = m.menu();
         }
         self.menu = None;
+    }
+
+    /// Is the command bar on screen: pinned by `[ui] command_bar`, or
+    /// called up by `pane.command-line`.
+    #[must_use]
+    pub fn command_bar_visible(&self) -> bool {
+        self.chrome.command_bar() || self.command_bar_focus
     }
 
     /// The highlighted command in the menu, and the menu closed: what

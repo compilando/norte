@@ -167,10 +167,16 @@ pub struct Instance<S> {
     pub exited: Option<i32>,
     /// Output arrived while another instance was in front.
     pub unseen: bool,
+    /// Kept after a clean exit too: a command-bar order, whose output is
+    /// why it was run (ADR 0181).
+    pub keep: bool,
     /// The shell. Kept after a non-zero exit: dead, it still holds the last
     /// screen the reader has to see.
     pub shell: S,
 }
+
+/// How many finished command-bar entries stay with their output.
+pub const KEPT_MAX: usize = 20;
 
 /// The panel's instances and which one is in front.
 #[derive(Debug)]
@@ -256,6 +262,7 @@ impl<S> Terminals<S> {
             color,
             exited: None,
             unseen: false,
+            keep: false,
             shell,
         });
         self.active = Some(id);
@@ -349,10 +356,36 @@ impl<S> Terminals<S> {
         }
     }
 
-    /// Its shell ended. A clean exit (0) removes it; any other code keeps
-    /// it, without a shell, so the reader sees how it ended.
+    /// Marks `id` to stay after a clean exit.
+    pub fn keep_on_success(&mut self, id: InstanceId) {
+        if let Some(i) = self.get_mut(id) {
+            i.keep = true;
+        }
+    }
+
+    /// Its shell ended. A clean exit (0) removes it unless it is kept; any
+    /// other code keeps it, without a shell, so the reader sees how it
+    /// ended.
     pub fn on_exit(&mut self, id: InstanceId, code: i32) {
-        if code == 0 {
+        let kept = self.get_mut(id).is_some_and(|i| i.keep);
+        if code == 0 && kept {
+            if let Some(i) = self.get_mut(id) {
+                i.exited = Some(0);
+            }
+            // Past the cap, the oldest finished kept entry goes.
+            let finished: Vec<InstanceId> = self
+                .instances
+                .iter()
+                .filter(|i| i.keep && i.exited.is_some())
+                .map(|i| i.id)
+                .collect();
+            for old in finished
+                .iter()
+                .take(finished.len().saturating_sub(KEPT_MAX))
+            {
+                self.close(*old);
+            }
+        } else if code == 0 {
             self.close(id);
         } else if let Some(i) = self.get_mut(id) {
             // The dead shell stays: it holds the last screen.
@@ -573,6 +606,38 @@ mod tests {
         let i = t.iter().find(|i| i.id == b).expect("stays");
         assert_eq!(i.exited, Some(3));
         assert_eq!(i.shell, "b", "the dead shell keeps the last screen");
+    }
+
+    /// A command-bar order's entry stays after a clean exit: the reader
+    /// typed it to see its output (ADR 0181). A plain shell still goes.
+    #[test]
+    fn a_kept_entry_stays_after_a_clean_exit() {
+        let (mut t, [a, b, _]) = three();
+        t.keep_on_success(a);
+        t.on_exit(a, 0);
+        let i = t.iter().find(|i| i.id == a).expect("kept");
+        assert_eq!(i.exited, Some(0));
+        t.on_exit(b, 0);
+        assert!(t.iter().all(|i| i.id != b));
+    }
+
+    /// Finished kept entries are capped: past `KEPT_MAX`, the oldest goes,
+    /// so a long session of orders does not keep every screen forever.
+    #[test]
+    fn finished_kept_entries_are_capped() {
+        let mut t: Terminals<&str> = Terminals::new();
+        let ids: Vec<_> = (0..KEPT_MAX + 3)
+            .map(|_| {
+                let id = t.push("o".into(), None, None, "s");
+                t.keep_on_success(id);
+                id
+            })
+            .collect();
+        for id in &ids {
+            t.on_exit(*id, 0);
+        }
+        assert_eq!(t.iter().count(), KEPT_MAX);
+        assert!(t.iter().all(|i| i.id != ids[0]), "the oldest went first");
     }
 
     /// A clean exit of the ACTIVE one moves the focus like a close does.

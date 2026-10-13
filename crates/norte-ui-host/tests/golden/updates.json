@@ -323,6 +323,13 @@
       ],
       "title": "Columnas — sftp"
     },
+    "command_bar": {
+      "cursor": 4,
+      "focused": true,
+      "prompt": "/home/u/src",
+      "reason": "",
+      "text": "make test"
+    },
     "compare": null,
     "connection": {
       "state": "connected"

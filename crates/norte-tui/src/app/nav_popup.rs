@@ -84,6 +84,10 @@ pub struct NavPopup {
     /// 2026-09-15 D2): `Some` while typing, and then text keys belong to it.
     /// `None` unfiltered and in the other lists.
     pub filter: Option<String>,
+    /// What "add to favorites" saves when it is not the focused folder: a
+    /// place or a branch picked from a context menu. `None` = the usual
+    /// target (`App::nav_popup_add_target`).
+    pub(crate) add_target: Option<norte_proto::VPath>,
 }
 
 impl NavPopup {

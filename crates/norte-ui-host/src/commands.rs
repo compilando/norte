@@ -135,6 +135,7 @@ pub const IMPLEMENTED: &[&str] = &[
     "app.extensions",
     "app.agents",
     "app.terminal",
+    "pane.command-line",
     "app.handoff",
     "pane.open",
     "pane.compare-files",
@@ -509,6 +510,8 @@ pub enum Effect {
     /// that cannot be what the same key that enters it does. To close it
     /// there is `layout.close-slot`, named for what it does.
     OpenTerminal,
+    /// The command bar takes the keyboard (ADR 0181).
+    CommandLine,
     /// Another shell in the terminal panel; `pick` = choose the shell
     /// profile first.
     TerminalNew {
@@ -983,6 +986,7 @@ pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
         "pane.edit" => Effect::EditExternal,
         "pane.compare-files" => Effect::CompareFiles,
         "app.terminal" => Effect::Terminal,
+        "pane.command-line" => Effect::CommandLine,
         "app.handoff" => Effect::Handoff,
         "app.theme" => Effect::Theme,
         "app.menu" => Effect::Menu,
@@ -1147,6 +1151,7 @@ mod tests {
                 "pane.checksum-verify",
                 "pane.chmod",
                 "pane.combine-files",
+                "pane.command-line",
                 "pane.compare-files",
                 "pane.copy",
                 "pane.delete",

@@ -222,8 +222,7 @@ async fn main() -> Result<()> {
     // nowhere to put it, which is an SSH session's case. Both are STATED
     // before the key, with their reason, instead of failing afterward.
     app.backend_daemon = cli_daemon;
-    app.has_desktop = std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty())
-        || std::env::var_os("DISPLAY").is_some_and(|v| !v.is_empty());
+    app.has_desktop = norte_frontend::shell::has_desktop();
     // And whether there is a daemon to talk about (#328). Here and only
     // once, for the same reason as the line above: the `Backend` does not
     // change arms during the process's life. Without this, a plain `ntc` —
@@ -359,6 +358,15 @@ async fn main() -> Result<()> {
             command,
             detached: cfg.common.ui_diff_detached.unwrap_or(false),
         });
+    app.ui_terminal = cfg.common.ui_terminal.clone();
+    // The command bar's history (ADR 0181), shared with the window.
+    app.command_history_path = norte_config::command_history::path();
+    app.command_bar = norte_frontend::command_bar::CommandBar::new(
+        app.command_history_path
+            .as_deref()
+            .map(norte_config::command_history::load)
+            .unwrap_or_default(),
+    );
     // Daemon-mode channels (None when embedded): other frontends' tasks and
     // (re)connection notices — drained in the main loop.
     let foreign_tasks = backend.take_foreign_tasks();

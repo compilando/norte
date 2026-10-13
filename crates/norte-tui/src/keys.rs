@@ -16,7 +16,7 @@ use crate::app::{App, Modal, PAGE, PromptKind, error_message};
 use crate::config::{self};
 use crate::dispatch::dispatch;
 use crate::event_loop::{launch_pending, run_command};
-use crate::gestures::{keyboard_owner, submit_command_line};
+use crate::gestures::keyboard_owner;
 use crate::jobs::{
     AiRenameRun, InFlight, RenameBatchRun, SemanticRun, launch_search, on_compare_key,
     on_search_dialog_key, on_search_enter, on_search_escape, on_sync_key,
@@ -75,7 +75,61 @@ pub async fn on_key(
     key: KeyEvent,
 ) {
     app.message = None;
-    if app.menu.is_some() && !modal_wins(app) {
+    // A modal that arrived over the open menu owns the keys; the menu goes.
+    if app.context_menu.is_some() && modal_wins(app) {
+        app.context_menu = None;
+    }
+    // The bar takes keys only with nothing in front of it, the order the
+    // window's host keeps: a menu, help or a picker opened over it own them.
+    if app.command_bar_focus
+        && app.context_menu.is_none()
+        && app.menu.is_none()
+        && !modal_wins(app)
+        && !crate::mouse::overlay_open(app)
+    {
+        crate::command_bar::on_key(app, key);
+        if let Some(order) = app.pending_order.take()
+            && let Err(msg) = crate::termpanel::start_order(app, &order)
+        {
+            app.message = Some(msg);
+        }
+    } else if app.context_menu.is_some() {
+        // The context menu: fixed keys like the menu bar's, and what it
+        // picks runs through the same path as its key.
+        let picked = crate::context_menu::on_key(app, key.code);
+        if let Some(
+            p @ crate::context_menu::Picked {
+                action: norte_frontend::context_menu::Action::Verb(_),
+                ..
+            },
+        ) = picked
+        {
+            crate::mouse::run_context_verb(app, backend, events, work, p).await;
+        } else if let Some(crate::context_menu::Picked {
+            action: norte_frontend::context_menu::Action::Command(id),
+            ..
+        }) = picked
+            && let Some(cmd) = Command::parse(id)
+        {
+            run_command(
+                app,
+                backend,
+                events,
+                help_lines,
+                lang,
+                quick_mode,
+                confirm_quit,
+                cfg,
+                &mut work.fill,
+                &mut work.decorate,
+                &mut work.probed,
+                &mut work.search,
+                cmd,
+            )
+            .await;
+            launch_pending(app, events, capture).await;
+        }
+    } else if app.menu.is_some() && !modal_wins(app) {
         // The menu bar: FIXED keys, like the palette.
         // There are no `dialog.*` verbs for "next
         // menu", so they cannot come from the keymap
@@ -917,11 +971,6 @@ pub async fn on_key(
                     }
                     PromptKind::TransferDest => {
                         let _ = app.transfer_dest_confirm();
-                    }
-                    PromptKind::CommandLine => {
-                        if let Some(cmd) = app.command_line_confirm() {
-                            submit_command_line(app, &cmd);
-                        }
                     }
                     PromptKind::AiRename => {
                         if let Some(instruction) = app.ai_rename_confirm() {

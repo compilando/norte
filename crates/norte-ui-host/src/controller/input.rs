@@ -408,6 +408,11 @@ impl State {
         if self.ir_a.is_some() {
             return Some(self.key_in_goto(k, backend, mailbox));
         }
+        // The command bar (ADR 0181): a free text line too, for the same
+        // reason as the search box.
+        if self.command_bar_focus {
+            return Some(self.key_in_command_bar(k, backend, mailbox));
+        }
         if self.slot().pane.quick().is_some() {
             return self.key_in_quick(k);
         }

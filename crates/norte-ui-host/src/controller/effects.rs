@@ -188,6 +188,8 @@ impl State {
             | Effect::EditExternal
             | Effect::CompareFiles
             | Effect::Terminal
+            // The command bar runs every order as a shell in the panel below.
+            | Effect::CommandLine
             // The terminal PANEL (#362), and with more reason than
             // `Terminal`: that one launches an outside emulator, and this one
             // runs a shell INSIDE the window. In one that promises not to
@@ -229,6 +231,7 @@ impl State {
             Effect::EditExternal => self.edit_external(),
             Effect::CompareFiles => self.compare_files(),
             Effect::Terminal => self.open_terminal(),
+            Effect::CommandLine => self.focus_command_bar(),
             Effect::Handoff => self.request_handoff(backend, mailbox),
             Effect::Compare => self.request_comparison(backend, mailbox),
             Effect::Disconnect => self.disconnect(backend, mailbox),
@@ -609,19 +612,25 @@ impl State {
     /// Opens a terminal sitting in the active panel's directory.
     pub(super) fn open_terminal(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let dir = self.slot().pane.dir().clone();
-        if !norte_frontend::shell::is_local(&dir) {
-            // A terminal sits in a filesystem directory: over an `sftp://`
-            // there is nowhere to sit it, and opening it in `$HOME` without
-            // saying anything would be opening it somewhere else.
-            let outgoing = self.say("host-not-local");
+        // A terminal sits in a filesystem directory: over an `sftp://` there
+        // is nowhere to sit it, and opening it in `$HOME` without saying
+        // anything would be opening it somewhere else. The reason is the
+        // shared table's, so the menu that dims the entry and the refusal
+        // say the same thing.
+        if let Some(r) =
+            norte_frontend::availability::verdict("app.terminal", &self.facts()).reason()
+        {
+            let key = norte_frontend::availability::reason_key(r);
+            let outgoing = self.say(key);
             return (
                 ActionAck::Unavailable {
-                    reason_key: "host-not-local".to_owned(),
+                    reason_key: key.to_owned(),
                 },
                 outgoing,
             );
         }
-        if !self.native(crate::dto::NativeEffect::OpenTerminal { dir }) {
+        let configured = self.config.common.ui_terminal.clone();
+        if !self.native(crate::dto::NativeEffect::OpenTerminal { dir, configured }) {
             return Self::without_desktop();
         }
         (self.applied(), self.say("msg-opening-terminal"))

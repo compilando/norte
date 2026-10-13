@@ -14,7 +14,9 @@ use crate::theme::TuiTheme;
 use norte_i18n::t;
 
 mod chrome;
+mod command_bar;
 mod compare;
+mod context_menu;
 mod geometry;
 mod help;
 mod modals;
@@ -64,8 +66,8 @@ pub(crate) use chrome::{TARGET_BADGE, TabStrip, draw_tab_strip};
 pub(crate) use chrome::panel_buttons;
 use chrome::{draw_key_bar, draw_menu, draw_panel_bar};
 pub(crate) use geometry::{
-    body_rect, centered, chrome_body, pane_cols, placed_of_kind, resolved_frame, slot_content,
-    slot_rect, visor_split,
+    body_rect, centered, chrome_body, command_bar_area, pane_cols, placed_of_kind, resolved_frame,
+    slot_content, slot_rect, visor_split,
 };
 use modals::draw_modal;
 #[cfg(test)]
@@ -507,6 +509,8 @@ fn draw_frame(frame: &mut Frame<'_>, app: &App) {
     // as the menu: it is chrome, and the body has already been given the
     // spot left for it.
     draw_panel_bar(frame, app);
+    command_bar::draw(frame, app);
+    context_menu::draw(frame, app);
     if let Some(help) = &app.help {
         draw_help(
             frame,
@@ -711,6 +715,61 @@ pub(crate) fn rail_pixels_shown(app: &App, area: Rect) -> Option<(Rect, geometry
     rail.big.then_some((bar, rail))
 }
 
+/// Whether the menu row's layout buttons are drawn in pixels this frame: a
+/// terminal that shows images, and nothing painted over the body (kitty's
+/// pixels sit above the text). ONE answer for the painter, which then
+/// leaves the glyph cells blank, and for [`chrome_icons_to_place`].
+pub(crate) fn layout_pixels_shown(app: &App) -> bool {
+    app.menu_bar
+        && !something_above_the_viewer(app)
+        && crate::rail_icons::backend(app) != crate::rail_icons::RailBackend::Glyph
+}
+
+/// The first image slot the chrome's icons use; the panel column's come
+/// before it.
+const CHROME_SLOTS: usize = 48;
+
+/// The chrome's icons to place this frame: the layout buttons' shared
+/// drawings (`layout:*`), over the three cells of each button, in the title's
+/// colour. Empty unless `layout_pixels_shown`.
+#[must_use]
+pub fn chrome_icons_to_place(
+    app: &App,
+    area: Rect,
+    cell_px: (u16, u16),
+) -> Vec<crate::rail_icons::RailIcon> {
+    if !layout_pixels_shown(app) {
+        return Vec::new();
+    }
+    let backend = crate::rail_icons::backend(app);
+    let exact = backend == crate::rail_icons::RailBackend::Sixel;
+    let canvas = crate::rail_icons::canvas_cells(cell_px, 3, 1, exact);
+    let Some(rgb) = app
+        .theme
+        .role_rgb(Role::Title)
+        .or_else(|| app.theme.role_rgb(Role::Regular))
+    else {
+        return Vec::new();
+    };
+    let bg = app
+        .theme
+        .role_bg_shown(Role::Background)
+        .unwrap_or([0, 0, 0]);
+    chrome::layout_button_cells(app, area)
+        .into_iter()
+        .enumerate()
+        .map(|(i, (x, b))| crate::rail_icons::RailIcon {
+            kind: format!("layout:{}", b.id),
+            rgb,
+            rect: Rect::new(x, area.y, 3, 1),
+            canvas,
+            backend,
+            bg,
+            slot: CHROME_SLOTS + i,
+        })
+        .collect()
+}
+
 /// The panel column's big icons to place this frame (spec 2026-10-05): one
 /// per slot `draw_rail` left blank, in the state's colour, rasterised for
 /// cells of `cell_px` pixels (`(0, 0)` if the terminal does not say). Empty
@@ -756,6 +815,7 @@ pub fn rail_icons_to_place(
         .into_iter()
         .zip(chrome::panel_buttons(app, area))
         .enumerate()
+        .take(CHROME_SLOTS)
         .filter(|(_, (_, b))| icon_svg(&b.kind).is_some())
         .filter_map(|(index, (slot, b))| {
             let rgb = match b.state {
