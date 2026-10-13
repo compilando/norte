@@ -65,6 +65,32 @@ fn every_release_config_dir_loads_whole() {
     }
 }
 
+/// Every command name a release shipped still binds: it is in today's
+/// catalogue or in `RENAMED` (ADR 0182). A user's `keymap.toml` names
+/// them, so renaming one without its alias breaks that file — here, not in
+/// their home.
+///
+/// `expected/commands.txt` is written by the freeze from the TAG's
+/// catalogue source (`scripts/release/freeze-disk-compat.sh`), never from
+/// this tree's: a rename made after the tag would otherwise be frozen
+/// under its new name, and the old one would go unprotected.
+#[test]
+fn every_released_command_name_still_binds() {
+    use norte_frontend::keymap::catalogue::{lookup, renamed_to};
+    for config in corpora() {
+        let list = config.with_file_name("expected").join("commands.txt");
+        let frozen =
+            std::fs::read_to_string(&list).unwrap_or_else(|e| panic!("{}: {e}", list.display()));
+        for name in frozen.lines().filter(|l| !l.is_empty()) {
+            assert!(
+                lookup(name).is_some() || renamed_to(name).and_then(lookup).is_some(),
+                "{}: `{name}` was shipped and no longer binds: add it to RENAMED",
+                list.display()
+            );
+        }
+    }
+}
+
 #[test]
 fn every_release_profile_loads_without_degrading() {
     for config in corpora() {

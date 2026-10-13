@@ -666,6 +666,10 @@ pub fn rebind_dry_run(
     seq: &[Chord],
     command: &str,
 ) -> Result<RebindWrite, RebindError> {
+    // An old name (ADR 0182) is written as the CURRENT one: the loader would
+    // resolve it anyway, and comparing against it below would read the
+    // command's own binding as a shadow.
+    let command = super::catalogue::renamed_to(command).unwrap_or(command);
     // `Display` is what the writer stores and `parse_chord` is what the loader
     // reads back, so rendering here means the round trip a chord actually makes
     // is the one that gets validated — not an approximation of it.

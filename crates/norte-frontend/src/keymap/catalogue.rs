@@ -602,6 +602,43 @@ pub fn lookup(name: &str) -> Option<&'static CommandDef> {
     CATALOGUE.iter().find(|d| d.name == name)
 }
 
+/// Command names a release shipped and a later one renamed: `(old, new)`.
+///
+/// A user's `keymap.toml` names commands, and ADR 0182 promises that what a
+/// release left on disk keeps loading. So a rename ADDS a row here instead
+/// of breaking that file: the old name binds the new command, and `norte
+/// doctor` says to update it. The rows stay until the next major.
+///
+/// `tests/disk-compat/<version>/expected/commands.txt` freezes each
+/// release's names, and a test fails when one is neither in [`CATALOGUE`]
+/// nor here. Empty today: nothing has been renamed since 0.3.0-alpha.12.
+pub const RENAMED: &[(&str, &str)] = &[];
+
+/// The current name for `name` when it is a renamed one (see [`RENAMED`]),
+/// or `None`.
+///
+/// ```
+/// use norte_frontend::keymap::catalogue::renamed_to;
+/// assert_eq!(renamed_to("cursor.down"), None, "a current name is not renamed");
+/// ```
+#[must_use]
+pub fn renamed_to(name: &str) -> Option<&'static str> {
+    renamed_in(RENAMED, name)
+}
+
+/// [`renamed_to`] over a given table: the seam the tests use, since the
+/// real table is empty.
+#[must_use]
+pub(crate) fn renamed_in(
+    table: &'static [(&'static str, &'static str)],
+    name: &str,
+) -> Option<&'static str> {
+    table
+        .iter()
+        .find(|(old, _)| *old == name)
+        .map(|(_, new)| *new)
+}
+
 /// The [`Effect`] of `name`, or `None` if the vocabulary does not know it.
 ///
 /// A caller deciding whether something may RUN must treat `None` as not
@@ -613,7 +650,30 @@ pub fn effect(name: &str) -> Option<Effect> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CATALOGUE, Status, lookup};
+    use super::{CATALOGUE, RENAMED, Status, lookup};
+
+    /// A rename row that points nowhere, chains into another, or shadows a
+    /// live name would bind something the user never wrote. Each row:
+    /// the new name exists, the old one does not, and nothing chains.
+    #[test]
+    fn every_rename_lands_on_a_live_command_in_one_hop() {
+        let mut olds: Vec<&str> = RENAMED.iter().map(|(old, _)| *old).collect();
+        for (old, new) in RENAMED {
+            assert!(lookup(new).is_some(), "{old} → {new}: {new} does not exist");
+            assert!(
+                lookup(old).is_none(),
+                "{old} is live: a rename would hijack it"
+            );
+            assert!(
+                !RENAMED.iter().any(|(_, n)| n == old),
+                "{old} is both renamed and a rename's target: a chain"
+            );
+        }
+        olds.sort_unstable();
+        let before = olds.len();
+        olds.dedup();
+        assert_eq!(before, olds.len(), "an old name is renamed twice");
+    }
 
     /// A duplicated name would make `lookup` order-dependent, and the table is
     /// hand-maintained: pin it.

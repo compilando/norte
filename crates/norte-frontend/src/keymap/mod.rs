@@ -185,6 +185,15 @@ pub enum KeymapDiagnostic {
         /// Human-readable description (from the underlying [`KeymapError`]).
         message: String,
     },
+    /// A command name an earlier release shipped and this one renamed
+    /// ([`catalogue::RENAMED`]). It still binds the new command; the file
+    /// just says the old name. Not a defect, a nudge.
+    Renamed {
+        /// The name in the file.
+        old: String,
+        /// The command it binds now.
+        new: &'static str,
+    },
 }
 
 /// The union of `run` names bound (in ANY of the three lists — `keymap`,
@@ -1358,7 +1367,7 @@ keymap = [{ on = ["x"], run = "lua:Bad Name" }]"#,
             .iter()
             .filter_map(|d| match d {
                 KeymapDiagnostic::UnknownCommand { run } => Some(run.as_str()),
-                KeymapDiagnostic::Structural { .. } => None,
+                KeymapDiagnostic::Structural { .. } | KeymapDiagnostic::Renamed { .. } => None,
             })
             .collect();
         assert_eq!(
@@ -1382,7 +1391,7 @@ keymap = [{ on = ["x"], run = "lua:Bad Name" }]"#,
             KeymapDiagnostic::Structural { message } => {
                 assert!(message.contains("lua:bad name!"), "{message}");
             }
-            d @ KeymapDiagnostic::UnknownCommand { .. } => {
+            d @ (KeymapDiagnostic::UnknownCommand { .. } | KeymapDiagnostic::Renamed { .. }) => {
                 panic!("expected Structural, got {d:?}")
             }
         }
@@ -2668,6 +2677,8 @@ keymap = [ { on = ["tab"], run = "cursor.down" } ]
                 KeymapDiagnostic::UnknownCommand { run } => {
                     matches!(&e, KeymapError::UnknownCommand { run: r } if r == run)
                 }
+                // A nudge, never the error `build_for` fails with.
+                KeymapDiagnostic::Renamed { .. } => false,
             });
             assert!(
                 same,
