@@ -63,6 +63,18 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **"Terminal here" inside an archive on a remote server** now says the
+  folder is not on this disk, instead of suggesting to go up to it.
+- **The command bar keeps what you were typing** while you walk the
+  history with Up and Down, as a shell does; and with a POSIX `sh` it
+  refuses a name ending in a newline instead of inserting another name.
+- **A right-click menu taller than the terminal scrolls** with its
+  selection, so its last entries can be reached.
+- **Programs the window launches get their own process group** and are
+  reaped when they exit, so they no longer linger as zombies or die with
+  a Ctrl+C aimed at the window.
+- **Copying paths in the terminal no longer blocks the screen** while the
+  clipboard helper runs.
 - **Going up out of an archive's root lands in its folder** in the window,
   with the cursor on the archive; it used to show "invalid path". The `..`
   row did the same in both frontends.

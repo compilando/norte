@@ -3363,6 +3363,32 @@ mod hotlist_tests {
         );
     }
 
+    /// A profile is presentation too: it cannot choose the program either,
+    /// and says so where profiles report.
+    #[test]
+    fn a_profile_cannot_choose_the_terminal() {
+        let user = tempfile::tempdir().unwrap();
+        let profile = tempfile::tempdir().unwrap();
+        std::fs::write(
+            profile.path().join("norte.toml"),
+            "[ui]\nterminal = [\"/tmp/evil\"]\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (user.path().to_path_buf(), Layer::User),
+                (profile.path().to_path_buf(), Layer::Profile),
+            ],
+        };
+        let cfg = load(&layers).expect("loads");
+        assert_eq!(cfg.ui_terminal, None);
+        assert!(
+            cfg.profile_warnings.iter().any(|w| w.contains("terminal")),
+            "{:?}",
+            cfg.profile_warnings
+        );
+    }
+
     /// What a foreign repository asks for and is not applied gets SAID, same
     /// as in a profile. It used to be silently dropped: it failed closed, but
     /// the `.norte.toml`'s owner had no way to know why their transport,

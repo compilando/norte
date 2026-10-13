@@ -105,7 +105,7 @@ pub async fn dispatch(
             if paths.is_empty() {
                 app.message = Some(t("msg-nothing-selected"));
             } else {
-                crate::gestures::copy_paths(app, &paths);
+                crate::gestures::copy_paths(app, &paths).await;
             }
         }
         Command::PaneSwitch => app.switch_focus(),

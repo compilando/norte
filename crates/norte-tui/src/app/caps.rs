@@ -152,7 +152,7 @@ impl App {
             daemon: self.backend_daemon,
             windowed: self.has_desktop,
             pane_on_disk: norte_frontend::shell::shell_dir(pane.dir()).is_some(),
-            pane_in_archive: pane.dir().archive_split().is_ok_and(|a| a.is_some()),
+            pane_in_archive: norte_frontend::shell::archive_on_disk(pane.dir()),
         }
     }
 

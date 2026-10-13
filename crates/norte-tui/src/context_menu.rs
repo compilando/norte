@@ -340,6 +340,22 @@ pub fn rect(menu: &ContextMenu, frame: Rect) -> Rect {
     Rect::new(x, y, w, h)
 }
 
+/// The first painted line of a menu that does not fit in `area` (its
+/// rect): enough lines skipped that the cursor's is the last one shown.
+/// Derived from the cursor, so painting and the mouse agree — and with no
+/// state, walking back up drags the window with the cursor pinned at the
+/// bottom instead of the top.
+#[must_use]
+pub fn first_line(menu: &ContextMenu, area: Rect) -> usize {
+    let shown = usize::from(area.height.saturating_sub(2)).max(1);
+    let at = menu
+        .lines()
+        .iter()
+        .position(|l| *l == Line::Item(menu.cursor))
+        .unwrap_or(0);
+    (at + 1).saturating_sub(shown)
+}
+
 /// The row painted at `(col, row)`, if any.
 #[must_use]
 pub fn row_at(app: &App, col: u16, row: u16) -> Option<usize> {
@@ -350,7 +366,8 @@ pub fn row_at(app: &App, col: u16, row: u16) -> Option<usize> {
     if col <= r.x || col >= right || row <= r.y || row >= bottom {
         return None;
     }
-    match menu.lines().get(usize::from(row - r.y - 1))? {
+    let line = first_line(menu, r) + usize::from(row - r.y - 1);
+    match menu.lines().get(line)? {
         Line::Item(i) => Some(*i),
         Line::Section(_) => None,
     }
@@ -374,6 +391,10 @@ pub fn cell_of(app: &App, command: &str) -> Option<(u16, u16)> {
     let line = menu.lines().iter().position(
         |l| matches!(l, Line::Item(i) if matches!(menu.rows[*i].action, Action::Command(c) if c == command)),
     )?;
+    let line = line.checked_sub(first_line(menu, r))?;
+    if line + 2 >= usize::from(r.height) {
+        return None;
+    }
     Some((r.x + 2, r.y + 1 + u16::try_from(line).ok()?))
 }
 

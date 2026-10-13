@@ -143,9 +143,10 @@ pub struct Facts {
     /// The acting pane's directory is a folder on this disk — what a
     /// terminal or a shell can sit in.
     pub pane_on_disk: bool,
-    /// The acting pane is inside an archive. Asked apart from
-    /// [`Facts::pane_on_disk`] because the reader fixes it differently: the
-    /// archive's own folder is one `..` away.
+    /// The acting pane is inside an archive whose file is on this disk.
+    /// Asked apart from [`Facts::pane_on_disk`] because the reader fixes it
+    /// differently: the archive's own folder is one `..` away. A remote
+    /// archive is not on disk, and says so.
     pub pane_in_archive: bool,
 }
 

@@ -56,10 +56,12 @@ pub fn backend(app: &crate::app::App) -> RailBackend {
 }
 
 /// A sixel slot's canvas: the 2×2 cells' pixels exactly — sixel paints
-/// pixel for pixel, with no scaling to fit.
+/// pixel for pixel, with no scaling to fit. An unknown cell (`(0, 0)`) is
+/// taken as 10×20: drawn at a guessed scale beats a canvas that cannot
+/// rasterise.
 #[must_use]
-pub fn canvas_exact((cw, ch): (u16, u16)) -> (u32, u32) {
-    (2 * u32::from(cw), 2 * u32::from(ch))
+pub fn canvas_exact(cell_px: (u16, u16)) -> (u32, u32) {
+    canvas_cells(cell_px, 2, 2, true)
 }
 
 /// The canvas, in pixels, for a 2×2-cell slot whose cells measure
@@ -70,13 +72,7 @@ pub fn canvas_exact((cw, ch): (u16, u16)) -> (u32, u32) {
 /// sharp on dense cells.
 #[must_use]
 pub fn canvas_for(cell_px: (u16, u16)) -> (u32, u32) {
-    let (cw, ch) = match cell_px {
-        (0, _) | (_, 0) => (10, 20),
-        (w, h) => (u32::from(w), u32::from(h)),
-    };
-    let (w, h) = (2 * cw, 2 * ch);
-    let k = 64_u32.div_ceil(w.min(h)).clamp(1, 8);
-    (w * k, h * k)
+    canvas_cells(cell_px, 2, 2, false)
 }
 
 /// [`canvas_for`] for an icon `cols` × `rows` cells wide (the chrome's
@@ -150,7 +146,7 @@ fn raster(kind: &str, rgb: [u8; 3], canvas: (u32, u32)) -> Option<std::sync::Arc
     RASTERISED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let pixmap = rasterise(svg, rgb, canvas).map(std::sync::Arc::new);
     if pixmap.is_none() {
-        tracing::debug!(kind, ?canvas, "could not rasterise the panel icon");
+        tracing::debug!(kind, ?canvas, "could not rasterise the icon");
     }
     cache
         .lock()
@@ -214,14 +210,17 @@ fn rasterise(svg: &str, rgb: [u8; 3], (w, h): (u32, u32)) -> Option<Pixmap> {
     Some(pixmap)
 }
 
-/// One icon to place: which, in what colour, over which 2×2 cells.
+/// One icon to place — a panel column's or a chrome button's: which, in
+/// what colour, over which cells.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RailIcon {
-    /// The panel kind, whose shared SVG is drawn.
+    /// The id of the shared SVG drawn: a panel kind, or a chrome icon
+    /// (`layout:*`).
     pub kind: String,
     /// The stroke colour: the state's role, from the theme.
     pub rgb: [u8; 3],
-    /// The 2×2 cells `draw_rail` left blank for it.
+    /// The cells the painter left blank for it: 2×2 in the column, a
+    /// button's 3×1 on the menu row.
     pub rect: ratatui::layout::Rect,
     /// The raster's pixels: the slot's proportions for kitty
     /// (`canvas_for`), its exact pixels for sixel (`canvas_exact`).
@@ -231,8 +230,9 @@ pub struct RailIcon {
     /// The rail's background, as shown: what sixel blends the antialiased
     /// edge toward.
     pub bg: [u8; 3],
-    /// Which slot of the column it fills: its image id (`id_for`), so a
-    /// slot with no SVG ahead of it does not shift the others.
+    /// Which image slot it fills (`id_for`): the column's from 0, the
+    /// chrome's from 48, so a slot with no SVG ahead of it does not shift
+    /// the others.
     pub slot: usize,
 }
 
@@ -571,6 +571,7 @@ mod tests {
     #[test]
     fn the_sixel_canvas_is_the_slot_exactly() {
         assert_eq!(canvas_exact((9, 19)), (18, 38));
+        assert_eq!(canvas_exact((0, 0)), (20, 40), "unknown cell: 10×20");
     }
 
     #[test]

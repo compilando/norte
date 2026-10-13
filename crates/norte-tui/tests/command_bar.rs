@@ -120,3 +120,43 @@ fn off_disk_nothing_runs_and_the_bar_says_why() {
         Some(&*norte_i18n::t("reason-not-on-this-disk"))
     );
 }
+
+/// What the log keeps of a running order. Writes into a buffer.
+#[derive(Clone, Default)]
+struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// An order can carry a password (`mysql -p…`): starting it logs the
+/// fixed name, never the order — at every level.
+#[cfg(unix)]
+#[test]
+fn the_order_never_reaches_the_log() {
+    let d = tempfile::tempdir().unwrap();
+    let mut app = app_in(d.path(), &[]);
+    let captured = Captured::default();
+    let sink = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || sink.clone())
+        .finish();
+    let order = command_bar::Order {
+        argv: vec!["/bin/sh".into(), "-c".into(), "true # s3cr3t".into()],
+        cwd: d.path().to_path_buf(),
+        title: "true # s3cr3t".to_owned(),
+    };
+    tracing::subscriber::with_default(subscriber, || {
+        norte_tui::termpanel::start_order(&mut app, &order).expect("started");
+    });
+    let log = String::from_utf8_lossy(&captured.0.lock().unwrap()).into_owned();
+    assert!(log.contains("command bar"), "it is logged: {log}");
+    assert!(!log.contains("s3cr3t"), "{log}");
+}
