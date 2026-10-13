@@ -217,10 +217,17 @@ async fn spawn_detached(
 
 /// Puts `paths` on the clipboard (or arms OSC 52 when there is no helper)
 /// and says so: `pane.copy-path` and the context menu's Copy path.
-pub fn copy_paths(app: &mut App, paths: &[VPath]) {
+pub async fn copy_paths(app: &mut App, paths: &[VPath]) {
     let bytes = norte_frontend::shell::clipboard_bytes(paths);
     let n = paths.len().to_string();
-    app.message = Some(match norte_frontend::shell::copy_to_clipboard(&bytes) {
+    // The helper (`wl-copy`, `xclip`, `pbcopy`…) is a child process: off
+    // the loop turn (rule 2).
+    let sent = bytes.clone();
+    let outcome =
+        tokio::task::spawn_blocking(move || norte_frontend::shell::copy_to_clipboard(&sent))
+            .await
+            .unwrap_or(norte_frontend::shell::ClipboardOutcome::Failed);
+    app.message = Some(match outcome {
         norte_frontend::shell::ClipboardOutcome::Done(_) => ta("msg-paths-copied", &[("n", &n)]),
         norte_frontend::shell::ClipboardOutcome::NoHelper => {
             app.pending_osc52 = Some(norte_frontend::shell::osc52(&bytes));

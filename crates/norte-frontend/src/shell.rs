@@ -930,6 +930,21 @@ pub fn shell_dir(dir: &norte_proto::VPath) -> Option<std::path::PathBuf> {
         .and_then(|native| child_cwd(&native))
 }
 
+/// Whether `dir` is inside an archive whose file is on this disk — nested
+/// archives included — so its folder is some `..` away. What
+/// `Facts::pane_in_archive` asks: a zip on a remote server has no folder a
+/// terminal could open in.
+#[must_use]
+pub fn archive_on_disk(dir: &norte_proto::VPath) -> bool {
+    let mut outer = None;
+    let mut cur = dir.clone();
+    while let Ok(Some(a)) = cur.archive_split() {
+        cur = a.outer.clone();
+        outer = Some(a.outer);
+    }
+    outer.is_some_and(|f| norte_vfs::native::vpath_to_native(&f).is_ok())
+}
+
 /// Windows' probe list, outside the `cfg` so every platform tests it.
 ///
 /// The directory is NOT in any argv: it travels only as the process's cwd,
@@ -1532,14 +1547,24 @@ mod tests {
         assert!(terminal_candidates_from(Some(&[]), Some("kitty".as_ref()), dir).len() > 1);
     }
 
+    /// `%d` carries the directory's exact bytes, whole, as ONE argument,
+    /// over the whole hostile corpus.
     #[cfg(unix)]
     #[test]
-    fn a_non_utf8_dir_survives_the_configured_template() {
+    fn every_hostile_dir_survives_the_configured_template() {
         use std::os::unix::ffi::OsStrExt;
-        let dir = std::path::Path::new(std::ffi::OsStr::from_bytes(b"/tmp/caf\xE9"));
         let cfg = ["foot", "-D", "%d"].map(str::to_owned);
-        let all = terminal_candidates_from(Some(&cfg), None, dir);
-        assert_eq!(all[0][2].as_bytes(), b"/tmp/caf\xE9");
+        for name in norte_testkit::corpus::hostile_names() {
+            if name.bytes.contains(&0) {
+                continue;
+            }
+            let mut bytes = b"/tmp/".to_vec();
+            bytes.extend_from_slice(&name.bytes);
+            let dir = std::path::Path::new(std::ffi::OsStr::from_bytes(&bytes));
+            let all = terminal_candidates_from(Some(&cfg), None, dir);
+            assert_eq!(all[0].len(), 3, "{:?}", name.bytes);
+            assert_eq!(all[0][2].as_bytes(), &bytes[..], "{:?}", name.bytes);
+        }
     }
 
     /// A detached launch runs in `cwd` and does not wait for the child: the
@@ -1585,6 +1610,23 @@ mod tests {
         for wire in ["mem:///", "sftp://h/x", "zip+file:///tmp/a.zip/!/inner"] {
             let vp = VPath::parse(wire).expect(wire);
             assert_eq!(shell_dir(&vp), None, "{wire}");
+        }
+    }
+
+    /// "Go up to its folder" is only true of an archive whose file sits on
+    /// this disk, nested or not; a zip on an sftp server has no such folder.
+    #[cfg(unix)]
+    #[test]
+    fn an_archive_is_on_disk_only_when_its_file_is() {
+        for (wire, on_disk) in [
+            ("zip+file:///tmp/a.zip/!/inner", true),
+            ("zip+tar+file:///b.tar/!/i.zip/!/f", true),
+            ("zip+sftp://h/a.zip/!/inner", false),
+            ("file:///tmp", false),
+            ("sftp://h/x", false),
+        ] {
+            let vp = VPath::parse(wire).expect(wire);
+            assert_eq!(archive_on_disk(&vp), on_disk, "{wire}");
         }
     }
 

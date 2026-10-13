@@ -33,6 +33,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &App) {
     let lines: Vec<Line<'static>> = menu
         .lines()
         .into_iter()
+        .skip(crate::context_menu::first_line(menu, area))
         .map(|l| match l {
             MenuLine::Section(i) => section(app, menu.rows[i].section.as_deref(), width),
             MenuLine::Item(i) => item(app, &menu.rows[i], i == menu.cursor, width),

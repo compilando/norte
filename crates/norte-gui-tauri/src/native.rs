@@ -552,8 +552,24 @@ fn launch(
     if let Some(d) = cwd {
         cmd.current_dir(d);
     }
+    // Its own process group, as the terminal's launches: a Ctrl+C or a
+    // hangup aimed at the window does not take the launched program along.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
+    }
     match cmd.spawn() {
-        Ok(_) => RunOutcome::Done,
+        Ok(mut child) => {
+            // Reaped off the window's threads: dropped, it stays a zombie
+            // until the window exits. A reaper that cannot start costs one.
+            let _ = std::thread::Builder::new()
+                .name("norte-reap".into())
+                .spawn(move || {
+                    let _ = child.wait();
+                });
+            RunOutcome::Done
+        }
         Err(_) => RunOutcome::Failure,
     }
 }
@@ -587,6 +603,39 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// A launched program gets its own process group, away from the
+    /// window's signals (Linux: the group is read from `/proc`).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_launch_runs_in_its_own_process_group() {
+        let d = tempfile::tempdir().unwrap();
+        let out = d.path().join("pgid");
+        let script = format!(
+            "cut -d' ' -f5 /proc/$$/stat > '{}.t' && mv '{0}.t' '{0}'",
+            out.display()
+        );
+        let outcome = super::launch(
+            std::path::Path::new("sh"),
+            &["-c".into(), script.into()],
+            None,
+        );
+        assert_eq!(outcome, RunOutcome::Done);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let pgid = loop {
+            if let Ok(s) = std::fs::read_to_string(&out) {
+                break s;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the child never wrote"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let ours = std::fs::read_to_string("/proc/self/stat").unwrap();
+        let ours = ours.split(' ').nth(4).unwrap();
+        assert_ne!(pgid.trim(), ours, "its own group");
     }
 
     /// A location that is NOT on this disk is not handed to the desktop.

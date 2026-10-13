@@ -2670,7 +2670,7 @@ pub(crate) async fn run_context_verb(
         }
         (Verb::CopyPath, _) => {
             if let Some(p) = path {
-                crate::gestures::copy_paths(app, &[p]);
+                crate::gestures::copy_paths(app, &[p]).await;
             }
         }
         (Verb::OpenHere, _) => {

@@ -393,3 +393,29 @@ fn a_verb_pick_carries_its_subject() {
         }
     );
 }
+
+/// Taller than the terminal, the menu scrolls with its cursor: the last
+/// entry is painted, and a click on it reaches it.
+#[test]
+fn a_menu_taller_than_the_terminal_scrolls_to_its_cursor() {
+    let mut app = app_on("file:///casa");
+    let (col, row, _) = a_row(&app);
+    right_click(&mut app, col, row);
+    let _ = context_menu::on_key(&mut app, KeyCode::End);
+    let frame = ratatui::layout::Rect::new(0, 0, W, 8);
+    app.last_frame = Some(frame);
+    let menu = app.context_menu.as_ref().expect("menu open");
+    let last = menu.rows.len() - 1;
+    let r = context_menu::rect(menu, frame);
+    assert!(menu.lines().len() + 2 > usize::from(r.height), "taller");
+    assert_eq!(
+        context_menu::row_at(&app, r.x + 2, r.y + r.height - 2),
+        Some(last),
+        "the bottom painted line is the cursor's"
+    );
+    let mut t = Terminal::new(TestBackend::new(W, 8)).unwrap();
+    t.draw(|f| ui::draw(f, &app)).unwrap();
+    let text = t.backend().to_string();
+    let label = menu.rows[last].label.clone();
+    assert!(text.contains(&label), "{text}");
+}

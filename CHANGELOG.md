@@ -7,6 +7,8 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+## [0.3.0-alpha.12] - 2026-10-13
+
 ### Added
 
 - **"Terminal here" on the right-click menu**, dimmed with its reason
@@ -24,6 +26,9 @@ independently through `PROTOCOL_VERSION`.
   area, a column header, a Places row and a tree branch, with the same
   entries, dimmed with the same reasons. `shift+F10` and the Menu key open
   it on the listing's cursor row.
+- **The terminal's layout buttons draw the window's icons** where the
+  terminal shows images (kitty graphics or sixel); elsewhere they keep
+  their `[|] [-] [=] [/] [#]` glyphs.
 
 ### Changed
 
@@ -31,6 +36,9 @@ independently through `PROTOCOL_VERSION`.
   is a desktop, like the window does (ADR 0180); over ssh it still opens a
   shell in place. On macOS and Windows the terminal now also offers the
   handoff to the window when it is not running over ssh.
+- **The key that opens the menu leads the terminal's menu bar** (`Alt+m │
+  File  Operate …`) instead of sitting at the right edge, where it read as
+  the label of the layout buttons. Narrow, it gives way to the titles.
 
 - **A plain word in the search form finds the names that contain it**
   (ADR 0179): `bash` now finds `.bashrc`. A pattern with a wildcard
@@ -57,6 +65,18 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **"Terminal here" inside an archive on a remote server** now says the
+  folder is not on this disk, instead of suggesting to go up to it.
+- **The command bar keeps what you were typing** while you walk the
+  history with Up and Down, as a shell does; and with a POSIX `sh` it
+  refuses a name ending in a newline instead of inserting another name.
+- **A right-click menu taller than the terminal scrolls** with its
+  selection, so its last entries can be reached.
+- **Programs the window launches get their own process group** and are
+  reaped when they exit, so they no longer linger as zombies or die with
+  a Ctrl+C aimed at the window.
+- **Copying paths in the terminal no longer blocks the screen** while the
+  clipboard helper runs.
 - **Going up out of an archive's root lands in its folder** in the window,
   with the cursor on the archive; it used to show "invalid path". The `..`
   row did the same in both frontends.
@@ -8372,7 +8392,8 @@ and some daemon/socket tests are only available in CI environments.
 - Writes inside ZIP archives; list, restore, and purge operations for logical
   trash; and the M5 GUI.
 
-[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.11...HEAD
+[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.12...HEAD
+[0.3.0-alpha.12]: https://github.com/compilando/norte/compare/v0.3.0-alpha.11...v0.3.0-alpha.12
 [0.3.0-alpha.11]: https://github.com/compilando/norte/compare/v0.3.0-alpha.10...v0.3.0-alpha.11
 [0.3.0-alpha.10]: https://github.com/compilando/norte/compare/v0.3.0-alpha.9...v0.3.0-alpha.10
 [0.3.0-alpha.9]: https://github.com/compilando/norte/compare/v0.3.0-alpha.8...v0.3.0-alpha.9

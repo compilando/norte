@@ -348,7 +348,7 @@ impl State {
             // here would be asking whether the thing being used exists.
             windowed: true,
             pane_on_disk: norte_frontend::shell::shell_dir(slot.pane.dir()).is_some(),
-            pane_in_archive: slot.pane.dir().archive_split().is_ok_and(|a| a.is_some()),
+            pane_in_archive: norte_frontend::shell::archive_on_disk(slot.pane.dir()),
         }
     }
 

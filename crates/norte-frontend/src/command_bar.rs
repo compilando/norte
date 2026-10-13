@@ -23,6 +23,8 @@ pub struct CommandBar {
     /// Which history entry is shown while walking it (`None` = the line
     /// being typed).
     browsing: Option<usize>,
+    /// The line being typed, kept while the history is walked.
+    draft: String,
 }
 
 impl CommandBar {
@@ -130,6 +132,9 @@ impl CommandBar {
         if self.history.is_empty() {
             return;
         }
+        if self.browsing.is_none() {
+            self.draft = self.buffer.clone();
+        }
         let i = self
             .browsing
             .map_or(self.history.len() - 1, |i| i.saturating_sub(1));
@@ -137,7 +142,8 @@ impl CommandBar {
         self.set(self.history[i].clone());
     }
 
-    /// The next history entry, back to an empty line past the newest.
+    /// The next history entry, back to the line being typed past the
+    /// newest.
     pub fn history_next(&mut self) {
         let Some(i) = self.browsing else {
             return;
@@ -147,7 +153,8 @@ impl CommandBar {
             self.set(self.history[i + 1].clone());
         } else {
             self.browsing = None;
-            self.set(String::new());
+            let draft = std::mem::take(&mut self.draft);
+            self.set(draft);
         }
     }
 
@@ -165,8 +172,8 @@ impl CommandBar {
             .filter(|n| n.starts_with(word))
             .collect();
         let replacement = match hits.as_slice() {
-            [] => return false,
-            [one] => format!("{} ", quote_for(shell, one)),
+            [one] if quotable(shell, one) => format!("{} ", quote_for(shell, one)),
+            [] | [_] => return false,
             many => {
                 let mut prefix = many[0].len();
                 for n in &many[1..] {
@@ -216,11 +223,11 @@ impl CommandBar {
     /// mean something to it.
     pub fn insert_name(&mut self, shell: &Path, name: &[u8]) -> bool {
         match shell_quoting(shell) {
-            Some(kind) => self.insert(&quote_for(kind, name)),
+            Some(kind) if quotable(kind, name) => self.insert(&quote_for(kind, name)),
             None if name.iter().all(|b| inert_everywhere(*b)) => {
                 self.insert(&String::from_utf8_lossy(name));
             }
-            None => return false,
+            Some(_) | None => return false,
         }
         true
     }
@@ -233,6 +240,7 @@ impl CommandBar {
         let order = self.buffer.trim().to_owned();
         self.set(String::new());
         self.browsing = None;
+        self.draft.clear();
         if order.is_empty() {
             return None;
         }
@@ -276,6 +284,13 @@ fn allowed(c: char) -> bool {
     !c.is_control() && !norte_encoding::is_terminal_hazard(c)
 }
 
+/// Whether [`quote_for`] gives back `name` exactly: POSIX `sh` cannot
+/// carry a trailing newline through `$(…)`, and another name is worse than
+/// none.
+fn quotable(shell: Option<Shell>, name: &[u8]) -> bool {
+    shell.is_some() || !name.ends_with(b"\n")
+}
+
 /// `name` as ONE word for `shell` (`None` = POSIX `sh`), and ASCII only,
 /// whatever its bytes: what is typed into the bar is text, and a name's
 /// bytes travel as escapes the shell itself turns back into them.
@@ -312,7 +327,7 @@ pub fn quote_for(shell: Option<Shell>, name: &[u8]) -> String {
         }
         // POSIX sh: plain printable ASCII goes in single quotes; anything
         // else becomes `printf` octal escapes inside a command substitution
-        // (which drops trailing newlines — a POSIX limit, sh only).
+        // (which drops trailing newlines: `quotable` refuses those names).
         None if name.iter().all(|b| (0x20..0x7f).contains(b)) => {
             out.push('\'');
             for &b in name {
@@ -389,6 +404,33 @@ mod tests {
                 assert_eq!(&out.stdout, name, "{bin}: {order}");
             }
         }
+    }
+
+    /// `sh` drops a trailing newline through `$(…)`: such a name would
+    /// become another one, so it is refused, not mangled — by insertion
+    /// and by completion alike.
+    #[test]
+    fn sh_refuses_a_name_ending_in_a_newline() {
+        let sh = Path::new("/bin/sh");
+        let mut b = CommandBar::new(Vec::new());
+        assert!(!b.insert_name(sh, b"a\n"));
+        assert_eq!(b.buffer, "");
+        b.insert("cat a");
+        assert!(!b.complete_for(&[b"a\n"], sh));
+        assert_eq!(b.buffer, "cat a");
+        assert!(b.insert_name(Path::new("/bin/bash"), b"a\n"));
+    }
+
+    /// Walking the history keeps the half-typed line: past the newest
+    /// entry it comes back, as in a shell.
+    #[test]
+    fn the_draft_survives_a_walk_through_the_history() {
+        let mut b = CommandBar::new(vec!["ls".to_owned()]);
+        b.insert("make te");
+        b.history_prev();
+        assert_eq!(b.text(), "ls");
+        b.history_next();
+        assert_eq!(b.text(), "make te");
     }
 
     #[test]
