@@ -1481,10 +1481,56 @@ pub fn handle(app: &mut App, ev: MouseEvent) -> After {
     handle_at(app, ev, Instant::now())
 }
 
+/// The context menu: while open it takes every press — inside, a row runs
+/// through the same path as a panel-bar button; outside, it closes and the
+/// click goes no further (ADR 0178). Closed, a right press on a listing
+/// opens it there.
+fn context_menu_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
+    use crate::context_menu as cm;
+    let press = matches!(
+        ev.kind,
+        MouseEventKind::Down(MouseButton::Left | MouseButton::Right)
+    );
+    if app.context_menu.is_some() {
+        if !press {
+            return Some(After::Nothing);
+        }
+        if !cm::contains(app, ev.column, ev.row) {
+            app.context_menu = None;
+            return Some(After::Nothing);
+        }
+        let Some(i) = cm::row_at(app, ev.column, ev.row) else {
+            return Some(After::Nothing);
+        };
+        return Some(match cm::choose(app, i) {
+            Some(norte_frontend::context_menu::Action::Command(c)) => {
+                app.pending_panel_command = Some(c.to_owned());
+                After::PanelBar
+            }
+            _ => After::Nothing,
+        });
+    }
+    if !matches!(ev.kind, MouseEventKind::Down(MouseButton::Right)) || overlay_open(app) {
+        return None;
+    }
+    let hit = hit_test(app, ev.column, ev.row)?;
+    app.mouse.drag.cancel();
+    app.mouse.last_click = None;
+    let anchor = (ev.column, ev.row.saturating_add(1));
+    match hit.index {
+        Some(i) => cm::open_row(app, hit.pane, i, anchor),
+        None => cm::open_empty(app, hit.pane, anchor),
+    }
+    Some(After::Nothing)
+}
+
 /// Like [`handle`] with the instant injected: the double click is a time
 /// window, and a test that depended on the machine's clock would be a test
 /// that fails in CI on a Tuesday.
 pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
+    if let Some(after) = context_menu_gesture(app, ev) {
+        return after;
+    }
     if let Some(after) = above_the_panes(app, ev) {
         return after;
     }

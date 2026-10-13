@@ -15,6 +15,7 @@ use norte_i18n::t;
 
 mod chrome;
 mod compare;
+mod context_menu;
 mod geometry;
 mod help;
 mod modals;
@@ -507,6 +508,7 @@ fn draw_frame(frame: &mut Frame<'_>, app: &App) {
     // as the menu: it is chrome, and the body has already been given the
     // spot left for it.
     draw_panel_bar(frame, app);
+    context_menu::draw(frame, app);
     if let Some(help) = &app.help {
         draw_help(
             frame,

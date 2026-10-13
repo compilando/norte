@@ -779,6 +779,7 @@ pub async fn dispatch(
         // record), and whatever changes on disk is picked up by the watcher
         // and the refresh on return.
         Command::AppTerminal => crate::gestures::terminal_here(app).await,
+        Command::PaneContextMenu => crate::context_menu::open_on_cursor(app),
         // Phase 9: the HANDOFF to the window. Here it only CHECKS and
         // requests; dumping the screen, releasing the session and launching
         // the window are three trips that do not fit in dispatching a key,

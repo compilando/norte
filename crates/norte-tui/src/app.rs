@@ -548,6 +548,8 @@ pub struct App {
     /// The menu bar, if open. An overlay: it keeps ALL the keys while it is,
     /// like the rest.
     pub menu: Option<norte_frontend::menu::MenuState>,
+    /// The open context menu (right click, the Menu key), if any.
+    pub context_menu: Option<crate::context_menu::ContextMenu>,
     /// Which menu was opened last.
     ///
     /// Reopened from there ([`norte_frontend::menu::MenuState::reopen_at`]):
@@ -1426,6 +1428,7 @@ impl App {
             log_remote: crate::logview::LogRemote::default(),
             busy: None,
             menu: None,
+            context_menu: None,
             menu_last: 0,
             // The first four are the `orthodox` preset's.
             next_slot: 5,

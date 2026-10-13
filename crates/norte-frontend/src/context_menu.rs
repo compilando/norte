@@ -272,12 +272,81 @@ pub fn reason_of(
     }
 }
 
-/// `entries` as rows to paint, in `lang`, with `keymap`'s chords.
+/// What a right click on a row acts on, decided ONCE: the marks when the
+/// row is marked (`marks`), the row alone otherwise — and then the caller
+/// drops the marks, because the menu says "acts on c.txt" and every command
+/// prefers the marks.
+#[must_use]
+pub fn row_target(entry: &norte_proto::Entry, marks: Option<&[&norte_proto::Entry]>) -> RowTarget {
+    use norte_proto::EntryKind;
+    let (count, all_files) = match marks {
+        Some(m) => (m.len(), m.iter().all(|e| e.kind == EntryKind::File)),
+        None => (1, entry.kind == EntryKind::File),
+    };
+    let single = count == 1;
+    RowTarget {
+        count,
+        kind: single.then_some(entry.kind),
+        archive: single && crate::nav::archive_root_for(entry).is_some(),
+        all_files,
+    }
+}
+
+/// The menu's header, "acts on …": the masked name for one target, the
+/// count for the marks — so the header always names the operand.
+#[must_use]
+pub fn acts_on(
+    lang: norte_i18n::Lang,
+    target: &RowTarget,
+    entry: &norte_proto::Entry,
+    encoding: Option<norte_encoding::NameEncoding>,
+) -> String {
+    let what = if target.count == 1 {
+        let bytes = entry
+            .path
+            .file_name()
+            .map_or(&[][..], norte_proto::Segment::as_bytes);
+        elide(&crate::display_name_with(bytes, encoding).0)
+    } else {
+        norte_i18n::ta_in(
+            lang,
+            "gui-menu-target-marks",
+            &[("n", &target.count.to_string())],
+        )
+    };
+    norte_i18n::ta_in(lang, "gui-menu-acts-on", &[("target", &what)])
+}
+
+/// The empty area's menu for a pane on `dir`: its surface and its header.
+///
+/// Remote is the BASE scheme, the part after the last `+`: `zip+sftp` is
+/// remote, `zip+file` is not — the same test `disconnect` makes before
+/// refusing with `msg-disconnect-local`.
+#[must_use]
+pub fn empty_menu(
+    lang: norte_i18n::Lang,
+    dir: &norte_proto::VPath,
+    encoding: Option<norte_encoding::NameEncoding>,
+) -> (Surface, String) {
+    let scheme = dir.scheme();
+    let base = scheme.rsplit('+').next().unwrap_or(scheme);
+    let (shown, _) = crate::path_display_with(dir, encoding);
+    let header = norte_i18n::ta_in(lang, "ctx-acts-on-dir", &[("dir", &elide(&shown))]);
+    (
+        Surface::Empty {
+            remote: base != "file",
+        },
+        header,
+    )
+}
+
+/// `entries` as rows to paint, in `lang`; `chord_of` answers a command's
+/// painted chord in this frontend's keymap.
 pub fn project(
     entries: &[Entry],
     facts: &crate::availability::Facts,
     implemented: &[&str],
-    keymap: &crate::keymap::Effective,
+    chord_of: impl Fn(&str) -> Option<String>,
     lang: norte_i18n::Lang,
     verb_reason: impl Fn(Verb) -> Option<std::borrow::Cow<'static, str>>,
 ) -> Vec<Row> {
@@ -288,7 +357,7 @@ pub fn project(
             let reason = reason_of(e, facts, implemented, &verb_reason);
             let (chord, role) = match e.action {
                 Action::Command(c) => (
-                    crate::overlays::palette::first_chord(c, keymap).unwrap_or_default(),
+                    chord_of(c).unwrap_or_default(),
                     crate::chrome::menu::role(c).as_str(),
                 ),
                 Action::Verb(_) => (String::new(), "normal"),
@@ -569,7 +638,14 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let rows = project(&entries, &facts, &implemented, &eff, Lang::En, |_| None);
+        let rows = project(
+            &entries,
+            &facts,
+            &implemented,
+            |c| crate::overlays::palette::first_chord(c, &eff),
+            Lang::En,
+            |_| None,
+        );
         assert_eq!(rows.len(), entries.len());
         let by = |c: &'static str| {
             rows.iter()

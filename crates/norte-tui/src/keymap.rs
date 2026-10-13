@@ -225,6 +225,7 @@ commands! {
     "app.settings" => AppSettings,
     "app.pick-accept" => AppPickAccept,
     "app.terminal" => AppTerminal,
+    "pane.context-menu" => PaneContextMenu,
     "app.handoff" => AppHandoff,
     "app.toggle-panels" => AppTogglePanels,
     "pane.command-line" => PaneCommandLine,

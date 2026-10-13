@@ -117,41 +117,10 @@ impl State {
         let Some(entry) = pane.entries().get(i) else {
             return (Self::stale(StaleAction::Generation), Vec::new());
         };
-        let (count, all_files) = if marked {
-            let marks = pane.marked_entries();
-            (
-                pane.marks_len(),
-                marks.iter().all(|e| e.kind == EntryKind::File),
-            )
-        } else {
-            (1, entry.kind == EntryKind::File)
-        };
-        let single = count == 1;
-        let target = norte_frontend::context_menu::RowTarget {
-            count,
-            kind: single.then_some(entry.kind),
-            archive: single && norte_frontend::nav::archive_root_for(entry).is_some(),
-            all_files,
-        };
-        // ONE frame, "acts on …", for both targets: the name or the count
-        // goes inside it, so the header always says it is the operand.
-        let target_text = if single {
-            // The SAME masking as the row's `display_name`, so the header
-            // never says a name the row does not.
-            let bytes = entry
-                .path
-                .file_name()
-                .map_or(&[][..], norte_proto::Segment::as_bytes);
-            let (text, _) = norte_frontend::display_name_with(bytes, pane.name_encoding());
-            norte_frontend::context_menu::elide(&text)
-        } else {
-            norte_i18n::ta_in(
-                self.lang,
-                "gui-menu-target-marks",
-                &[("n", &count.to_string())],
-            )
-        };
-        let header = norte_i18n::ta_in(self.lang, "gui-menu-acts-on", &[("target", &target_text)]);
+        let marks = marked.then(|| pane.marked_entries());
+        let target = norte_frontend::context_menu::row_target(entry, marks.as_deref());
+        let header =
+            norte_frontend::context_menu::acts_on(self.lang, &target, entry, pane.name_encoding());
         let fingerprint = self.fingerprint_of(slot_id);
         let surface = Surface::Row(target);
         let bar = self.install_context_menu(ContextMenu {
@@ -190,19 +159,8 @@ impl State {
             return (Self::stale(StaleAction::Generation), Vec::new());
         }
         let pane = &self.slot().pane;
-        // The BASE scheme, the part after the last `+`: `zip+sftp` is
-        // remote, `zip+file` is not — the same test `disconnect` makes
-        // before refusing with `msg-disconnect-local`.
-        let scheme = pane.dir().scheme();
-        let base = scheme.rsplit('+').next().unwrap_or(scheme);
-        let remote = base != "file";
-        let (dir, _) = norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
-        let header = norte_i18n::ta_in(
-            self.lang,
-            "ctx-acts-on-dir",
-            &[("dir", &norte_frontend::context_menu::elide(&dir))],
-        );
-        let surface = Surface::Empty { remote };
+        let (surface, header) =
+            norte_frontend::context_menu::empty_menu(self.lang, pane.dir(), pane.name_encoding());
         // The SAME fingerprint as a row's: the folder is what this menu
         // names, and the marks are what Mark all / Invert act on.
         let fingerprint = self.fingerprint_of(slot_id);
@@ -434,7 +392,7 @@ impl State {
             &m.entries,
             &m.facts,
             &implemented,
-            &self.effective,
+            |c| norte_frontend::palette::first_chord(c, &self.effective),
             self.lang,
             |v| verb_reason(m, v),
         )

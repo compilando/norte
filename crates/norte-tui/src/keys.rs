@@ -75,7 +75,32 @@ pub async fn on_key(
     key: KeyEvent,
 ) {
     app.message = None;
-    if app.menu.is_some() && !modal_wins(app) {
+    if app.context_menu.is_some() && !modal_wins(app) {
+        // The context menu: fixed keys like the menu bar's, and what it
+        // picks runs through the same path as its key.
+        if let Some(norte_frontend::context_menu::Action::Command(id)) =
+            crate::context_menu::on_key(app, key.code)
+            && let Some(cmd) = Command::parse(id)
+        {
+            run_command(
+                app,
+                backend,
+                events,
+                help_lines,
+                lang,
+                quick_mode,
+                confirm_quit,
+                cfg,
+                &mut work.fill,
+                &mut work.decorate,
+                &mut work.probed,
+                &mut work.search,
+                cmd,
+            )
+            .await;
+            launch_pending(app, events, capture).await;
+        }
+    } else if app.menu.is_some() && !modal_wins(app) {
         // The menu bar: FIXED keys, like the palette.
         // There are no `dialog.*` verbs for "next
         // menu", so they cannot come from the keymap
