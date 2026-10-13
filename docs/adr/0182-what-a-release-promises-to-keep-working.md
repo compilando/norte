@@ -78,8 +78,19 @@ At the beta every `norte:*` package goes to `1.0.0`.
   test. Until then the promise rests on wasmtime's documented behaviour
   (`component::Linker`, "Names and Semver") and on the rule for what a
   compatible bump may add.
-- **Not done here:** the index schema version, the keymap command alias,
-  and the `1.0.0` bumps themselves. The bumps belong to the beta release.
+- **Done after the first commit:**
+  - The index carries `PRAGMA user_version` (`INDEX_SCHEMA`). An unversioned
+    index with today's columns is stamped; one with other columns is
+    rebuilt empty; one from a newer norte is refused.
+  - The keymap honours `RENAMED`, and each corpus freezes its command
+    names (`expected/commands.txt`).
+  - `just release` freezes the corpus.
+  - The index migrates inside one `BEGIN IMMEDIATE` transaction, so a
+    daemon and a CLI opening it at once do not undo each other's rebuild.
+    What it cannot cover: an OLDER daemon still running across an
+    upgrade keeps its statements for the old schema until it restarts.
+- **Not done here:** the `1.0.0` bumps themselves. They belong to the beta
+  release.
 - 86 wire minors in alpha say the protocol has not settled. Going to `1.0.0`
   is a bet that the beta's surface is the right one. A major later is
   allowed, but it costs every client at once.

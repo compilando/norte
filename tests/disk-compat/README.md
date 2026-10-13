@@ -32,19 +32,24 @@ migration), or record the break in the CHANGELOG and in an ADR.
 
 ## Freezing a release
 
-At release time, before tagging:
+`just release <tag>` does it with the published binary
+(`scripts/release/freeze-disk-compat.sh`; `just disk-compat-freeze` by
+hand). The script:
 
-1. Copy the previous corpus's `config/` to `<new version>/config/`. Add
-   whatever the release made new (a key, a file kind), each set to a
-   non-default value.
-2. Regenerate `journal.db` and `index.db` with the release binary itself.
-   Run it inside `bwrap --dev-bind / / --tmpfs /srv --bind <dir> /srv/norte`
-   so the journal records `/srv/norte/...` and not your home. The 0.3.0-alpha.12
-   journal came from: `mkdir dir`, `cp a.txt dir/a.txt`, `mv "b ñ.txt"
-   dir/b.txt`, `rm a.txt`, `mkdir lat\xe9n` (not UTF-8), `cp dir copia`,
-   then `index build w`, then `PRAGMA wal_checkpoint(TRUNCATE);
-   PRAGMA journal_mode=DELETE` on `index.db`.
-3. Write `expected/` from that binary's answers.
+1. copies the previous corpus's text configs (not its databases);
+2. writes `journal.db` and `index.db` with the release binary inside
+   `bwrap`, so the journal records `/srv/norte/...` and not a home;
+3. writes `expected/` from that binary's answers.
+
+Then, by hand:
+
+- add to `config/` whatever the release made new (a key, a file kind),
+  each set to a non-default value;
+- commit the directory.
+
+`expected/commands.txt` comes from the TAG's catalogue source: the
+command names a user's keymap may still use. A rename adds a row to
+`RENAMED` in `keymap/catalogue.rs`; the test fails otherwise.
 
 The 0.3.0-alpha.12 text files were written by hand from the schema and
 accepted by the released binary's `norte doctor`. The files doctor does not

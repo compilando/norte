@@ -37,7 +37,57 @@ pub enum IndexError {
     /// place where a record is kept that the provider lied.
     #[error("empty embedding: the provider returned a dimension-0 vector")]
     EmptyVector,
+    /// The file was written by a NEWER norte ([`INDEX_SCHEMA`] is lower
+    /// than its `user_version`). It is left untouched: downgrade is not
+    /// promised (ADR 0182), and wiping it would cost that norte a rebuild.
+    #[error(
+        "index schema {found} is newer than this norte's {INDEX_SCHEMA}: update norte, or delete index.db and run `index build`"
+    )]
+    FromTheFuture {
+        /// The `user_version` found in the file.
+        found: i64,
+    },
 }
+
+/// The index's schema version, kept in `PRAGMA user_version` (ADR 0182).
+///
+/// Bump it when a column changes in a way `CREATE … IF NOT EXISTS` cannot
+/// add: an index from an older version is then REBUILT empty on open
+/// rather than failing at query time. The index is derived data, so a
+/// rebuild loses nothing but time; the next `index build` refills it.
+pub const INDEX_SCHEMA: i64 = 1;
+
+/// The version an index IS, from its stamp and its `files` columns.
+///
+/// An index from before versions existed (stamp 0) with v1's columns is a
+/// v1 index — alpha.12's is exactly that, and `tests/disk-compat` pins it.
+/// It maps to 1 rather than being exempted, so the next bump rebuilds it
+/// like any other v1 index. This mapping stays forever.
+fn effective_version(stamped: i64, columns: &[String]) -> i64 {
+    if stamped == 0 && columns == FILES_COLUMNS_V1 {
+        1
+    } else {
+        stamped
+    }
+}
+
+/// How many times [`Index::open`] retries a lock it cannot wait for: with
+/// its linear backoff, a bit over a second in all.
+const OPEN_RETRIES: u32 = 10;
+
+/// The `files` columns of [`INDEX_SCHEMA`] 1, in order: what an index
+/// written before the version existed has to have to be kept as is.
+const FILES_COLUMNS_V1: &[&str] = &[
+    "id",
+    "root_id",
+    "path",
+    "name_display",
+    "path_display",
+    "kind",
+    "size",
+    "mtime_ms",
+    "last_seen_build",
+];
 
 impl IndexError {
     /// `true` if it is TRANSIENT (lock busy: `SQLITE_BUSY`/`SQLITE_LOCKED`) —
@@ -141,9 +191,30 @@ impl Index {
             // so it is set explicitly in case the dependency's default
             // changes.
             .foreign_keys(true);
-        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
-        let idx = Self { pool };
-        idx.migrate().await?;
+        // Bounded retry of the open itself. Switching a file to WAL (a new,
+        // empty index; one from before WAL) takes an exclusive lock that
+        // SQLite does NOT wait for with `busy_timeout`: a daemon and a CLI
+        // creating the index at once got "database is locked" immediately
+        // (measured: 2 runs in 60 of the race test). The migration's own
+        // contention is waited for inside `BEGIN IMMEDIATE`.
+        let mut attempt = 0u32;
+        let idx = loop {
+            let res = async {
+                let pool = SqlitePoolOptions::new().connect_with(opts.clone()).await?;
+                let idx = Self { pool };
+                idx.migrate().await?;
+                Ok::<_, IndexError>(idx)
+            }
+            .await;
+            match res {
+                Err(e) if e.is_retryable() && attempt < OPEN_RETRIES => {
+                    attempt += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(20 * u64::from(attempt)))
+                        .await;
+                }
+                other => break other?,
+            }
+        };
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -173,7 +244,61 @@ impl Index {
         Ok(idx)
     }
 
+    /// Brings the file to [`INDEX_SCHEMA`]: stamps an unversioned index
+    /// whose columns already match, rebuilds one that does not (or one
+    /// from an older version), and refuses one from a newer norte.
+    ///
+    /// One `BEGIN IMMEDIATE` transaction on one connection: the daemon and
+    /// an embedded CLI open the same file, and without it one could drop the
+    /// tables the other had just rebuilt. The second opener waits for the
+    /// write lock (`busy_timeout`) and then reads the stamped version.
     async fn migrate(&self) -> Result<(), IndexError> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let stamped: i64 = sqlx::query_scalar("PRAGMA user_version")
+            .fetch_one(&mut *tx)
+            .await?;
+        if stamped > INDEX_SCHEMA {
+            return Err(IndexError::FromTheFuture { found: stamped });
+        }
+        let columns: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('files')")
+                .fetch_all(&mut *tx)
+                .await?;
+        let found = effective_version(stamped, &columns);
+        if !columns.is_empty() && found < INDEX_SCHEMA {
+            tracing::warn!(
+                found,
+                current = INDEX_SCHEMA,
+                "index schema outdated: rebuilt empty, `index build` refills it"
+            );
+            Self::drop_all(&mut tx).await?;
+        }
+        Self::create_schema(&mut tx).await?;
+        if stamped != INDEX_SCHEMA {
+            // `PRAGMA` takes no bound parameter; the value is our constant.
+            sqlx::query(&format!("PRAGMA user_version = {INDEX_SCHEMA}"))
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Drops every table and trigger the schema creates, for a rebuild.
+    async fn drop_all(conn: &mut sqlx::SqliteConnection) -> Result<(), IndexError> {
+        for stmt in [
+            "DROP TRIGGER IF EXISTS files_ai",
+            "DROP TRIGGER IF EXISTS files_ad",
+            "DROP TABLE IF EXISTS embeddings",
+            "DROP TABLE IF EXISTS files_fts",
+            "DROP TABLE IF EXISTS files",
+        ] {
+            sqlx::query(stmt).execute(&mut *conn).await?;
+        }
+        Ok(())
+    }
+
+    async fn create_schema(conn: &mut sqlx::SqliteConnection) -> Result<(), IndexError> {
         // Authority table: `path` = VPath::to_wire() (lossless, recoverable);
         // the *_display columns (lossy UTF-8) feed FTS5.
         sqlx::query(
@@ -190,14 +315,14 @@ impl Index {
                  UNIQUE(root_id, path)
              )",
         )
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await?;
         sqlx::query(
             "CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(
                  name_display, path_display, content='files', content_rowid='id'
              )",
         )
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await?;
         sqlx::query(
             "CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
@@ -205,7 +330,7 @@ impl Index {
                  VALUES (new.id, new.name_display, new.path_display);
              END",
         )
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await?;
         sqlx::query(
             "CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN
@@ -213,7 +338,7 @@ impl Index {
                  VALUES ('delete', old.id, old.name_display, old.path_display);
              END",
         )
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await?;
         // Semantic embeddings (M4-IA-2, ADR 0031 A3). Additive: an old DB
         // gains the table on the next open. Invalidation by
@@ -230,7 +355,7 @@ impl Index {
                  text_hash BLOB NOT NULL
              )",
         )
-        .execute(&self.pool)
+        .execute(&mut *conn)
         .await?;
         Ok(())
     }
@@ -812,6 +937,150 @@ mod tests {
             size: Some(10),
             mtime_ms: Some(1),
         }
+    }
+
+    /// A raw connection to `path`, to write an index the way an OTHER
+    /// norte left it.
+    async fn raw(path: &Path) -> SqlitePool {
+        // DELETE mode on purpose: switching it to WAL is the contended step
+        // `open` has to retry, and the race test needs that case.
+        let opts = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true);
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("raw connection")
+    }
+
+    async fn user_version(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar("PRAGMA user_version")
+            .fetch_one(pool)
+            .await
+            .expect("pragma")
+    }
+
+    /// A fresh index is stamped; an unversioned one with today's columns
+    /// (alpha.12's) keeps its rows and gets stamped.
+    #[tokio::test]
+    async fn the_schema_version_is_stamped_and_a_current_index_kept() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("index.db");
+        let idx = Index::open(&path).await.expect("open");
+        assert_eq!(user_version(&idx.pool).await, INDEX_SCHEMA);
+        idx.build(
+            &root(),
+            vec![entry(&root(), b"kept.txt")],
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("build");
+        // Back to "before versions": what every index on disk is today.
+        sqlx::query("PRAGMA user_version = 0")
+            .execute(&idx.pool)
+            .await
+            .expect("unstamp");
+        drop(idx);
+        let idx = Index::open(&path).await.expect("reopen");
+        assert_eq!(user_version(&idx.pool).await, INDEX_SCHEMA);
+        let hits = idx.query(&root(), "kept", 10).await.expect("query");
+        assert_eq!(
+            hits.len(),
+            1,
+            "an index with today's columns is not rebuilt"
+        );
+    }
+
+    /// An unversioned index whose `files` table is NOT today's is rebuilt
+    /// empty on open, instead of failing at the first query.
+    #[tokio::test]
+    async fn an_index_with_other_columns_is_rebuilt_not_queried() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("index.db");
+        let pool = raw(&path).await;
+        sqlx::query("CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT)")
+            .execute(&pool)
+            .await
+            .expect("old table");
+        sqlx::query("INSERT INTO files (path) VALUES ('old')")
+            .execute(&pool)
+            .await
+            .expect("old row");
+        pool.close().await;
+        let idx = Index::open(&path).await.expect("rebuilt, not refused");
+        assert_eq!(user_version(&idx.pool).await, INDEX_SCHEMA);
+        assert!(
+            idx.query(&root(), "old", 10)
+                .await
+                .expect("query works")
+                .is_empty()
+        );
+    }
+
+    /// The daemon and an embedded CLI opening an index that has to be
+    /// rebuilt, at once: the migration is one IMMEDIATE transaction, so the
+    /// second waits and finds it done instead of dropping the first's work.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_openers_racing_a_rebuild_both_land_on_the_current_schema() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("index.db");
+        let pool = raw(&path).await;
+        sqlx::query("CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT)")
+            .execute(&pool)
+            .await
+            .expect("old table");
+        pool.close().await;
+        let (a, b) = tokio::join!(Index::open(&path), Index::open(&path));
+        let (a, b) = (a.expect("first opener"), b.expect("second opener"));
+        for idx in [&a, &b] {
+            assert_eq!(user_version(&idx.pool).await, INDEX_SCHEMA);
+        }
+        a.build(
+            &root(),
+            vec![entry(&root(), b"one.txt")],
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("build after the race");
+        assert_eq!(b.query(&root(), "one", 10).await.expect("query").len(), 1);
+    }
+
+    /// An unstamped v1 index IS v1, never "current": once `INDEX_SCHEMA`
+    /// moves past 1, alpha.12's index has to be rebuilt, not stamped.
+    #[test]
+    fn an_unstamped_v1_index_is_version_one_not_current() {
+        let v1: Vec<String> = FILES_COLUMNS_V1.iter().map(|c| (*c).to_owned()).collect();
+        assert_eq!(effective_version(0, &v1), 1);
+        assert_eq!(effective_version(0, &["id".to_owned()]), 0);
+        assert_eq!(effective_version(0, &[]), 0);
+        assert_eq!(effective_version(3, &v1), 3, "a stamp is believed");
+    }
+
+    /// An index from a NEWER norte is refused and left as it was.
+    #[tokio::test]
+    async fn an_index_from_the_future_is_refused_untouched() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("index.db");
+        let pool = raw(&path).await;
+        sqlx::query("CREATE TABLE files (future TEXT)")
+            .execute(&pool)
+            .await
+            .expect("future table");
+        sqlx::query(&format!("PRAGMA user_version = {}", INDEX_SCHEMA + 1))
+            .execute(&pool)
+            .await
+            .expect("future version");
+        pool.close().await;
+        let err = Index::open(&path).await.expect_err("refused");
+        assert!(matches!(err, IndexError::FromTheFuture { found } if found == INDEX_SCHEMA + 1));
+        assert!(!err.is_retryable());
+        let pool = raw(&path).await;
+        let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('files')")
+            .fetch_all(&pool)
+            .await
+            .expect("columns");
+        assert_eq!(cols, vec!["future".to_owned()], "nothing was dropped");
     }
 
     #[tokio::test]

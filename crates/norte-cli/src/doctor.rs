@@ -339,7 +339,17 @@ pub fn check_keymaps(layers: &Layers) -> Vec<Finding> {
         }
     }
     for (screen, label) in SCREENS {
-        findings.extend(check_keymap_screen(&preset_kf, &layer_kfs, screen, label));
+        for f in check_keymap_screen(&preset_kf, &layer_kfs, screen, label) {
+            // A renamed name in `[global]` is seen by every screen: say it
+            // once.
+            let repeated = f.code == "keymap-renamed-cmd"
+                && findings
+                    .iter()
+                    .any(|g: &Finding| g.code == f.code && g.detail == f.detail);
+            if !repeated {
+                findings.push(f);
+            }
+        }
     }
     // `user:<id>` bindings are checked against commands.toml (ADR 0177). Only
     // the browse map: `[global]` merges into it, and user commands make no
@@ -395,6 +405,8 @@ pub fn check_keymaps(layers: &Layers) -> Vec<Finding> {
 ///   ambiguous prefix, a `lua:` name that fails the charset, or — since K2a
 ///   (ADR 0044) — a digit key bound while the preset enables counts, or a
 ///   reserved key (`Tab`) taken from `pane.switch` on the Browse screen.
+/// - [`KeymapDiagnostic::Renamed`] → [`Severity::Warn`]
+///   (`keymap-renamed-cmd`): an old command name that still binds.
 ///
 /// No diagnostics → one [`Severity::Ok`] `keymap-ok`. The one-pass builder
 /// reports EVERY finding at once, so this needs no retry loop, no anti-DoS
@@ -446,6 +458,17 @@ fn check_keymap_screen(
                     "{label}: {}",
                     norte_encoding::mask_terminal_hazards(&message)
                 ),
+            },
+            // A name a release shipped and a later one renamed (ADR 0182):
+            // it still works, the file just wants the new name. `old`
+            // matched a catalogue row, so it is norte's own text.
+            KeymapDiagnostic::Renamed { old, new } => Finding {
+                section: "keymap",
+                severity: Severity::Warn,
+                code: "keymap-renamed-cmd",
+                // No screen label: the name is renamed everywhere, and
+                // `check_keymaps` says it once.
+                detail: format!("{old} → {new}"),
             },
         })
         .collect()
