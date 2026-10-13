@@ -7,6 +7,8 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+## [0.3.0-alpha.12] - 2026-10-13
+
 ### Added
 
 - **"Terminal here" on the right-click menu**, dimmed with its reason
@@ -8390,7 +8392,8 @@ and some daemon/socket tests are only available in CI environments.
 - Writes inside ZIP archives; list, restore, and purge operations for logical
   trash; and the M5 GUI.
 
-[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.11...HEAD
+[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.12...HEAD
+[0.3.0-alpha.12]: https://github.com/compilando/norte/compare/v0.3.0-alpha.11...v0.3.0-alpha.12
 [0.3.0-alpha.11]: https://github.com/compilando/norte/compare/v0.3.0-alpha.10...v0.3.0-alpha.11
 [0.3.0-alpha.10]: https://github.com/compilando/norte/compare/v0.3.0-alpha.9...v0.3.0-alpha.10
 [0.3.0-alpha.9]: https://github.com/compilando/norte/compare/v0.3.0-alpha.8...v0.3.0-alpha.9
