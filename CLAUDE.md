@@ -475,6 +475,13 @@ tag. The loop for its scripts is `just baseline-selftest` (seconds, no Docker).
 nothing about old distributions. `just baseline-prune` removes its Docker
 volumes and images.
 
+**A release is `just release <tag> [lead.md]`, after the tag is pushed.** It
+runs the steps that used to be done by hand: notes from the CHANGELOG, the
+Windows runner, `baseline` + `baseline-publish`, the Windows artefacts, and
+the disk-compat corpus frozen with the published binary. It leaves the
+release a **draft**, and publishing it stays a person's call. It is
+resumable: rerun it after a failure. Its loop is `just release-selftest`.
+
 ## Workspace map
 
 - `crates/norte-proto`: protocol types. Any change affects the wire format and

@@ -20,6 +20,13 @@ independently through `PROTOCOL_VERSION`.
   says so in the status bar. It never installs anything.
   `norte update check` asks once, whatever the setting says. The new
   `norte.toml` key is `[updates] check` (ADR 0183).
+- **An old search index no longer breaks search.** The index now records
+  its format. One a newer norte cannot read is rebuilt empty on open; run
+  `index build` to refill it. One written by a newer norte is left alone
+  and reported.
+- **A renamed command keeps working in your `keymap.toml`.** When a
+  command is renamed, the old name still binds it, and `norte doctor`
+  suggests the new one.
 - **`norte doctor` checks `policy.toml`.** A file that does not parse
   keeps the daemon from starting, and doctor now says so instead of
   staying silent.

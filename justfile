@@ -990,6 +990,25 @@ gui-package: gui-build
 gui-smoke imagen="debian:trixie":
     ./scripts/gui-smoke.sh {{imagen}}
 
+# Cuts the release of a PUSHED tag and leaves it as a draft
+# (`scripts/release/release.sh`): notes from the CHANGELOG, the Windows
+# runner, `baseline` + `baseline-publish`, the Windows artefacts, and the
+# disk-compat corpus frozen with the published binary. Resumable: run it
+# again after a failure. `lead` is a file with the notes' first paragraph.
+# In the FOREGROUND: `baseline` alone outlasts the background cap.
+release tag lead="":
+    ./scripts/release/release.sh {{tag}} "{{lead}}"
+
+# The release scripts' check: syntax, shellcheck and the notes of the
+# newest CHANGELOG version. Seconds, no network.
+release-selftest:
+    ./scripts/release/selftest.sh
+
+# Freezes `tests/disk-compat/<version>` with a released `norte` binary
+# (ADR 0182). `release` calls it; by hand only to redo one.
+disk-compat-freeze version binary:
+    ./scripts/release/freeze-disk-compat.sh {{version}} {{binary}}
+
 # The baseline system's tests (`scripts/baseline/lib.sh`) and shellcheck over
 # all its scripts. Seconds, no Docker: that folder's RED→GREEN loop.
 baseline-selftest:

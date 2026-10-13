@@ -9,6 +9,9 @@
 # Manual on purpose: a release is cut by hand (`just baseline` for Linux),
 # and a tag push already fires dist's `release.yml`.
 name: Windows packages
+# The tag in the run's title is how `scripts/release/release.sh` finds this
+# tag's run again when it is resumed, instead of dispatching another.
+run-name: Windows packages ${{ inputs.tag }}
 
 on:
   workflow_dispatch:
