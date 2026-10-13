@@ -71,6 +71,10 @@ fn effective_version(stamped: i64, columns: &[String]) -> i64 {
     }
 }
 
+/// How many times [`Index::open`] retries a lock it cannot wait for: with
+/// its linear backoff, a bit over a second in all.
+const OPEN_RETRIES: u32 = 10;
+
 /// The `files` columns of [`INDEX_SCHEMA`] 1, in order: what an index
 /// written before the version existed has to have to be kept as is.
 const FILES_COLUMNS_V1: &[&str] = &[
@@ -187,9 +191,30 @@ impl Index {
             // so it is set explicitly in case the dependency's default
             // changes.
             .foreign_keys(true);
-        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
-        let idx = Self { pool };
-        idx.migrate().await?;
+        // Bounded retry of the open itself. Switching a file to WAL (a new,
+        // empty index; one from before WAL) takes an exclusive lock that
+        // SQLite does NOT wait for with `busy_timeout`: a daemon and a CLI
+        // creating the index at once got "database is locked" immediately
+        // (measured: 2 runs in 60 of the race test). The migration's own
+        // contention is waited for inside `BEGIN IMMEDIATE`.
+        let mut attempt = 0u32;
+        let idx = loop {
+            let res = async {
+                let pool = SqlitePoolOptions::new().connect_with(opts.clone()).await?;
+                let idx = Self { pool };
+                idx.migrate().await?;
+                Ok::<_, IndexError>(idx)
+            }
+            .await;
+            match res {
+                Err(e) if e.is_retryable() && attempt < OPEN_RETRIES => {
+                    attempt += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(20 * u64::from(attempt)))
+                        .await;
+                }
+                other => break other?,
+            }
+        };
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -917,6 +942,8 @@ mod tests {
     /// A raw connection to `path`, to write an index the way an OTHER
     /// norte left it.
     async fn raw(path: &Path) -> SqlitePool {
+        // DELETE mode on purpose: switching it to WAL is the contended step
+        // `open` has to retry, and the race test needs that case.
         let opts = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true);
