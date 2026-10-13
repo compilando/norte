@@ -429,6 +429,9 @@ export class Screen {
   readonly helpBody = help.helpBody;
 
   /** In `render/help.ts`. */
+  readonly helpRail = help.helpRail;
+
+  /** In `render/help.ts`. */
   readonly helpBlock = help.helpBlock;
 
   /** In `render/help.ts`. */

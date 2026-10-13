@@ -747,6 +747,8 @@ cli-ls-skipped = warning: { $n } container entries omitted from the index (hosti
 # --- Help (F1) — built from the effective keymap ---
 help-title = Help
 help-toc = Sections of this page
+help-rail-keys-title = Keys on this page
+help-rail-see-title = See also
 help-section-browse = Browsing (panes)
 help-section-viewer = Viewer
 help-section-dialog = Dialogs and overlays

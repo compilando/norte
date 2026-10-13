@@ -22,6 +22,11 @@ independently through `PROTOCOL_VERSION`.
   font with keys as keycaps; settings opens with the search box focused,
   marks the chosen row with a tint instead of a solid band, and its
   controls share one height and style.
+- **Help in the window uses its width**: each page's keys, in the reader's
+  preset, and the pages it points to sit in a column beside the prose
+  instead of at the bottom; the title is no longer repeated, so pages
+  with three sections or more show their section index; group headers,
+  section rules and tip/note/warning notices each have their own look.
 - **Settings in the terminal**: the index runs full height beside the list,
   counts align, long names no longer run into their value, switches say
   on/off, and the description wraps over two lines instead of being cut

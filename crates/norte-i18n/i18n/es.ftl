@@ -749,6 +749,8 @@ cli-ls-skipped = aviso: { $n } entradas del contenedor omitidas del índice (nom
 # --- Ayuda (F1) — construida del keymap efectivo ---
 help-title = Ayuda
 help-toc = Secciones de esta página
+help-rail-keys-title = Teclas de esta página
+help-rail-see-title = Ver también
 help-section-browse = Navegación (panes)
 help-section-viewer = Viewer
 help-section-dialog = Diálogos y overlays
