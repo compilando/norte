@@ -736,7 +736,7 @@ msg-terminal-none-unset = $TERMINAL is not set and no terminal emulator was foun
 help-cmd-app-terminal = open a shell in the active pane's directory
 help-cmd-app-handoff = hand the screen to the other frontend and carry on there (daemon only)
 help-cmd-app-toggle-panels = hide the panels and show the terminal
-help-cmd-pane-command-line = run a command in the active pane's directory
+help-cmd-pane-command-line = open the command bar: each order runs in the active pane's folder
 cli-ls-skipped = warning: { $n } container entries omitted from the index (hostile names/limits)
 
 # --- Help (F1) — built from the effective keymap ---
@@ -1433,7 +1433,7 @@ menu-item-pane-history = History
 menu-item-pane-hotlist = Bookmarks
 menu-item-pane-select-drive = Volumes
 menu-item-pane-refresh = Refresh
-menu-item-pane-command-line = Command line
+menu-item-pane-command-line = Command bar
 menu-item-app-terminal = Terminal here
 menu-item-app-handoff = Carry on in the other frontend
 menu-item-layout-focus-next = Next panel

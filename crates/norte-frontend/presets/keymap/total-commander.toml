@@ -35,8 +35,8 @@
 # Shift+F7); panel view-mode switches (Ctrl+F1/F2/F7/F10/F11/F12,
 # Ctrl+Shift+F1/F2/F8, "Unsorted"); the directory-tree popup dialog
 # (Alt+F10, a second presentation of the same tree Ctrl+F8 already opens);
-# command-line history and in-line editing (Alt+F8, and the whole
-# "Command Line: Keys" section — history, cut/copy/paste, word-delete);
+# the command line's in-line editing (the "Command Line: Keys" section —
+# cut/copy/paste, word-delete; its history, Alt+F8, opens norte's bar);
 # file comments (Ctrl+Z); directory-branch flattening (Ctrl+B,
 # Ctrl+Shift+B); the open-tabs list menu (Ctrl+Shift+A); the Multi-Rename
 # Tool (Ctrl+M, a batch feature with no single-file analogue); FTP
@@ -218,6 +218,9 @@ keymap = [
     { on = ["shift+f2"], run = "pane.compare-dirs" },
     { on = ["ctrl+y"], run = "pane.sync-dirs" },
     { on = ["shift+f4"], run = "pane.edit-new" },
+    # Alt+F8 is TC's command-line history; norte's command line is the bar,
+    # whose Up/Down walk that history.
+    { on = ["alt+f8"], run = "pane.command-line" },
     { on = ["alt+down"], run = "pane.history" },
     { on = ["ctrl+f3"], run = "pane.sort-name" },
     { on = ["ctrl+f4"], run = "pane.sort-ext" },

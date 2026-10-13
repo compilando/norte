@@ -55,7 +55,7 @@
 # commands menu (F11) and plugin configuration (Alt+Shift+F9); internal/
 # external viewer and editor toggles (Alt+F3, Alt+F4— norte has one viewer
 # and one editor, no alternate to switch to); printing (Alt+F5); NTFS
-# hard-link creation (Alt+F6); command-line history (Alt+F8) and file
+# hard-link creation (Alt+F6); file
 # view/edit history (Alt+F11), distinct from the folder history at Alt+F12,
 # which IS bound to `pane.history`; console window resize (Alt+F9); find
 # folder (Alt+F10), a narrower relative of find file already bound at
@@ -231,6 +231,9 @@ keymap = [
     { on = ["alt+f2"], run = "pane.select-drive-right" },
     { on = ["alt+f7"], run = "pane.search" },
     { on = ["alt+f12"], run = "pane.history" },
+    # Alt+F8 is Far's command-line history; norte's command line is the
+    # bar, whose Up/Down walk that history — the same door.
+    { on = ["alt+f8"], run = "pane.command-line" },
     { on = ["shift+f1"], run = "pane.pack" },
     { on = ["shift+f2"], run = "pane.unpack" },
     { on = ["shift+f4"], run = "pane.edit-new" },

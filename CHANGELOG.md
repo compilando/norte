@@ -7,6 +7,21 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Changed
+
+- **The command bar has a key in every keymap**: `Ctrl+↓` in orthodox and
+  cua (Krusader's), `!` in vim (as `:!`), `Alt+F8` in Far and Total
+  Commander (their command-line history). Norton keeps none, as its header
+  says. With the krusader keymap the bar is on screen by default, as in
+  Krusader; `[ui] command_bar = false` hides it. The Go menu calls it
+  "Command bar", as Settings does.
+
+### Fixed
+
+- **Help in the window keeps the topic list where it was** when you click
+  a topic near the bottom; it used to jump back to the top, the chosen
+  topic out of sight.
+
 ## [0.3.0-alpha.12] - 2026-10-13
 
 ### Added

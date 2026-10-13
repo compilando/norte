@@ -82,6 +82,12 @@
 # Norton Commander has no background operations: there is no key to
 # transcribe. Both are reached from the palette.
 
+# `pane.command-line` (the command bar, ADR 0181) is left UNBOUND too: NC's
+# command line was always on screen and took any typed letter, so there is
+# no key to transcribe, and its history chord is not attested by a source
+# this preset can cite. It is in the Go menu (F9) and the palette, and
+# `[ui] command_bar = true` keeps it on screen as NC did.
+
 dialog_from = "orthodox"
 
 [global]

@@ -2767,6 +2767,17 @@ describe("help's scroll", () => {
     expect(body().scrollTop).toBe(120);
   });
 
+  it("the topic list keeps its scroll when a click opens another page", () => {
+    const { screen } = mount();
+    screen.paint(withHelp("copying", 0));
+    const topics = () => document.querySelector(".help-topics") as HTMLElement;
+    topics().scrollTop = 200;
+    // A click on a row near the bottom: the host answers with the new page
+    // and the cursor on that row.
+    screen.paint(withHelp("moving", 1));
+    expect(topics().scrollTop).toBe(200);
+  });
+
   it("and changing PAGE starts at the top, which is what a reader does", () => {
     const { screen } = mount();
     screen.paint(withHelp("copying", 0));
