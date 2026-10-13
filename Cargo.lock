@@ -5057,6 +5057,7 @@ dependencies = [
  "norte-proto",
  "norte-testkit",
  "norte-theme",
+ "norte-update",
  "norte-vfs",
  "norte-vfs-local",
  "norte-winpipe",
@@ -5458,6 +5459,7 @@ dependencies = [
  "norte-term",
  "norte-testkit",
  "norte-theme",
+ "norte-update",
  "norte-vfs",
  "norte-vfs-local",
  "norte-winpipe",
@@ -5499,6 +5501,7 @@ dependencies = [
  "norte-testkit",
  "norte-theme",
  "norte-tui",
+ "norte-update",
  "norte-vfs",
  "serde",
  "serde_json",
@@ -5508,6 +5511,18 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "norte-update"
+version = "0.3.0-alpha.12"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

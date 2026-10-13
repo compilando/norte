@@ -183,3 +183,4 @@ edits.
 | [0180](0180-terminal-here-opens-an-emulator-when-there-is-a-desktop.md) | "Terminal here" opens an emulator when there is a desktop | accepted |
 | [0181](0181-the-command-bar-runs-each-order-as-a-terminal-panel-entry.md) | The command bar runs each order as a terminal-panel entry | accepted |
 | [0182](0182-what-a-release-promises-to-keep-working.md) | What a release promises to keep working | accepted |
+| [0183](0183-the-release-check-is-opt-in.md) | The release check is opt-in | accepted |

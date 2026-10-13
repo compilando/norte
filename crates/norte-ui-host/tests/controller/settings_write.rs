@@ -528,3 +528,22 @@ async fn a_double_click_activates_the_row_like_enter() {
     })
     .await;
 }
+
+/// The wizard answered with Enter on every step writes its four answers,
+/// the release check among them as a real boolean, and OFF (ADR 0183): a
+/// reader who did not read the question did not ask for the network.
+#[tokio::test]
+async fn the_wizard_writes_the_release_check_off_when_enter_is_all_it_got() {
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_with_layers(root.path()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(UiAction::WizardOpen).await.expect("host alive");
+    for _ in 0..4 {
+        h.dispatch(press("Enter")).await.expect("host alive");
+    }
+    let written = snapshot_until(&h, &mut sub, "the wizard's answers written", |_| {
+        toml_de(root.path()).filter(|s| s.contains("[updates]") && s.contains("theme ="))
+    })
+    .await;
+    assert!(written.contains("check = false"), "{written}");
+}

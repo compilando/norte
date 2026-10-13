@@ -340,6 +340,9 @@ pub async fn run(
     // would open with the slot undeclared: it neither gets placed, nor
     // focused, nor shows up in the bar.
     work.panels = Some(crate::probes::spawn_panels(backend));
+    if cfg.common.check_updates {
+        work.update_check = crate::probes::spawn_update_check();
+    }
     let mut dir_watch = norte_frontend::watch::DirWatch::new();
     let mut dir_watch_alive = true;
     // #405: set by a 100 ms tick that changed nothing on screen; the next
@@ -1267,6 +1270,20 @@ pub async fn run(
                 }
             } => {
                 crate::jobs::harvest_goto_index(app, &mut work, res);
+            }
+            res = async {
+                match &mut work.update_check {
+                    Some(h) => h.await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                work.update_check = None;
+                if let Ok(Some(version)) = res {
+                    app.message = Some(norte_frontend::banners::update_line(
+                        norte_i18n::active(),
+                        &version,
+                    ));
+                }
             }
             res = async {
                 // A checksum batch's report (#311): same shape. Waiting for

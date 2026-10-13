@@ -246,6 +246,8 @@ pub struct InFlight {
     /// that, navigating fast through a large tree left the core measuring
     /// three directories nobody was going to look at anymore.
     pub disk_map: Option<DiskMapRun>,
+    /// The release check (ADR 0183): at most one, launched at start.
+    pub update_check: Option<tokio::task::JoinHandle<Option<String>>>,
     /// Checksums ready that arrived with ANOTHER modal open: they're HELD
     /// here and opened as soon as there is no modal ([`Self::pending_ai_plan`]
     /// discipline). They used to be dropped, and the status bar promised

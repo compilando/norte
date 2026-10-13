@@ -374,6 +374,10 @@ cli-enqueue-mkdir = no se pudo encolar el mkdir
 # `cli-help-unknown-topic`, porque este es un conjunto cerrado, no un corpus
 # donde el usuario pudiera haberse equivocado de página nueva.
 cli-shell-init-unknown = shell desconocido «{ $shell }» — soportados: bash, zsh, fish
+# `norte update check` (ADR 0183).
+cli-update-available = norte { $version } está disponible (tienes la { $current }): { $url }
+cli-update-current = norte { $current } es la última versión publicada.
+cli-update-failed = no se pudo comprobar si hay una versión nueva: { $reason }
 # `norte theme import` (spec 2026-09-11, F5).
 cli-theme-imported = tema { $name } importado → { $path } (sobre { $base })
 cli-theme-ignored = aviso: { $count } entradas no son colores y se han saltado: { $ids }
@@ -544,6 +548,7 @@ degraded-reason-unknown = motivo desconocido
 # que apagó los hooks de un plugin. `$plugin` y `$text` son texto del wire, ya
 # enmascarado.
 msg-plugin-notice = ⚑ { $plugin }: { $text }
+msg-update-available = norte { $version } está disponible — `norte update check` dice dónde
 msg-plugin-hooks-disabled = ⚑ { $plugin }: sus hooks se apagaron tras tres fallos seguidos — desactívalo y vuelve a activarlo en el gestor de extensiones para reintentar
 msg-plugin-effect-denied = ⚑ { $plugin }: tu policy denegó un fichero que este plugin pidió escribir (regla para actor "plugin"); se dice una vez mientras norte corre
 status-connection-failed = ✗ no se pudo conectar
@@ -1259,6 +1264,10 @@ wizard-ask-theme = Elige un tema. Lo que ves mientras te mueves es lo que eliges
 wizard-ask-icons = ¿Ves aquí tres iconos: 📁 🖼 ⚙ ? Si salen como cuadros, la fuente del terminal no tiene emoji.
 wizard-icons-yes = Sí, los veo — usar iconos
 wizard-icons-no = No — insignias ASCII
+wizard-step-updates = versiones nuevas
+wizard-ask-updates = ¿Pregunta norte a GitHub, una vez al día al arrancar, si hay una versión más nueva? No instala nada, y es lo único que manda por la red sin que lo pidas. Puedes cambiarlo en Ajustes.
+wizard-updates-no = No — nunca por su cuenta
+wizard-updates-yes = Sí — una vez al día, y avisa en la barra de estado
 # Cabe ENTERO en la caja del asistente (66 celdas): recortado por la mitad se
 # perdía justo `[Esc]`, la única tecla que dice cómo no contestar.
 wizard-hint = [Intro] siguiente · [Retroceso] atrás · [Esc] no preguntar más
@@ -2301,6 +2310,8 @@ setting-ui-menu-bar-name = Barra de menú
 setting-ui-menu-bar-desc = Si la barra de menú se queda fijada en la fila de arriba. Encendida por defecto: hay comandos a los que solo se llega por el menú, y nada en pantalla decía que estaba ahí. Apagarla devuelve la fila — el menú sigue abriéndose con su tecla. La GUI lo ignora.
 setting-ui-mouse-name = Ratón
 setting-ui-mouse-desc = Si la TUI captura el ratón (click, rueda, arrastre para marcar). Mientras está capturado el terminal no puede seleccionar texto con el ratón; mantén Mayús para seleccionar igualmente, o desactiva esto. La GUI lo ignora.
+setting-updates-check-name = Buscar versiones nuevas
+setting-updates-check-desc = Una vez al día, al arrancar, pregunta a GitHub si hay un norte más nuevo y lo dice en la barra de estado. No instala nada. Apagado por defecto: es lo único que norte manda por la red sin que lo pidas. `norte update check` pregunta una vez, diga lo que diga esto. Se aplica en el siguiente arranque.
 setting-ui-alt-menu-name = Alt abre el menú
 setting-ui-alt-menu-desc = Si pulsar y soltar Alt solo abre la barra de menús en la TUI. Necesita un terminal con el protocolo de teclado de kitty (kitty, foot, WezTerm, Ghostty); tmux, xterm y GNOME Terminal no pueden avisar de un Alt suelto. Apagado por defecto: en ese modo el terminal manda teclas y no texto, así que una letra con tecla muerta (é) o un símbolo con AltGr (@, #) llega como su tecla base. La GUI lo tiene siempre.
 setting-ui-parent-entry-name = Fila para subir

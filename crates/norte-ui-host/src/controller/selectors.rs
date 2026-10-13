@@ -1396,6 +1396,19 @@ impl State {
         vec![parche, notice]
     }
 
+    /// A newer release exists (ADR 0183): the same status message + notice
+    /// pair as [`Self::plugin_notice`], with the phrase the terminal paints.
+    pub(super) fn update_available(&mut self, version: &str) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let line = norte_frontend::banners::update_line(self.lang, version);
+        self.status.message = Some(clamp_display(line.clone()));
+        let parche = self.parche(vec![ViewChange::Status(self.status.clone())]);
+        let notice = self.over(UiUpdate::Notice(UiNotice::Message {
+            key: "msg-update-available".to_owned(),
+            detail: Some(line),
+        }));
+        vec![parche, notice]
+    }
+
     /// A `plugin.notice` (0.69.0, ADR 0100): a hook's phrase, attributed to
     /// the plugin, as a status message — the same patch + notice pair as
     /// [`Self::connection_failed`], and for the same reason. An unknown

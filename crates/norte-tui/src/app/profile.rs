@@ -213,6 +213,7 @@ mod tests {
             archive: _,
             log: _,
             ai: _,
+            check_updates: _,
             // — Load diagnostics, not settings.
             sources: _,
             project_warnings: _,

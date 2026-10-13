@@ -9,6 +9,12 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **norte can tell you when a new release is out.** It is off unless you
+  turn it on: the first-run wizard asks, and Settings has "Check for new
+  releases". When on, it asks GitHub at most once a day, at start, and
+  says so in the status bar. It never installs anything.
+  `norte update check` asks once, whatever the setting says. The new
+  `norte.toml` key is `[updates] check` (ADR 0183).
 - **`norte doctor` checks `policy.toml`.** A file that does not parse
   keeps the daemon from starting, and doctor now says so instead of
   staying silent.
