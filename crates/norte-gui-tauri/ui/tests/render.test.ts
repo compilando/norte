@@ -3997,6 +3997,65 @@ describe("help", () => {
     expect(document.querySelector(".help-toc")).toBeNull();
   });
 
+  it("the corpus's own `# Title` is not painted twice, and its sections move up", () => {
+    // Every corpus page opens with `# <its title>`: painted under the `h1`
+    // it read as the title twice, and the real sections (`##`) ended up as
+    // `h3` — out of the page index, which only counts `h2`.
+    const { screen } = mount();
+    const v = withHelp();
+    if (v.help !== null) {
+      v.help.blocks = [
+        { block: "heading", level: 1, text: "Copiar" },
+        ...["Uno", "Dos", "Tres"].map((t) => ({
+          block: "heading" as const,
+          level: 2,
+          text: t,
+        })),
+      ];
+    }
+    screen.paint(v);
+    const body = document.querySelector(".help-body") as HTMLElement;
+    expect(body.textContent?.split("Copiar")).toHaveLength(2);
+    expect(
+      [...body.querySelectorAll(".help-main > h2")].map((h) => h.textContent),
+    ).toEqual(["Uno", "Dos", "Tres"]);
+    expect(
+      [...document.querySelectorAll(".help-toc-item")].map((b) => b.textContent),
+    ).toEqual(["Uno", "Dos", "Tres"]);
+  });
+
+  it("the page's keys and its links go in the side column, keeping their indices", () => {
+    const { screen, sent } = mount();
+    const v = withHelp();
+    if (v.help !== null) {
+      v.help.action_cursor = 2;
+    }
+    screen.paint(v);
+    const rail = document.querySelector(".help-rail") as HTMLElement;
+    const keys = rail.querySelector(".help-rail-keys") as HTMLElement;
+    const see = rail.querySelector(".help-rail-see") as HTMLElement;
+    expect(keys.querySelectorAll(".help-action")).toHaveLength(2);
+    expect(see.querySelectorAll(".help-action")).toHaveLength(1);
+    // The cursor lives in the list that holds it, and only there.
+    const seeList = see.querySelector("[role=listbox]") as HTMLElement;
+    expect(seeList.getAttribute("aria-activedescendant")).toBe("help-action-2");
+    expect(
+      keys.querySelector("[role=listbox]")?.hasAttribute("aria-activedescendant"),
+    ).toBe(false);
+    (see.querySelector(".help-action") as HTMLElement).click();
+    expect(sent).toEqual([{ action: "help_activate", index: 2 }]);
+  });
+
+  it("a page with no keys and no links has no side column", () => {
+    const { screen } = mount();
+    const v = withHelp();
+    if (v.help !== null) {
+      v.help.actions = [];
+    }
+    screen.paint(v);
+    expect(document.querySelector(".help-rail")).toBeNull();
+  });
+
   it("a click on the sidebar requests THAT page", () => {
     const { screen, sent } = mount();
     screen.paint(withHelp());
