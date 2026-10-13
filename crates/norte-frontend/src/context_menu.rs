@@ -206,6 +206,108 @@ pub fn entries(surface: &Surface) -> Vec<Entry> {
     }
 }
 
+/// One entry as both frontends paint it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Row {
+    /// Translated label.
+    pub label: String,
+    /// The command's first chord in this keymap, painted; empty for verbs
+    /// and for commands with no key.
+    pub chord: String,
+    /// Whether activating it runs something.
+    pub enabled: bool,
+    /// Why not, translated; empty when enabled.
+    pub reason: String,
+    /// The section this entry opens (`Some("")` = a bare rule).
+    pub section: Option<String>,
+    /// The menu role (`normal`, `ai`, `danger`…) a renderer styles by.
+    pub role: &'static str,
+    /// What it runs.
+    pub action: Action,
+}
+
+/// What a listing menu (a row or the empty area) saw at opening, so an
+/// entry run after the listing changed under it refuses instead of acting
+/// on whatever now sits there.
+///
+/// Paths and a count, not the generation: the generation moves with any
+/// filler batch, a refresh that changed nothing included, and a menu that
+/// went stale on every refresh would refuse a copy that targets exactly
+/// what it said.
+///
+/// The FOLDER is in it, and the entry is its WHOLE path, because a pane
+/// keeps `dir()` and the old body until the new listing lands: a menu
+/// opened during a slow load said "in /old", and once /new lands New folder
+/// or Mark all would act there. A last component alone would let a
+/// same-named file in the new folder pass for the one the header named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fingerprint {
+    /// The folder the listing showed.
+    pub dir: norte_proto::VPath,
+    /// The pointed entry's full path.
+    pub entry: Option<norte_proto::VPath>,
+    /// How many marks the pane had.
+    pub marks: usize,
+}
+
+/// Why `e` cannot run, as a Fluent key, or `None` when it can.
+///
+/// The ONE function for what a menu paints dimmed and what a click refuses,
+/// so the two cannot disagree. `implemented` is this frontend's command
+/// set; `verb_reason` answers the verbs, whose vetoes depend on what the
+/// frontend knows about the surface (a column, a place).
+pub fn reason_of(
+    e: &Entry,
+    facts: &crate::availability::Facts,
+    implemented: &[&str],
+    verb_reason: impl Fn(Verb) -> Option<std::borrow::Cow<'static, str>>,
+) -> Option<std::borrow::Cow<'static, str>> {
+    use std::borrow::Cow;
+    match e.action {
+        Action::Command(c) if implemented.contains(&c) => crate::availability::verdict(c, facts)
+            .reason()
+            .map(|r| Cow::Borrowed(crate::availability::reason_key(r))),
+        Action::Command(_) => Some(Cow::Borrowed("reason-unavailable")),
+        Action::Verb(v) => verb_reason(v),
+    }
+}
+
+/// `entries` as rows to paint, in `lang`, with `keymap`'s chords.
+pub fn project(
+    entries: &[Entry],
+    facts: &crate::availability::Facts,
+    implemented: &[&str],
+    keymap: &crate::keymap::Effective,
+    lang: norte_i18n::Lang,
+    verb_reason: impl Fn(Verb) -> Option<std::borrow::Cow<'static, str>>,
+) -> Vec<Row> {
+    let t = |k: &str| norte_i18n::t_in(lang, k);
+    entries
+        .iter()
+        .map(|e| {
+            let reason = reason_of(e, facts, implemented, &verb_reason);
+            let (chord, role) = match e.action {
+                Action::Command(c) => (
+                    crate::overlays::palette::first_chord(c, keymap).unwrap_or_default(),
+                    crate::chrome::menu::role(c).as_str(),
+                ),
+                Action::Verb(_) => (String::new(), "normal"),
+            };
+            Row {
+                label: t(e.label_key),
+                chord,
+                enabled: reason.is_none(),
+                reason: reason.map_or_else(String::new, |k| t(&k)),
+                section: e
+                    .section
+                    .map(|k| if k.is_empty() { String::new() } else { t(k) }),
+                role,
+                action: e.action,
+            }
+        })
+        .collect()
+}
+
 fn open_verbs() -> Vec<Entry> {
     vec![
         verb(Verb::OpenHere, "ctx-open-here", None),
@@ -420,6 +522,75 @@ mod tests {
         }
         assert!(!local.contains(&"pane.disconnect"));
         assert!(commands(&Surface::Empty { remote: true }).contains(&"pane.disconnect"));
+    }
+
+    fn all_clear() -> crate::availability::Facts {
+        crate::availability::Facts {
+            enterable: true,
+            viewable: true,
+            rename_single: true,
+            source_read_only: false,
+            dest_read_only: false,
+            degraded: false,
+            journalled: true,
+            daemon: true,
+            windowed: true,
+            pane_on_disk: true,
+            pane_in_archive: false,
+        }
+    }
+
+    /// The projection both frontends paint: an entry whose command this
+    /// frontend does not run is dimmed with "unavailable", one the shared
+    /// table vetoes carries the table's reason, and the rest are enabled
+    /// with their chord. One list for what is PAINTED and what a click
+    /// REFUSES.
+    #[test]
+    fn the_projection_dims_what_this_frontend_cannot_run() {
+        use norte_i18n::{Lang, t_in};
+        let preset = crate::keymap::parse_keymap(
+            "[pane]\nkeymap = [ { on = [\"f3\"], run = \"pane.view\" } ]\n",
+        )
+        .expect("fixture parses");
+        let eff = crate::keymap::Effective::build_for(
+            &preset,
+            &[],
+            &["pane.view"],
+            crate::keymap::Screen::Browse,
+        )
+        .expect("fixture builds");
+        let entries = entries(&row(1, Some(EntryKind::File), false, true));
+        let mut facts = all_clear();
+        facts.dest_read_only = true;
+        let implemented: Vec<&str> = entries
+            .iter()
+            .filter_map(|e| match e.action {
+                Action::Command(c) if c != "pane.chmod" => Some(c),
+                _ => None,
+            })
+            .collect();
+        let rows = project(&entries, &facts, &implemented, &eff, Lang::En, |_| None);
+        assert_eq!(rows.len(), entries.len());
+        let by = |c: &'static str| {
+            rows.iter()
+                .find(|r| r.action == Action::Command(c))
+                .unwrap_or_else(|| panic!("{c}"))
+        };
+        let chmod = by("pane.chmod");
+        assert!(!chmod.enabled);
+        assert_eq!(chmod.reason, t_in(Lang::En, "reason-unavailable"));
+        let copy = by("pane.copy");
+        assert!(!copy.enabled);
+        assert_eq!(copy.reason, t_in(Lang::En, "reason-read-only"));
+        let view = by("pane.view");
+        assert!(view.enabled && view.reason.is_empty());
+        assert!(!view.chord.is_empty(), "the fixture binds F3");
+        assert_eq!(view.label, t_in(Lang::En, "menu-item-pane-view"));
+        assert_eq!(
+            reason_of(&entries[0], &facts, &implemented, |_| None),
+            None,
+            "the click's refusal and the paint come from one function"
+        );
     }
 
     /// "Terminal here" is on a row's menu and on the empty area's, always:

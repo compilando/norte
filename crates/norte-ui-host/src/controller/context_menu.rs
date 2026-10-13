@@ -47,28 +47,7 @@ pub(super) struct ContextMenu {
     pub(super) anchor: Option<(i32, i32)>,
 }
 
-/// What a listing menu (a row or the empty area) saw at opening.
-///
-/// Paths and a count, not the generation: the generation moves with any
-/// filler batch, a refresh that changed nothing included, and a menu that
-/// went stale on every refresh would refuse a copy that targets exactly
-/// what it said.
-///
-/// The FOLDER is in it, and the entry is its WHOLE path, because
-/// `navigate_slot` keeps `dir()` and the old body until the new listing
-/// lands: a menu opened during a slow load said "in /old", and once /new
-/// lands New folder or Mark all would act there. A last component alone
-/// would let a same-named file in the new folder pass for the one the
-/// header named.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Fingerprint {
-    /// The folder the listing showed.
-    pub(super) dir: VPath,
-    /// The pointed entry's full path.
-    pub(super) entry: Option<VPath>,
-    /// How many marks the pane had.
-    pub(super) marks: usize,
-}
+pub(super) use norte_frontend::context_menu::Fingerprint;
 
 /// What a menu-local verb acts on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -450,37 +429,25 @@ impl State {
     /// row and the hand learns it once.
     pub(super) fn vista_context_menu(&self) -> Option<crate::dto::ContextMenuView> {
         let m = self.context_menu.as_ref()?;
-        let items = m
-            .entries
-            .iter()
-            .map(|e| {
-                let reason = self.reason_against(m, e);
-                let (chord, role) = match e.action {
-                    Action::Command(c) => (
-                        norte_frontend::palette::first_chord(c, &self.effective)
-                            .unwrap_or_default(),
-                        norte_frontend::menu::role(c).as_str(),
-                    ),
-                    Action::Verb(_) => (String::new(), "normal"),
-                };
-                crate::dto::ContextItemView {
-                    label: clamp_display(norte_i18n::t_in(self.lang, e.label_key)),
-                    chord: clamp_display(chord),
-                    enabled: reason.is_none(),
-                    reason: reason.map_or_else(String::new, |k| {
-                        clamp_display(norte_i18n::t_in(self.lang, &k))
-                    }),
-                    section: e.section.map(|k| {
-                        if k.is_empty() {
-                            String::new()
-                        } else {
-                            clamp_display(norte_i18n::t_in(self.lang, k))
-                        }
-                    }),
-                    role: role.to_owned(),
-                }
-            })
-            .collect();
+        let implemented = crate::commands::all_with(self.effects);
+        let items = norte_frontend::context_menu::project(
+            &m.entries,
+            &m.facts,
+            &implemented,
+            &self.effective,
+            self.lang,
+            |v| verb_reason(m, v),
+        )
+        .into_iter()
+        .map(|r| crate::dto::ContextItemView {
+            label: clamp_display(r.label),
+            chord: clamp_display(r.chord),
+            enabled: r.enabled,
+            reason: clamp_display(r.reason),
+            section: r.section.map(clamp_display),
+            role: r.role.to_owned(),
+        })
+        .collect();
         Some(crate::dto::ContextMenuView {
             header: m.header.clone(),
             items,
@@ -490,44 +457,11 @@ impl State {
         })
     }
 
-    /// Why entry `e` of `m` cannot run, as a Fluent reason key, or `None`
-    /// when it can.
-    ///
-    /// ONE function for the two questions — what the menu PAINTS dimmed and
-    /// what a click REFUSES — so the two cannot disagree: an entry painted
-    /// enabled that refused, or the reverse, would be a menu lying about
-    /// itself. The criteria are the shared table's verdict on the facts
-    /// frozen at opening, plus "this window does not run it"; there is no
-    /// third.
-    ///
-    /// The verbs have exactly two vetoes, both decided at opening: hiding a
-    /// column that cannot be hidden (`name`), and the verbs that need the
-    /// path (the Open ones and Copy path) on a favorite whose target did
-    /// not parse — reason, the config's own error key, the one the bar
-    /// already paints as the row's "broken" note.
+    /// Why entry `e` of `m` cannot run (`context_menu::reason_of`, the one
+    /// function for what is painted dimmed and what a click refuses).
     fn reason_against(&self, m: &ContextMenu, e: &Entry) -> Option<Cow<'static, str>> {
-        match e.action {
-            Action::Command(c) => {
-                if crate::commands::all_with(self.effects).contains(&c) {
-                    norte_frontend::availability::verdict(c, &m.facts)
-                        .reason()
-                        .map(|r| Cow::Borrowed(norte_frontend::availability::reason_key(r)))
-                } else {
-                    Some(Cow::Borrowed("reason-unavailable"))
-                }
-            }
-            Action::Verb(Verb::HideColumn) => (m.surface == (Surface::Header { hideable: false }))
-                .then_some(Cow::Borrowed("reason-wrong-target")),
-            Action::Verb(
-                Verb::OpenHere | Verb::OpenInOther | Verb::OpenInNewTab | Verb::CopyPath,
-            ) => match &m.subject {
-                Subject::Place {
-                    broken: Some(key), ..
-                } => Some(Cow::Owned(key.clone())),
-                _ => None,
-            },
-            Action::Verb(_) => None,
-        }
+        let implemented = crate::commands::all_with(self.effects);
+        norte_frontend::context_menu::reason_of(e, &m.facts, &implemented, |v| verb_reason(m, v))
     }
 
     /// What a listing menu on `slot` would remember if it opened NOW: the
@@ -936,5 +870,26 @@ impl State {
             context_menu: self.vista_context_menu(),
         });
         (self.applied(), vec![self.parche(changes)])
+    }
+}
+
+/// The window's two verb vetoes, both decided at opening: hiding a column
+/// that cannot be hidden (`name`), and the verbs that need the path (the
+/// Open ones and Copy path) on a favorite whose target did not parse —
+/// reason, the config's own error key, the one the bar already paints as
+/// the row's "broken" note.
+fn verb_reason(m: &ContextMenu, v: Verb) -> Option<Cow<'static, str>> {
+    match v {
+        Verb::HideColumn => (m.surface == (Surface::Header { hideable: false }))
+            .then_some(Cow::Borrowed("reason-wrong-target")),
+        Verb::OpenHere | Verb::OpenInOther | Verb::OpenInNewTab | Verb::CopyPath => {
+            match &m.subject {
+                Subject::Place {
+                    broken: Some(key), ..
+                } => Some(Cow::Owned(key.clone())),
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
