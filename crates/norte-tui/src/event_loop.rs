@@ -447,7 +447,7 @@ pub async fn run(
         // takes them down on this very frame).
         let keep_frame = crate::rail_icons::backend(app) == crate::rail_icons::RailBackend::Sixel
             || crate::rail_icons::any_sixel_placed();
-        let mut drawn: Option<ratatui::buffer::Buffer> = None;
+        let mut drawn: Option<crate::rail_icons::KeptFrame> = None;
         let painted_area = if skip_frame {
             last_area
         } else {
@@ -464,7 +464,7 @@ pub async fn run(
                 .draw(|f| ui::draw(f, app))
                 .map_err(RunError::Terminal)?;
             if keep_frame {
-                drawn = Some(crate::rail_icons::column_strip(frame.buffer));
+                drawn = Some(crate::rail_icons::kept_frame(frame.buffer));
             }
             frame.area
         };

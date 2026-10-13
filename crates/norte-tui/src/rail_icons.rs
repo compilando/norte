@@ -80,7 +80,7 @@ pub fn canvas_for(cell_px: (u16, u16)) -> (u32, u32) {
 }
 
 /// [`canvas_for`] for an icon `cols` × `rows` cells wide (the chrome's
-/// one-row icons are 2 × 1), scaled up the same way for a crisp kitty
+/// one-row icons are 3 × 1), scaled up the same way for a crisp kitty
 /// image; `exact` for sixel, which paints cell by cell.
 #[must_use]
 pub fn canvas_cells(cell_px: (u16, u16), cols: u32, rows: u32, exact: bool) -> (u32, u32) {
@@ -295,7 +295,7 @@ fn placed() -> std::sync::MutexGuard<'static, Vec<Option<Placed>>> {
 /// row shares a row with where it was, and a later repaint would erase
 /// half of it. The cursor is saved and restored around it all. A failed
 /// write keeps what was believed on screen, so the exit can still erase it.
-pub fn sync<B>(out: &mut B, want: &[RailIcon], frame: Option<&ratatui::buffer::Buffer>)
+pub fn sync<B>(out: &mut B, want: &[RailIcon], frame: Option<&KeptFrame>)
 where
     B: ratatui::backend::Backend<Error = std::io::Error> + std::io::Write,
 {
@@ -376,8 +376,8 @@ where
     let written = (|| -> std::io::Result<()> {
         out.write_all(b"\x1b7")?;
         out.write_all(down.as_bytes())?;
-        if let Some(buf) = frame {
-            out.draw(repaint_cells(buf, &repaint).into_iter())?;
+        if let Some(kept) = frame {
+            out.draw(repaint_from(kept, &repaint).into_iter())?;
         }
         for (w, escape) in up.iter().filter(|(_, e)| !e.is_empty()) {
             crossterm::queue!(out, crossterm::cursor::MoveTo(w.rect.x, w.rect.y))?;
@@ -401,19 +401,53 @@ where
 /// cells, and its icons sit in columns 1–2.
 pub const STRIP_W: u16 = 4;
 
-/// The column's strip of a drawn frame — all a repaint reads — instead of
-/// a copy of the whole screen on every frame.
+/// What a repaint reads of a drawn frame: the column's strip and the menu
+/// row (the layout buttons), instead of the whole screen on every frame.
+pub struct KeptFrame {
+    /// The left strip, `STRIP_W` wide.
+    pub column: ratatui::buffer::Buffer,
+    /// The top row, full width.
+    pub menu_row: ratatui::buffer::Buffer,
+}
+
+/// Keeps the parts of `frame` an icon can sit on.
 #[must_use]
-pub fn column_strip(frame: &ratatui::buffer::Buffer) -> ratatui::buffer::Buffer {
-    let area = ratatui::layout::Rect {
-        width: frame.area.width.min(STRIP_W),
-        ..frame.area
+pub fn kept_frame(frame: &ratatui::buffer::Buffer) -> KeptFrame {
+    let copy = |area: ratatui::layout::Rect| {
+        let mut part = ratatui::buffer::Buffer::empty(area);
+        for p in area.positions() {
+            part[p] = frame[p].clone();
+        }
+        part
     };
-    let mut strip = ratatui::buffer::Buffer::empty(area);
-    for p in area.positions() {
-        strip[p] = frame[p].clone();
+    KeptFrame {
+        column: copy(ratatui::layout::Rect {
+            width: frame.area.width.min(STRIP_W),
+            ..frame.area
+        }),
+        menu_row: copy(ratatui::layout::Rect {
+            height: frame.area.height.min(1),
+            ..frame.area
+        }),
     }
-    strip
+}
+
+/// The cells of `rects` from whichever kept part holds each one whole.
+fn repaint_from<'a>(
+    kept: &'a KeptFrame,
+    rects: &[ratatui::layout::Rect],
+) -> Vec<(u16, u16, &'a ratatui::buffer::Cell)> {
+    rects
+        .iter()
+        .flat_map(|r| {
+            let part = if kept.column.area.intersection(*r) == *r {
+                &kept.column
+            } else {
+                &kept.menu_row
+            };
+            repaint_cells(part, std::slice::from_ref(r))
+        })
+        .collect()
 }
 
 /// The cells of `rects` as `frame` has them, for a repaint — skipping the
@@ -558,7 +592,7 @@ mod tests {
         sync_f(o, want, None);
     }
 
-    fn sync_f(o: &mut Vec<u8>, want: &[RailIcon], frame: Option<&ratatui::buffer::Buffer>) {
+    fn sync_f(o: &mut Vec<u8>, want: &[RailIcon], frame: Option<&KeptFrame>) {
         sync(&mut ratatui::backend::CrosstermBackend::new(o), want, frame);
     }
 
@@ -581,10 +615,26 @@ mod tests {
         let _ = written(delete_all);
         let want = [sixel_icon([200, 0, 0])];
         let _ = written(|o| sync_v(o, &want));
-        let hidden = written(|o| sync_f(o, &[], Some(&frame_of_x())));
+        let hidden = written(|o| sync_f(o, &[], Some(&kept_frame(&frame_of_x()))));
         assert_eq!(hidden.matches('x').count(), 4, "its 2×2 cells: {hidden:?}");
         assert!(!hidden.contains("\x1b_G"), "no kitty delete");
         assert!(written(|o| sync_v(o, &want)).contains("\x1bP"));
+    }
+
+    /// A layout button's sixel sits on the menu row, far right of the
+    /// column's strip: taken down (the menu opens), its cells come from
+    /// what the loop kept, or the dead icon stays on screen.
+    #[test]
+    fn a_sixel_on_the_menu_row_is_repainted_from_the_kept_frame() {
+        let _ = written(delete_all);
+        let button = RailIcon {
+            rect: ratatui::layout::Rect::new(7, 0, 2, 1),
+            ..sixel_icon([200, 0, 0])
+        };
+        let _ = written(|o| sync_v(o, &[button]));
+        let kept = kept_frame(&frame_of_x());
+        let hidden = written(|o| sync_f(o, &[], Some(&kept)));
+        assert_eq!(hidden.matches('x').count(), 2, "its 2 cells: {hidden:?}");
     }
 
     /// An icon that moves one row (a button more, the menu bar toggled)
@@ -598,7 +648,7 @@ mod tests {
             rect: ratatui::layout::Rect::new(1, 1, 2, 2),
             ..sixel_icon([200, 0, 0])
         };
-        let out = written(|o| sync_f(o, &[moved], Some(&frame_of_x())));
+        let out = written(|o| sync_f(o, &[moved], Some(&kept_frame(&frame_of_x()))));
         let repaint = out.find('x').expect("old cells repainted");
         let image = out.find("\x1bP").expect("placed again");
         assert!(repaint < image, "{out:?}");
@@ -611,7 +661,13 @@ mod tests {
     fn a_recoloured_sixel_clears_its_cells_first() {
         let _ = written(delete_all);
         let _ = written(|o| sync_v(o, &[sixel_icon([200, 0, 0])]));
-        let out = written(|o| sync_f(o, &[sixel_icon([0, 200, 0])], Some(&frame_of_x())));
+        let out = written(|o| {
+            sync_f(
+                o,
+                &[sixel_icon([0, 200, 0])],
+                Some(&kept_frame(&frame_of_x())),
+            );
+        });
         let repaint = out.find('x').expect("cells repainted");
         let image = out.find("\x1bP").expect("placed again");
         assert!(repaint < image, "{out:?}");
@@ -686,9 +742,13 @@ mod tests {
     /// column's strip, not the whole screen every frame.
     #[test]
     fn the_kept_frame_is_the_column_strip() {
-        let strip = column_strip(&frame_of_x());
-        assert_eq!(strip.area, ratatui::layout::Rect::new(0, 0, STRIP_W, 10));
-        assert_eq!(strip[(1, 3)].symbol(), "x", "its cells, copied");
+        let kept = kept_frame(&frame_of_x());
+        assert_eq!(
+            kept.column.area,
+            ratatui::layout::Rect::new(0, 0, STRIP_W, 10)
+        );
+        assert_eq!(kept.column[(1, 3)].symbol(), "x", "its cells, copied");
+        assert_eq!(kept.menu_row.area, ratatui::layout::Rect::new(0, 0, 10, 1));
     }
 
     /// The window's live size wins — it follows a font zoom, which changes
@@ -734,7 +794,7 @@ mod tests {
     fn kitty_removal_repaints_nothing() {
         let _ = written(delete_all);
         let _ = written(|o| sync_v(o, &[icon("places", [1, 2, 3], 1, 2)]));
-        let out = written(|o| sync_f(o, &[], Some(&frame_of_x())));
+        let out = written(|o| sync_f(o, &[], Some(&kept_frame(&frame_of_x()))));
         assert!(!out.contains('x') && out.contains("d=i"), "{out:?}");
     }
 

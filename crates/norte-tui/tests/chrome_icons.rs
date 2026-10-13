@@ -40,8 +40,9 @@ fn first_row(app: &mut App) -> String {
         .to_owned()
 }
 
-/// With pixels, each layout button gets its shared icon in two cells of
-/// the menu row, and the ASCII glyph is not painted under it.
+/// With pixels, each layout button gets its shared icon over the three
+/// cells of its button (the click zone), and the ASCII glyph is not
+/// painted under it.
 #[test]
 fn the_layout_buttons_draw_their_icons_with_pixels() {
     let mut app = app(norte_config::Images::Kitty);
@@ -60,7 +61,7 @@ fn the_layout_buttons_draw_their_icons_with_pixels() {
         ]
     );
     for i in &icons {
-        assert_eq!((i.rect.y, i.rect.width, i.rect.height), (0, 2, 1), "{i:?}");
+        assert_eq!((i.rect.y, i.rect.width, i.rect.height), (0, 3, 1), "{i:?}");
     }
     assert!(!row.contains("[|]"), "{row}");
 }
@@ -73,4 +74,14 @@ fn without_pixels_the_glyphs_stay() {
     let area = ratatui::layout::Rect::new(0, 0, W, H);
     assert!(ui::chrome_icons_to_place(&app, area, (10, 20)).is_empty());
     assert!(row.contains("[|]"), "{row}");
+}
+
+/// An open menu covers the buttons: no icon is placed, so a sixel one
+/// already up comes down.
+#[test]
+fn an_open_menu_places_no_icon() {
+    let mut app = app(norte_config::Images::Kitty);
+    app.menu = Some(norte_frontend::menu::MenuState::new());
+    let area = ratatui::layout::Rect::new(0, 0, W, H);
+    assert!(ui::chrome_icons_to_place(&app, area, (10, 20)).is_empty());
 }

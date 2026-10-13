@@ -720,7 +720,7 @@ pub(crate) fn rail_pixels_shown(app: &App, area: Rect) -> Option<(Rect, geometry
 /// pixels sit above the text). ONE answer for the painter, which then
 /// leaves the glyph cells blank, and for [`chrome_icons_to_place`].
 pub(crate) fn layout_pixels_shown(app: &App) -> bool {
-    (app.menu_bar || app.menu.is_some())
+    app.menu_bar
         && !something_above_the_viewer(app)
         && crate::rail_icons::backend(app) != crate::rail_icons::RailBackend::Glyph
 }
@@ -730,7 +730,7 @@ pub(crate) fn layout_pixels_shown(app: &App) -> bool {
 const CHROME_SLOTS: usize = 48;
 
 /// The chrome's icons to place this frame: the layout buttons' shared
-/// drawings (`layout:*`), two cells of the menu row each, in the title's
+/// drawings (`layout:*`), over the three cells of each button, in the title's
 /// colour. Empty unless `layout_pixels_shown`.
 #[must_use]
 pub fn chrome_icons_to_place(
@@ -743,7 +743,7 @@ pub fn chrome_icons_to_place(
     }
     let backend = crate::rail_icons::backend(app);
     let exact = backend == crate::rail_icons::RailBackend::Sixel;
-    let canvas = crate::rail_icons::canvas_cells(cell_px, 2, 1, exact);
+    let canvas = crate::rail_icons::canvas_cells(cell_px, 3, 1, exact);
     let Some(rgb) = app
         .theme
         .role_rgb(Role::Title)
@@ -761,7 +761,7 @@ pub fn chrome_icons_to_place(
         .map(|(i, (x, b))| crate::rail_icons::RailIcon {
             kind: format!("layout:{}", b.id),
             rgb,
-            rect: Rect::new(x, area.y, 2, 1),
+            rect: Rect::new(x, area.y, 3, 1),
             canvas,
             backend,
             bg,
@@ -815,6 +815,7 @@ pub fn rail_icons_to_place(
         .into_iter()
         .zip(chrome::panel_buttons(app, area))
         .enumerate()
+        .take(CHROME_SLOTS)
         .filter(|(_, (_, b))| icon_svg(&b.kind).is_some())
         .filter_map(|(index, (slot, b))| {
             let rgb = match b.state {

@@ -549,9 +549,6 @@ mod tests {
         KindRegistry::builtin()
     }
 
-    /// Every built-in button has the shared SVG both frontends draw, and
-    /// it is colourable (`currentColor`) — the TUI swaps that for the
-    /// state's colour before rasterising.
     /// The chrome's own icons (layout buttons, places and tree, status bar)
     /// are shared files too: one per id in `CHROME_ICONS`, named after it,
     /// so the terminal rasterises the drawing the window paints.
@@ -570,6 +567,9 @@ mod tests {
         }
     }
 
+    /// Every built-in button has the shared SVG both frontends draw, and
+    /// it is colourable (`currentColor`) — the TUI swaps that for the
+    /// state's colour before rasterising.
     #[test]
     fn every_builtin_button_has_a_shared_svg() {
         let reg = registry();
