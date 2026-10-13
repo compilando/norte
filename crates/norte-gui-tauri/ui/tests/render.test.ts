@@ -63,6 +63,7 @@ function row(key: number, name: string, extra: Partial<RowView> = {}): RowView {
     badge_role: "",
     icon: "",
     icon_hostile: false,
+    icon_kind: "file",
     name_color: "",
     name_bold: false,
     name_dim: false,

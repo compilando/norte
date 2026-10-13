@@ -624,6 +624,7 @@ impl State {
                 .map(clamp_display)
                 .unwrap_or_default(),
             icon_hostile: decoration.is_some_and(|d| d.icon_hostile),
+            icon_kind: norte_frontend::file_icon::icon_kind(bytes, e.kind).to_owned(),
             name_color: style.color,
             name_bold: style.bold,
             name_dim: style.dim,

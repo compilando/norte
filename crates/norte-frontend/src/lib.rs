@@ -62,6 +62,7 @@ pub mod confine;
 pub mod context_menu;
 mod decoration;
 pub mod error;
+pub mod file_icon;
 pub mod fuzzy;
 pub mod handoff;
 pub mod help;

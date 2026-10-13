@@ -1475,6 +1475,22 @@ body {
   opacity: 0.55;
 }
 
+/* The colored file-type icon (bridge 114, ADR 0184): its colors are the
+   drawing's own, so no stroke, no `currentColor`, no dimming. A bit larger
+   than the stroke page because a filled shape reads smaller. */
+.row-file-icon {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 17px;
+  height: 17px;
+  margin-right: 6px;
+}
+
+/* A symlink keeps its type's drawing, a little faded: it is not the file. */
+.kind-symlink .row-file-icon {
+  opacity: 0.7;
+}
+
 /* The icon column (bridge 62): a fixed width of two cells and a space,
    BEFORE the name, across every row of the slot as soon as one has an
    icon. Isolated because it is a plugin's text glued to a file name. The

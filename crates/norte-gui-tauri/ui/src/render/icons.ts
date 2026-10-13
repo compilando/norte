@@ -38,6 +38,40 @@ import fsRemovable from "../../../../norte-frontend/assets/ui-icons/fs-removable
 import fsNetwork from "../../../../norte-frontend/assets/ui-icons/fs-network.svg?raw";
 import fsHome from "../../../../norte-frontend/assets/ui-icons/fs-home.svg?raw";
 
+// The listing's own colored icons per file type (ADR 0184). The HOST picks
+// the id (`RowView.icon_kind`); here it is only drawn.
+import ftArchive from "../../../../norte-frontend/assets/file-icons/archive.svg?raw";
+import ftAudio from "../../../../norte-frontend/assets/file-icons/audio.svg?raw";
+import ftCode from "../../../../norte-frontend/assets/file-icons/code.svg?raw";
+import ftConfig from "../../../../norte-frontend/assets/file-icons/config.svg?raw";
+import ftDoc from "../../../../norte-frontend/assets/file-icons/doc.svg?raw";
+import ftFile from "../../../../norte-frontend/assets/file-icons/file.svg?raw";
+import ftFolder from "../../../../norte-frontend/assets/file-icons/folder.svg?raw";
+import ftImage from "../../../../norte-frontend/assets/file-icons/image.svg?raw";
+import ftPdf from "../../../../norte-frontend/assets/file-icons/pdf.svg?raw";
+import ftScript from "../../../../norte-frontend/assets/file-icons/script.svg?raw";
+import ftSheet from "../../../../norte-frontend/assets/file-icons/sheet.svg?raw";
+import ftSlides from "../../../../norte-frontend/assets/file-icons/slides.svg?raw";
+import ftText from "../../../../norte-frontend/assets/file-icons/text.svg?raw";
+import ftVideo from "../../../../norte-frontend/assets/file-icons/video.svg?raw";
+
+const FILE_SVG: Record<string, string> = {
+  archive: ftArchive,
+  audio: ftAudio,
+  code: ftCode,
+  config: ftConfig,
+  doc: ftDoc,
+  file: ftFile,
+  folder: ftFolder,
+  image: ftImage,
+  pdf: ftPdf,
+  script: ftScript,
+  sheet: ftSheet,
+  slides: ftSlides,
+  text: ftText,
+  video: ftVideo,
+};
+
 const SVG = "http://www.w3.org/2000/svg";
 
 /** An icon's pieces: `d` paths and `[cx, cy, r]` circles. */
@@ -157,6 +191,51 @@ function shapeOf(src: string): Shape {
     (m): [number, number, number] => [Number(m[1]), Number(m[2]), Number(m[3])],
   );
   return { paths, circles };
+}
+
+/** The presentation attributes a colored icon's piece may carry. */
+const PAINT = [
+  "d",
+  "fill",
+  "stroke",
+  "stroke-width",
+  "stroke-linecap",
+  "stroke-linejoin",
+];
+
+/**
+ * A listing row's own colored icon for a file-type id, or `null` for an id
+ * without a drawing (the caller falls back to the plain page).
+ *
+ * The same two-pattern reading as `shapeOf`, and for the same reason (D11):
+ * the files are ours, and each `<path>`/`<circle>` keeps only the
+ * attributes in `PAINT`, so nothing in them is markup the webview runs.
+ */
+export function fileIcon(doc: Document, id: string): SVGSVGElement | null {
+  const src = FILE_SVG[id];
+  if (src === undefined) {
+    return null;
+  }
+  const svg = doc.createElementNS(SVG, "svg");
+  svg.setAttribute("class", "file-icon");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  for (const m of src.matchAll(/<(path|circle) ([^>]*?)\/>/g)) {
+    const tag = m[1] ?? "path";
+    const el = doc.createElementNS(SVG, tag);
+    for (const a of (m[2] ?? "").matchAll(/([a-z-]+)="([^"]*)"/g)) {
+      const [name, value] = [a[1] ?? "", a[2] ?? ""];
+      if (
+        PAINT.includes(name) ||
+        (tag === "circle" && ["cx", "cy", "r"].includes(name))
+      ) {
+        el.setAttribute(name, value);
+      }
+    }
+    svg.append(el);
+  }
+  return svg;
 }
 
 /** A badge's figure: past a hundred, `99+`. */

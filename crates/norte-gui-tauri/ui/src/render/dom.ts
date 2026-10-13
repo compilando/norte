@@ -12,7 +12,7 @@ import type {
   ViewerView,
   ViewSnapshot,
 } from "../types";
-import { icon as fsIcon } from "./icons";
+import { fileIcon, icon as fsIcon } from "./icons";
 
 /**
  * Scrolls just enough for `el` to be visible, if the environment knows how.
@@ -453,14 +453,26 @@ export function updateRow(
     // No plugin icons: the window's own folder and page, the Tree's same
     // drawing (2026-10-08). A `/` glued to the name was the only mark of a
     // folder; an icon says it at a glance and keeps the names aligned.
-    const own = fsIcon(document, row.kind === "dir" ? "fs:folder" : "fs:file");
-    if (own !== null) {
-      own.classList.add("row-icon");
-      if (row.name_color !== "" && !row.selected) {
-        own.style.color = row.name_color;
-      }
-      block.append(own);
+    //
+    // Since bridge 114 (ADR 0184) it is a COLORED drawing per file type,
+    // like a desktop file manager's: the type's colors are the drawing's,
+    // so it does not take the entry color the stroke icon took. An id
+    // without a drawing — a newer host — falls back to the stroke page.
+    const colored = fileIcon(document, row.icon_kind);
+    if (colored !== null) {
+      colored.classList.add("row-file-icon");
+      block.append(colored);
       el.classList.add("own-icon");
+    } else {
+      const own = fsIcon(document, row.kind === "dir" ? "fs:folder" : "fs:file");
+      if (own !== null) {
+        own.classList.add("row-icon");
+        if (row.name_color !== "" && !row.selected) {
+          own.style.color = row.name_color;
+        }
+        block.append(own);
+        el.classList.add("own-icon");
+      }
     }
   }
   block.append(name);

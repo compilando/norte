@@ -107,6 +107,7 @@ fn row(key: u64, name: &str, hostile: bool) -> RowView {
         badge_role: String::new(),
         icon: String::new(),
         icon_hostile: false,
+        icon_kind: "file".to_owned(),
         name_color: String::new(),
         name_bold: false,
         name_dim: false,
@@ -3379,7 +3380,7 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // change go; `app.palette` opens the go-to box with `>`.
     // 111 (spec 2026-10-09): `ViewerView.highlight`/`.lines_from`, and
     // `SlotView::Search` with its rows, the search panel.
-    const SHAPE: u64 = 10_195_354_051_754_575_098;
+    const SHAPE: u64 = 13_061_708_098_836_872_754;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

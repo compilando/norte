@@ -3050,6 +3050,10 @@ pub struct RowView {
     /// The icon is painted different from what it is. Same reason as the
     /// badge.
     pub icon_hostile: bool,
+    /// The window's own colored icon for this row when no plugin gave
+    /// [`Self::icon`] (ADR 0184): one of `norte_frontend::file_icon::IDS`,
+    /// decided by the host from the raw name.
+    pub icon_kind: String,
     /// The `#rrggbb` color the THEME paints this entry's name with, from
     /// `[files.ext]` (wins) or `[files.kind]`. Empty = the theme says
     /// nothing about it and the renderer uses the listing's normal color.

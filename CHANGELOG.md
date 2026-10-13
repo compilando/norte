@@ -9,6 +9,11 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The window paints colored icons per file type**, as a desktop file
+  manager does: a red PDF, a blue document, a green spreadsheet, a picture
+  for an image, and more, plus a blue folder. They are on with no plugin
+  to approve. The `file-icons` plugin, when on, still wins (ADR 0184). The
+  terminal is unchanged.
 - **norte can tell you when a new release is out.** It is off unless you
   turn it on: the first-run wizard asks, and Settings has "Check for new
   releases". When on, it asks GitHub at most once a day, at start, and

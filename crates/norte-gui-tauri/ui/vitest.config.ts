@@ -8,6 +8,7 @@ export default defineConfig({
         ".",
         "../../norte-frontend/assets/panel-icons",
         "../../norte-frontend/assets/ui-icons",
+        "../../norte-frontend/assets/file-icons",
       ],
     },
   },
