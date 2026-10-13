@@ -490,14 +490,7 @@ pub async fn dispatch(
             // inner root the child is NOT `dir` (that is the virtual
             // compound path, not a real entry in the parent's listing) but
             // the container file itself (`aref.outer`).
-            let (parent, child) = match dir.archive_split() {
-                Ok(Some(aref)) if aref.inner.is_empty() => {
-                    let outer = aref.outer.clone();
-                    (outer.parent(), outer)
-                }
-                _ => (dir.parent(), dir.clone()),
-            };
-            if let Some(parent) = parent {
+            if let Some((parent, child)) = norte_frontend::nav::up_from(&dir) {
                 app.focused_mut().set_pending_focus(child);
                 cd_outcome = cd(app, backend, events, parent).await;
                 // Review S, M2: a FAILED `cd` (permission denied, daemon

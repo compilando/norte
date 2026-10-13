@@ -494,7 +494,7 @@ impl PaneState {
         if !matches!(self.parent_row, ParentRow::Requested) {
             return;
         }
-        let Some(parent) = self.dir.parent() else {
+        let Some((parent, _)) = crate::nav::up_from(&self.dir) else {
             return;
         };
         let row = Entry {

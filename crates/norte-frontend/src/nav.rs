@@ -1143,6 +1143,34 @@ pub fn archive_root_for(e: &norte_proto::Entry) -> Option<norte_proto::VPath> {
     VPath::archive_compose(format, &e.path, &[]).ok()
 }
 
+/// Where going up from `dir` lands, and the entry there to put the cursor
+/// on: `(parent, child)`, or `None` at a root.
+///
+/// At an archive's inner root the parent is the folder holding the
+/// CONTAINER, and the child is the container file itself. The syntactic
+/// [`VPath::parent`](norte_proto::VPath::parent) only drops the `!` marker
+/// there, leaving a compound path without one, which is malformed (ADR
+/// 0018) and every provider rejects. Shared so the `..` row, the window's
+/// "go up" and the terminal's agree.
+///
+/// ```
+/// use norte_proto::VPath;
+/// use norte_frontend::nav::up_from;
+/// let zip = VPath::parse("file:///home/u/files.zip").unwrap();
+/// let root = VPath::archive_compose("zip", &zip, &[]).unwrap();
+/// assert_eq!(up_from(&root), Some((VPath::parse("file:///home/u").unwrap(), zip)));
+/// let dir = VPath::parse("file:///home/u").unwrap();
+/// assert_eq!(up_from(&dir), Some((VPath::parse("file:///home").unwrap(), dir.clone())));
+/// assert_eq!(up_from(&VPath::parse("file:///").unwrap()), None);
+/// ```
+#[must_use]
+pub fn up_from(dir: &norte_proto::VPath) -> Option<(norte_proto::VPath, norte_proto::VPath)> {
+    match dir.archive_split() {
+        Ok(Some(aref)) if aref.inner.is_empty() => Some((aref.outer.parent()?, aref.outer)),
+        _ => Some((dir.parent()?, dir.clone())),
+    }
+}
+
 /// The archive format a NAME suggests, among the ones norte knows how to
 /// WRITE (#132).
 ///
