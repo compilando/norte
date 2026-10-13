@@ -333,6 +333,32 @@ pub fn pane_attr_ids(app: &App) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// The context menu's "Hide this column": the columns picker's own result
+/// for the focused pane's scheme, minus `id`, applied the way the picker
+/// applies it (so in the terminal it is saved, as the picker saves).
+/// `name` cannot be hidden. Returns `true` when the panes need a re-list.
+pub(crate) async fn hide_column(app: &mut App, id: &str) -> bool {
+    if id == "name" {
+        return false;
+    }
+    let scheme = app.focused().dir().scheme().to_owned();
+    let sort = app.focused().sort();
+    let mut picked = norte_frontend::columns_picker::ColumnsPicker::open_with_catalog(
+        &app.columns,
+        &scheme,
+        sort,
+        app.attr_catalog(&scheme),
+        &[],
+    )
+    .finish();
+    let before = picked.ids.len();
+    picked.ids.retain(|c| c != id);
+    if picked.ids.len() == before {
+        return false;
+    }
+    apply_picked_columns(app, picked).await
+}
+
 /// Applies the picker's result (#108 7a): session first (in-memory settings
 /// and re-sort of EVERY pane, `apply_scheme_sort` is a no-op where the spec
 /// does not change), disk after (`config::persist_columns` in

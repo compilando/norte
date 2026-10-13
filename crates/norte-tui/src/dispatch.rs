@@ -105,18 +105,7 @@ pub async fn dispatch(
             if paths.is_empty() {
                 app.message = Some(t("msg-nothing-selected"));
             } else {
-                let bytes = norte_frontend::shell::clipboard_bytes(&paths);
-                let n = paths.len().to_string();
-                app.message = Some(match norte_frontend::shell::copy_to_clipboard(&bytes) {
-                    norte_frontend::shell::ClipboardOutcome::Done(_) => {
-                        ta("msg-paths-copied", &[("n", &n)])
-                    }
-                    norte_frontend::shell::ClipboardOutcome::NoHelper => {
-                        app.pending_osc52 = Some(norte_frontend::shell::osc52(&bytes));
-                        ta("msg-paths-copied-osc52", &[("n", &n)])
-                    }
-                    norte_frontend::shell::ClipboardOutcome::Failed => t("msg-clipboard-failed"),
-                });
+                crate::gestures::copy_paths(app, &paths);
             }
         }
         Command::PaneSwitch => app.switch_focus(),

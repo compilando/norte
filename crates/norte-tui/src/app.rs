@@ -767,6 +767,9 @@ pub struct App {
     /// its own: two paths to open the same panel diverge the moment one of
     /// the two grows a detail.
     pub pending_panel_command: Option<String>,
+    /// A context-menu verb the mouse picked, for the run loop to run
+    /// (`mouse::After::ContextVerb`).
+    pub pending_context_verb: Option<crate::context_menu::Picked>,
     /// The disk map's child to enter, if someone asked for it.
     ///
     /// Set by the key or the click and consumed by the LOOP, which is the one
@@ -1478,6 +1481,7 @@ impl App {
             volumes: Vec::new(),
             volumes_stale: true,
             pending_panel_command: None,
+            pending_context_verb: None,
             pending_disk_map_enter: None,
             disk_map_stale: false,
             timeline_stale: false,

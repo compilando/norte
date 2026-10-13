@@ -5,16 +5,64 @@
 //! the right surface, measures where it goes, and hands the chosen command
 //! to the same path a key takes.
 
+use std::borrow::Cow;
+
 use crossterm::event::KeyCode;
-use norte_frontend::context_menu::{Action, Fingerprint, Row, Surface, entries, project};
+use norte_frontend::context_menu::{
+    Action, Fingerprint, PlaceTarget, Row, Surface, Verb, entries, project,
+};
+use norte_proto::VPath;
 use ratatui::layout::Rect;
 
 use crate::app::App;
+
+/// What a menu-local verb acts on, frozen at opening.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Subject {
+    /// A listing (its rows and empty area): commands only.
+    Listing,
+    /// Column `id` of pane `pane`'s header.
+    Column {
+        /// The pane.
+        pane: usize,
+        /// The column's id as the header names it.
+        id: String,
+    },
+    /// Places row `index`, with what it pointed at.
+    Place {
+        /// Its index in the bar's rows.
+        index: usize,
+        /// Where it leads; `None` for a section header.
+        path: Option<VPath>,
+        /// A favorite's raw name (the key `hotlist_remove` needs).
+        favorite: Option<String>,
+        /// A favorite whose target did not parse: its error key.
+        broken: Option<String>,
+    },
+    /// Tree row `index`, with its path.
+    Branch {
+        /// Its index among the visible branches.
+        index: usize,
+        /// Its directory.
+        path: VPath,
+    },
+}
+
+/// What a pick runs: the entry's action and what it acts on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Picked {
+    /// The entry's action.
+    pub action: Action,
+    /// What the menu was opened on.
+    pub subject: Subject,
+}
 
 /// An open menu. The rows are projected ONCE, at opening, against the facts
 /// of that moment, like the window's.
 #[derive(Debug, Clone)]
 pub struct ContextMenu {
+    /// What a verb acts on.
+    pub subject: Subject,
     /// "acts on …", or the folder for the empty area.
     pub header: String,
     /// What is painted, in order.
@@ -62,8 +110,35 @@ fn fingerprint(app: &App, pane: usize) -> Fingerprint {
     }
 }
 
+/// The TUI's verb vetoes, the window's two (`verb_reason` in the host):
+/// hiding `name`, and the path verbs on a favorite whose target is broken.
+fn verb_reason(subject: &Subject, v: Verb) -> Option<Cow<'static, str>> {
+    match (v, subject) {
+        (Verb::HideColumn, Subject::Column { id, .. }) if id == "name" => {
+            Some(Cow::Borrowed("reason-wrong-target"))
+        }
+        (
+            Verb::OpenHere | Verb::OpenInOther | Verb::OpenInNewTab | Verb::CopyPath,
+            Subject::Place {
+                broken: Some(key), ..
+            },
+        ) => Some(Cow::Owned(key.clone())),
+        _ => None,
+    }
+}
+
 /// Projects `surface` for the focused pane and installs the menu.
 fn install(app: &mut App, surface: Surface, header: String, anchor: (u16, u16)) {
+    install_on(app, surface, Subject::Listing, header, anchor);
+}
+
+fn install_on(
+    app: &mut App,
+    surface: Surface,
+    subject: Subject,
+    header: String,
+    anchor: (u16, u16),
+) {
     let pane = app.focus();
     let list = entries(&surface);
     let implemented: Vec<&str> = list
@@ -85,9 +160,10 @@ fn install(app: &mut App, surface: Surface, header: String, anchor: (u16, u16)) 
                 .filter(|s| !s.is_empty())
         },
         norte_i18n::active(),
-        |_| None,
+        |v| verb_reason(&subject, v),
     );
     app.context_menu = Some(ContextMenu {
+        subject,
         header,
         rows,
         cursor: 0,
@@ -156,6 +232,77 @@ pub fn open_on_cursor(app: &mut App) {
     } else {
         open_empty(app, pane, anchor);
     }
+}
+
+/// A right click on Places row `index`: a section header folds, a drive or a
+/// favorite opens, is copied, and joins or leaves the favorites.
+pub fn open_place(app: &mut App, index: usize, anchor: (u16, u16)) {
+    use norte_frontend::places::PlaceRow;
+    let Some(row) = app
+        .places_slot()
+        .and_then(|id| app.panes.places(id))
+        .and_then(|s| s.rows().get(index).cloned())
+    else {
+        return;
+    };
+    let (target, path, favorite, broken) = match &row {
+        PlaceRow::Header { .. } => (PlaceTarget::SectionHeader, None, None, None),
+        PlaceRow::Drive { mount, .. } => (PlaceTarget::Drive, Some(mount.clone()), None, None),
+        PlaceRow::Favorite { name, target } => (
+            PlaceTarget::Favorite,
+            target.as_ref().ok().cloned(),
+            Some(name.clone()),
+            target.as_ref().err().cloned(),
+        ),
+    };
+    let header = path.as_ref().map_or_else(
+        || norte_i18n::t("ctx-toggle-fold"),
+        |p| norte_frontend::context_menu::elide(&norte_frontend::path_display(p).0),
+    );
+    install_on(
+        app,
+        Surface::Place(target),
+        Subject::Place {
+            index,
+            path,
+            favorite,
+            broken,
+        },
+        header,
+        anchor,
+    );
+}
+
+/// A right click on tree row `index`.
+pub fn open_branch(app: &mut App, index: usize, anchor: (u16, u16)) {
+    let Some(path) = app
+        .tree()
+        .and_then(|t| t.rows().get(index).map(|r| r.path.clone()))
+    else {
+        return;
+    };
+    let header = norte_frontend::context_menu::elide(&norte_frontend::path_display(&path).0);
+    install_on(
+        app,
+        Surface::Branch,
+        Subject::Branch { index, path },
+        header,
+        anchor,
+    );
+}
+
+/// A right click on column `id` of pane `pane`'s header.
+pub fn open_header(app: &mut App, pane: usize, id: String, anchor: (u16, u16)) {
+    app.set_focus(pane);
+    let header = id.clone();
+    let hideable = id != "name";
+    install_on(
+        app,
+        Surface::Header { hideable },
+        Subject::Column { pane, id },
+        header,
+        anchor,
+    );
 }
 
 /// Where the menu is painted inside `frame`: below and right of the anchor,
@@ -227,7 +374,7 @@ pub fn cell_of(app: &App, command: &str) -> Option<(u16, u16)> {
 /// Activates row `i`: `None` and the menu stays when it is dimmed; `None`
 /// and the menu closes when the pane changed under it (a stale target is a
 /// wrong-file operation); the action otherwise, menu closed first.
-pub fn choose(app: &mut App, i: usize) -> Option<Action> {
+pub fn choose(app: &mut App, i: usize) -> Option<Picked> {
     let menu = app.context_menu.as_ref()?;
     let row = menu.rows.get(i)?;
     if !row.enabled {
@@ -235,14 +382,22 @@ pub fn choose(app: &mut App, i: usize) -> Option<Action> {
         return None;
     }
     let action = row.action;
-    let stale = menu.pane >= app.panes.len() || fingerprint(app, menu.pane) != menu.fingerprint;
+    // A side-panel subject is re-checked when its verb runs (its row may
+    // have moved); a listing's is its pane's fingerprint.
+    let stale = match menu.subject {
+        Subject::Listing | Subject::Column { .. } => {
+            menu.pane >= app.panes.len() || fingerprint(app, menu.pane) != menu.fingerprint
+        }
+        Subject::Place { .. } | Subject::Branch { .. } => false,
+    };
+    let subject = menu.subject.clone();
     app.context_menu = None;
-    (!stale).then_some(action)
+    (!stale).then_some(Picked { action, subject })
 }
 
 /// A key while the menu is open: arrows walk, `Enter` picks, `Esc` closes.
 /// Fixed keys, like the menu bar's: no `dialog.*` verb names them.
-pub fn on_key(app: &mut App, code: KeyCode) -> Option<Action> {
+pub fn on_key(app: &mut App, code: KeyCode) -> Option<Picked> {
     let menu = app.context_menu.as_mut()?;
     let n = menu.rows.len();
     match code {

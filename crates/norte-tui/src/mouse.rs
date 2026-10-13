@@ -561,6 +561,9 @@ pub enum After {
     /// path as `Enter`. This module cannot: dispatching is async and needs
     /// the backend.
     MenuAccept,
+    /// A context-menu verb was picked (`App::pending_context_verb`): the
+    /// run loop runs it, since opening a place is a `cd`.
+    ContextVerb,
     /// Double click on a row: dispatches `nav.enter`, THE SAME command as
     /// the keyboard's (never a second path that enters directories on its
     /// own).
@@ -1503,20 +1506,39 @@ fn context_menu_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
             return Some(After::Nothing);
         };
         return Some(match cm::choose(app, i) {
-            Some(norte_frontend::context_menu::Action::Command(c)) => {
+            Some(cm::Picked {
+                action: norte_frontend::context_menu::Action::Command(c),
+                ..
+            }) => {
                 app.pending_panel_command = Some(c.to_owned());
                 After::PanelBar
             }
-            _ => After::Nothing,
+            Some(picked) => {
+                app.pending_context_verb = Some(picked);
+                After::ContextVerb
+            }
+            None => After::Nothing,
         });
     }
     if !matches!(ev.kind, MouseEventKind::Down(MouseButton::Right)) || overlay_open(app) {
         return None;
     }
+    let anchor = (ev.column, ev.row.saturating_add(1));
+    if let Some(z) = place_zone_at(app, ev.column, ev.row) {
+        cm::open_place(app, z.index, anchor);
+        return Some(After::Nothing);
+    }
+    if let Some(z) = tree_zone_at(app, ev.column, ev.row) {
+        cm::open_branch(app, z.index, anchor);
+        return Some(After::Nothing);
+    }
+    if let Some((pane, id)) = header_column_at(app, ev.column, ev.row) {
+        cm::open_header(app, pane, id.to_string(), anchor);
+        return Some(After::Nothing);
+    }
     let hit = hit_test(app, ev.column, ev.row)?;
     app.mouse.drag.cancel();
     app.mouse.last_click = None;
-    let anchor = (ev.column, ev.row.saturating_add(1));
     match hit.index {
         Some(i) => cm::open_row(app, hit.pane, i, anchor),
         None => cm::open_empty(app, hit.pane, anchor),
@@ -2513,6 +2535,142 @@ pub async fn on_mouse(
             app.abandon_pending(resolver);
             crate::searchpanel::activate(app, backend, events, work).await;
         }
+        self::After::ContextVerb => {
+            app.abandon_pending(resolver);
+            if let Some(picked) = app.pending_context_verb.take() {
+                run_context_verb(app, backend, events, work, picked).await;
+            }
+        }
+    }
+}
+
+/// Whether a side panel's row still points where it did when the menu
+/// opened; listings answer through their fingerprint instead.
+fn subject_still_there(app: &crate::app::App, subject: &crate::context_menu::Subject) -> bool {
+    use crate::context_menu::Subject;
+    match subject {
+        Subject::Place { index, path, .. } => app.places_row_path(*index).as_ref() == path.as_ref(),
+        Subject::Branch { index, path } => {
+            app.tree()
+                .and_then(|t| t.rows().get(*index).map(|r| r.path.clone()))
+                .as_ref()
+                == Some(path)
+        }
+        Subject::Listing | Subject::Column { .. } => true,
+    }
+}
+
+/// Runs a context-menu verb through the TUI's own paths: a place or a
+/// branch opens through the usual `cd` flow, a favorite is saved and
+/// removed as the favorites popup does, a column sorts and hides as its
+/// title click and the columns picker do.
+///
+/// A side panel's row is re-checked first: drives landing or a branch
+/// unfolding move the rows, and a verb must not act on whatever now sits
+/// at that index.
+pub(crate) async fn run_context_verb(
+    app: &mut crate::app::App,
+    backend: &norte_core::backend::Backend,
+    events: &mut crate::console::Console<'_>,
+    work: &mut crate::jobs::InFlight,
+    picked: crate::context_menu::Picked,
+) {
+    use crate::context_menu::Subject;
+    use norte_frontend::context_menu::{Action, Verb};
+    let Action::Verb(verb) = picked.action else {
+        return;
+    };
+    if !subject_still_there(app, &picked.subject) {
+        app.message = Some(norte_i18n::t("msg-context-stale"));
+        return;
+    }
+    let path = match &picked.subject {
+        Subject::Place { path, .. } => path.clone(),
+        Subject::Branch { path, .. } => Some(path.clone()),
+        _ => None,
+    };
+    match (verb, &picked.subject) {
+        (Verb::SortByColumn, Subject::Column { pane, id }) => {
+            app.set_focus(*pane);
+            if let Some(column) = id
+                .parse::<norte_frontend::columns::ColumnId>()
+                .ok()
+                .and_then(|c| norte_frontend::columns::sort_column_id(&c))
+            {
+                app.sort_focused_by(column);
+            }
+        }
+        (Verb::HideColumn, Subject::Column { pane, id }) => {
+            app.set_focus(*pane);
+            if crate::screens::pickers::hide_column(app, id).await {
+                // The same re-list the columns picker asks for.
+                let refreshed = crate::refresh::refresh_panes(app, backend, events).await;
+                crate::refresh::after_panes_refresh(
+                    app,
+                    backend,
+                    refreshed,
+                    &mut work.fill,
+                    &mut work.decorate,
+                    &mut work.probed,
+                    &mut work.search,
+                );
+            }
+        }
+        (Verb::ToggleFold, Subject::Place { index, .. }) => {
+            app.places_set_cursor(*index);
+            app.places_toggle_fold();
+            drain_places_drives(app, backend).await;
+        }
+        (Verb::ToggleFold, Subject::Branch { index, .. }) => {
+            if let Some(t) = app.tree_mut() {
+                t.set_cursor(*index);
+                t.toggle();
+            }
+        }
+        (
+            Verb::RemoveFavorite,
+            Subject::Place {
+                favorite: Some(name),
+                ..
+            },
+        ) => crate::screens::side_nav::hotlist_remove(app, name).await,
+        (Verb::AddFavorite, _) => {
+            if let Some(p) = path {
+                app.open_hotlist_add_for(p);
+            }
+        }
+        (Verb::CopyPath, _) => {
+            if let Some(p) = path {
+                crate::gestures::copy_paths(app, &[p]);
+            }
+        }
+        (Verb::OpenHere, _) => {
+            if let Some(p) = path {
+                focused_to(app, backend, events, work, p).await;
+            }
+        }
+        (Verb::OpenInOther, _) => {
+            if let Some(p) = path {
+                let pane = app.target_index().unwrap_or_else(|| app.focus() ^ 1);
+                let outcome = cd_in(app, backend, events, pane, p, Trail::Record).await;
+                settle_cd(
+                    app,
+                    backend,
+                    &mut work.fill,
+                    &mut work.decorate,
+                    &mut work.probed,
+                    &mut work.search,
+                    outcome,
+                );
+            }
+        }
+        (Verb::OpenInNewTab, _) => {
+            if let Some(p) = path {
+                app.tab_new();
+                focused_to(app, backend, events, work, p).await;
+            }
+        }
+        _ => {}
     }
 }
 

@@ -14,6 +14,10 @@ independently through `PROTOCOL_VERSION`.
   (Settings › Open with) picks the emulator, e.g. iTerm2 on macOS; the
   probe also knows ptyxis, GNOME Console, foot, xfce4-terminal and
   Debian's `x-terminal-emulator`.
+- **A right-click menu in the terminal**, the window's: on a row, the empty
+  area, a column header, a Places row and a tree branch, with the same
+  entries, dimmed with the same reasons. `shift+F10` and the Menu key open
+  it on the listing's cursor row.
 
 ### Changed
 

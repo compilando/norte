@@ -219,7 +219,7 @@ fn keys_walk_pick_and_close() {
     assert_eq!(context_menu::on_key(&mut app, KeyCode::Down), None);
     assert_eq!(app.context_menu.as_ref().unwrap().cursor, 1);
     let picked = context_menu::on_key(&mut app, KeyCode::Enter);
-    assert_eq!(picked, Some(Action::Command("pane.view")));
+    assert_eq!(picked.map(|p| p.action), Some(Action::Command("pane.view")));
     assert!(app.context_menu.is_none());
     right_click(&mut app, col, row);
     assert_eq!(context_menu::on_key(&mut app, KeyCode::Esc), None);
@@ -241,5 +241,124 @@ fn the_menu_key_opens_it_on_the_cursor() {
             .any(|l| l.contains(&norte_i18n::t("menu-item-pane-copy"))),
         "painted:\n{}",
         lines.join("\n")
+    );
+}
+
+fn with_places() -> App {
+    let mut app = app_on("file:///casa");
+    app.toggle_places();
+    let id = app.places_slot().expect("open");
+    let sidebar = app.panes.places_mut(id).expect("a sidebar");
+    sidebar.set_favorites(&[
+        ("trabajo".to_owned(), Ok(vp("file:///trabajo"))),
+        ("roto".to_owned(), Err("hotlist-invalid".to_owned())),
+    ]);
+    let _ = paint(&mut app);
+    app
+}
+
+fn place_index(app: &App, name: &str) -> usize {
+    use norte_frontend::places::PlaceRow;
+    let id = app.places_slot().unwrap();
+    app.panes
+        .places(id)
+        .unwrap()
+        .rows()
+        .iter()
+        .position(|r| matches!(r, PlaceRow::Favorite { name: n, .. } if n == name))
+        .expect(name)
+}
+
+fn verbs(app: &App) -> Vec<(norte_frontend::context_menu::Verb, bool, String)> {
+    app.context_menu
+        .as_ref()
+        .expect("menu open")
+        .rows
+        .iter()
+        .filter_map(|r| match r.action {
+            Action::Verb(v) => Some((v, r.enabled, r.reason.clone())),
+            Action::Command(_) => None,
+        })
+        .collect()
+}
+
+/// A favorite offers the open verbs and "remove"; a broken one dims the
+/// verbs that need its path, with the config's own reason.
+#[test]
+fn a_favorite_offers_remove_and_a_broken_one_says_why() {
+    use norte_frontend::context_menu::Verb;
+    let mut app = with_places();
+    let ok = place_index(&app, "trabajo");
+    context_menu::open_place(&mut app, ok, (2, 2));
+    let v = verbs(&app);
+    assert!(
+        v.iter().any(|(x, on, _)| *x == Verb::RemoveFavorite && *on),
+        "{v:?}"
+    );
+    assert!(
+        v.iter().any(|(x, on, _)| *x == Verb::OpenInOther && *on),
+        "{v:?}"
+    );
+    let broken = place_index(&app, "roto");
+    context_menu::open_place(&mut app, broken, (2, 2));
+    let open = verbs(&app)
+        .into_iter()
+        .find(|(x, ..)| *x == Verb::OpenHere)
+        .expect("open here listed");
+    assert!(!open.1);
+    assert_eq!(open.2, norte_i18n::t("hotlist-invalid"));
+}
+
+/// A right click on a Places row opens ITS menu, through the mouse.
+#[test]
+fn a_right_click_on_places_opens_the_places_menu() {
+    let mut app = with_places();
+    let want = place_index(&app, "trabajo");
+    let zone = ui::places_zones(&app, app.last_frame.expect("painted"))
+        .into_iter()
+        .find(|z| z.index == want)
+        .expect("painted");
+    right_click(&mut app, zone.x0, zone.row);
+    assert!(matches!(
+        app.context_menu.as_ref().map(|m| &m.subject),
+        Some(context_menu::Subject::Place { favorite: Some(n), .. }) if n == "trabajo"
+    ));
+}
+
+/// The name column cannot be hidden, and the menu says so instead of
+/// leaving the entry out.
+#[test]
+fn the_name_column_cannot_be_hidden_and_says_why() {
+    use norte_frontend::context_menu::Verb;
+    let mut app = app_on("file:///casa");
+    context_menu::open_header(&mut app, 0, "name".into(), (2, 2));
+    let hide = verbs(&app)
+        .into_iter()
+        .find(|(x, ..)| *x == Verb::HideColumn)
+        .expect("hide listed");
+    assert!(!hide.1);
+    assert_eq!(hide.2, norte_i18n::t("reason-wrong-target"));
+    context_menu::open_header(&mut app, 0, "size".into(), (2, 2));
+    assert!(
+        verbs(&app)
+            .iter()
+            .any(|(x, on, _)| *x == Verb::HideColumn && *on)
+    );
+}
+
+/// Picking a verb hands back WHAT it acts on: the run loop needs both.
+#[test]
+fn a_verb_pick_carries_its_subject() {
+    use norte_frontend::context_menu::Verb;
+    let mut app = app_on("file:///casa");
+    context_menu::open_header(&mut app, 0, "size".into(), (2, 2));
+    let picked = context_menu::on_key(&mut app, KeyCode::Enter).expect("sort is first");
+    assert_eq!(picked.action, Action::Verb(Verb::SortByColumn));
+    assert_eq!(
+        picked.subject,
+        context_menu::Subject::Column {
+            pane: 0,
+            id: "size".into()
+        }
     );
 }

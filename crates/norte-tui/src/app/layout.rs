@@ -422,6 +422,29 @@ impl App {
         }
     }
 
+    /// Where Places row `index` leads, if it leads anywhere (a drive, a
+    /// valid favorite).
+    #[must_use]
+    pub fn places_row_path(&self, index: usize) -> Option<VPath> {
+        use norte_frontend::places::PlaceRow;
+        let id = self.places_slot()?;
+        match self.panes.places(id)?.rows().get(index)? {
+            PlaceRow::Drive { mount, .. } => Some(mount.clone()),
+            PlaceRow::Favorite { target: Ok(t), .. } => Some(t.clone()),
+            _ => None,
+        }
+    }
+
+    /// Puts the sidebar's cursor on row `index` (out of range is ignored).
+    pub fn places_set_cursor(&mut self, index: usize) {
+        if let Some(id) = self.places_slot()
+            && let Some(s) = self.panes.places_mut(id)
+            && index < s.rows().len()
+        {
+            s.set_cursor(index);
+        }
+    }
+
     /// Folds or unfolds the section the sidebar's cursor is on.
     pub fn places_toggle_fold(&mut self) {
         if let Some(id) = self.places_slot()

@@ -78,8 +78,19 @@ pub async fn on_key(
     if app.context_menu.is_some() && !modal_wins(app) {
         // The context menu: fixed keys like the menu bar's, and what it
         // picks runs through the same path as its key.
-        if let Some(norte_frontend::context_menu::Action::Command(id)) =
-            crate::context_menu::on_key(app, key.code)
+        let picked = crate::context_menu::on_key(app, key.code);
+        if let Some(
+            p @ crate::context_menu::Picked {
+                action: norte_frontend::context_menu::Action::Verb(_),
+                ..
+            },
+        ) = picked
+        {
+            crate::mouse::run_context_verb(app, backend, events, work, p).await;
+        } else if let Some(crate::context_menu::Picked {
+            action: norte_frontend::context_menu::Action::Command(id),
+            ..
+        }) = picked
             && let Some(cmd) = Command::parse(id)
         {
             run_command(

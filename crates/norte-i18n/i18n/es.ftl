@@ -2021,6 +2021,7 @@ reason-needs-daemon = necesita el daemon (--daemon)
 reason-needs-desktop = necesita un escritorio: aquí no hay dónde abrir una ventana
 reason-inside-archive = dentro de un archivo comprimido: sube con .. a su carpeta
 reason-not-on-this-disk = no es una carpeta de este disco
+msg-context-stale = esa fila ha cambiado desde que abriste el menú: no hago nada
 
 on-yes = sí
 on-no = no

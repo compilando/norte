@@ -776,7 +776,7 @@ async fn hotlist_add(app: &mut App, name: &str) {
 /// being edited — the active PROFILE if there is one, otherwise the user's
 /// — (`spawn_blocking`, rule 2). Same consistency contract as
 /// [`hotlist_add`].
-async fn hotlist_remove(app: &mut App, name: &str) {
+pub(crate) async fn hotlist_remove(app: &mut App, name: &str) {
     let n = name.to_owned();
     let dest = app.config_write_dir();
     let res = tokio::task::spawn_blocking(move || -> std::io::Result<()> {

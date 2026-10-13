@@ -215,6 +215,21 @@ async fn spawn_detached(
     Ok(())
 }
 
+/// Puts `paths` on the clipboard (or arms OSC 52 when there is no helper)
+/// and says so: `pane.copy-path` and the context menu's Copy path.
+pub fn copy_paths(app: &mut App, paths: &[VPath]) {
+    let bytes = norte_frontend::shell::clipboard_bytes(paths);
+    let n = paths.len().to_string();
+    app.message = Some(match norte_frontend::shell::copy_to_clipboard(&bytes) {
+        norte_frontend::shell::ClipboardOutcome::Done(_) => ta("msg-paths-copied", &[("n", &n)]),
+        norte_frontend::shell::ClipboardOutcome::NoHelper => {
+            app.pending_osc52 = Some(norte_frontend::shell::osc52(&bytes));
+            ta("msg-paths-copied-osc52", &[("n", &n)])
+        }
+        norte_frontend::shell::ClipboardOutcome::Failed => t("msg-clipboard-failed"),
+    });
+}
+
 /// "Terminal here" (`app.terminal`, ADR 0180): an emulator in the focused
 /// pane's directory when there is a desktop to put it on, the suspended
 /// login shell otherwise — and also when no emulator starts, saying so.
