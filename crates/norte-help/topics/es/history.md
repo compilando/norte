@@ -176,8 +176,9 @@ nunca cae en la fila bajo el cursor.
 {{cmd:layout.assistant}} abre un panel donde pides en palabras — «copia los
 PDF de este mes al otro panel», «¿qué ocupa más aquí?». Escribir `@` en la
 caja hace lo mismo con lo que sigue. Cada respuesta es o bien una orden de la
-gramática de arriba, que revisas y aplicas con `a` (abre el mismo diálogo que
-su tecla), o bien una respuesta.
+gramática de arriba, que revisas y aplicas con Intro sobre la línea vacía
+(abre el mismo diálogo que su tecla), o bien una respuesta. Esc mientras
+piensa cancela la pregunta; otro Esc devuelve las teclas.
 
 Está apagado hasta que lo enciendes en `norte.toml` (`[ai] enabled = true` y
 un proveedor). Nunca cambia nada por sí mismo. Para responder lee nombres,

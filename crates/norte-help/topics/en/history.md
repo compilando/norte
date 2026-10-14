@@ -171,8 +171,9 @@ falls back to the row under the cursor.
 {{cmd:layout.assistant}} opens a panel where you ask in plain words — "copy
 this month's PDFs to the other pane", "what takes the most space here?". Typing
 `@` in the box does the same with what follows. Each reply is either an order
-in the grammar above, which you review and apply with `a` (it opens the same
-dialog its key would), or an answer.
+in the grammar above, which you review and apply with Enter on an empty line
+(it opens the same dialog its key would), or an answer. Esc while it is
+thinking cancels the question; Esc again gives the keys back.
 
 It is off until you turn it on in `norte.toml` (`[ai] enabled = true` and a
 provider). It never changes anything itself. To answer, it reads names, sizes,
