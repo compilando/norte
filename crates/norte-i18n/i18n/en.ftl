@@ -368,6 +368,11 @@ cli-enqueue-copy = could not enqueue the copy
 cli-enqueue-move = could not enqueue the move
 cli-enqueue-delete = could not enqueue the delete
 cli-enqueue-mkdir = could not enqueue the mkdir
+cli-enqueue-undo = could not enqueue the undo
+cli-run-needs-selection = this action needs a `sel` first: there is no pane to take marks from
+cli-run-needs-pane = cd and catalogue commands act on a pane; run them in the box
+cli-run-undo-needs-yes = undo changes your files: add --yes to run it from a script
+cli-run-would = { $action }: { $n } matched
 # S3 (shell-integration): `Shell::parse`'s vocabulary is exactly these three
 # tokens — named here instead of echoed back the way `cli-help-unknown-topic`
 # does, because this one is a closed set, not a corpus the user could plausibly

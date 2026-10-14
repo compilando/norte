@@ -31,6 +31,7 @@ norte-config = { workspace = true, features = ["logging"] }
 norte-connect.workspace = true
 norte-core.workspace = true
 norte-encoding.workspace = true
+norte-orders.workspace = true
 norte-frontend.workspace = true
 # H3e: `doctor` judges a `help.md` with the SAME cap and the SAME
 # command-ownership rules that apply in the host and in the frontend.

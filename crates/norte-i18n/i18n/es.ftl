@@ -369,6 +369,11 @@ cli-enqueue-copy = no se pudo encolar la copia
 cli-enqueue-move = no se pudo encolar el move
 cli-enqueue-delete = no se pudo encolar el borrado
 cli-enqueue-mkdir = no se pudo encolar el mkdir
+cli-enqueue-undo = no se pudo encolar el deshacer
+cli-run-needs-selection = esta acción necesita antes un `sel`: no hay panel del que tomar marcas
+cli-run-needs-pane = cd y los comandos del catálogo actúan sobre un panel; úsalos en la caja
+cli-run-undo-needs-yes = deshacer cambia tus ficheros: añade --yes para ejecutarlo desde un script
+cli-run-would = { $action }: { $n } casan
 # S3 (shell-integration): el vocabulario de `Shell::parse` son exactamente
 # estos tres — nombrados aquí en vez de repetir el nombre tecleado como hace
 # `cli-help-unknown-topic`, porque este es un conjunto cerrado, no un corpus

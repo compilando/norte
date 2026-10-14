@@ -161,6 +161,25 @@ enum Cmd {
         #[arg(long)]
         resume: bool,
     },
+    /// Runs an order in the box's grammar (ADR 0185), e.g.
+    /// 'sel ext:pdf age<30d | cp >/mnt/backup'. There is no pane: `sel`
+    /// reads `--cwd` and `>other` is refused.
+    Run {
+        /// The order.
+        order: String,
+        /// Folder that `sel` and relative paths resolve against.
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        /// Print what would run; run nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+        /// Required for `undo`, which changes files.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Deletes a file or directory (recursive), with progress and clean Ctrl-C
     /// Deletes PERMANENTLY (the engine's test bench; the trash lives
     /// in the TUI — ADR 0009).
@@ -1008,6 +1027,13 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             })
             .await
         }
+        Cmd::Run {
+            order,
+            cwd,
+            dry_run,
+            json,
+            yes,
+        } => cmd::run::run(&backend, &order, &cwd, dry_run, json, yes).await,
         Cmd::Plugin { cmd } => cmd::plugin::plugin_cmd(&backend, cmd, cli.socket).await,
         Cmd::Index { cmd } => cmd::index::index_cmd(&backend, cmd).await,
         Cmd::Audit { .. }
