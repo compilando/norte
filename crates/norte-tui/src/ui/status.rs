@@ -823,4 +823,42 @@ mod tests {
             .collect();
         assert!(zone.starts_with('⟳') && zone.ends_with('▏'), "{zone:?}");
     }
+
+    /// ADR 0187: the burst's graph leads the item where it fits, inside
+    /// the clickable zone, and is the first thing a narrow bar gives up.
+    #[test]
+    fn the_tasks_item_leads_with_its_graph_where_it_fits() {
+        use norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};
+        let mut app = app_two_panes();
+        app.chrome.status_items =
+            Some(norte_config::StatusItems::parse(&["tasks"]).expect("valid"));
+        let p = TaskProgress {
+            task_id: TaskId::new(1),
+            kind: TaskKind::Copy,
+            state: TaskState::Running,
+            bytes_done: 50,
+            bytes_total: Some(100),
+            entries_done: 0,
+            entries_total: None,
+            current: None,
+            unreadable: None,
+            unvisited: None,
+        };
+        for sec in 0..3 {
+            let t = norte_frontend::task_strip::StripTask {
+                progress: &p,
+                operand: None,
+                bps: Some(1_000.0 * f64::from(sec + 1)),
+            };
+            app.strip.update(i64::from(sec) * 1_000, [t]);
+        }
+        app.render_now_ms = Some(2_000);
+        let braille = |c: char| ('\u{2800}'..='\u{28FF}').contains(&c);
+        let wide = super::compose(&app, ratatui::layout::Rect::new(0, 0, 120, 1));
+        let (x0, _, _) = wide.items[0];
+        let first = wide.text.chars().nth(usize::from(x0));
+        assert!(first.is_some_and(braille), "{:?}", wide.text);
+        let narrow = super::compose(&app, ratatui::layout::Rect::new(0, 0, 40, 1));
+        assert!(!narrow.text.chars().any(braille), "{:?}", narrow.text);
+    }
 }
