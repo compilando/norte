@@ -2197,6 +2197,86 @@ async fn a_quick_task_leaves_the_checkmark_and_opens_no_panel() {
     assert!(gone, "and the ✓ leaves on its own");
 }
 
+/// ADR 0187: a task that moves draws its graph on its row and on the tasks
+/// item, sampled on the strip's clock; a finished one draws none.
+#[tokio::test(start_paused = true)]
+async fn a_moving_task_carries_its_graph_and_a_finished_one_does_not() {
+    let fake = tree_as_fake();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
+    let (h, _snap) = host_tree(Arc::new(fake)).await;
+    let mut sub = h.subscribe();
+    // Wide enough for the item to keep its graph next to its rate: short of
+    // room the graph is the first thing given up.
+    h.dispatch(UiAction::SetViewport {
+        width: 200,
+        height: 60,
+    })
+    .await
+    .expect("host alive");
+    let p = inject_task_for(&tx, 5, norte_proto::TaskKind::Copy);
+    next_tasks(&mut sub).await;
+    for sec in 1..=4_u64 {
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        p.send_modify(|x| x.bytes_done = sec * 1_000_000);
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+    }
+    let mut row = None;
+    for _ in 0..10 {
+        let tasks = next_tasks(&mut sub).await;
+        if tasks.first().is_some_and(|t| !t.spark.is_empty()) {
+            row = tasks.first().cloned();
+            break;
+        }
+    }
+    let row = row.expect("the row carries its graph");
+    assert_eq!(row.spark.len(), norte_frontend::spark::SAMPLES);
+    assert!(row.spark.contains(&100), "{:?}", row.spark);
+    let snap = crate::sync::next_snapshot_after_resync(&h, &mut sub).await;
+    let item = snap
+        .status_items
+        .iter()
+        .find(|i| i.id == "tasks")
+        .and_then(|i| i.progress.clone())
+        .expect("the tasks item, with its bar");
+    assert!(!item.spark.is_empty(), "and the burst's graph");
+
+    // Stalled: no progress arrives, and the graph falls to zero instead of
+    // keeping the last speed.
+    for _ in 0..3 {
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+    }
+    let mut fell = false;
+    for _ in 0..10 {
+        let tasks = next_tasks(&mut sub).await;
+        if tasks.first().and_then(|t| t.spark.last()) == Some(&0) {
+            fell = true;
+            break;
+        }
+    }
+    assert!(fell, "a stalled task's graph falls to zero");
+
+    p.send_modify(|x| x.state = norte_proto::TaskState::Completed);
+    let mut done = false;
+    for _ in 0..10 {
+        let tasks = next_tasks(&mut sub).await;
+        if tasks
+            .first()
+            .is_some_and(|t| t.state == norte_ui_host::dto::TaskStateView::Done)
+        {
+            assert!(tasks[0].spark.is_empty(), "finished, no graph");
+            done = true;
+            break;
+        }
+    }
+    assert!(done, "the row reached its end");
+}
+
 /// ADR 0146: after a daemon handoff, the PREVIOUS one's work leaves neither
 /// the bar running nor the automatic panel open forever: those tasks are
 /// never going to finish, because there is nobody left to finish them.

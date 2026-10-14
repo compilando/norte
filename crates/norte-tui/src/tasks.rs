@@ -51,6 +51,8 @@ pub struct TaskRow {
     /// PER ROW and not per board: two copies at once run at different
     /// speeds, and an average of the two describes neither.
     pub rate: norte_frontend::tasks::Rate,
+    /// Its rate over the last seconds, sampled on each tick (ADR 0187).
+    pub spark: norte_frontend::spark::Spark,
     /// When it was first seen terminal, on the paint's INJECTED clock
     /// ([`crate::app::App::now_ms`]). `None` while it stays alive.
     terminal_at_ms: Option<i64>,
@@ -158,6 +160,7 @@ impl TaskBoard {
             trash_target,
             operand,
             rate: norte_frontend::tasks::Rate::default(),
+            spark: norte_frontend::spark::Spark::default(),
             terminal_at_ms: None,
             reported: false,
         });
@@ -186,6 +189,9 @@ impl TaskBoard {
             // ages out the rows: a snapshot carries no time, and measuring
             // with another clock would be a number the tests cannot pin.
             row.rate.observe(&row.last, now_ms);
+            if !row.last.state.is_terminal() {
+                row.spark.record(now_ms, row.rate.bps());
+            }
             // The operand is NOT cleared when the snapshot stops carrying it:
             // see `TaskRow::operand`'s note.
             if row.last.current.is_some() {

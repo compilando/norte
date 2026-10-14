@@ -79,6 +79,10 @@ pub struct StripView {
     pub rate: String,
     /// What is left, already written, or empty.
     pub eta: String,
+    /// The burst's throughput over the last seconds
+    /// ([`crate::spark::Spark::series`]), only while it runs and something
+    /// moved; empty otherwise (ADR 0187).
+    pub spark: Vec<u8>,
 }
 
 /// A work burst in progress.
@@ -97,6 +101,11 @@ struct Burst {
     mixed: bool,
     /// The last name seen, for the "✓ copied x" of a single task.
     name: Option<String>,
+    /// The burst's summed throughput, one sample per second (ADR 0187).
+    spark: crate::spark::Spark,
+    /// Some task of it is RUNNING — not paused, not queued — on the last
+    /// `update`: only then is there a graph to sample every second.
+    moving: bool,
 }
 
 /// The last burst's outcome, while it is shown.
@@ -190,6 +199,15 @@ impl TaskStrip {
             .filter(|t| r.ids.contains(&t.progress.task_id.get()))
             .collect();
         if any_running {
+            // Paused tasks move nothing on purpose (ADR 0147): their last
+            // rate is not this second's.
+            let moving: Vec<&&StripTask<'a>> = in_burst
+                .iter()
+                .filter(|t| t.progress.state == TaskState::Running)
+                .collect();
+            r.moving = !moving.is_empty();
+            r.spark
+                .record(now_ms, Some(moving.iter().filter_map(|t| t.bps).sum()));
             self.running = Some(running_view(r, &in_burst));
             return;
         }
@@ -218,6 +236,7 @@ impl TaskStrip {
             },
             rate: String::new(),
             eta: String::new(),
+            spark: Vec::new(),
         };
         self.outcome = Some(Outcome {
             until_ms: now_ms.saturating_add(duration),
@@ -255,9 +274,16 @@ impl TaskStrip {
     #[must_use]
     pub fn next_change_ms(&self, now_ms: i64) -> Option<i64> {
         if let Some(r) = &self.burst {
-            return [r.since_ms + UMBRAL_MS, r.since_ms + PANEL_MS]
+            // And every whole second while something moves: the graph
+            // samples on this clock, not on progress (ADR 0187).
+            let next_second = r.moving.then(|| (now_ms.div_euclid(1000) + 1) * 1000);
+            let threshold = [r.since_ms + UMBRAL_MS, r.since_ms + PANEL_MS]
                 .into_iter()
                 .find(|&t| t > now_ms);
+            return match (threshold, next_second) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
         }
         self.outcome
             .as_ref()
@@ -345,6 +371,11 @@ fn running_view(burst: &Burst, tasks: &[&StripTask<'_>]) -> StripView {
         } else {
             crate::tasks::human_eta(eta)
         },
+        spark: if paused || burst.spark.is_quiet() {
+            Vec::new()
+        } else {
+            burst.spark.series()
+        },
     }
 }
 
@@ -355,6 +386,10 @@ pub struct Form {
     pub text: String,
     /// Whether the [`BAR_CELLS`]-cell bar goes behind it.
     pub bar: bool,
+    /// Whether the burst's graph goes in front of it (ADR 0187):
+    /// [`crate::spark::CELLS`] cells and a space. Each frontend draws it its
+    /// own way, so it is not in the text.
+    pub graph: bool,
 }
 
 /// The item's forms, from longest to shortest. The status bar uses the
@@ -368,7 +403,11 @@ pub fn forms(v: &StripView, lang: Lang) -> Vec<Form> {
         Some(TaskKind::Delete) => "delete",
         _ => "other",
     };
-    let f = |text: String, bar: bool| Form { text, bar };
+    let f = |text: String, bar: bool| Form {
+        text,
+        bar,
+        graph: false,
+    };
     match v.phase {
         StripPhase::Running | StripPhase::Paused => {
             let paused = v.phase == StripPhase::Paused;
@@ -400,6 +439,29 @@ pub fn forms(v: &StripView, lang: Lang) -> Vec<Form> {
             out.push(f(format!("{icon} {}{pct}", v.count), true));
             out.push(f(format!("{icon} {}{pct}", v.count), false));
             out.dedup();
+            // The graph goes in front of the two longest forms only, so
+            // `statusbar::fit` gives it up before anything that says what
+            // is running (ADR 0187).
+            //
+            // The second one only while it is still wider than the longest
+            // without graph: a long rate (" · 48 MiB/s") would otherwise be
+            // given up before the graph.
+            if !v.spark.is_empty() {
+                let graph = |x: &Form| Form {
+                    graph: true,
+                    ..x.clone()
+                };
+                let mut with = vec![graph(&out[0])];
+                if let Some(second) = out.get(1).map(graph)
+                    && form_cells(&second) >= form_cells(&out[0])
+                {
+                    with.push(second);
+                }
+                out.splice(0..0, with);
+            }
+            // The window sends the graph inside the bar's view: a graph on a
+            // form with no bar would never reach it.
+            debug_assert!(out.iter().all(|f| !f.graph || f.bar));
             out
         }
         StripPhase::Done => {
@@ -462,7 +524,9 @@ pub fn bar_glyphs(percent: Option<u8>, now_ms: i64) -> String {
 /// Cells a [`Form`] takes up, with its bar and the space separating it.
 #[must_use]
 pub fn form_cells(f: &Form) -> usize {
-    crate::display::cells(&f.text) + if f.bar { BAR_CELLS + 3 } else { 0 }
+    crate::display::cells(&f.text)
+        + if f.bar { BAR_CELLS + 3 } else { 0 }
+        + if f.graph { crate::spark::CELLS + 1 } else { 0 }
 }
 
 #[cfg(test)]
@@ -596,8 +660,99 @@ mod tests {
         assert!(!s.wants_panel(PANEL_MS - 1));
         assert!(s.wants_panel(PANEL_MS));
         assert_eq!(s.next_change_ms(0), Some(UMBRAL_MS));
-        assert_eq!(s.next_change_ms(UMBRAL_MS), Some(PANEL_MS));
-        assert_eq!(s.next_change_ms(PANEL_MS), None);
+        assert_eq!(s.next_change_ms(1_900), Some(PANEL_MS));
+    }
+
+    /// While a burst runs the strip wakes every whole second, to sample the
+    /// graph (ADR 0187); once it is over, only the outcome's expiry.
+    #[test]
+    fn a_running_burst_wakes_every_second() {
+        let mut s = TaskStrip::default();
+        let a = p(1, TaskKind::Copy, R, 0, None);
+        s.update(0, [t(&a)]);
+        assert_eq!(s.next_change_ms(UMBRAL_MS), Some(1_000));
+        assert_eq!(s.next_change_ms(PANEL_MS), Some(3_000));
+        assert_eq!(s.next_change_ms(7_500), Some(8_000));
+        let a = p(1, TaskKind::Copy, OK, 0, None);
+        s.update(8_000, [t(&a)]);
+        assert_eq!(s.next_change_ms(8_000), Some(8_000 + DONE_MS));
+    }
+
+    /// The graph follows the burst's summed rate, one sample per second,
+    /// and leaves the longest forms first.
+    #[test]
+    fn the_graph_follows_the_summed_rate() {
+        let mut s = TaskStrip::default();
+        let a = p(1, TaskKind::Copy, R, 0, Some(1_000));
+        let at = |bps: f64| StripTask {
+            progress: &a,
+            operand: None,
+            bps: Some(bps),
+        };
+        s.update(0, [t(&a)]);
+        assert!(
+            s.view(UMBRAL_MS).is_none_or(|v| v.spark.is_empty()),
+            "nothing moved yet"
+        );
+        for (sec, bps) in [(1, 10.0), (2, 20.0), (3, 40.0)] {
+            s.update(sec * 1_000, [at(bps)]);
+        }
+        let v = s.view(3_000).expect("bar");
+        assert_eq!(v.spark.len(), crate::spark::SAMPLES);
+        assert_eq!(v.spark.last(), Some(&100));
+        let fs = forms(&v, Lang::En);
+        assert!(fs[0].graph && fs[1].graph, "{fs:?}");
+        assert!(fs.iter().skip(2).all(|f| !f.graph), "{fs:?}");
+        assert_eq!(fs[0].text, fs[2].text, "the graph is not in the text");
+        let widths: Vec<usize> = fs.iter().map(form_cells).collect();
+        assert!(widths.windows(2).all(|w| w[0] >= w[1]), "{widths:?}");
+    }
+
+    /// A paused burst draws no graph: nothing is moving now.
+    #[test]
+    fn a_paused_burst_draws_no_graph() {
+        let mut s = TaskStrip::default();
+        let a = p(1, TaskKind::Copy, R, 0, Some(1_000));
+        let task = StripTask {
+            progress: &a,
+            operand: None,
+            bps: Some(50.0),
+        };
+        s.update(0, [task]);
+        s.update(1_000, [task]);
+        let paused = p(1, TaskKind::Copy, TaskState::Paused, 0, Some(1_000));
+        s.update(2_000, [t(&paused)]);
+        assert!(s.view(2_000).expect("bar").spark.is_empty());
+        assert_eq!(
+            s.next_change_ms(2_000),
+            None,
+            "nothing moves: no wake every second"
+        );
+    }
+
+    /// A long rate is not given up before the graph: the forms stay
+    /// longest-first with the graph on (review m1).
+    #[test]
+    fn a_long_rate_outlives_the_graph() {
+        let v = StripView {
+            phase: StripPhase::Running,
+            count: 1,
+            percent: Some(62),
+            kind: Some(TaskKind::Copy),
+            name: Some("foto.jpg".to_owned()),
+            rate: "48 MiB/s".to_owned(),
+            eta: String::new(),
+            spark: vec![50; crate::spark::SAMPLES],
+        };
+        let fs = forms(&v, Lang::En);
+        let widths: Vec<usize> = fs.iter().map(form_cells).collect();
+        assert!(widths.windows(2).all(|w| w[0] >= w[1]), "{widths:?}");
+        let last_graph = fs.iter().rposition(|f| f.graph).expect("a graph");
+        let last_rate = fs
+            .iter()
+            .rposition(|f| f.text.contains("48 MiB/s"))
+            .expect("the rate");
+        assert!(last_graph < last_rate, "{fs:?}");
     }
 
     /// A copy that starts and ends between two ticks is never seen running,
@@ -679,6 +834,7 @@ mod tests {
             name: Some("foto.jpg".to_owned()),
             rate: "48 MiB/s".to_owned(),
             eta: String::new(),
+            spark: Vec::new(),
         };
         let fs = forms(&v, Lang::Es);
         let widths: Vec<usize> = fs.iter().map(form_cells).collect();

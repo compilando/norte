@@ -394,6 +394,11 @@ pub struct StatusProgressView {
     pub percent: Option<u8>,
     /// `running`, `done` or `failed`.
     pub phase: String,
+    /// The burst's throughput, drawn in front of the text (ADR 0187, bridge
+    /// 117): one value per second, oldest first, 0–100 against the series'
+    /// own maximum. Empty = no graph — nothing moved, or it did not fit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spark: Vec<u8>,
 }
 
 /// A chrome button that runs a command (ADR 0133): the layout ones.
@@ -4017,6 +4022,11 @@ pub struct TaskView {
     pub detail_hostile: bool,
     /// The task belongs to ANOTHER client of the same session.
     pub foreign: bool,
+    /// Its throughput over the last seconds, like
+    /// [`StatusProgressView::spark`]; empty once it ends or before anything
+    /// moved. Bridge 117.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spark: Vec<u8>,
 }
 
 /// A task's state.

@@ -60,6 +60,11 @@ pub(super) enum Target {
     Viva(u64),
 }
 
+/// How long a task's byte count may stand still before its graph reads it
+/// as stalled (ADR 0187): above one sampling second, so a task that
+/// publishes every second is not taken for stopped between two.
+const STALL_MS: i64 = 1_500;
+
 /// A task alive on the board.
 pub(super) struct TaskViva {
     pub(super) vista: TaskView,
@@ -71,6 +76,13 @@ pub(super) struct TaskViva {
     /// copies at once run at different speeds, and an average of the two
     /// describes neither.
     rate: norte_frontend::tasks::Rate,
+    /// Its rate over the last seconds, sampled on the strip's clock (ADR
+    /// 0187).
+    spark: norte_frontend::spark::Spark,
+    /// Its byte count, and when on the strip's clock it last changed:
+    /// `rate` only measures when progress arrives, and a stalled task sends
+    /// none, so the graph needs to know it stopped.
+    moved: (u64, i64),
     /// How to ask it to stop. Cancelling twice is not an error.
     pub(super) cancel: std::sync::Arc<dyn Fn() + Send + Sync>,
     /// How to pause or resume it (ADR 0147); `None` if it cannot be.
@@ -484,6 +496,8 @@ impl State {
                 // for there to be a speed, and until then the row stays
                 // silent.
                 rate: norte_frontend::tasks::Rate::default(),
+                spark: norte_frontend::spark::Spark::default(),
+                moved: (task.progress.borrow().bytes_done, self.clock_strip()),
                 cancel: task.cancel,
                 pause: task.pause,
                 cola: task.cola,
@@ -587,6 +601,9 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        // The strip's clock, the one the graph samples on (ADR 0187): a
+        // monotonic one, and one a test can advance.
+        let now = self.clock_strip();
         let Some(viva) = self.tasks.get_mut(&p.task_id.get()) else {
             return Vec::new();
         };
@@ -598,7 +615,10 @@ impl State {
         // not carry it, so whoever is watching estimates it — and the host
         // writes it, so the window and the terminal say the same speed with
         // the same units.
-        viva.rate.observe(p, super::now_ms());
+        viva.rate.observe(p, now);
+        if p.bytes_done != viva.moved.0 {
+            viva.moved = (p.bytes_done, now);
+        }
         let (pace, remains) = (
             norte_frontend::tasks::human_rate(viva.rate.bps()),
             norte_frontend::tasks::human_eta(viva.rate.eta_secs(p)),
@@ -1949,8 +1969,36 @@ impl State {
 
     /// Shows the board to the light bar (ADR 0146) and schedules the next
     /// wake-up if the bar is going to change with no progress arriving.
-    pub(super) fn annotate_strip(&mut self, mailbox: &mpsc::Sender<Message>) {
+    /// Returns whether any row's graph changed (ADR 0187).
+    pub(super) fn annotate_strip(&mut self, mailbox: &mpsc::Sender<Message>) -> bool {
         let now = self.clock_strip();
+        let mut graphs_changed = false;
+        // Each row's graph samples here, on the strip's clock, and not on
+        // progress: a stalled task publishes nothing (ADR 0187).
+        for t in self.tasks.values_mut() {
+            let spark = if Self::terminal(t.vista.state) || t.epoch != self.epoch_connection {
+                Vec::new()
+            } else {
+                // Still for longer than a second and a half: it is stalled,
+                // whatever the last measured rate says — and the row's speed
+                // stops claiming one too.
+                if now.saturating_sub(t.moved.1) > STALL_MS {
+                    t.rate = norte_frontend::tasks::Rate::default();
+                    t.vista.rate.clear();
+                    t.vista.eta.clear();
+                }
+                t.spark.record(now, t.rate.bps());
+                if t.spark.is_quiet() {
+                    Vec::new()
+                } else {
+                    t.spark.series()
+                }
+            };
+            if spark != t.vista.spark {
+                t.vista.spark = spark;
+                graphs_changed = true;
+            }
+        }
         // Copies: progress lives behind a `watch`, and its guard cannot
         // cross the call. There are few of them (the board has a cap) and
         // they are small.
@@ -1975,18 +2023,19 @@ impl State {
                 }),
         );
         let Some(when) = self.strip.next_change_ms(now) else {
-            return;
+            return graphs_changed;
         };
         if self.strip_wake == Some(when) {
-            return;
+            return graphs_changed;
         }
         self.strip_wake = Some(when);
         let wait = std::time::Duration::from_millis(u64::try_from(when - now).unwrap_or(0));
         let mailbox = mailbox.clone();
         tokio::spawn(async move {
             tokio::time::sleep(wait).await;
-            let _ = mailbox.send(Message::Strip).await;
+            let _ = mailbox.send(Message::Strip(when)).await;
         });
+        graphs_changed
     }
 
     /// The time the bar asked for arrived: it is renoted, and a patch
@@ -1995,14 +2044,32 @@ impl State {
     /// `processes_automaticos`).
     pub(super) fn wake_strip(
         &mut self,
+        when: i64,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        // A timer another one superseded: the newer one is armed, and this
+        // one re-arming would leave two ticking forever, one more each time
+        // progress lands next to a second's boundary.
+        if self.strip_wake != Some(when) {
+            return Vec::new();
+        }
         self.strip_wake = None;
-        self.annotate_strip(mailbox);
+        let graphs_changed = self.annotate_strip(mailbox);
         let mut sends = self.processes_automaticos(backend, mailbox);
-        if sends.is_empty() && self.last_items.as_ref() != Some(&self.status_items_view()) {
-            sends.push(self.parche(Vec::new()));
+        // The rows' graphs moved with this second (ADR 0187).
+        let changes = if graphs_changed {
+            vec![ViewChange::Tasks {
+                tasks: self.vistas_de_tasks(),
+                cursor: self.board_cursor(),
+            }]
+        } else {
+            Vec::new()
+        };
+        if !changes.is_empty()
+            || (sends.is_empty() && self.last_items.as_ref() != Some(&self.status_items_view()))
+        {
+            sends.push(self.parche(changes));
         }
         sends
     }

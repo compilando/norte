@@ -94,6 +94,7 @@ pub mod shell_profiles;
 pub mod shortcuts;
 mod sort;
 pub mod space;
+pub mod spark;
 pub mod subshell;
 pub mod sync;
 pub mod task_strip;

@@ -61,6 +61,7 @@ impl State {
                 .as_ref()
                 .is_some_and(|path| norte_frontend::path_display(path).1),
             foreign: false,
+            spark: Vec::new(),
         }
     }
 
@@ -494,6 +495,7 @@ impl State {
                                 StripPhase::Failed => "failed",
                             }
                             .to_owned(),
+                            spark: v.spark.clone(),
                         }
                     }),
                 }

@@ -9,6 +9,11 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Throughput graphs.** While a copy, move or delete runs, the tasks item
+  of the status bar leads with a graph of the speed over the last half
+  minute (`⣀⣤⣶⣿`), and each row of the processes panel draws its own — as
+  braille in the terminal, as a line in the window. A stalled copy shows
+  as a fall to zero, not a frozen speed (ADR 0187).
 - **The assistant.** `alt+Y` (all seven presets), the AI button on the
   panel bar, or `@` in the box opens a panel where you ask in plain words:
   "copy this month's PDFs to the other pane", "what takes the most space

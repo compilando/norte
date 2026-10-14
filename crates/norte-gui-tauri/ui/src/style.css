@@ -1664,6 +1664,23 @@ button.status-item:hover {
   gap: 8px;
 }
 
+.task-rate {
+  white-space: nowrap;
+  flex: none;
+}
+
+/* The throughput graph (ADR 0187): eight terminal cells wide, like the
+   braille one, coloured by the text it sits in. */
+.spark {
+  display: inline-block;
+  width: 8ch;
+  height: 1em;
+  margin-right: 8px;
+  vertical-align: middle;
+  color: var(--border-focus);
+  flex: none;
+}
+
 /* The first-run wizard (bridge 63): a full-screen veil with a box in the
    center, like the palette. */
 #wizard[data-open="true"] {

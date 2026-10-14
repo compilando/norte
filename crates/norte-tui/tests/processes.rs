@@ -329,3 +329,56 @@ fn a_long_path_does_not_overflow_the_row() {
     );
     assert!(screen.contains("final.txt"), "the tail survives: {screen}");
 }
+
+/// ADR 0187: a running row that has moved draws its throughput graph, the
+/// status bar draws the burst's where it fits, and a finished row draws
+/// none.
+#[test]
+fn a_moving_task_draws_its_graph_and_a_finished_one_does_not() {
+    let mut app = test_app();
+    let progress = |state, bytes| norte_proto::TaskProgress {
+        task_id: norte_proto::TaskId::new(9),
+        kind: norte_proto::TaskKind::Copy,
+        state,
+        bytes_done: bytes,
+        bytes_total: Some(1 << 30),
+        entries_done: 0,
+        entries_total: None,
+        current: Some(vp("file:///casa/grande.iso")),
+        unreadable: None,
+        unvisited: None,
+    };
+    let (tx, rx) = tokio::sync::watch::channel(progress(norte_proto::TaskState::Running, 0));
+    app.board.push(
+        &norte_core::backend::TaskRef::synthetic_for_tests(norte_proto::TaskId::new(9), rx),
+        None,
+    );
+    for sec in 0..4_i64 {
+        let bytes = u64::try_from(sec).unwrap() * (8 << 20);
+        tx.send(progress(norte_proto::TaskState::Running, bytes))
+            .unwrap();
+        app.board.tick(sec * 1_000);
+    }
+    assert!(
+        !app.board.rows()[0].spark.is_quiet(),
+        "four seconds of copying fed the ring"
+    );
+    app.toggle_processes();
+    let screen = paint(&app, 100, 24);
+    let row = screen
+        .lines()
+        .find(|l| l.contains("grande.iso") && l.contains('%'))
+        .unwrap_or_else(|| panic!("no row: {screen}"));
+    let braille = |c: char| ('\u{2801}'..='\u{28FF}').contains(&c);
+    assert!(row.chars().any(braille), "the row's graph: {row:?}");
+
+    tx.send(progress(norte_proto::TaskState::Completed, 1 << 30))
+        .unwrap();
+    app.board.tick(4_000);
+    let screen = paint(&app, 100, 24);
+    let row = screen
+        .lines()
+        .find(|l| l.contains("grande.iso"))
+        .unwrap_or_else(|| panic!("no row: {screen}"));
+    assert!(!row.chars().any(braille), "finished, no graph: {row:?}");
+}

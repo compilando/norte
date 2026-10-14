@@ -79,8 +79,10 @@ lives half a second is a flicker — ; with several tasks it shows one bar, for
 the total; and when they finish it leaves `✓ copied photo.jpg` for a while,
 even when it was so quick that the bar never showed. If something failed it
 says `✗ 1 failed` and stays longer, as long as the row stays in the jobs
-panel, which is where you read why. Short of room it shrinks — losing the
-name, then the rate, then the bar — before any other item is dropped.
+panel, which is where you read why. While work moves it leads with a small
+graph of the speed over the last half minute (`⣀⣤⣶⣿`), and each row of the
+jobs panel draws its own. Short of room it shrinks — losing the graph, then
+the name, then the rate, then the bar — before any other item is dropped.
 
 A columns plugin can speak there too: `status_plugins =
 ["plugin:git/branch"]` shows that column's value for the entry under the

@@ -80,8 +80,11 @@ barra de medio segundo es un parpadeo—; con varias tareas enseña una sola
 barra, la del total; y al acabar deja un rato `✓ copiado foto.jpg`, también
 cuando fue tan rápido que la barra no llegó a salir. Si algo falló dice
 `✗ 1 falló` y se queda más, lo que tarda en irse la fila del panel de procesos,
-que es donde se lee por qué. Sin sitio se acorta —pierde el nombre, luego el
-ritmo, luego la barra— antes de quitar ningún otro dato.
+que es donde se lee por qué. Mientras el trabajo avanza va precedida de una
+gráfica pequeña de la velocidad del último medio minuto (`⣀⣤⣶⣿`), y cada fila
+del panel de procesos dibuja la suya. Sin sitio se acorta —pierde la gráfica,
+luego el nombre, luego el ritmo, luego la barra— antes de quitar ningún otro
+dato.
 
 Un plugin de columnas también puede hablar ahí: `status_plugins =
 ["plugin:git/branch"]` enseña el valor de esa columna para la entrada bajo
