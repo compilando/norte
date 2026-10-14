@@ -109,6 +109,30 @@ async fn zero_matches_copies_nothing() {
     assert!(snap.dialogs.is_empty(), "no dialog over the cursor row");
 }
 
+/// A lazy listing (#52) carries no sizes: Enter measures the rows `size`
+/// needs before it selects, and only then marks.
+#[tokio::test]
+async fn enter_measures_a_lazy_listing_before_selecting_by_size() {
+    let mut f = Fake {
+        lazy: true,
+        ..Fake::default()
+    };
+    f.put(
+        "mem:///casa",
+        vec![(b"a.txt".to_vec(), false), (b"b.txt".to_vec(), false)],
+    );
+    let (h, _snap) = host_tree(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    typed(&h, ":sel size=1 type:file").await;
+    h.dispatch(press("Enter")).await.expect("host alive");
+    let snap = wait_snapshot(&h, &mut sub, "both measured and marked", |s| {
+        marked(listing(s)).len() == 2
+    })
+    .await;
+    assert_eq!(marked(listing(&snap)), ["a.txt", "b.txt"]);
+}
+
 /// The window and the terminal mark the same rows for the same line: both
 /// go through `PaneState::select_query`, which is the oracle here.
 #[tokio::test]

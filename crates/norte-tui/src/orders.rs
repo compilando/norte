@@ -69,6 +69,15 @@ pub async fn run(app: &mut App, backend: &Backend, order: &norte_orders::Order) 
     let mut matched = None;
     for step in &steps {
         if let Step::Select(q) = step {
+            // The lazy listing (#52) measured only the painted rows: stat
+            // the rest the query needs, or `size>` silently skips them.
+            for path in orders::unmeasured(app.focused().state(), q) {
+                if let Ok(st) = backend.stat(&path).await {
+                    app.focused_mut()
+                        .state_mut()
+                        .hydrate(&path, st.size, st.mtime_ms);
+                }
+            }
             match app.focused_mut().state_mut().select_query(q, now) {
                 Ok(n) => matched = Some(n),
                 Err(e) => {

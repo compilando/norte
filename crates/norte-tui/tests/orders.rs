@@ -130,6 +130,32 @@ async fn a_catalogue_stage_runs_like_its_key() {
     );
 }
 
+/// A lazy local listing carries no size for rows never painted (#52): the
+/// order measures them before it selects, or `size>` would skip them.
+#[tokio::test]
+async fn sel_by_size_measures_rows_the_listing_never_measured() {
+    use norte_vfs::Provider;
+    let engine = norte_core::Engine::new();
+    let mem = Arc::new(norte_testkit::MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let b = Backend::Embedded(Arc::new(engine));
+    let mut sink = mem.write(&vp("mem:///big.bin")).await.expect("write");
+    sink.write(bytes::Bytes::from(vec![0u8; 4096]))
+        .await
+        .expect("chunk");
+    sink.commit().await.expect("commit");
+    let d = vp("mem:///");
+    let mut lazy = entry(&d, "big.bin");
+    lazy.size = None;
+    let mut app = App::new(
+        Pane::new(d, vec![lazy]),
+        Pane::new(vp("mem:///o"), Vec::new()),
+    );
+    app.set_focus(0);
+    norte_tui::orders::run(&mut app, &b, &order("sel size>1K")).await;
+    assert_eq!(marked(&app), ["big.bin"]);
+}
+
 #[tokio::test]
 async fn log_opens_the_timeline() {
     let mut app = app_with("mem:///d", &["a"], "mem:///o");

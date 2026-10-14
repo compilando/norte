@@ -223,6 +223,31 @@ pub fn undo_cut(
     })
 }
 
+/// How many rows an order measures before its `sel` at most; past this the
+/// rest stay unknown and the preview says how many.
+pub const MEASURE_CAP: usize = 5_000;
+
+/// The markable rows a `sel` cannot judge yet: it tests `size` or `age` and
+/// the lazy listing (#52) never measured them — only painted rows get a
+/// stat. An executor stats these and calls [`crate::PaneState::hydrate`]
+/// before it selects; the live preview only counts them.
+#[must_use]
+pub fn unmeasured(pane: &crate::PaneState, q: &Query) -> Vec<VPath> {
+    let wants_size = q.terms.iter().any(|t| matches!(t.pred, Pred::Size(..)));
+    let wants_age = q.terms.iter().any(|t| matches!(t.pred, Pred::Age(..)));
+    if !wants_size && !wants_age {
+        return Vec::new();
+    }
+    pane.markable_entries()
+        .filter(|e| {
+            (wants_size && e.size.is_none() && e.kind != EntryKind::Dir)
+                || (wants_age && e.mtime_ms.is_none())
+        })
+        .map(|e| e.path.clone())
+        .take(MEASURE_CAP)
+        .collect()
+}
+
 /// The focused pane's EXPLICIT marks — empty when only the cursor row would
 /// act, because that fallback is not a mark and must not come back as one.
 #[must_use]
@@ -261,15 +286,25 @@ pub fn preview(
     let Some(Stage::Sel(q)) = order.stages.first() else {
         return String::new();
     };
+    let missing = unmeasured(pane, q).len();
     match pane.select_query(q, now_ms) {
         Ok(n) => {
             let n_text = n.to_string();
             let size = crate::human_bytes(pane.marked_bytes());
-            norte_i18n::ta_in(
+            let mut text = norte_i18n::ta_in(
                 lang,
                 "msg-order-preview",
                 &[("n", &n_text), ("size", &size)],
-            )
+            );
+            if missing > 0 {
+                text.push_str(" · ");
+                text.push_str(&norte_i18n::ta_in(
+                    lang,
+                    "msg-order-unmeasured",
+                    &[("n", &missing.to_string())],
+                ));
+            }
+            text
         }
         Err(_) => String::new(),
     }
@@ -681,6 +716,34 @@ mod tests {
             Err(UndoRefusal::Nothing)
         );
         assert_eq!(undo_cut(&[], None, 1), Err(UndoRefusal::Nothing));
+    }
+
+    #[test]
+    fn unmeasured_lists_only_what_the_query_needs_and_is_missing() {
+        let mut lazy = file("lazy.bin", 0, 1);
+        lazy.size = None;
+        lazy.mtime_ms = None;
+        let p = pane(vec![lazy, file("known.bin", 5, 1)]);
+        let names = |q: &str| -> Vec<String> {
+            unmeasured(&p, &query(q))
+                .iter()
+                .map(|v| {
+                    String::from_utf8_lossy(v.file_name().expect("name").as_bytes()).into_owned()
+                })
+                .collect()
+        };
+        assert_eq!(names("sel size>1K"), ["lazy.bin"]);
+        assert_eq!(names("sel age<1d"), ["lazy.bin"]);
+        assert!(names("sel *.bin").is_empty(), "a glob needs no stat");
+    }
+
+    #[test]
+    fn the_preview_says_how_many_rows_it_could_not_measure() {
+        let mut lazy = file("lazy.bin", 0, 1);
+        lazy.size = None;
+        let mut p = pane(vec![lazy, file("known.bin", 5 << 20, 1)]);
+        let text = preview(&mut p, ":sel size>1M", &[], NOW, norte_i18n::Lang::En);
+        assert!(text.contains("not measured"), "{text}");
     }
 
     #[test]

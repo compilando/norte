@@ -569,6 +569,13 @@ impl PaneState {
     /// marking it would put the PARENT in the list of what gets copied or
     /// deleted. Here and not in every caller, because this is the choke
     /// point every bulk mark passes through.
+    /// The entries a bulk mark acts on ([`Self::markable_indices`]).
+    pub(crate) fn markable_entries(&self) -> impl Iterator<Item = &Entry> {
+        self.markable_indices()
+            .into_iter()
+            .filter_map(|i| self.entries.get(i))
+    }
+
     pub(super) fn markable_indices(&self) -> Vec<usize> {
         let from = usize::from(self.is_parent_row(0));
         match self.quick_visible() {

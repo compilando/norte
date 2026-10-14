@@ -521,7 +521,7 @@ impl State {
             return (self.applied(), restored);
         };
         let (ack, mut rest) = match act {
-            Action::Order(order) => self.run_order(&order, backend, mailbox),
+            Action::Order(order) => self.run_order(&order, false, backend, mailbox),
             Action::Ir(dir) => (
                 self.applied(),
                 self.navigate(&dir, Trail::Record, backend, mailbox),

@@ -61,6 +61,7 @@ impl State {
     pub(super) fn run_order(
         &mut self,
         order: &norte_orders::Order,
+        measured: bool,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
@@ -80,6 +81,36 @@ impl State {
                 return (self.applied(), self.say_text(text));
             }
         };
+        // The lazy listing (#52) measured only the painted rows: what a `sel`
+        // needs and is missing is statted first, and the order runs again
+        // when the answers are in (`order_measured`).
+        let missing: Vec<VPath> = steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Select(q) => Some(orders::unmeasured(&self.slot().pane, q)),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        if !missing.is_empty() && !measured {
+            let backend = Arc::clone(backend);
+            let mailbox = mailbox.clone();
+            let order = order.clone();
+            tokio::spawn(async move {
+                let mut stats = Vec::with_capacity(missing.len());
+                for path in missing {
+                    if let Ok(st) = backend.stat(path.clone(), Vec::new()).await {
+                        stats.push((path, st.size, st.mtime_ms));
+                    }
+                }
+                let _ = mailbox
+                    .send(Message::Background(Box::new(Background::OrderMeasured(
+                        order, stats,
+                    ))))
+                    .await;
+            });
+            return (self.applied(), Vec::new());
+        }
         let mut matched = None;
         let mut out = Vec::new();
         for step in &steps {
@@ -118,6 +149,21 @@ impl State {
         };
         out.append(&mut rest);
         (ack, out)
+    }
+
+    /// The stats an order waited for: into the listing, then the order runs
+    /// — once; a row whose stat failed stays unknown and does not match.
+    pub(super) fn order_measured(
+        &mut self,
+        order: &norte_orders::Order,
+        stats: Vec<(VPath, Option<u64>, Option<i64>)>,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        for (path, size, mtime) in stats {
+            self.slot_mut().pane.hydrate(&path, size, mtime);
+        }
+        self.run_order(order, true, backend, mailbox).1
     }
 
     /// `mkdir` from an order: the path is already resolved, so it goes
