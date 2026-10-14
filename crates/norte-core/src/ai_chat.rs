@@ -279,6 +279,237 @@ pub fn vet_order(text: &str) -> Result<(), ReplyError> {
     Ok(())
 }
 
+/// Tool rounds before the model must answer.
+pub const MAX_TOOL_ROUNDS: usize = 6;
+/// Entries one `list` returns at most.
+pub const MAX_LIST: usize = 200;
+/// The most bytes of one model reply.
+const MAX_REPLY_BYTES: usize = 64 * 1024;
+/// How long `sizes` may walk a folder.
+const SIZES_BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl crate::Engine {
+    /// One assistant turn (`ai.chat`, ADR 0186): the model may call the
+    /// read-only tools up to [`MAX_TOOL_ROUNDS`] times, then answers with an
+    /// order — parsed and vetted, given ONE retry when vetted out — or with
+    /// prose. Mutates nothing.
+    ///
+    /// # Errors
+    /// [`norte_proto::Error::Unsupported`] with no provider;
+    /// [`norte_proto::Error::PolicyDenied`] when the AI gate refuses (off,
+    /// local-only over remote, a pane under a denied prefix);
+    /// [`norte_proto::Error::Cancelled`]; the provider's errors.
+    pub async fn ai_chat(
+        &self,
+        p: &norte_proto::methods::AiChatParams,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<norte_proto::methods::AiChatTurn, norte_proto::Error> {
+        use norte_proto::Error;
+        use norte_proto::methods::AiChatTurn;
+
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let (provider, config) = self.ai_parts().ok_or(Error::Unsupported)?;
+        let roots: Vec<&VPath> = std::iter::once(&p.here).chain(p.other.as_ref()).collect();
+        crate::ai::AiGate::new(&config)
+            .check(crate::ai::AiOp::Chat, provider.is_local(), &roots)
+            .map_err(|r| crate::engine::ai_denied_to_error(&r))?;
+
+        let mut rounds: Vec<(String, String)> = Vec::new();
+        let mut bad_replies = 0;
+        let mut vetted_out = false;
+        loop {
+            let req = build_request(&p.messages, &p.here, p.other.as_ref(), &rounds);
+            let raw = tokio::select! {
+                () = cancel.cancelled() => return Err(Error::Cancelled),
+                r = drain(&*provider, req) => r?,
+            };
+            let reply = match parse_reply(&raw, &p.here) {
+                Ok(r) => r,
+                Err(e) => {
+                    bad_replies += 1;
+                    if bad_replies >= 2 {
+                        return Ok(AiChatTurn::Answer {
+                            text: format!(
+                                "(the assistant did not answer in the expected form: {e})"
+                            ),
+                        });
+                    }
+                    rounds.push((raw, format!("refused: {e}; reply with one JSON object")));
+                    continue;
+                }
+            };
+            match reply {
+                Reply::Answer { text } => return Ok(AiChatTurn::Answer { text }),
+                Reply::Order { text, note } => match vet_order(&text) {
+                    Ok(()) => return Ok(AiChatTurn::Order { text, note }),
+                    Err(e) if !vetted_out => {
+                        vetted_out = true;
+                        rounds.push((raw, format!("refused: {e}")));
+                    }
+                    Err(e) => {
+                        return Ok(AiChatTurn::Answer {
+                            text: format!("(the assistant's order was refused: {e})"),
+                        });
+                    }
+                },
+                Reply::Tool(call) => {
+                    if rounds.len() >= MAX_TOOL_ROUNDS {
+                        return Ok(AiChatTurn::Answer {
+                            text: "(the assistant kept looking and did not answer)".to_owned(),
+                        });
+                    }
+                    let result = self.run_tool(&call, &roots, &config, cancel).await;
+                    rounds.push((raw, result));
+                }
+            }
+        }
+    }
+
+    /// One read-only tool, confined to the panes and the AI gate. A refusal
+    /// is the RESULT the model reads, not an error of the turn.
+    async fn run_tool(
+        &self,
+        call: &ToolCall,
+        roots: &[&VPath],
+        config: &crate::ai::AiConfig,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> String {
+        let allowed = |path: &VPath| {
+            roots.iter().any(|r| crate::policy::is_under(r, path))
+                && !config
+                    .denied_prefixes
+                    .iter()
+                    .any(|d| crate::policy::is_under(d, path))
+        };
+        let refused = || "refused: outside the reader's panes".to_owned();
+        match call {
+            ToolCall::List(dir) if allowed(dir) => self.tool_list(dir, config).await,
+            ToolCall::Stat(path) if allowed(path) => match self.stat(path).await {
+                Ok(e) => serde_json::json!(entry_json(&e)).to_string(),
+                Err(e) => format!("error: {e}"),
+            },
+            ToolCall::Sizes(dir) if allowed(dir) => self.tool_sizes(dir, cancel).await,
+            ToolCall::Log(n) => match self.journal_page(None, *n, Some("user")).await {
+                Ok(rows) => {
+                    let page = crate::journal::page_to_wire(&rows, *n);
+                    let out: Vec<serde_json::Value> = page
+                        .rows
+                        .iter()
+                        .map(|r| {
+                            serde_json::json!({
+                                "seq": r.seq,
+                                "op": r.op,
+                                "path": norte_orders::escape_name(r.path.as_bytes()),
+                                "ts_ms": r.ts_ms,
+                            })
+                        })
+                        .collect();
+                    serde_json::Value::Array(out).to_string()
+                }
+                Err(e) => format!("error: {e}"),
+            },
+            _ => refused(),
+        }
+    }
+
+    async fn tool_list(&self, dir: &VPath, config: &crate::ai::AiConfig) -> String {
+        use futures::StreamExt as _;
+        let mut stream = match self.list(dir).await {
+            Ok(s) => s,
+            Err(e) => return format!("error: {e}"),
+        };
+        let mut rows = Vec::new();
+        let mut more = 0usize;
+        while let Some(item) = stream.next().await {
+            let Ok(entry) = item else { continue };
+            if config
+                .denied_prefixes
+                .iter()
+                .any(|d| crate::policy::is_under(d, &entry.path))
+            {
+                continue;
+            }
+            if rows.len() < MAX_LIST {
+                rows.push(entry_json(&entry));
+            } else {
+                more += 1;
+            }
+        }
+        serde_json::json!({ "entries": rows, "more": more }).to_string()
+    }
+
+    async fn tool_sizes(
+        &self,
+        dir: &VPath,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> String {
+        let params = norte_proto::methods::FsDirSizeParams {
+            paths: vec![dir.clone()],
+        };
+        let handle = match self.dir_size_as(params, crate::journal::Actor::User).await {
+            Ok(h) => h,
+            Err(e) => return format!("error: {e}"),
+        };
+        let progress = handle.progress();
+        let canceller = handle.cancel_token();
+        let finished = tokio::select! {
+            () = cancel.cancelled() => None,
+            r = tokio::time::timeout(SIZES_BUDGET, handle.join()) => r.ok(),
+        };
+        if finished.is_none() {
+            canceller.cancel();
+        }
+        let p = progress.borrow().clone();
+        serde_json::json!({
+            "bytes": p.bytes_done,
+            "entries": p.entries_done,
+            "complete": finished.is_some(),
+        })
+        .to_string()
+    }
+}
+
+/// An entry as the model reads it: the name escaped the way the grammar
+/// writes it, never raw bytes.
+fn entry_json(e: &norte_proto::Entry) -> serde_json::Value {
+    let name = e.path.file_name().map_or(&b""[..], |n| n.as_bytes());
+    serde_json::json!({
+        "name": norte_orders::escape_name(name),
+        "kind": match e.kind {
+            norte_proto::EntryKind::File => "file",
+            norte_proto::EntryKind::Dir => "dir",
+            norte_proto::EntryKind::Symlink => "link",
+            norte_proto::EntryKind::Other => "other",
+        },
+        "size": e.size,
+        "mtime_ms": e.mtime_ms,
+    })
+}
+
+/// The whole reply, capped: a provider that never stops is cut, not
+/// buffered.
+async fn drain(
+    provider: &dyn norte_ai::AiProvider,
+    req: ChatRequest,
+) -> Result<String, norte_proto::Error> {
+    use futures::StreamExt as _;
+    let mut chat = provider
+        .chat(req)
+        .await
+        .map_err(|e| crate::engine::ai_to_proto_error(&e))?;
+    let mut out = String::new();
+    while let Some(delta) = chat.next().await {
+        let delta = delta.map_err(|e| crate::engine::ai_to_proto_error(&e))?;
+        if out.len() + delta.len() > MAX_REPLY_BYTES {
+            break;
+        }
+        out.push_str(&delta);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

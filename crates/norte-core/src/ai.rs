@@ -280,6 +280,9 @@ pub enum AiOp {
     /// `index.embed` / `index.search_semantic` — content prefixes or the
     /// query go out to the provider.
     Embed,
+    /// `ai.chat` (ADR 0186): the conversation and metadata the tools read
+    /// (names, sizes, dates) go out to the provider.
+    Chat,
 }
 
 /// Reason the gate rejected an AI operation.
