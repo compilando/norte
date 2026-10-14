@@ -112,6 +112,8 @@ keymap = [
     { on = ["menu"], run = "pane.context-menu" },
     { on = ["f4"], run = "pane.open" },
     { on = ["/"], run = "pane.quick-search" },
+    # The order line (ADR 0185): `:` was free in the listing.
+    { on = [":"], run = "app.orders" },
     { on = ["alt+down"], run = "pane.history" },
     { on = ["alt+f7"], run = "pane.search" },
     { on = ["shift+f2"], run = "pane.compare-dirs" },

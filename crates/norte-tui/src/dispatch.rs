@@ -996,6 +996,9 @@ pub async fn dispatch(
             open_omnibox(app, backend, norte_frontend::goto::PREFIX_COMMANDS).await;
         }
         Command::AppGoto => open_omnibox(app, backend, "").await,
+        Command::AppOrders => {
+            open_omnibox(app, backend, norte_frontend::goto::PREFIX_ORDER).await;
+        }
         // `F11` (S3): settings overlay — the rows are born from the CURRENT
         // `cfg` (same criterion as `help_lines`/`app.palette_rows`: rebuilt
         // on open, never a carried-over copy). Plugins section (G3c): a

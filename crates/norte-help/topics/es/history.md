@@ -20,6 +20,7 @@ commands = [
     "nav.jump-back",
     "pane.hotlist",
     "app.goto",
+    "app.orders",
 ]
 +++
 
@@ -148,3 +149,23 @@ importados no lo atan, porque ninguno de los gestores que transcriben tiene
 una tecla equivalente: en ésos se llega por el menú Ir, donde está el
 primero. En esos cuatro, {{cmd:app.palette}} abre la caja con `>`; bórralo
 para buscar sitios.
+
+## Órdenes: `:`
+
+{{cmd:app.orders}} abre la misma caja con `:` escrito, y la línea pasa a ser
+una orden: `sel ext:pdf age<30d | cp >other`. Mientras escribes se marcan las
+filas que casa el `sel`; Esc devuelve las marcas que tenías. Intro ejecuta la
+última etapa por el mismo diálogo que abre su tecla: una copia sigue
+preguntando.
+
+- `sel` lleva términos que deben cumplirse todos: `ext:pdf,jpg`,
+  `name:*borrador*` o un glob suelto, `size>10M`, `age<7d` (`s m h d w`; `m`
+  son minutos), `type:file|dir|link`, y `!` delante niega uno.
+- Después, una acción: `cp >other`, `mv >here`, `cp >/una/ruta`, `trash`,
+  `mkdir NOMBRE`, `cd RUTA`, o cualquier comando por su nombre (`pane.swap`).
+- `log` abre la línea de tiempo; `undo 3` deshace tus tres últimas
+  operaciones, tras preguntar.
+
+Un nombre que no es texto, o que lleva un espacio o `|`, se escribe con
+escapes: `\xff`, `\ `, `\|`. Un `sel` que no casa nada no ejecuta nada:
+nunca cae en la fila bajo el cursor.

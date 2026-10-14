@@ -821,6 +821,7 @@ modal-undo-session-title = ¿deshacer todo lo que hizo esta sesión?
 modal-undo-session-scope = revierte TODAS sus operaciones, en orden inverso; lo que no se pueda revertir se dirá en el informe
 help-cmd-app-palette = paleta de comandos
 help-cmd-app-goto = ir a cualquier sitio
+help-cmd-app-orders = escribir una orden (sel … | cp >other)
 # Los títulos de las secciones de «ir a» (fase 6). El orden en que salen lo
 # fija `norte_frontend::goto::ORDEN`, no este fichero.
 goto-title = Ir a
@@ -1387,6 +1388,7 @@ menu-item-mark-extension-remove = Desmarcar por extensión
 menu-item-mark-files = Marcar los ficheros
 menu-item-mark-dirs = Marcar los directorios
 menu-item-app-goto = Ir a…
+menu-item-app-orders = Línea de órdenes…
 menu-item-nav-parent = Subir
 menu-item-nav-back = Atrás
 menu-item-nav-jump-back = Volver al punto de salto

@@ -247,6 +247,7 @@ impl State {
             Effect::Sync => self.request_sync(backend, mailbox),
             Effect::Palette
             | Effect::IrA
+            | Effect::Orders
             | Effect::Help
             | Effect::Settings
             | Effect::Extensions
@@ -804,6 +805,7 @@ impl State {
                 self.open_go_to(norte_frontend::goto::PREFIX_COMMANDS, backend, mailbox)
             }
             Effect::IrA => self.open_go_to("", backend, mailbox),
+            Effect::Orders => self.open_go_to(norte_frontend::goto::PREFIX_ORDER, backend, mailbox),
             Effect::Help => self.open_help(backend, mailbox),
             Effect::Settings => self.open_settings(),
             Effect::Extensions => self.open_extensions(backend, mailbox),

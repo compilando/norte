@@ -95,6 +95,11 @@
 # capability: it is a shortcut not attributed to a source that does not
 # state it.
 #
+# `app.orders` (the order line, ADR 0185) is unbound for the same reason:
+# Krusader's command line runs the shell, which is norte's command bar here,
+# and `:` would be typed into the incremental name search (ADR 0155). It is
+# in the Go menu, and `alt+p` opens the box — type `:` there.
+#
 # `task.pause` (ADR 0147), `task.retry` (ADR 0148) and the three queue ones
 # (`task.queue`, `task.up`, `task.down`, ADR 0149) are left UNBOUND here,
 # just like `task.cancel`:

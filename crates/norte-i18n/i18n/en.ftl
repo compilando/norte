@@ -816,6 +816,7 @@ modal-undo-session-title = undo everything this session did?
 modal-undo-session-scope = reverts ALL of its operations, newest first; whatever cannot be reverted is named in the report
 help-cmd-app-palette = command palette
 help-cmd-app-goto = go anywhere
+help-cmd-app-orders = type an order (sel … | cp >other)
 # Section titles for "go anywhere" (phase 6). The order they appear in is
 # fixed by `norte_frontend::goto::ORDEN`, not by this file.
 goto-title = Go to
@@ -1454,6 +1455,7 @@ menu-item-mark-extension-remove = Unmark by extension
 menu-item-mark-files = Mark the files
 menu-item-mark-dirs = Mark the directories
 menu-item-app-goto = Go to…
+menu-item-app-orders = Order line…
 menu-item-nav-parent = Up
 menu-item-nav-back = Back
 menu-item-nav-jump-back = Jump back
