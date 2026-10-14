@@ -7,6 +7,8 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+## [0.3.0-alpha.13] - 2026-10-14
+
 ### Added
 
 - **Throughput graphs.** While a copy, move or delete runs, the tasks item
@@ -8464,7 +8466,8 @@ and some daemon/socket tests are only available in CI environments.
 - Writes inside ZIP archives; list, restore, and purge operations for logical
   trash; and the M5 GUI.
 
-[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.12...HEAD
+[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.13...HEAD
+[0.3.0-alpha.13]: https://github.com/compilando/norte/compare/v0.3.0-alpha.12...v0.3.0-alpha.13
 [0.3.0-alpha.12]: https://github.com/compilando/norte/compare/v0.3.0-alpha.11...v0.3.0-alpha.12
 [0.3.0-alpha.11]: https://github.com/compilando/norte/compare/v0.3.0-alpha.10...v0.3.0-alpha.11
 [0.3.0-alpha.10]: https://github.com/compilando/norte/compare/v0.3.0-alpha.9...v0.3.0-alpha.10
