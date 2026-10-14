@@ -97,11 +97,14 @@ say "Linux: build on the baseline, smoke, verify, publish"
 # The build of THIS commit of the tag: one of a tag since moved has the
 # same `<tag>-0-g` prefix and another hash.
 tag_sha="$(git rev-parse "$tag^{commit}")"
+# `if`, not `&&`: under `set -e` and `pipefail`, a last directory that does
+# not match would fail the pipeline and kill the script without a word.
 this_build() {
-    local d
+    local d found=""
     for d in target/baseline/"$tag"-0-g*; do
-        [ -d "$d" ] && [[ "$tag_sha" == "${d##*-0-g}"* ]] && echo "$d"
-    done | tail -1
+        if [ -d "$d" ] && [[ "$tag_sha" == "${d##*-0-g}"* ]]; then found="$d"; fi
+    done
+    echo "$found"
 }
 dir="$(this_build)"
 if [ -z "$dir" ] || ! scripts/baseline/verify.sh "$dir" > /dev/null 2>&1; then
