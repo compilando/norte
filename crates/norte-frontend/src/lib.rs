@@ -52,6 +52,7 @@ pub use overlays::{
 pub use view::{columns, diskmap, display, format, treemap, viewer};
 
 pub mod ansi;
+pub mod assistant;
 pub mod availability;
 pub mod broken_plugin;
 pub mod busy;
