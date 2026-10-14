@@ -81,6 +81,13 @@ independently through `PROTOCOL_VERSION`.
   a topic near the bottom; it used to jump back to the top, the chosen
   topic out of sight.
 
+### Security
+
+- **rustls 0.23.46** (RUSTSEC-2026-0346 to 0349): among them, a server
+  reply that could downgrade later TLS connections to classical key
+  exchange. Affects the AI providers, object storage and the release
+  check.
+
 ## [0.3.0-alpha.12] - 2026-10-13
 
 ### Added
