@@ -369,6 +369,11 @@ cli-enqueue-copy = no se pudo encolar la copia
 cli-enqueue-move = no se pudo encolar el move
 cli-enqueue-delete = no se pudo encolar el borrado
 cli-enqueue-mkdir = no se pudo encolar el mkdir
+cli-enqueue-undo = no se pudo encolar el deshacer
+cli-run-needs-selection = esta acción necesita antes un `sel`: no hay panel del que tomar marcas
+cli-run-needs-pane = cd y los comandos del catálogo actúan sobre un panel; úsalos en la caja
+cli-run-undo-needs-yes = deshacer cambia tus ficheros: añade --yes para ejecutarlo desde un script
+cli-run-would = { $action }: { $n } casan
 # S3 (shell-integration): el vocabulario de `Shell::parse` son exactamente
 # estos tres — nombrados aquí en vez de repetir el nombre tecleado como hace
 # `cli-help-unknown-topic`, porque este es un conjunto cerrado, no un corpus
@@ -821,6 +826,7 @@ modal-undo-session-title = ¿deshacer todo lo que hizo esta sesión?
 modal-undo-session-scope = revierte TODAS sus operaciones, en orden inverso; lo que no se pueda revertir se dirá en el informe
 help-cmd-app-palette = paleta de comandos
 help-cmd-app-goto = ir a cualquier sitio
+help-cmd-app-orders = escribir una orden (sel … | cp >other)
 # Los títulos de las secciones de «ir a» (fase 6). El orden en que salen lo
 # fija `norte_frontend::goto::ORDEN`, no este fichero.
 goto-title = Ir a
@@ -834,10 +840,38 @@ goto-section-index = Encontrado por el índice
 goto-title-help = Temas de ayuda
 goto-prefix-commands = Ejecutar un comando
 goto-prefix-places = Ir a un sitio
+goto-title-order = Orden
+goto-prefix-order =Ejecutar una orden (sel ext:pdf | cp >other)
+goto-hint-order = sel ext:pdf age<30d | cp >other · trash · mkdir NOMBRE · cd RUTA · log · undo N
+order-error-empty = nada que ejecutar
+order-error-unknown-verb = no es un verbo ni un comando
+order-error-not-yet = rehacer aún no está disponible
+order-error-stands-alone = log y undo no se encadenan con |
+order-error-bad-term = esta palabra no significa nada aquí
+order-error-bad-number = no es un número con unidad válida (K M G T · s m h d w)
+order-error-bad-escape = un escape es \xHH, \\, \ (espacio), \| o \'
+order-error-missing-dest = ¿adónde? (>other, >here o >RUTA)
+order-error-missing-arg = este verbo necesita un argumento
+order-error-unterminated = una comilla no se cierra
+order-error-no-other-pane = no hay otro panel
+order-error-bad-path = no es una ruta válida
+order-error-one-action = solo la última etapa puede actuar (sel … | sel … | cp >other)
+order-error-unknown-command = no existe ese comando
+order-error-unknown-command-nearest = no existe ese comando — ¿quisiste decir { $nearest }?
+msg-order-preview = { $n ->
+    [one] 1 elemento · { $size }
+   *[other] { $n } elementos · { $size }
+}
+msg-order-nothing-matched = nada casó — no se ejecutó nada
+msg-order-measuring = midiendo las filas que necesita la orden…
+msg-order-stale = la orden no se ejecutó: el panel cambió mientras medía
+msg-order-journal-failed = no se pudo leer la historia: { $err }
+msg-order-unmeasured ={ $n } sin medir aún (Intro las mide)
+msg-order-undo-too-far = eso va más atrás de una página de historia: deshaz desde la línea de tiempo (log)
 goto-empty = nada casa con eso
 goto-index-off = el índice semántico no está encendido
 goto-path-desc = ir a esta ruta
-goto-hint = > comandos · ? ayuda
+goto-hint = > comandos · : órdenes · ? ayuda
 goto-box-label = Buscar sitios y comandos (>)
 # La categoría bajo la que se archiva una fila de comando: el espacio de nombres de su id.
 cmd-ns-app = Aplicación
@@ -1363,6 +1397,7 @@ menu-item-mark-extension-remove = Desmarcar por extensión
 menu-item-mark-files = Marcar los ficheros
 menu-item-mark-dirs = Marcar los directorios
 menu-item-app-goto = Ir a…
+menu-item-app-orders = Línea de órdenes…
 menu-item-nav-parent = Subir
 menu-item-nav-back = Atrás
 menu-item-nav-jump-back = Volver al punto de salto

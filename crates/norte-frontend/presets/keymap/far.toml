@@ -118,6 +118,10 @@
 # orthodox, cua and vim carry it. Here it is reached through the Go menu
 # (F9), where it is first, and through the palette.
 #
+# `app.orders` (the order line, ADR 0185) likewise: Far's command line is
+# the shell's, and every printable key goes to it. Go menu, or the palette
+# with `:` typed.
+#
 # `task.pause` (ADR 0147), `task.retry` (ADR 0148) and the three queue ones
 # (`task.queue`, `task.up`, `task.down`, ADR 0149) are left UNBOUND here,
 # just like `task.cancel`:

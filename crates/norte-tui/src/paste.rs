@@ -130,6 +130,7 @@ pub fn route_paste(app: &mut App, text: &str) {
         if let Some(g) = &mut app.goto {
             g.push_str(first_line);
         }
+        crate::orders::after_edit(app);
         PasteOutcome::Inserted
     } else if app.shortcuts.is_some() && !modal_wins(app) {
         let capturing = app.shortcuts.as_ref().is_some_and(Shortcuts::is_capturing);

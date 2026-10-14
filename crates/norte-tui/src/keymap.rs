@@ -211,6 +211,7 @@ commands! {
     "app.extensions" => AppExtensions,
     "app.palette" => AppPalette,
     "app.goto" => AppGoto,
+    "app.orders" => AppOrders,
     "layout.timeline" => LayoutTimeline,
     "layout.search" => LayoutSearch,
     "layout.terminal" => LayoutTerminal,

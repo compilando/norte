@@ -130,6 +130,7 @@ pub const IMPLEMENTED: &[&str] = &[
     "pane.columns",
     "app.palette",
     "app.goto",
+    "app.orders",
     "app.help",
     "app.settings",
     "app.extensions",
@@ -469,6 +470,8 @@ pub enum Effect {
     Palette,
     /// Opens "go to anywhere" (#357).
     IrA,
+    /// Opens the same box on its order line, `:` (ADR 0185).
+    Orders,
     /// Opens settings: they are read, cycled and written.
     Settings,
     /// Opens the extension manager, read-only.
@@ -967,6 +970,7 @@ pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
         "pane.columns" | "pane.sort-menu" => Effect::Columns,
         "app.palette" => Effect::Palette,
         "app.goto" => Effect::IrA,
+        "app.orders" => Effect::Orders,
         "app.help" => Effect::Help,
         "app.settings" => Effect::Settings,
         "app.quit" => Effect::Exit,

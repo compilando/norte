@@ -5054,6 +5054,7 @@ dependencies = [
  "norte-help",
  "norte-i18n",
  "norte-mcp",
+ "norte-orders",
  "norte-proto",
  "norte-testkit",
  "norte-theme",
@@ -5239,6 +5240,7 @@ dependencies = [
  "norte-encoding",
  "norte-help",
  "norte-i18n",
+ "norte-orders",
  "norte-proto",
  "norte-testkit",
  "norte-theme",
@@ -5340,6 +5342,17 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "norte-orders"
+version = "0.3.0-alpha.12"
+dependencies = [
+ "norte-encoding",
+ "norte-testkit",
+ "proptest",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5456,6 +5469,7 @@ dependencies = [
  "norte-frontend",
  "norte-help",
  "norte-i18n",
+ "norte-orders",
  "norte-proto",
  "norte-term",
  "norte-testkit",
@@ -5497,6 +5511,7 @@ dependencies = [
  "norte-frontend",
  "norte-help",
  "norte-i18n",
+ "norte-orders",
  "norte-proto",
  "norte-term",
  "norte-testkit",

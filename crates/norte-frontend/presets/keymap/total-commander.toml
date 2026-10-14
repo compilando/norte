@@ -83,6 +83,10 @@
 # orthodox, cua and vim carry it; here, the Go menu (F9), where it is
 # first.
 #
+# `app.orders` (the order line, ADR 0185) likewise: TC's command line runs
+# programs, and a printable key starts the quick search. Go menu, or
+# `alt+p` and type `:`.
+#
 # `task.pause` (ADR 0147), `task.retry` (ADR 0148) and the three queue ones
 # (`task.queue`, `task.up`, `task.down`, ADR 0149) are left UNBOUND here,
 # just like `task.cancel`:

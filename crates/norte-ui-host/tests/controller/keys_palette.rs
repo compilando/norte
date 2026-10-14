@@ -389,18 +389,18 @@ async fn host_tree_with_preset(
     .expect("starts")
 }
 
-/// Vim binds `:` to the palette; inside the box `:` is a colon (Review
-/// Focus 2).
+/// Vim binds `:` to the order line (ADR 0185); inside the box `:` is a
+/// colon (Review Focus 2).
 #[tokio::test]
 async fn vims_colon_types_inside_the_box() {
     let (h, _snap) = host_tree_with_preset(fake_tree(), "vim").await;
     let mut sub = h.subscribe();
     h.dispatch(press(":")).await.expect("host alive");
     let g = next_goto(&mut sub).await.expect("`:` opens the box");
-    assert_eq!(g.query, ">");
+    assert_eq!(g.query, ":");
     h.dispatch(press(":")).await.expect("host alive");
     let g = next_goto(&mut sub).await.expect("open");
-    assert_eq!(g.query, ">:");
+    assert_eq!(g.query, "::");
 }
 
 /// The same `:` as most keyboards send it — with Shift held — still types a
@@ -413,12 +413,12 @@ async fn vims_shifted_colon_types_inside_the_box() {
         .await
         .expect("host alive");
     let g = next_goto(&mut sub).await.expect("`:` opens the box");
-    assert_eq!(g.query, ">");
+    assert_eq!(g.query, ":");
     h.dispatch(key_mod(":", false, true))
         .await
         .expect("host alive");
     let g = next_goto(&mut sub).await.expect("open");
-    assert_eq!(g.query, ">:");
+    assert_eq!(g.query, "::");
 }
 
 /// A preset that does not bind `app.goto` (Krusader) puts no key on the menu

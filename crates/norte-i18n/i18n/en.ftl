@@ -368,6 +368,11 @@ cli-enqueue-copy = could not enqueue the copy
 cli-enqueue-move = could not enqueue the move
 cli-enqueue-delete = could not enqueue the delete
 cli-enqueue-mkdir = could not enqueue the mkdir
+cli-enqueue-undo = could not enqueue the undo
+cli-run-needs-selection = this action needs a `sel` first: there is no pane to take marks from
+cli-run-needs-pane = cd and catalogue commands act on a pane; run them in the box
+cli-run-undo-needs-yes = undo changes your files: add --yes to run it from a script
+cli-run-would = { $action }: { $n } matched
 # S3 (shell-integration): `Shell::parse`'s vocabulary is exactly these three
 # tokens — named here instead of echoed back the way `cli-help-unknown-topic`
 # does, because this one is a closed set, not a corpus the user could plausibly
@@ -816,6 +821,7 @@ modal-undo-session-title = undo everything this session did?
 modal-undo-session-scope = reverts ALL of its operations, newest first; whatever cannot be reverted is named in the report
 help-cmd-app-palette = command palette
 help-cmd-app-goto = go anywhere
+help-cmd-app-orders = type an order (sel … | cp >other)
 # Section titles for "go anywhere" (phase 6). The order they appear in is
 # fixed by `norte_frontend::goto::ORDEN`, not by this file.
 goto-title = Go to
@@ -829,10 +835,38 @@ goto-section-index = Found by the index
 goto-title-help = Help topics
 goto-prefix-commands = Run a command
 goto-prefix-places = Go to a place
+goto-title-order = Order
+goto-prefix-order =Run an order (sel ext:pdf | cp >other)
+goto-hint-order = sel ext:pdf age<30d | cp >other · trash · mkdir NAME · cd PATH · log · undo N
+order-error-empty = nothing to run
+order-error-unknown-verb = not a verb nor a command
+order-error-not-yet = redo is not available yet
+order-error-stands-alone = log and undo cannot be piped
+order-error-bad-term = this word means nothing here
+order-error-bad-number = not a number with a valid unit (K M G T · s m h d w)
+order-error-bad-escape = an escape is \xHH, \\, \ (space), \| or \'
+order-error-missing-dest = where to? (>other, >here or >PATH)
+order-error-missing-arg = this verb needs an argument
+order-error-unterminated = a quote is never closed
+order-error-no-other-pane = there is no other pane
+order-error-bad-path = not a valid path
+order-error-one-action = only the last stage may act (sel … | sel … | cp >other)
+order-error-unknown-command = no such command
+order-error-unknown-command-nearest = no such command — did you mean { $nearest }?
+msg-order-preview = { $n ->
+    [one] 1 item · { $size }
+   *[other] { $n } items · { $size }
+}
+msg-order-nothing-matched = nothing matched — nothing was run
+msg-order-measuring = measuring the rows the order needs…
+msg-order-stale = the order was not run: the pane changed while it was measuring
+msg-order-journal-failed = could not read the history: { $err }
+msg-order-unmeasured ={ $n } not measured yet (Enter measures them)
+msg-order-undo-too-far = that goes further back than one page of history: undo from the timeline (log)
 goto-empty = nothing matches that
 goto-index-off = the semantic index is not switched on
 goto-path-desc = go to this path
-goto-hint = > commands · ? help
+goto-hint = > commands · : orders · ? help
 goto-box-label = Search places and commands (>)
 # The category a command row is filed under: its id's namespace.
 cmd-ns-app = App
@@ -1430,6 +1464,7 @@ menu-item-mark-extension-remove = Unmark by extension
 menu-item-mark-files = Mark the files
 menu-item-mark-dirs = Mark the directories
 menu-item-app-goto = Go to…
+menu-item-app-orders = Order line…
 menu-item-nav-parent = Up
 menu-item-nav-back = Back
 menu-item-nav-jump-back = Jump back

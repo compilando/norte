@@ -57,6 +57,7 @@ mod listing;
 mod logpanel;
 mod menu;
 mod nav;
+mod orders;
 mod organize;
 mod palette;
 mod panel;
@@ -1095,6 +1096,18 @@ enum Background {
         Option<i64>,
         Result<norte_proto::methods::JournalListResult, Error>,
     ),
+    /// The reader's journal page an order's `undo N` asked for (ADR 0185),
+    /// with N.
+    /// With the box's generation when it was asked: a late answer opens no
+    /// dialog over whatever the reader is doing now.
+    OrderUndo(
+        u64,
+        u32,
+        Result<norte_proto::methods::JournalListResult, Error>,
+    ),
+    /// The rows an order's `sel` needed measured (#52 lazy listing), with
+    /// what each stat said; the order runs once they are in.
+    OrderMeasured(Box<orders::OrderMeasured>),
     /// The connections for "go to" (#357), with the OPENING that requested
     /// them: an answer from a previous opening does not fill in the current
     /// one.
@@ -2679,6 +2692,12 @@ struct State {
     /// if it is open. One more input context, like the incremental search
     /// and the viewer: while it is open, text keys belong to it.
     ir_a: Option<norte_frontend::goto::Goto>,
+    /// The `:` line's preview (`14 items · 38 MB`), translated; empty when
+    /// the line selects nothing yet.
+    order_preview: String,
+    /// The active slot's marks when the box went into `:` mode: Esc puts
+    /// them back after a live `sel` preview. `None` = not previewing.
+    order_marks_before: Option<Vec<norte_proto::VPath>>,
     /// How many times "go to" has been opened: connections and the index that
     /// answer an earlier opening are dropped.
     gen_ir_a: u64,
@@ -3433,6 +3452,8 @@ impl State {
             token: 0,
             locale,
             ir_a: None,
+            order_preview: String::new(),
+            order_marks_before: None,
             gen_ir_a: 0,
             go_to_index: None,
             wizard: None,

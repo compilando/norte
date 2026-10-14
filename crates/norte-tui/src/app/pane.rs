@@ -123,6 +123,13 @@ impl Pane {
         &self.state
     }
 
+    /// The shared state, mutable, for an order's live `sel`
+    /// (`norte_frontend::orders::preview`): it marks through the same
+    /// funnel as every bulk gesture.
+    pub(crate) fn state_mut(&mut self) -> &mut norte_frontend::PaneState {
+        &mut self.state
+    }
+
     // --- Read-only delegates over the shared state (#82) ---
 
     /// Listed directory.

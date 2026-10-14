@@ -20,6 +20,7 @@ commands = [
     "nav.jump-back",
     "pane.hotlist",
     "app.goto",
+    "app.orders",
 ]
 +++
 
@@ -144,3 +145,22 @@ In the `orthodox`, `cua` and `vim` presets it is `ctrl+g`. The four imported
 ones do not bind it, because none of the managers they transcribe has an
 equivalent key: there, you reach it from the Go menu, where it sits first. In those four,
 {{cmd:app.palette}} opens the box with `>`; delete it to search places.
+
+## Orders: `:`
+
+{{cmd:app.orders}} opens the same box with `:` typed, and the line becomes an
+order: `sel ext:pdf age<30d | cp >other`. While you type, the rows the `sel`
+matches are marked; Esc puts back the marks you had. Enter runs the last
+stage through the same dialog its key opens — a copy still asks.
+
+- `sel` takes terms, all of which must hold: `ext:pdf,jpg`, `name:*draft*`
+  or a bare glob, `size>10M`, `age<7d` (`s m h d w`; `m` is minutes),
+  `type:file|dir|link`, and `!` in front negates one.
+- Then one action: `cp >other`, `mv >here`, `cp >/a/path`, `trash`,
+  `mkdir NAME`, `cd PATH`, or any command by its name (`pane.swap`).
+- `log` opens the timeline; `undo 3` undoes your last three operations,
+  after asking.
+
+A name that is not text, or holds a space or `|`, is written with escapes:
+`\xff`, `\ `, `\|`. A `sel` that matches nothing runs nothing — it never
+falls back to the row under the cursor.

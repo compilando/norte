@@ -545,14 +545,17 @@ pub async fn on_key(
                     g.push_char(c);
                 }
                 crate::jobs::goto::ask_the_index(app, backend, work);
+                crate::orders::after_edit(app);
             }
             KeyCode::Backspace if plain => {
                 if let Some(g) = &mut app.goto {
                     g.backspace();
                 }
                 crate::jobs::goto::ask_the_index(app, backend, work);
+                crate::orders::after_edit(app);
             }
             KeyCode::Esc if plain => {
+                crate::orders::cancel(app);
                 app.goto = None;
                 crate::jobs::goto::forget(work);
             }
@@ -607,6 +610,12 @@ pub async fn on_key(
                         g.set_query(q);
                     }
                     crate::jobs::goto::ask_the_index(app, backend, work);
+                    crate::orders::after_edit(app);
+                    return;
+                }
+                // An order that does not parse: the box stays open, its line
+                // already says why.
+                if let Some(crate::goto::Action::OrderInvalid) = &act {
                     return;
                 }
                 // The screen closes BEFORE acting, and the request to the
@@ -615,6 +624,17 @@ pub async fn on_key(
                 // has anywhere to land.
                 app.goto = None;
                 crate::jobs::goto::forget(work);
+                let act = match act {
+                    // An order runs its selection and its action here; a
+                    // final `cd` or command comes back to the arms below.
+                    Some(crate::goto::Action::Order(order)) => {
+                        crate::orders::run(app, backend, &order).await
+                    }
+                    other => {
+                        crate::orders::cancel(app);
+                        other
+                    }
+                };
                 let Some(act) = act else { return };
                 match act {
                     crate::goto::Action::Ir(dir) => {
@@ -723,7 +743,9 @@ pub async fn on_key(
                         crate::overlays::open_help_topic(app, lang, help_lines, &id);
                     }
                     // Handled above, before closing.
-                    crate::goto::Action::SetQuery(_) => {}
+                    crate::goto::Action::SetQuery(_)
+                    | crate::goto::Action::OrderInvalid
+                    | crate::goto::Action::Order(_) => {}
                 }
             }
             // The chord of `app.palette` or `app.goto` pressed inside the
@@ -736,6 +758,7 @@ pub async fn on_key(
                         g.set_query(q);
                     }
                     crate::jobs::goto::ask_the_index(app, backend, work);
+                    crate::orders::after_edit(app);
                 }
             }
         }

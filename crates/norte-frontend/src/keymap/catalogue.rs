@@ -157,6 +157,9 @@ pub const CATALOGUE: &[CommandDef] = &[
     // is the one that helps when you do not know which of the five it is
     // in.
     live("app.goto", false, Inert),
+    // The same box on its order line (`:`, ADR 0185). Opening it changes
+    // nothing: an order that writes asks through its own door.
+    live("app.orders", false, Inert),
     live("app.menu", false, Inert),
     // `--pick` (S2): being in this table only means the NAME is known to the
     // vocabulary (help, palette, rebind checks). No preset binds it — the

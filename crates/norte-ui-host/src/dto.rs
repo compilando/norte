@@ -486,6 +486,33 @@ pub struct GotoView {
     /// or empty. Bridge 108.
     #[serde(default)]
     pub hint: String,
+    /// The order line in `:` mode: colour spans, the parse error and the
+    /// preview. `None` in every other mode. Bridge 115.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<OrderLineView>,
+}
+
+/// An order typed in the box (bridge 115, ADR 0185).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct OrderLineView {
+    /// Colour spans as byte ranges of `GotoView.query` — what is painted.
+    pub tokens: Vec<OrderTokenView>,
+    /// Why the line does not parse, translated; empty when it parses.
+    pub error: String,
+    /// What the line would touch (`14 items · 38 MB`), translated; empty when
+    /// it selects nothing yet.
+    pub preview: String,
+}
+
+/// One colour span of an order line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrderTokenView {
+    /// Start byte in `GotoView.query`.
+    pub start: u32,
+    /// End byte (exclusive).
+    pub end: u32,
+    /// `verb`, `key`, `value`, `pipe`, `dest` or `error`.
+    pub class: String,
 }
 
 /// What the "go to" box is listing, chosen by the query's first character
@@ -500,6 +527,8 @@ pub enum GotoModeView {
     Commands,
     /// What to read (`?`): one flat list of help rows.
     Help,
+    /// An order line (`:`); the rows complete the word being typed. Bridge 115.
+    Order,
 }
 
 /// A "go to" line.

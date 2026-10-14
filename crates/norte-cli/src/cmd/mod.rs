@@ -9,4 +9,5 @@ pub(crate) mod environment;
 pub(crate) mod index;
 pub(crate) mod ls;
 pub(crate) mod plugin;
+pub(crate) mod run;
 pub(crate) mod sync;

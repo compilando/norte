@@ -628,7 +628,9 @@ use serde::{Deserialize, Serialize};
 ///   `command_bar_focus` and `command_bar_paste`.
 /// - **114**: `RowView.icon_kind`, the window's own colored icon per file
 ///   type (ADR 0184).
-pub const BRIDGE_VERSION: u32 = 114;
+/// - **115**: the order line (ADR 0185): `GotoModeView::Order` and
+///   `GotoView.order` (`OrderLineView`: colour spans, parse error, preview).
+pub const BRIDGE_VERSION: u32 = 115;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

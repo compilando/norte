@@ -201,6 +201,9 @@ keymap = [
     # already uses to disconnect. There is a test.
     { on = ["alt+d"], run = "pane.disconnect" },
     { on = ["/"], run = "pane.quick-search" },
+    # The order line (ADR 0185). `:` was free in the listing; mc has no such
+    # line to transcribe, so the key is vim's, the one people expect.
+    { on = [":"], run = "app.orders" },
     { on = ["alt+down"], run = "pane.history" },
     # mc opens the same list with `Alt+Shift+H`.
     { on = ["alt+H"], run = "pane.history" },

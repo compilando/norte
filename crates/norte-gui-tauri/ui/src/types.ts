@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 114;
+export const BRIDGE_VERSION = 115;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -1046,10 +1046,27 @@ export interface GotoView {
   lines: GotoLineView[];
   cursor: number | null;
   empty: string;
-  /** Which list the query asks for (bridge 108). */
-  mode?: "places" | "commands" | "help";
+  /** Which list the query asks for (bridge 108; `order` bridge 115). */
+  mode?: "places" | "commands" | "help" | "order";
   /** The empty places box's prefix hint (bridge 108). */
   hint?: string;
+  /** The order line in `:` mode (bridge 115, ADR 0185). */
+  order?: OrderLineView;
+}
+
+/** An order typed in the box: colour spans over `query`, why it does not
+ *  parse, and what it would touch (bridge 115). */
+export interface OrderLineView {
+  tokens: OrderTokenView[];
+  error: string;
+  preview: string;
+}
+
+/** One colour span: byte range of `GotoView.query`. */
+export interface OrderTokenView {
+  start: number;
+  end: number;
+  class: "verb" | "key" | "value" | "pipe" | "dest" | "error";
 }
 
 export interface ProfileRowView {

@@ -282,6 +282,17 @@ impl State {
         // The ceiling freezes NOW, with the count that is about to be shown:
         // the undo does not go past what this question counted.
         let ceiling = state.model.techo();
+        self.ask_undo_cut(seq, summary, ceiling)
+    }
+
+    /// The undo confirmation for a cut already counted: the timeline's row,
+    /// or an order's `undo N` (ADR 0185) — one dialog for both.
+    pub(super) fn ask_undo_cut(
+        &mut self,
+        seq: i64,
+        summary: norte_frontend::timeline::Cutoff,
+        ceiling: Option<i64>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if summary.no_does_nothing() {
             return (self.applied(), self.say("timeline-undo-nothing"));
         }

@@ -29,6 +29,8 @@
 pub const PREFIX_COMMANDS: &str = ">";
 /// The prefix that turns the box into the help list.
 pub const PREFIX_HELP: &str = "?";
+/// The prefix that turns the box into an order line (`norte-orders`).
+pub const PREFIX_ORDER: &str = ":";
 
 /// What the box is listing, chosen by the query's first character.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +41,9 @@ pub enum Mode {
     Commands,
     /// What to read: one flat list of help rows, behind [`PREFIX_HELP`].
     Help,
+    /// An order line, behind [`PREFIX_ORDER`]; the rows complete the word
+    /// under the cursor.
+    Order,
 }
 
 impl Mode {
@@ -50,18 +55,22 @@ impl Mode {
             Self::Commands
         } else if query.starts_with(PREFIX_HELP) {
             Self::Help
+        } else if query.starts_with(PREFIX_ORDER) {
+            Self::Order
         } else {
             Self::Places
         }
     }
 
-    /// A stable name for the frontends: `"places"`, `"commands"` or `"help"`.
+    /// A stable name for the frontends: `"places"`, `"commands"`, `"help"`
+    /// or `"order"`.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Places => "places",
             Self::Commands => "commands",
             Self::Help => "help",
+            Self::Order => "order",
         }
     }
 }
@@ -73,6 +82,7 @@ pub fn needle(query: &str) -> &str {
     query
         .strip_prefix(PREFIX_COMMANDS)
         .or_else(|| query.strip_prefix(PREFIX_HELP))
+        .or_else(|| query.strip_prefix(PREFIX_ORDER))
         .unwrap_or(query)
         .trim_start()
 }
@@ -427,8 +437,106 @@ impl Goto {
                 );
             }
             Mode::Help => self.refresh_flat(&[SECTION_HELP.id], &needle, false),
+            Mode::Order => self.refresh_order(),
         }
         self.cursor = self.first_row().unwrap_or(0);
+    }
+
+    /// The completions for the word being typed in an order: a verb or a
+    /// catalogue id at the start of a stage, a query key inside a `sel`.
+    /// A complete word offers nothing, so Enter runs the order.
+    fn refresh_order(&mut self) {
+        let query = self.query.clone();
+        let body = query.get(PREFIX_ORDER.len()..).unwrap_or_default();
+        let word_start = body
+            .rfind(|c: char| c.is_ascii_whitespace() || c == '|')
+            .map_or(0, |i| i + 1);
+        let word = &body[word_start..];
+        let stage = &body[body.rfind('|').map_or(0, |i| i + 1)..word_start];
+        let first = stage.split_ascii_whitespace().next();
+        let before = &query[..PREFIX_ORDER.len() + word_start];
+        let row = |text: &str, tail: &str| GotoRow {
+            section: SECTION_COMMANDS.id,
+            key: format!("{K_SET}{before}{text}{tail}"),
+            text: text.to_owned(),
+            ..GotoRow::default()
+        };
+        let rows: Vec<GotoRow> = match first {
+            // A verb typed whole is done: offering `layout.log` under `log`
+            // would turn Enter into a different command.
+            None if norte_orders::VERBS.contains(&word) => Vec::new(),
+            None => {
+                let verbs = norte_orders::VERBS.iter().map(|v| row(v, " "));
+                if word.is_empty() {
+                    verbs.collect()
+                } else {
+                    let ids = crate::keymap::catalogue::CATALOGUE
+                        .iter()
+                        .map(|d| row(d.name, " "));
+                    let mut out = rank(verbs.collect(), word, false);
+                    out.extend(rank(ids.collect(), word, false));
+                    out
+                }
+            }
+            Some("sel") if !word.is_empty() => norte_orders::QUERY_KEYS
+                .iter()
+                .filter(|k| k.starts_with(word))
+                .map(|k| row(k, ""))
+                .collect(),
+            Some(_) => Vec::new(),
+        };
+        for r in rows
+            .into_iter()
+            .filter(|r| r.text != word)
+            .take(CAP_PER_SECTION)
+        {
+            self.push_row(r);
+        }
+    }
+
+    /// In order mode, the parsed order or why it does not parse — the error's
+    /// offset counts from the start of the QUERY. `None` in any other mode.
+    #[must_use]
+    pub fn order(&self) -> Option<Result<norte_orders::Order, norte_orders::ParseError>> {
+        let body = self.query.strip_prefix(PREFIX_ORDER)?;
+        Some(norte_orders::parse(body).map_err(|mut e| {
+            e.offset += PREFIX_ORDER.len();
+            e
+        }))
+    }
+
+    /// Colour spans for an order line, as byte ranges of
+    /// [`Self::query_display`] — what is painted, where a masked hazard is
+    /// wider than the byte it replaced. Empty outside order mode.
+    #[must_use]
+    pub fn order_tokens(&self) -> Vec<(std::ops::Range<usize>, norte_orders::TokenClass)> {
+        let Some(body) = self.query.strip_prefix(PREFIX_ORDER) else {
+            return Vec::new();
+        };
+        // raw byte offset → painted byte offset, one entry per raw byte + end.
+        let mut map = Vec::with_capacity(self.query.len() + 1);
+        let mut painted = 0usize;
+        for c in self.query.chars() {
+            let width = if norte_encoding::is_terminal_hazard(c) {
+                '\u{FFFD}'.len_utf8()
+            } else {
+                c.len_utf8()
+            };
+            for _ in 0..c.len_utf8() {
+                map.push(painted);
+            }
+            painted += width;
+        }
+        map.push(painted);
+        let at = |raw: usize| {
+            map.get(raw + PREFIX_ORDER.len())
+                .copied()
+                .unwrap_or(painted)
+        };
+        norte_orders::tokens(body)
+            .into_iter()
+            .map(|(r, class)| (at(r.start)..at(r.end), class))
+            .collect()
     }
 
     /// The places: each section of [`ORDEN`] under its header, ranked
@@ -591,7 +699,11 @@ impl Goto {
     /// The Fluent key of the hint an empty places box shows, or `None`.
     #[must_use]
     pub fn hint(&self) -> Option<&'static str> {
-        (self.mode() == Mode::Places && self.query.trim().is_empty()).then_some("goto-hint")
+        match self.mode() {
+            Mode::Places if self.query.trim().is_empty() => Some("goto-hint"),
+            Mode::Order if needle(&self.query).is_empty() => Some("goto-hint-order"),
+            _ => None,
+        }
     }
 
     /// What to ask the semantic index, if anything: only a places query of
@@ -699,6 +811,13 @@ impl Goto {
     /// the row is dimmed, otherwise what [`action`] reads from its `key`.
     #[must_use]
     pub fn confirm(&self) -> Option<Action> {
+        // An order: a completion row, when offered, finishes the word; with
+        // none, Enter runs the line or says it cannot.
+        if self.mode() == Mode::Order && self.selected().is_none() {
+            return self
+                .order()
+                .map(|o| o.map_or(Action::OrderInvalid, Action::Order));
+        }
         let row = self.selected()?;
         Some(
             row.unavailable
@@ -1039,6 +1158,12 @@ pub enum Action {
     SetQuery(String),
     /// Open this help topic.
     Help(String),
+    /// Run this order (`:` mode): the frontend resolves it with
+    /// [`crate::orders::steps`].
+    Order(norte_orders::Order),
+    /// An order that does not parse: the box stays open and shows why
+    /// ([`Goto::order`]).
+    OrderInvalid,
 }
 
 /// What to do with the row the reader just confirmed.
@@ -1093,6 +1218,7 @@ pub fn help_rows(lang: norte_i18n::Lang) -> Vec<GotoRow> {
     };
     let mut out = vec![
         prefix(PREFIX_COMMANDS, "goto-prefix-commands"),
+        prefix(PREFIX_ORDER, "goto-prefix-order"),
         prefix("", "goto-prefix-places"),
     ];
     out.extend(norte_help::topics(lang).iter().map(|t| GotoRow {
@@ -1912,11 +2038,12 @@ mod help_row_tests {
     fn the_help_list_is_prefixes_then_topics() {
         let rows = help_rows(Lang::En);
         assert_eq!(rows[0].key, "set:>");
-        assert_eq!(rows[1].key, "set:");
+        assert_eq!(rows[1].key, "set::");
+        assert_eq!(rows[2].key, "set:");
         let topics = norte_help::topics(Lang::En);
-        assert_eq!(rows.len(), 2 + topics.len());
-        assert_eq!(rows[2].key, format!("help:{}", topics[0].id.as_str()));
-        assert_eq!(rows[2].text, topics[0].title);
+        assert_eq!(rows.len(), 3 + topics.len());
+        assert_eq!(rows[3].key, format!("help:{}", topics[0].id.as_str()));
+        assert_eq!(rows[3].text, topics[0].title);
         assert!(rows.iter().all(|r| r.section == SECTION_HELP.id));
         assert_eq!(action("set:>"), Action::SetQuery(">".to_owned()));
         assert_eq!(action("help:copying"), Action::Help("copying".to_owned()));
@@ -1944,5 +2071,111 @@ mod help_row_tests {
         assert!(help_topic("cmd:plugin:org.x:greet", Lang::En).is_none());
         assert!(help_topic("cmd:renamer:org.x:r", Lang::En).is_none());
         assert!(help_topic("go:file:///tmp", Lang::En).is_none());
+    }
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::{Action, Goto, Mode, needle};
+    use norte_orders::{ParseErrorKind, TokenClass};
+
+    fn boxed(q: &str) -> Goto {
+        let mut g = Goto::new(Vec::new());
+        g.set_query(q);
+        g
+    }
+
+    fn texts(g: &Goto) -> Vec<&str> {
+        g.rows().iter().map(|r| r.text.as_str()).collect()
+    }
+
+    #[test]
+    fn colon_selects_order_mode() {
+        assert_eq!(Mode::of(":sel *"), Mode::Order);
+        assert_eq!(Mode::Order.as_str(), "order");
+    }
+
+    #[test]
+    fn needle_strips_the_colon() {
+        assert_eq!(needle(": sel"), "sel");
+    }
+
+    #[test]
+    fn a_valid_order_confirms_as_order() {
+        let g = boxed(":sel *.pdf | cp >other");
+        let Some(Action::Order(o)) = g.confirm() else {
+            panic!("{:?}", g.confirm())
+        };
+        assert_eq!(o.stages.len(), 2);
+    }
+
+    #[test]
+    fn a_parse_error_keeps_the_box_open_with_its_offset() {
+        let g = boxed(":sel ext:pdf | frob");
+        assert_eq!(g.confirm(), Some(Action::OrderInvalid));
+        let e = g.order().expect("order mode").expect_err("invalid");
+        assert_eq!(e.kind, ParseErrorKind::UnknownVerb);
+        assert_eq!(e.offset, 15, "offset counts from the start of the query");
+    }
+
+    #[test]
+    fn the_first_word_completes_verbs_and_catalogue_ids() {
+        assert!(texts(&boxed(":")).contains(&"sel"));
+        let g = boxed(":tr");
+        assert_eq!(texts(&g).first(), Some(&"trash"));
+        assert_eq!(g.confirm(), Some(Action::SetQuery(":trash ".into())));
+        assert!(texts(&boxed(":pane.sw")).contains(&"pane.swap"));
+        assert!(texts(&boxed(":sel *.rs | c")).contains(&"cp"));
+    }
+
+    #[test]
+    fn a_sel_term_completes_query_keys() {
+        let g = boxed(":sel ex");
+        assert_eq!(texts(&g), ["ext:"]);
+        assert_eq!(g.confirm(), Some(Action::SetQuery(":sel ext:".into())));
+    }
+
+    #[test]
+    fn a_complete_order_offers_no_completion() {
+        assert!(boxed(":trash ").rows().is_empty());
+    }
+
+    /// A verb typed whole is not completed into a command that merely
+    /// contains its letters: `:log` + Enter runs `log`, not `layout.log`.
+    #[test]
+    fn a_whole_verb_is_not_completed_into_something_else() {
+        for v in ["log", "undo", "trash"] {
+            let g = boxed(&format!(":{v}"));
+            assert!(g.rows().is_empty(), "{v}: {:?}", g.rows());
+            assert!(matches!(g.confirm(), Some(Action::Order(_))), "{v}");
+        }
+    }
+
+    #[test]
+    fn tokens_are_offset_past_the_prefix() {
+        let g = boxed(": trash");
+        assert_eq!(g.order_tokens(), vec![(2..7, TokenClass::Verb)]);
+    }
+
+    #[test]
+    fn an_order_line_with_a_control_byte_paints_masked() {
+        let g = boxed(":mkdir a\u{1b}b");
+        assert!(g.query_display().contains('\u{FFFD}'));
+        assert_eq!(
+            g.query_display().len(),
+            g.query().len() + 2,
+            "ESC (1 byte) became U+FFFD (3)"
+        );
+        assert_eq!(
+            g.order_tokens().last().map(|t| t.0.end),
+            Some(g.query_display().len()),
+            "spans index what is PAINTED"
+        );
+    }
+
+    #[test]
+    fn the_help_list_offers_the_order_prefix() {
+        let rows = super::help_rows(norte_i18n::Lang::En);
+        assert!(rows.iter().any(|r| r.key == "set::"));
     }
 }

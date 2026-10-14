@@ -219,7 +219,7 @@ pub const MENUS: &[Menu] = &[
             // do not know which of the others you want, and because the
             // four imported presets do not bind it to any key: this is
             // where they find it.
-            sec(None, &["app.goto"]),
+            sec(None, &["app.goto", "app.orders"]),
             sec(
                 None,
                 &["nav.parent", "nav.back", "nav.forward", "pane.refresh"],

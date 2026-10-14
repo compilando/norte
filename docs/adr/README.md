@@ -185,3 +185,4 @@ edits.
 | [0182](0182-what-a-release-promises-to-keep-working.md) | What a release promises to keep working | accepted |
 | [0183](0183-the-release-check-is-opt-in.md) | The release check is opt-in | accepted |
 | [0184](0184-the-window-paints-colored-file-type-icons.md) | The window paints colored file-type icons of its own | accepted |
+| [0185](0185-an-order-is-a-small-grammar-resolved-against-the-loaded-pane.md) | An order is a small grammar in a pure crate, resolved against the loaded pane | accepted |

@@ -1785,6 +1785,7 @@ fn reference_goto() -> norte_ui_host::dto::GotoView {
         empty: "nada casa con eso".to_owned(),
         mode: norte_ui_host::dto::GotoModeView::Places,
         hint: String::new(),
+        order: None,
     }
 }
 
