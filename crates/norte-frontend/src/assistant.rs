@@ -172,10 +172,29 @@ impl Assistant {
     /// The order under the cursor, if the cursor is on one: what Apply runs.
     #[must_use]
     pub fn selected_order(&self) -> Option<&str> {
-        match self.turns.get(self.cursor) {
+        self.order_at(self.cursor)
+    }
+
+    /// The order of turn `i`, if that turn is one (a click on its button).
+    #[must_use]
+    pub fn order_at(&self, i: usize) -> Option<&str> {
+        match self.turns.get(i) {
             Some(Turn::Order { text, .. }) => Some(text),
             _ => None,
         }
+    }
+}
+
+/// Why a turn did not come, as the panel says it: with AI off or no
+/// provider, what to add to `norte.toml`; otherwise the error's sentence.
+#[must_use]
+pub fn failure_text(e: &norte_proto::Error, lang: norte_i18n::Lang) -> String {
+    match e {
+        norte_proto::Error::Unsupported => setup_help(lang).join("\n"),
+        norte_proto::Error::PolicyDenied { rule } if rule == "ai-disabled" => {
+            setup_help(lang).join("\n")
+        }
+        _ => norte_i18n::t_in(lang, crate::error::error_key(e)),
     }
 }
 

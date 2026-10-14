@@ -13,6 +13,7 @@ use crate::app::{App, display_name};
 use crate::theme::TuiTheme;
 use norte_i18n::t;
 
+mod assistant_panel;
 mod chrome;
 mod command_bar;
 mod compare;
@@ -62,6 +63,7 @@ pub(crate) use chrome::{TARGET_BADGE, TabStrip, draw_tab_strip};
 // comes out since #329 because `app::layout`'s tests check that the BUTTON
 // says the same thing the screen does, and that pair — the tree's state and
 // what the bar derives from it — is exactly what used to drift out of sync.
+use assistant_panel::draw_assistant;
 #[cfg(test)]
 pub(crate) use chrome::panel_buttons;
 use chrome::{draw_key_bar, draw_menu, draw_panel_bar};
@@ -381,6 +383,14 @@ fn draw_side_panels(
             tl,
             app,
             app.key_owner() == crate::app::KeyOwner::Timeline,
+        );
+    }
+    if let Some((_, rect)) = placed_of_kind(res, &app.layout, crate::assistant::KIND) {
+        draw_assistant(
+            frame,
+            rect,
+            app,
+            app.key_owner() == crate::app::KeyOwner::Assistant,
         );
     }
     if let Some((id, rect)) = placed_of_kind(res, &app.layout, crate::searchpanel::KIND)

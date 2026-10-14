@@ -232,6 +232,11 @@ pub struct InFlight {
     /// The query to the index from the "go to" screen (phase 6): at most
     /// one, and typing another letter ABORTS the previous one.
     pub goto_index: Option<GotoIndexRun>,
+    /// The assistant's turn in flight (ADR 0186): at most one; closing the
+    /// panel aborts it.
+    pub assistant: Option<
+        tokio::task::JoinHandle<Result<norte_proto::methods::AiChatTurn, norte_proto::Error>>,
+    >,
     /// Checksum batch in flight (#311): at most one — the results modal is
     /// one, and launching another CANCELS the previous one's Task on top of
     /// aborting its wait.

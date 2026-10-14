@@ -227,6 +227,8 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::SearchActivateRow { .. } => "search_activate_row",
         UiAction::SearchPanelEdit { .. } => "search_panel_edit",
         UiAction::SearchPanelGo { .. } => "search_panel_go",
+        UiAction::AssistantSubmit { .. } => "assistant_submit",
+        UiAction::AssistantApply { .. } => "assistant_apply",
         UiAction::SearchPanelReroot { .. } => "search_panel_reroot",
         UiAction::SearchPanelFilters { .. } => "search_panel_filters",
         UiAction::SearchPanelActivate { .. } => "search_panel_activate",
@@ -590,6 +592,20 @@ fn overlay_actions() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("search_panel_go", UiAction::SearchPanelGo { slot_id: 15 }),
+        (
+            "assistant_submit",
+            UiAction::AssistantSubmit {
+                slot_id: 16,
+                text: "copia los pdf al otro panel".to_owned(),
+            },
+        ),
+        (
+            "assistant_apply",
+            UiAction::AssistantApply {
+                slot_id: 16,
+                turn: 1,
+            },
+        ),
         (
             "search_panel_reroot",
             UiAction::SearchPanelReroot { slot_id: 15 },

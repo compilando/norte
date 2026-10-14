@@ -5464,6 +5464,7 @@ dependencies = [
  "futures",
  "insta",
  "mlua",
+ "norte-ai",
  "norte-config",
  "norte-core",
  "norte-encoding",

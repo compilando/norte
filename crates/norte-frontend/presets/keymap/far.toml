@@ -163,6 +163,9 @@ keymap = [
     # The log (#323): far does not attest it, it is bound anyway because it
     # is norte's own and `alt+l` is free. See the header's divergences block.
     { on = ["alt+l"], run = "layout.log" },
+    # The assistant (ADR 0186): norte's own, like the log; FAR has nothing
+    # to transcribe. `alt+Y` is free in all seven presets.
+    { on = ["alt+Y"], run = "layout.assistant" },
     # The disk map (phase 4). FAR has no panel like this and attests no
     # chord, so this is not a transcription: `alt+z` is the one letter free
     # across all seven presets. See orthodox.toml.

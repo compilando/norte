@@ -175,6 +175,7 @@ pub fn icon(kind: &str, set: IconSet) -> Option<&'static str> {
         "timeline" => ("◷", "\u{f017}"),
         "terminal" => ("❯", "\u{f120}"),
         "search" => ("⌕", "\u{f002}"),
+        "assistant" => ("✦", "\u{f075}"),
         _ => return None,
     };
     Some(match set {
@@ -206,6 +207,7 @@ pub fn icon_svg(kind: &str) -> Option<&'static str> {
         "timeline" => include_str!("../../assets/panel-icons/timeline.svg"),
         "terminal" => include_str!("../../assets/panel-icons/terminal.svg"),
         "search" => include_str!("../../assets/panel-icons/search.svg"),
+        "assistant" => include_str!("../../assets/panel-icons/assistant.svg"),
         // The column's foot (`FOOTER`), not panels.
         "settings" => include_str!("../../assets/panel-icons/settings.svg"),
         "help" => include_str!("../../assets/panel-icons/help.svg"),
@@ -657,6 +659,8 @@ mod tests {
                 "terminal",
                 // The search panel, registered after the terminal.
                 "search",
+                // The assistant (ADR 0186), the last one registered.
+                "assistant",
             ],
             "the built-in buttons' order changed"
         );

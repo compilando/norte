@@ -45,6 +45,9 @@ keymap = [
     { on = ["alt+j"], run = "layout.processes" },
     # The log (#323). `alt+l` for "log", free in all seven presets.
     { on = ["alt+l"], run = "layout.log" },
+    # The assistant (ADR 0186). `alt+Y` is free in all seven presets; no
+    # reference manager has an assistant to transcribe a chord from.
+    { on = ["alt+Y"], run = "layout.assistant" },
     # The disk map (phase 4). `alt+z` was the ONLY letter free across all
     # seven presets: from `a` to `y` none is left unbound in at least one of
     # them. The mnemonic is bad and that is accepted — a strange key is

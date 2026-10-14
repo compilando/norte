@@ -47,6 +47,9 @@ keymap = [
     { on = ["alt+j"], run = "layout.processes" },
     # The log (#323). `alt+l` for "log", free in all seven presets.
     { on = ["alt+l"], run = "layout.log" },
+    # The assistant (ADR 0186). `alt+Y` is free in all seven presets; no
+    # reference manager has an assistant to transcribe a chord from.
+    { on = ["alt+Y"], run = "layout.assistant" },
     # The disk map (phase 4), `alt+z`: the one letter free in all seven.
     # See the note in orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },

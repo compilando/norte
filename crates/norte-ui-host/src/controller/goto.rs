@@ -522,6 +522,7 @@ impl State {
         };
         let (ack, mut rest) = match act {
             Action::Order(order) => self.run_order(&order, false, backend, mailbox),
+            Action::Ask(text) => self.ask_assistant(&text, backend, mailbox),
             Action::Ir(dir) => (
                 self.applied(),
                 self.navigate(&dir, Trail::Record, backend, mailbox),
@@ -593,6 +594,7 @@ impl State {
                 Mode::Commands => crate::dto::GotoModeView::Commands,
                 Mode::Help => crate::dto::GotoModeView::Help,
                 Mode::Order => crate::dto::GotoModeView::Order,
+                Mode::Ask => crate::dto::GotoModeView::Ask,
             },
             hint: g
                 .hint()

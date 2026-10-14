@@ -500,6 +500,9 @@ pub struct Fake {
     >,
     /// The directories that were asked to be created.
     pub created: std::sync::Mutex<Vec<VPath>>,
+    /// What `ai.chat` answers (ADR 0186); `None` = `Unsupported`, like a
+    /// daemon with no assistant.
+    pub ai_turn: Option<norte_proto::methods::AiChatTurn>,
     /// What a `stat` finds on something this fake CREATED (#303).
     ///
     /// `EntryKind::File` — the default — is normal life: the file the daemon
@@ -1355,6 +1358,14 @@ impl HostBackend for Fake {
                 foreign: false,
             })
         })
+    }
+
+    fn ai_chat(
+        &self,
+        _params: norte_proto::methods::AiChatParams,
+    ) -> BoxFuture<'static, Result<norte_proto::methods::AiChatTurn, Error>> {
+        let turn = self.ai_turn.clone();
+        Box::pin(async move { turn.ok_or(Error::Unsupported) })
     }
 
     fn journal_list(

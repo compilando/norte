@@ -21,6 +21,7 @@ commands = [
     "pane.hotlist",
     "app.goto",
     "app.orders",
+    "layout.assistant",
 ]
 +++
 
@@ -164,3 +165,16 @@ stage through the same dialog its key opens — a copy still asks.
 A name that is not text, or holds a space or `|`, is written with escapes:
 `\xff`, `\ `, `\|`. A `sel` that matches nothing runs nothing — it never
 falls back to the row under the cursor.
+
+## The assistant: `@`
+
+{{cmd:layout.assistant}} opens a panel where you ask in plain words — "copy
+this month's PDFs to the other pane", "what takes the most space here?". Typing
+`@` in the box does the same with what follows. Each reply is either an order
+in the grammar above, which you review and apply with `a` (it opens the same
+dialog its key would), or an answer.
+
+It is off until you turn it on in `norte.toml` (`[ai] enabled = true` and a
+provider). It never changes anything itself. To answer, it reads names, sizes,
+dates and your recent operations — never the contents of a file — and only
+under the folders of your two panes, minus the paths you deny in `[ai]`.

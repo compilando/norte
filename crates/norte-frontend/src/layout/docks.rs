@@ -40,6 +40,8 @@ pub fn default_dock(kind: &str) -> Dock {
         // What you navigate WITH: VS Code's place for it.
         "search" => (Edge::Left, Size::Fixed(36)),
         "viewer" => (Edge::Right, Size::Weight(1)),
+        // A conversation is read in lines of prose: a column, like a chat.
+        "assistant" => (Edge::Right, Size::Fixed(44)),
         "processes" => (Edge::Bottom, Size::Fixed(8)),
         "log" | "terminal" | "timeline" | "disk-map" => (Edge::Bottom, Size::Fixed(12)),
         // The details ("metadata"), and any kind nobody knows.

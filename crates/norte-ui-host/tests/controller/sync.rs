@@ -3981,6 +3981,8 @@ async fn the_pane_bar_shows_the_panes_and_a_click_opens_them() {
             // The search panel, likewise: shared registry, so its button is
             // here before the window paints it.
             "search",
+            // The assistant (ADR 0186), the last one registered.
+            "assistant",
         ],
         "the same buttons and the same order as `panelbar::buttons`"
     );

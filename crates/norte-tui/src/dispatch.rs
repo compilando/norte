@@ -170,6 +170,7 @@ pub async fn dispatch(
         Command::LayoutPreview => app.toggle_preview(),
         Command::LayoutProcesses => app.toggle_processes(),
         Command::LayoutLog => app.toggle_log(),
+        Command::LayoutAssistant => app.toggle_assistant(),
         Command::LayoutDiskMap => app.toggle_disk_map(),
         Command::LayoutSearch => app.toggle_search_panel(),
         // The timeline (phase 7): opening is placing the slot, and reading

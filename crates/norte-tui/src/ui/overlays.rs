@@ -1095,6 +1095,7 @@ pub(crate) fn draw_goto(
         Mode::Commands => t("palette-title"),
         Mode::Help => t("goto-title-help"),
         Mode::Order => t("goto-title-order"),
+        Mode::Ask => t("goto-title-ask"),
     };
     let footer = if goto.mode() == Mode::Order {
         order_footer(goto, order_preview, theme)

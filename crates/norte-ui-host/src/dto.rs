@@ -492,6 +492,34 @@ pub struct GotoView {
     pub order: Option<OrderLineView>,
 }
 
+/// The assistant panel (bridge 116, ADR 0186).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssistantSlotView {
+    /// Slot id.
+    pub slot_id: u32,
+    /// The turns, oldest first.
+    pub turns: Vec<AssistantTurnView>,
+    /// A turn is in flight: the input is disabled and "thinking…" shows.
+    pub pending: bool,
+    /// What an empty panel says, translated.
+    pub empty: String,
+}
+
+/// One turn of the assistant panel, already sanitized and translated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssistantTurnView {
+    /// `reader`, `order`, `answer` or `failed`.
+    pub kind: String,
+    /// The text: what was typed, the order's line, the answer, or why not.
+    pub text: String,
+    /// For an order, what it does in the model's words; empty otherwise.
+    /// Painted BELOW and smaller than `text`: the line is what runs.
+    pub note: String,
+    /// For an order written for another folder than the focused one, the
+    /// sentence that says so; empty otherwise.
+    pub written_for: String,
+}
+
 /// An order typed in the box (bridge 115, ADR 0185).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct OrderLineView {
@@ -529,6 +557,8 @@ pub enum GotoModeView {
     Help,
     /// An order line (`:`); the rows complete the word being typed. Bridge 115.
     Order,
+    /// A question for the assistant (`@`); no rows. Bridge 116.
+    Ask,
 }
 
 /// A "go to" line.
@@ -2203,6 +2233,10 @@ pub enum SlotView {
     /// The rows, how a batch is grouped and what a cut would take are
     /// decided by `norte_frontend::timeline`, the same model as the TUI.
     Timeline(Box<TimelineSlotView>),
+    /// The assistant panel (bridge 116, ADR 0186): the conversation, newest
+    /// last, already sanitized. Its input is the renderer's; sending is
+    /// `assistant_submit`, applying an order `assistant_apply`.
+    Assistant(Box<AssistantSlotView>),
     /// The search panel (spec 2026-10-09, bridge 111): searches as you type
     /// under a root and shows every matching line, by folder and file.
     Search(Box<SearchPanelSlotView>),

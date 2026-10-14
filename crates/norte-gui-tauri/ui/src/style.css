@@ -1790,6 +1790,54 @@ button.status-item:hover {
   font-size: 0.9em;
 }
 
+/* The assistant panel (bridge 116, ADR 0186): the order line reads first,
+   the model's note below it and smaller. */
+.assistant {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.assistant-turns {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 0.5em 0.75em;
+  list-style: none;
+}
+.assistant-turn {
+  margin-bottom: 0.6em;
+}
+.assistant-turn[data-kind="reader"] .assistant-text {
+  color: var(--title-fg);
+}
+.assistant-turn[data-kind="order"] .assistant-text {
+  font-family: var(--font-mono);
+  color: var(--border-focus);
+}
+.assistant-turn[data-kind="failed"] .assistant-text {
+  color: var(--warning-fg);
+  white-space: pre-wrap;
+}
+.assistant-note,
+.assistant-empty,
+.assistant-thinking {
+  font-size: 0.9em;
+  color: var(--info-fg);
+}
+.assistant-written-for {
+  font-size: 0.9em;
+  color: var(--warning-fg);
+}
+.assistant-apply {
+  margin-top: 0.3em;
+}
+.assistant-input {
+  margin: 0.5em 0.75em;
+  background: var(--input-bg);
+  color: var(--fg);
+  border: 1px solid var(--input-border);
+}
+
 /* The order line (`:`, bridge 115, ADR 0185): each token by its class, the
    same roles the terminal paints them with. */
 .order-token[data-class="verb"] {

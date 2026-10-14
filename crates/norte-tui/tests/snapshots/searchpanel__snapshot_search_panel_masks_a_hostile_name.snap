@@ -3,7 +3,7 @@ source: crates/norte-tui/tests/searchpanel.rs
 expression: screen
 ---
 " Archivo  Operar  Marcar  Ir  Paneles  Pestañas  Buscar  Ver  Herramientas  Ayuda    [|] [-] [=] [#]"
-" Sitios  Visor  Tareas  Detalles  Árbol  Log  Mapa  Historial  Terminal  Buscar                     "
+" Sitios  Visor  Tareas  Info  Árbol  Log  Mapa  Historial  Terminal  Buscar  IA                     "
 "┌ Buscar ──────────────────────────┐┌/casa─────────────────────────┐┌/casa─────────────────────────┐"
 "│en /casa                          ││Nombre▲                 Tamaño││Nombre▲                 Tamaño│"
 "│Nombre: mal▏                      ││   f00                     1 B││   f00                     1 B│"
