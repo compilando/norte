@@ -47,6 +47,25 @@ use norte_frontend::SEMANTIC_K;
 use norte_i18n::{t, ta};
 use norte_proto::VPath;
 
+/// Whether a side panel with the keyboard may take this key: no modal, and
+/// none of the overlays the chain checks AFTER the panels is open. Those
+/// paint over the panel, so they must win over it — the box opened over the
+/// terminal panel used to paint while every key went to the shell, which
+/// ran the reader's order as a command.
+fn panel_keys(app: &App) -> bool {
+    !modal_wins(app)
+        && app.goto.is_none()
+        && app.nav_popup.is_none()
+        && app.search_dialog.is_none()
+        && app.splash.is_none()
+        && app.wizard.is_none()
+        && app.sync.is_none()
+        && app.compare.is_none()
+        && app.shortcuts.is_none()
+        && app.settings.is_none()
+        && app.help.is_none()
+}
+
 /// Routes a key through the precedence chain. See the module.
 #[expect(
     clippy::too_many_arguments,
@@ -275,7 +294,7 @@ pub async fn on_key(
             key.code,
         )
         .await;
-    } else if !modal_wins(app)
+    } else if panel_keys(app)
         // Typing the log's filter is a text field: its keys are its own.
         && app.log_filter_input.is_none()
         // Nor the search panel's inputs — but only for the keys that type:
@@ -336,7 +355,7 @@ pub async fn on_key(
             &mut work.search,
             outcome,
         );
-    } else if app.key_owner() == crate::app::KeyOwner::Tree && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Tree && panel_keys(app) {
         // #136: the tree sends the listing to the branch
         // chosen through the usual cd flow.
         let outcome = on_tree_key(
@@ -357,7 +376,7 @@ pub async fn on_key(
             &mut work.search,
             outcome,
         );
-    } else if app.key_owner() == crate::app::KeyOwner::Places && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Places && panel_keys(app) {
         // Places sidebar (L3): Enter over a row sends
         // the focused LISTING to that place, through the
         // usual cd flow.
@@ -379,7 +398,7 @@ pub async fn on_key(
             &mut work.search,
             outcome,
         );
-    } else if app.key_owner() == crate::app::KeyOwner::Processes && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Processes && panel_keys(app) {
         // Process panel (#243): the keys arrive HERE,
         // not at the listing behind it. Without this
         // arm the panel got the focus border, the `▶`
@@ -388,24 +407,24 @@ pub async fn on_key(
         // thought they had the keyboard in the task
         // list.
         on_processes_key(app, dialog_resolver, key.modifiers, key.code);
-    } else if app.key_owner() == crate::app::KeyOwner::Log && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Log && panel_keys(app) {
         // Log panel (#323), for the same reason as the process one:
         // its keys are single letters and have to arrive here and not at
         // the listing, where `d` means something else.
         crate::logview::apply(app, dialog_resolver, key.modifiers, key.code);
-    } else if app.key_owner() == crate::app::KeyOwner::DiskMap && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::DiskMap && panel_keys(app) {
         // The disk map (phase 4), for the same reason as its neighbors: its
         // keys are arrows and one loose letter, and have to arrive here and
         // not at the listing, where `r` means something else.
         on_disk_map_key(app, dialog_resolver, key.modifiers, key.code);
-    } else if app.key_owner() == crate::app::KeyOwner::Timeline && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Timeline && panel_keys(app) {
         // The timeline (phase 7), for the same reason as its neighbors.
         // It is async because reaching the bottom asks for the next page and
         // because Enter opens the undo question, which needs the backend.
         on_timeline_key(app, backend, dialog_resolver, key.modifiers, key.code).await;
     } else if app.key_owner() == crate::app::KeyOwner::Search
         && !crate::searchpanel::viewer_over(app)
-        && !modal_wins(app)
+        && panel_keys(app)
     {
         // The search panel, for the same reason as its neighbors: what is
         // typed into it must not reach the listing behind it. Not while a
@@ -421,10 +440,10 @@ pub async fn on_key(
             key.code,
         )
         .await;
-    } else if app.key_owner() == crate::app::KeyOwner::Assistant && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Assistant && panel_keys(app) {
         // The assistant (ADR 0186): what is typed belongs to its input.
         crate::assistant::on_key(app, backend, events, work, key.modifiers, key.code).await;
-    } else if app.key_owner() == crate::app::KeyOwner::Terminal && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Terminal && panel_keys(app) {
         // The terminal panel (#362), and this arm does NOT look like its
         // neighbors: the others translate keys into commands, and here the
         // BYTES are passed to a shell. Everything typed belongs to it —
@@ -454,7 +473,7 @@ pub async fn on_key(
         {
             i.shell.0.write(&bytes);
         }
-    } else if app.key_owner() == crate::app::KeyOwner::Panel && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Panel && panel_keys(app) {
         // Plugin panel (phase 3), for the same reason as the two above:
         // without this arm the keys fell to the listing behind it while
         // the screen said the keyboard was here.

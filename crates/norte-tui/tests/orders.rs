@@ -215,6 +215,82 @@ async fn undo_with_an_empty_journal_says_so_and_asks_nothing() {
     assert!(app.message.is_some());
 }
 
+/// One key through the whole chain, the way the loop sends it.
+async fn chain_key(app: &mut App, backend: &Backend, code: crossterm::event::KeyCode) {
+    use norte_frontend::keymap::{CATALOGUE, Effective, Resolver, Screen, presets};
+    let src = presets::source("orthodox").expect("the preset exists");
+    let kf = norte_frontend::keymap::parse_keymap(src).expect("the preset parses");
+    let known: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
+    let build = |s| Resolver::new(Effective::build_for(&kf, &[], &known, s).expect("merges"));
+    let (mut browse, mut viewer, mut dialog) = (
+        build(Screen::Browse),
+        build(Screen::Viewer),
+        build(Screen::Dialog),
+    );
+    let cfg = norte_tui::config::load(&norte_config::Layers { dirs: vec![] }).expect("config");
+    let mut cap = norte_tui::mouse::Capture::new();
+    let mut stream = futures::stream::pending();
+    let mut events = norte_tui::console::Console::detached(&mut stream);
+    let mut work = norte_tui::jobs::InFlight::default();
+    norte_tui::keys::on_key(
+        app,
+        backend,
+        &mut cap,
+        &mut events,
+        &mut browse,
+        &mut viewer,
+        &mut dialog,
+        &mut Vec::new(),
+        norte_i18n::Lang::Es,
+        norte_tui::nav::Mode::default(),
+        norte_tui::config::ConfirmQuit::default(),
+        &cfg,
+        None,
+        None,
+        &mut work,
+        crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE),
+    )
+    .await;
+}
+
+/// The box opened over a side panel that has the keyboard takes what is
+/// typed. It used to paint on top while every key went to the panel
+/// underneath: over the terminal panel, the reader's order ran in the shell
+/// as a command. The assistant and the tree stand in for the terminal,
+/// which needs a pty: they sit in the same arm of the chain.
+#[tokio::test]
+async fn the_box_over_a_panel_with_the_keyboard_takes_the_keys() {
+    let b = backend();
+    for owner in [
+        norte_tui::app::KeyOwner::Assistant,
+        norte_tui::app::KeyOwner::Tree,
+    ] {
+        let mut app = app_with("mem:///d", &["a.pdf"], "mem:///o");
+        match owner {
+            norte_tui::app::KeyOwner::Assistant => app.open_assistant(),
+            _ => app.toggle_tree(),
+        }
+        assert_eq!(app.key_owner(), owner, "the panel has the keyboard");
+        typed(&mut app, ":");
+        for c in "sel".chars() {
+            chain_key(&mut app, &b, crossterm::event::KeyCode::Char(c)).await;
+        }
+        assert_eq!(
+            app.goto.as_ref().map(norte_frontend::goto::Goto::query),
+            Some(":sel"),
+            "{owner:?}: the box got the keys"
+        );
+        assert_eq!(app.assistant.input(), "", "{owner:?}: not the panel");
+        chain_key(&mut app, &b, crossterm::event::KeyCode::Esc).await;
+        assert!(app.goto.is_none());
+        assert_eq!(
+            app.key_owner(),
+            owner,
+            "closing gives the panel its keys back"
+        );
+    }
+}
+
 #[tokio::test]
 async fn cd_comes_back_as_the_boxs_own_navigation() {
     let mut app = app_with("mem:///d", &["a"], "mem:///o");
