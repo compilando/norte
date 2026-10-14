@@ -117,6 +117,22 @@ fn a_combining_mark_after_a_letter_stays_raw() {
     assert_eq!(escape_name("हिन्दी".as_bytes()), "हिन्दी");
     assert_eq!(escape_name("\u{301}x".as_bytes()), r"\xcc\x81x");
     assert_eq!(escape_name("a \u{301}".as_bytes()), r"a\x20\xcc\x81");
+    // Vietnamese stacks two.
+    assert_eq!(escape_name("e\u{323}\u{302}".as_bytes()), "e\u{323}\u{302}");
+}
+
+/// A stack of marks past what any script needs (Zalgo) draws over the lines
+/// around it: from the fifth on, they are escaped.
+#[test]
+fn a_tall_stack_of_marks_is_escaped_past_four() {
+    let zalgo = format!("a{}", "\u{300}".repeat(16));
+    let e = escape_name(zalgo.as_bytes());
+    assert!(e.starts_with(&format!("a{}", "\u{300}".repeat(4))), "{e:?}");
+    assert_eq!(e.matches('\u{300}').count(), 4, "{e:?}");
+    assert_eq!(
+        parse(&format!("mkdir {e}")).map(|o| o.stages),
+        Ok(vec![Stage::Mkdir(zalgo.into_bytes())])
+    );
 }
 
 /// Bidi controls and every other terminal hazard are escaped, letter or

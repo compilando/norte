@@ -98,9 +98,9 @@ pub enum Pred {
     Ext(Vec<Vec<u8>>),
     /// `name:GLOB`, or a bare GLOB.
     Name(Vec<u8>),
-    /// `name=NAME`: exactly this name, `*` and `?` included as letters. The
-    /// frontend compares it folded, as it compares a glob, but with no
-    /// wildcards — the way to target a file literally called `*`.
+    /// `name=NAME`: exactly this name, `*` and `?` included as letters — the
+    /// way to target a file literally called `*`. The frontend matches the
+    /// bytes, or the same name in NFC (a decomposed `é`); case never folds.
     Literal(Vec<u8>),
     /// Size in bytes; `K`/`M`/`G`/`T` are 1024-based.
     Size(Cmp, u64),

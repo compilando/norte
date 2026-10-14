@@ -193,14 +193,19 @@ const INVISIBLE_MARKS: &[(char, char)] = &[
     ('\u{E0100}', '\u{E01EF}'),
 ];
 
-/// Whether `c` is written as it is. A combining mark only right after a
-/// letter (or a mark kept on one): alone it would draw on whatever the
-/// terminal printed before it.
-fn safe(c: char, comma: bool, after_letter: bool) -> bool {
+/// How many combining marks may stack raw on one letter. Vietnamese needs
+/// two and Indic clusters rarely pass three; a taller stack (Zalgo) draws
+/// over the lines around it.
+const MAX_MARKS: u8 = 4;
+
+/// Whether `c` is written as it is. A combining mark only while `marks_left`
+/// (right after a letter, up to [`MAX_MARKS`]): alone it would draw on
+/// whatever the terminal printed before it.
+fn safe(c: char, comma: bool, marks_left: u8) -> bool {
     if c.is_ascii() {
         c.is_ascii_graphic() && !matches!(c, '|' | '\'' | '\\') && !(comma && c == ',')
     } else if unicode_normalization::char::is_combining_mark(c) {
-        after_letter
+        marks_left > 0
             && !INVISIBLE_MARKS
                 .iter()
                 .any(|(lo, hi)| (*lo..=*hi).contains(&c))
@@ -211,25 +216,29 @@ fn safe(c: char, comma: bool, after_letter: bool) -> bool {
 
 fn escape(bytes: &[u8], comma: bool) -> String {
     let mut out = String::with_capacity(bytes.len());
-    let mut after_letter = false;
+    let mut marks_left = 0u8;
     for chunk in bytes.utf8_chunks() {
         for c in chunk.valid().chars() {
-            if safe(c, comma, after_letter) {
+            if safe(c, comma, marks_left) {
                 out.push(c);
-                // A kept mark carries the letter on: marks stack (Vietnamese).
-                after_letter =
-                    c.is_alphanumeric() || unicode_normalization::char::is_combining_mark(c);
+                marks_left = if unicode_normalization::char::is_combining_mark(c) {
+                    marks_left.saturating_sub(1)
+                } else if c.is_alphanumeric() {
+                    MAX_MARKS
+                } else {
+                    0
+                };
             } else {
                 let mut buf = [0u8; 4];
                 for b in c.encode_utf8(&mut buf).bytes() {
                     let _ = write!(out, "\\x{b:02x}");
                 }
-                after_letter = false;
+                marks_left = 0;
             }
         }
         for b in chunk.invalid() {
             let _ = write!(out, "\\x{b:02x}");
-            after_letter = false;
+            marks_left = 0;
         }
     }
     out

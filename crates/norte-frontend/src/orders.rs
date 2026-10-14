@@ -26,8 +26,8 @@ enum Compiled {
     /// Folded extensions, each with whether it names raw bytes.
     Ext(Vec<(String, bool)>),
     Name(NameMatcher),
-    /// `name=`: the whole name folded as a glob folds it, no wildcards.
-    Literal(String),
+    /// `name=`: its bytes, and its NFC key ([`nfc_key`]) — no case folding.
+    Literal(Vec<u8>, Option<Vec<u8>>),
     Size(Cmp, u64),
     Age(Cmp, u64),
     Kind(KindSel),
@@ -56,7 +56,7 @@ impl CompiledQuery {
                         .collect(),
                 ),
                 Pred::Name(g) => Compiled::Name(NameMatcher::new(g)?),
-                Pred::Literal(n) => Compiled::Literal(crate::nav::fold_exact(n, None)),
+                Pred::Literal(n) => Compiled::Literal(n.clone(), nfc_key(n, None)),
                 Pred::Size(c, n) => Compiled::Size(*c, *n),
                 Pred::Age(c, n) => Compiled::Age(*c, *n),
                 Pred::Kind(k) => Compiled::Kind(*k),
@@ -110,7 +110,10 @@ pub fn matches(entry: &Entry, q: &CompiledQuery, now_ms: i64) -> bool {
                 }))
             }
             Compiled::Name(m) => Some(m.is_match(name, q.enc)),
-            Compiled::Literal(l) => Some(crate::nav::fold_exact(name, q.enc) == *l),
+            Compiled::Literal(bytes, key) => Some(
+                name == bytes.as_slice()
+                    || key.is_some() && nfc_key(name, q.enc).as_ref() == key.as_ref(),
+            ),
             Compiled::Size(cmp, n) => {
                 let measured = entry.kind != EntryKind::Dir || q.dirs_asked;
                 entry.size.filter(|_| measured).map(|s| cmp.holds(s, *n))
@@ -508,8 +511,10 @@ fn listed<'b>(cx: &Context<'b>, typed: &'b [u8]) -> &'b [u8] {
     if names().any(|n| n == typed) {
         return typed;
     }
-    let want = nfc_key(typed, None);
-    let mut hits = names().filter(|n| nfc_key(n, cx.enc) == want);
+    let Some(want) = nfc_key(typed, None) else {
+        return typed;
+    };
+    let mut hits = names().filter(|n| nfc_key(n, cx.enc).as_ref() == Some(&want));
     match (hits.next(), hits.next()) {
         (Some(one), None) => one,
         _ => typed,
@@ -517,15 +522,20 @@ fn listed<'b>(cx: &Context<'b>, typed: &'b [u8]) -> &'b [u8] {
 }
 
 /// A name in NFC without case folding; a non-UTF-8 name a pane reinterprets
-/// is decoded first, as [`crate::nav::fold_with`] decodes it.
-fn nfc_key(name: &[u8], enc: Option<NameEncoding>) -> Vec<u8> {
+/// is decoded first, as [`crate::nav::fold_with`] decodes it. `None` when
+/// NFC would rewrite a canonical singleton (KELVIN SIGN into `K`): those are
+/// two names a reader tells apart, so they never pair.
+fn nfc_key(name: &[u8], enc: Option<NameEncoding>) -> Option<Vec<u8>> {
     use unicode_normalization::UnicodeNormalization as _;
-    match (enc, std::str::from_utf8(name)) {
-        (Some(e), Err(_)) => norte_encoding::decode_name(name, e)
-            .nfc()
-            .collect::<String>()
-            .into_bytes(),
-        _ => norte_encoding::name_key(name, norte_encoding::FoldMode::None).into_owned(),
+    let decoded = match (enc, std::str::from_utf8(name)) {
+        (Some(e), Err(_)) => Some(norte_encoding::decode_name(name, e)),
+        _ => None,
+    };
+    match decoded {
+        Some(text) if norte_encoding::has_canonical_singleton(text.as_bytes()) => None,
+        Some(text) => Some(text.nfc().collect::<String>().into_bytes()),
+        None if norte_encoding::has_canonical_singleton(name) => None,
+        None => Some(norte_encoding::name_key(name, norte_encoding::FoldMode::None).into_owned()),
     }
 }
 
@@ -1065,9 +1075,42 @@ mod tests {
         let mut p = pane(vec![file("*", 1, 1), file("a", 1, 1), file("B?", 1, 1)]);
         assert_eq!(p.select_query(&query("sel name=*"), NOW), Ok(1));
         assert_eq!(names(&p), ["*"]);
-        assert_eq!(p.select_query(&query("sel name=b?"), NOW), Ok(1), "folded");
+        assert_eq!(p.select_query(&query("sel name=B?"), NOW), Ok(1));
         assert_eq!(p.select_query(&query("sel !name=*"), NOW), Ok(2));
         assert_eq!(p.select_query(&query("sel *"), NOW), Ok(3));
+    }
+
+    /// `name=` is one name: case does not fold (two files on ext4), a
+    /// canonical singleton is not its NFC target, but a decomposed spelling
+    /// is the same name.
+    #[test]
+    fn name_equals_never_reaches_a_case_or_singleton_twin() {
+        let mk = |id: &str| entry(&corpus(id), EntryKind::File, Some(1), 1);
+        let mut p = pane(vec![
+            mk("ascii_case_twin_upper"),
+            mk("ascii_case_twin_lower"),
+        ]);
+        assert_eq!(p.select_query(&query("sel name=Orthodox"), NOW), Ok(1));
+        let mut p = pane(vec![mk("singleton_kelvin_sign"), mk("nfd_e_acute")]);
+        assert_eq!(p.select_query(&query("sel name=K.txt"), NOW), Ok(0));
+        let nfc = String::from_utf8(corpus("nfc_e_acute")).expect("utf8");
+        assert_eq!(
+            p.select_query(&query(&format!("sel name={nfc}")), NOW),
+            Ok(1)
+        );
+    }
+
+    /// In a pane reading names as an encoding, `name=` matches the exact
+    /// bytes typed escaped, and the decoded text typed plain.
+    #[test]
+    fn name_equals_in_a_reinterpreting_pane_matches_bytes_and_text() {
+        let latin = entry(&corpus("latin1_e_acute"), EntryKind::File, Some(1), 1);
+        let enc = Some(norte_encoding::name_reinterpret_cycle()[4]);
+        assert_eq!(enc.map(|e| e.label()), Some("windows-1252"));
+        let q = |line: &str| CompiledQuery::new(&query(line), enc).expect("compile");
+        assert!(matches(&latin, &q(r"sel name=\xe9"), NOW));
+        assert!(matches(&latin, &q("sel name=é"), NOW));
+        assert!(!matches(&latin, &q("sel name=e"), NOW));
     }
 
     fn corpus(id: &str) -> Vec<u8> {
@@ -1111,6 +1154,24 @@ mod tests {
         assert_eq!(cd_in(&both, None, &typed), nfc);
         // Not listed: the typed bytes, as typed.
         assert_eq!(cd_in(&[], None, &typed), nfc);
+    }
+
+    /// NFC folds a canonical singleton (KELVIN SIGN) into a letter a reader
+    /// sees as another: typing `K.txt` never reaches the Kelvin folder.
+    #[test]
+    fn a_typed_name_never_reaches_a_singleton_twin() {
+        for (twin, typed) in [
+            ("singleton_kelvin_sign", "ascii_capital_k"),
+            (
+                "singleton_kelvin_sign_invalid_tail",
+                "ascii_capital_k_invalid_tail",
+            ),
+        ] {
+            let listing = [entry(&corpus(twin), EntryKind::Dir, None, 1)];
+            let typed = corpus(typed);
+            let line = format!("cd {}", norte_orders::escape_name(&typed));
+            assert_eq!(cd_in(&listing, None, &line), typed, "{twin}");
+        }
     }
 
     /// A pane reading its names as cp866 matches what it paints: typing

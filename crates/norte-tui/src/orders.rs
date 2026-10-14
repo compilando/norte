@@ -10,7 +10,7 @@ use norte_core::backend::Backend;
 use norte_proto::VPath;
 
 use crate::app::{App, TransferKind, error_message};
-use crate::jobs::{InFlight, OrderMeasureRun, OrderMeasured};
+use crate::jobs::{InFlight, OrderMeasureRun, OrderMeasured, OrderStats};
 
 /// After every edit of the box. In `:` mode, previews the line's `sel` over
 /// the focused pane from the marks it had when `:` was typed; leaving `:`
@@ -129,27 +129,8 @@ async fn go(
             return None;
         }
     };
-    // F7's own refusal, per pane: the folder the order creates in.
-    if let Some(Step::Mkdir { path }) = steps.last() {
-        let parent = path.parent().unwrap_or_else(|| path.clone());
-        let read_only = app
-            .panes
-            .iter()
-            .position(|p| *p.dir() == parent)
-            .map_or_else(
-                || {
-                    norte_frontend::availability::read_only(
-                        app.caps(&parent).copied(),
-                        parent.scheme(),
-                    )
-                },
-                |i| app.pane_read_only(i),
-            );
-        if read_only {
-            let reason = norte_help::Reason::ReadOnlyBackend;
-            app.message = Some(t(norte_frontend::availability::reason_key(reason)));
-            return None;
-        }
+    if mkdir_refused(app, steps.last()) {
+        return None;
     }
     if let Some(work) = work {
         let missing: Vec<VPath> = steps
@@ -172,23 +153,56 @@ async fn go(
             return None;
         }
     }
+    finish(app, backend, &steps, &before, &here).await
+}
+
+/// F7's own refusal, per pane: a `mkdir` into a read-only folder — the pane
+/// showing it, or its caps when no pane does — is said, not attempted.
+fn mkdir_refused(app: &mut App, last: Option<&Step>) -> bool {
+    let Some(Step::Mkdir { path }) = last else {
+        return false;
+    };
+    let parent = path.parent().unwrap_or_else(|| path.clone());
+    let read_only = app
+        .panes
+        .iter()
+        .position(|p| *p.dir() == parent)
+        .map_or_else(
+            || norte_frontend::availability::read_only(app.caps(&parent).copied(), parent.scheme()),
+            |i| app.pane_read_only(i),
+        );
+    if read_only {
+        let reason = norte_help::Reason::ReadOnlyBackend;
+        app.message = Some(t(norte_frontend::availability::reason_key(reason)));
+    }
+    read_only
+}
+
+/// Selects, then runs the last stage through the door its key uses.
+async fn finish(
+    app: &mut App,
+    backend: &Backend,
+    steps: &[Step],
+    before: &[VPath],
+    here: &VPath,
+) -> Option<Action> {
     let now = app.now_ms();
     let mut matched = None;
-    for step in &steps {
+    for step in steps {
         if let Step::Select(q) = step {
             let Ok(n) = app.focused_mut().state_mut().select_query(q, now) else {
                 // The glob error quotes the pattern verbatim: never painted
                 // raw (`PatternError`'s own rule).
-                orders::restore(app.focused_mut().state_mut(), &before);
+                orders::restore(app.focused_mut().state_mut(), before);
                 app.message = Some(t("err-bad-pattern"));
                 return None;
             };
             matched = Some(n);
         }
     }
-    let runnable = orders::runnable(&steps, matched);
+    let runnable = orders::runnable(steps, matched);
     let Some(last) = runnable.last() else {
-        orders::restore(app.focused_mut().state_mut(), &before);
+        orders::restore(app.focused_mut().state_mut(), before);
         app.message = Some(t("msg-order-nothing-matched"));
         return None;
     };
@@ -202,7 +216,7 @@ async fn go(
             };
             // The same refusal the typed-destination prompt gives: every mark
             // onto itself is N failed tasks, not a copy.
-            if *to == here {
+            if to == here {
                 app.message = Some(t("msg-transfer-dest-same"));
             } else {
                 app.open_transfer_to_dir(kind, app.focus(), to.clone(), None);
@@ -246,7 +260,7 @@ const MEASURE_PARALLEL: usize = 32;
 /// The lazy listing (#52) measured only the painted rows: stat the rest the
 /// query needs, or `size>` silently skips them. A job, not the key: it is
 /// cancelled by aborting it (rule 3), never by a clock.
-async fn measure(backend: Backend, paths: Vec<VPath>) -> Vec<(VPath, Option<u64>, Option<i64>)> {
+async fn measure(backend: Backend, paths: Vec<VPath>) -> OrderStats {
     use futures::StreamExt as _;
     let backend = &backend;
     futures::stream::iter(paths)

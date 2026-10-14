@@ -1533,11 +1533,7 @@ pub async fn order_measured(
 
 /// What the box's Enter does once the screen closed: navigate, run a
 /// command as its key would, or say why not.
-#[expect(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
-    reason = "loop wiring, not an API"
-)]
+#[expect(clippy::too_many_arguments, reason = "loop wiring, not an API")]
 async fn settle_goto(
     app: &mut App,
     backend: &Backend,

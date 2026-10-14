@@ -249,6 +249,30 @@ fn a_non_utf8_argv_runs_and_dry_run_prints_the_escape() {
     );
 }
 
+/// A `\` right before a non-UTF-8 byte would read `\\` + `xff` once the byte
+/// is escaped: another, ASCII name. It is refused as a broken escape.
+#[cfg(unix)]
+#[test]
+fn a_backslash_before_an_invalid_byte_is_refused() {
+    use std::os::unix::ffi::OsStrExt;
+    let name = norte_testkit::corpus::hostile_names()
+        .into_iter()
+        .find(|n| n.id == "backslash_before_invalid")
+        .expect("fixture")
+        .bytes;
+    let src = tempfile::tempdir().expect("tempdir");
+    let mut arg = b"mkdir ".to_vec();
+    arg.extend_from_slice(&name);
+    let out = norte()
+        .args(["run", "--cwd"])
+        .arg(src.path())
+        .arg(std::ffi::OsStr::from_bytes(&arg))
+        .output()
+        .expect("runs");
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(std::fs::read_dir(src.path()).expect("dir").count(), 0);
+}
+
 /// `undo N --dry-run` says what the confirmation would: how many operations
 /// it undoes, and touches nothing.
 #[test]

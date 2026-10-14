@@ -120,9 +120,12 @@ pub struct GotoIndexRun {
     pub query: String,
 }
 
-/// What an order's measuring answers: each row's size and mtime, or the
-/// join error of an aborted job.
-pub type OrderMeasured = Result<Vec<(VPath, Option<u64>, Option<i64>)>, tokio::task::JoinError>;
+/// Each measured row's size and mtime.
+pub type OrderStats = Vec<(VPath, Option<u64>, Option<i64>)>;
+
+/// What an order's measuring answers: the stats, or the join error of an
+/// aborted job.
+pub type OrderMeasured = Result<OrderStats, tokio::task::JoinError>;
 
 /// An order's `sel` statting the rows the lazy listing (#52) never measured
 /// (ADR 0185). Off the key, with no time budget: Esc or the next edit of the
@@ -130,7 +133,7 @@ pub type OrderMeasured = Result<Vec<(VPath, Option<u64>, Option<i64>)>, tokio::t
 /// still where it was asked.
 pub struct OrderMeasureRun {
     /// The stats, spawned.
-    pub handle: tokio::task::JoinHandle<Vec<(VPath, Option<u64>, Option<i64>)>>,
+    pub handle: tokio::task::JoinHandle<OrderStats>,
     /// The order to run once they land.
     pub order: norte_orders::Order,
     /// The focused pane when it was asked.

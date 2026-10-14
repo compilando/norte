@@ -37,17 +37,25 @@ fn shown(p: &VPath) -> String {
 /// The order argument as the grammar reads it: bytes that are not UTF-8 (a
 /// Latin-1 name a shell glob expanded) become `\xHH`, which the grammar reads
 /// back as exactly those bytes — never a lossy `�`.
-fn order_line(arg: &OsStr) -> String {
+///
+/// # Errors
+/// The byte offset of an invalid byte right after an open `\`: escaped, it
+/// would read as `\\` + `xHH`, another name.
+fn order_line(arg: &OsStr) -> Result<String, usize> {
     use std::fmt::Write as _;
     let bytes = arg.as_encoded_bytes();
     let mut out = String::with_capacity(bytes.len());
     for chunk in bytes.utf8_chunks() {
         out.push_str(chunk.valid());
         for b in chunk.invalid() {
+            let open = out.bytes().rev().take_while(|c| *c == b'\\').count() % 2 == 1;
+            if open {
+                return Err(out.len() - 1);
+            }
             let _ = write!(out, "\\x{b:02x}");
         }
     }
-    out
+    Ok(out)
 }
 
 /// Whether resolving the order needs the folder's listing: a `sel`, or a
@@ -94,7 +102,15 @@ pub(crate) async fn run(
         ..
     } = flags;
     let lang = norte_i18n::active();
-    let line = order_line(arg);
+    let line = match order_line(arg) {
+        Ok(line) => line,
+        Err(offset) => {
+            let why = norte_i18n::t(orders::parse_error_key(
+                norte_orders::ParseErrorKind::BadEscape,
+            ));
+            return refuse(&format!("{why} (byte {offset})"));
+        }
+    };
     let order = match norte_orders::parse(&line) {
         Ok(o) => o,
         Err(e) => {
