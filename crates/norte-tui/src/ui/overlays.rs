@@ -908,6 +908,56 @@ fn goto_footer(goto: &norte_frontend::goto::Goto, query: &str) -> String {
     }
 }
 
+/// The `:` line: the order coloured by token, then why it does not parse, or
+/// what it would touch, or the hint.
+fn order_footer(
+    goto: &norte_frontend::goto::Goto,
+    preview: &str,
+    theme: &TuiTheme,
+) -> Line<'static> {
+    use norte_orders::TokenClass;
+    let shown = goto.query_display();
+    let mut spans = vec![Span::raw(" ❯")];
+    let mut at = 0;
+    for (r, class) in goto.order_tokens() {
+        if let Some(gap) = shown.get(at..r.start) {
+            spans.push(Span::raw(gap.to_owned()));
+        }
+        let role = match class {
+            TokenClass::Verb => Role::Title,
+            TokenClass::Key => Role::Info,
+            TokenClass::Value => Role::Regular,
+            TokenClass::Pipe => Role::Warning,
+            TokenClass::Dest => Role::Match,
+            TokenClass::Error => Role::Error,
+        };
+        if let Some(text) = shown.get(r.clone()) {
+            spans.push(Span::styled(text.to_owned(), theme.role(role)));
+        }
+        at = r.end;
+    }
+    if let Some(rest) = shown.get(at..) {
+        spans.push(Span::raw(rest.to_owned()));
+    }
+    spans.push(Span::raw("_  "));
+    match goto.order() {
+        Some(Err(e)) => spans.push(Span::styled(
+            t(norte_frontend::orders::parse_error_key(e.kind)),
+            theme.role(Role::Error),
+        )),
+        _ if !preview.is_empty() => {
+            spans.push(Span::styled(preview.to_owned(), theme.role(Role::Info)));
+        }
+        _ => {
+            if let Some(hint) = goto.hint() {
+                spans.push(Span::raw(t(hint)));
+            }
+        }
+    }
+    spans.push(Span::raw(" "));
+    Line::from(spans)
+}
+
 /// One row of the search box, laid out by CELLS: badge, recent dot, dim
 /// category, the text (matched chars marked), the dim description, and the
 /// chord against the right edge.
@@ -1000,6 +1050,7 @@ fn goto_row_line(
 pub(crate) fn draw_goto(
     frame: &mut Frame<'_>,
     goto: &norte_frontend::goto::Goto,
+    order_preview: &str,
     theme: &TuiTheme,
 ) {
     use norte_frontend::goto::{GotoLine, Mode};
@@ -1045,7 +1096,11 @@ pub(crate) fn draw_goto(
         Mode::Help => t("goto-title-help"),
         Mode::Order => t("goto-title-order"),
     };
-    let footer = goto_footer(goto, &query);
+    let footer = if goto.mode() == Mode::Order {
+        order_footer(goto, order_preview, theme)
+    } else {
+        Line::raw(goto_footer(goto, &query))
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {title} "))
@@ -1053,7 +1108,7 @@ pub(crate) fn draw_goto(
         // `❯` and not a `/`: here what is written CAN be a path, and a
         // prompt slash glued to an absolute path reads as part of it
         // (`//etc`).
-        .title_bottom(Line::raw(footer))
+        .title_bottom(footer)
         .border_style(theme.role(Role::ModalBorder));
     let list = List::new(items)
         .block(block)

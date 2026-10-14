@@ -33,6 +33,7 @@ pub mod mouse;
 pub mod mutations;
 pub mod nav;
 pub mod navigate;
+pub mod orders;
 pub mod overlays;
 pub mod palette;
 pub mod panel;

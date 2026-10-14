@@ -145,11 +145,13 @@ pub fn open(
 ) {
     if let Some(g) = &mut app.goto {
         g.set_query(query);
-        return;
+    } else {
+        let mut goto =
+            Goto::new(sources(app, connections, plugins)).with_recent(&app.palette_recent);
+        goto.set_query(query);
+        app.goto = Some(goto);
     }
-    let mut goto = Goto::new(sources(app, connections, plugins)).with_recent(&app.palette_recent);
-    goto.set_query(query);
-    app.goto = Some(goto);
+    crate::orders::after_edit(app);
 }
 
 /// What a non-typing key does in the open box: `Some(query)` if it is the

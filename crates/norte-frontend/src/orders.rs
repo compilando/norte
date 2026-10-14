@@ -160,6 +160,62 @@ pub enum OrderError {
         /// The closest catalogue id.
         nearest: Option<String>,
     },
+    /// A stage that acts before the last one: each action opens its own
+    /// confirmation, so only one can follow the `sel`s.
+    #[error("only the last stage may act")]
+    OneAction,
+}
+
+/// The focused pane's EXPLICIT marks — empty when only the cursor row would
+/// act, because that fallback is not a mark and must not come back as one.
+#[must_use]
+pub fn marks_before(pane: &crate::PaneState) -> Vec<VPath> {
+    if pane.marks_len() == 0 {
+        Vec::new()
+    } else {
+        pane.marked_paths()
+    }
+}
+
+/// Puts back the marks the pane had when the box opened.
+pub fn restore(pane: &mut crate::PaneState, before: &[VPath]) {
+    pane.clear_marks();
+    pane.restore_marks(before);
+}
+
+/// The live preview of the box's `query`: starts again from `before`, and
+/// when the line parses and opens with `sel`, marks what it matches.
+/// Returns what to show under the line (`1 item · 2 KiB`), or empty.
+#[must_use]
+pub fn preview(
+    pane: &mut crate::PaneState,
+    query: &str,
+    before: &[VPath],
+    now_ms: i64,
+    lang: norte_i18n::Lang,
+) -> String {
+    restore(pane, before);
+    let Some(body) = query.strip_prefix(crate::goto::PREFIX_ORDER) else {
+        return String::new();
+    };
+    let Ok(order) = norte_orders::parse(body) else {
+        return String::new();
+    };
+    let Some(Stage::Sel(q)) = order.stages.first() else {
+        return String::new();
+    };
+    match pane.select_query(q, now_ms) {
+        Ok(n) => {
+            let n_text = n.to_string();
+            let size = crate::human_bytes(pane.marked_bytes());
+            norte_i18n::ta_in(
+                lang,
+                "msg-order-preview",
+                &[("n", &n_text), ("size", &size)],
+            )
+        }
+        Err(_) => String::new(),
+    }
 }
 
 /// The Fluent key that explains a parse error to the reader.
@@ -186,6 +242,7 @@ pub fn order_error_text(e: &OrderError, lang: norte_i18n::Lang) -> String {
     match e {
         OrderError::NoOtherPane => norte_i18n::t_in(lang, "order-error-no-other-pane"),
         OrderError::BadPath => norte_i18n::t_in(lang, "order-error-bad-path"),
+        OrderError::OneAction => norte_i18n::t_in(lang, "order-error-one-action"),
         OrderError::UnknownCommand { nearest: None } => {
             norte_i18n::t_in(lang, "order-error-unknown-command")
         }
@@ -227,7 +284,15 @@ pub fn steps(order: &Order, cx: &Context<'_>) -> Result<Vec<Step>, OrderError> {
                 Stage::Catalogue(id) => Step::Command(command(id)?),
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()
+        .and_then(|all| {
+            let (_, init) = all.split_last().unwrap_or((&Step::Trash, &[]));
+            if init.iter().all(|s| matches!(s, Step::Select(_))) {
+                Ok(all)
+            } else {
+                Err(OrderError::OneAction)
+            }
+        })
 }
 
 /// A catalogue id as it binds today: renamed names follow their rename.
@@ -504,6 +569,56 @@ mod tests {
         );
         let ok = norte_orders::parse("pane.swap").expect("parse");
         assert_eq!(steps(&ok, &cx), Ok(vec![Step::Command("pane.swap".into())]));
+    }
+
+    #[test]
+    fn only_the_last_stage_may_act() {
+        let here = dir();
+        let cx = Context {
+            here: &here,
+            other: None,
+        };
+        let order = norte_orders::parse("sel *.rs | cp >here | trash").expect("parse");
+        assert_eq!(steps(&order, &cx), Err(OrderError::OneAction));
+        let ok = norte_orders::parse("sel *.rs | sel !a* | pane.copy").expect("parse");
+        assert_eq!(steps(&ok, &cx).map(|s| s.len()), Ok(3));
+    }
+
+    #[test]
+    fn the_live_preview_selects_and_says_how_much() {
+        let mut p = pane(vec![file("a.pdf", 2048, 1), file("b.txt", 1, 1)]);
+        let text = preview(&mut p, ":sel ext:pdf", &[], NOW, norte_i18n::Lang::En);
+        assert_eq!(names(&p), ["a.pdf"]);
+        assert!(text.contains('1') && text.contains("KiB"), "{text}");
+    }
+
+    #[test]
+    fn the_live_preview_starts_from_the_marks_before_the_box() {
+        let mut p = pane(vec![file("a.pdf", 1, 1), file("b.txt", 1, 1)]);
+        p.mark_all();
+        let before = marks_before(&p);
+        preview(&mut p, ":sel ext:pdf", &before, NOW, norte_i18n::Lang::En);
+        // The reader deletes back to a line with no `sel`: their marks return.
+        let text = preview(&mut p, ":tra", &before, NOW, norte_i18n::Lang::En);
+        assert_eq!(text, "");
+        assert_eq!(p.marks_len(), 2);
+    }
+
+    #[test]
+    fn marks_before_is_empty_when_only_the_cursor_would_act() {
+        let p = pane(vec![file("a", 1, 1)]);
+        assert!(
+            marks_before(&p).is_empty(),
+            "the cursor fallback is not a mark"
+        );
+    }
+
+    #[test]
+    fn restore_puts_back_exactly_the_marks_from_before() {
+        let mut p = pane(vec![file("a.pdf", 1, 1), file("b.txt", 1, 1)]);
+        preview(&mut p, ":sel *", &[], NOW, norte_i18n::Lang::En);
+        restore(&mut p, &[]);
+        assert_eq!(p.marks_len(), 0);
     }
 
     #[test]

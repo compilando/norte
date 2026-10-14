@@ -844,6 +844,7 @@ order-error-missing-arg = this verb needs an argument
 order-error-unterminated = a quote is never closed
 order-error-no-other-pane = there is no other pane
 order-error-bad-path = not a valid path
+order-error-one-action = only the last stage may act (sel … | sel … | cp >other)
 order-error-unknown-command = no such command
 order-error-unknown-command-nearest = no such command — did you mean { $nearest }?
 msg-order-preview = { $n ->

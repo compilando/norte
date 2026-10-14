@@ -132,6 +132,7 @@ pub fn settle_help_over_modal(app: &mut App) {
 /// search dialog) yield the key but SURVIVE: their rows do not expire and the
 /// reader gets them back intact after answering.
 pub fn close_stale_overlays(app: &mut App) {
+    crate::orders::cancel(app);
     app.goto = None;
     app.settings = None;
     // K3c: and with settings the shortcuts editor goes too, since it lives
@@ -449,6 +450,7 @@ pub fn goto_help(
         app.message = Some(t("msg-palette-no-help"));
         return false;
     };
+    crate::orders::cancel(app);
     app.goto = None;
     open_help_topic(app, lang, help_lines, topic.id.as_str());
     true

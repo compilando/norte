@@ -564,7 +564,7 @@ fn draw_frame(frame: &mut Frame<'_>, app: &App) {
     // The search box (places and commands): over the listing, under the
     // wizard and a modal.
     if let Some(goto) = &app.goto {
-        draw_goto(frame, goto, &app.theme);
+        draw_goto(frame, goto, &app.order_preview, &app.theme);
     }
     // The first-run wizard (spec 2026-09-10): over the search box and the
     // settings, under a modal, like the rest of the overlays that are not a

@@ -1013,6 +1013,11 @@ pub struct App {
     /// model belongs to `norte-frontend`; where its rows come from and what
     /// confirming them means comes from [`crate::goto`].
     pub goto: Option<norte_frontend::goto::Goto>,
+    /// The focused pane's marks when the box went into `:` mode: Esc puts
+    /// them back after a live `sel` preview. `None` = not previewing.
+    pub order_marks_before: Option<Vec<VPath>>,
+    /// The `:` line's preview (`14 items · 38 MB`), or empty.
+    pub order_preview: String,
     /// Open live-search dialog (`Alt+F7`, liveSearch T6): None = closed.
     /// Captures printables like the nav popup's `name_input`.
     pub search_dialog: Option<SearchDialog>,
@@ -1515,6 +1520,8 @@ impl App {
             hotlist: Vec::new(),
             nav_popup: None,
             goto: None,
+            order_marks_before: None,
+            order_preview: String::new(),
             search_dialog: None,
             compare: None,
             compare_size_hints: std::collections::HashMap::new(),

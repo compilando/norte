@@ -849,6 +849,7 @@ order-error-missing-arg = este verbo necesita un argumento
 order-error-unterminated = una comilla no se cierra
 order-error-no-other-pane = no hay otro panel
 order-error-bad-path = no es una ruta válida
+order-error-one-action = solo la última etapa puede actuar (sel … | sel … | cp >other)
 order-error-unknown-command = no existe ese comando
 order-error-unknown-command-nearest = no existe ese comando — ¿quisiste decir { $nearest }?
 msg-order-preview = { $n ->
