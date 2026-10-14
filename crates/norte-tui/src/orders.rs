@@ -121,7 +121,44 @@ pub async fn run(app: &mut App, backend: &Backend, order: &norte_orders::Order) 
         }
         Step::Cd { to } => Some(Action::Ir(to.clone())),
         Step::Command(id) => Some(Action::Command(id.clone())),
-        // `log` and `undo` are wired with the journal (task 6).
-        Step::Log(_) | Step::Undo(_) => None,
+        // The timeline panel IS the log: it pages, groups batches and
+        // undoes from a row.
+        Step::Log(_) => Some(Action::Command("layout.timeline".to_owned())),
+        Step::Undo(n) => {
+            undo(app, backend, *n).await;
+            None
+        }
+    }
+}
+
+/// `undo N`: the timeline's own confirmation, over the reader's newest N
+/// operations, with the ceiling frozen at what was counted.
+async fn undo(app: &mut App, backend: &Backend, n: u32) {
+    let page = match backend
+        .journal_list(
+            None,
+            norte_proto::methods::JOURNAL_LIST_MAX_PAGE,
+            Some("user"),
+        )
+        .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            app.message = Some(error_message(&e));
+            return;
+        }
+    };
+    match orders::undo_cut(&page.rows, page.next_before_seq, n) {
+        Ok(cut) => {
+            app.modal = Some(crate::app::Modal::ConfirmUndoAfter {
+                seq: cut.seq,
+                to_undo: cut.summary.to_undo,
+                irreversible: cut.summary.irreversible,
+                foreign: cut.summary.foreign,
+                techo: cut.techo,
+            });
+        }
+        Err(orders::UndoRefusal::Nothing) => app.message = Some(t("timeline-undo-nothing")),
+        Err(orders::UndoRefusal::TooFar) => app.message = Some(t("msg-order-undo-too-far")),
     }
 }

@@ -166,6 +166,63 @@ pub enum OrderError {
     OneAction,
 }
 
+/// What `undo N` will do: the `journal.undo_after` arguments and the count
+/// the confirmation shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UndoCut {
+    /// Undo the reader's entries with a `seq` above this one.
+    pub seq: i64,
+    /// …and none above this ceiling: an entry written after the listing was
+    /// read is not undone without having been counted.
+    pub techo: Option<i64>,
+    /// What the confirmation says.
+    pub summary: crate::timeline::Cutoff,
+}
+
+/// Why `undo N` asks nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UndoRefusal {
+    /// There is nothing of the reader's to undo.
+    Nothing,
+    /// N reaches past the page that was read; undoing "everything after 0"
+    /// would undo history nobody counted.
+    TooFar,
+}
+
+/// `undo N` over the reader's newest-first journal page (actor `user`):
+/// cut at the (N+1)-th OPERATION — a batch is one, as in the timeline.
+///
+/// # Errors
+/// [`UndoRefusal`] when there is nothing to undo or N goes past the page.
+pub fn undo_cut(
+    newest_first: &[norte_proto::methods::JournalRow],
+    next_before_seq: Option<i64>,
+    n: u32,
+) -> Result<UndoCut, UndoRefusal> {
+    let mut tl = crate::timeline::Timeline::new(newest_first, next_before_seq);
+    let n = usize::try_from(n).unwrap_or(usize::MAX);
+    if n == 0 || tl.is_empty() {
+        return Err(UndoRefusal::Nothing);
+    }
+    let seq = if n < tl.len() {
+        tl.set_cursor(n);
+        tl.cutoff().ok_or(UndoRefusal::Nothing)?
+    } else if next_before_seq.is_none() {
+        0
+    } else {
+        return Err(UndoRefusal::TooFar);
+    };
+    let summary = tl.summary_of_newest(n);
+    if summary.no_does_nothing() {
+        return Err(UndoRefusal::Nothing);
+    }
+    Ok(UndoCut {
+        seq,
+        techo: tl.techo(),
+        summary,
+    })
+}
+
 /// The focused pane's EXPLICIT marks — empty when only the cursor row would
 /// act, because that fallback is not a mark and must not come back as one.
 #[must_use]
@@ -571,6 +628,61 @@ mod tests {
         assert_eq!(steps(&ok, &cx), Ok(vec![Step::Command("pane.swap".into())]));
     }
 
+    fn jrow(seq: i64, batch: Option<i64>) -> norte_proto::methods::JournalRow {
+        norte_proto::methods::JournalRow {
+            undoes_seq: None,
+            undone: false,
+            hostile: false,
+            seq,
+            ts_ms: seq,
+            actor_kind: "user".to_owned(),
+            actor_id: None,
+            op: "copied".to_owned(),
+            path: format!("file:///a/{seq}"),
+            path_to: None,
+            reversible: true,
+            batch_id: batch,
+        }
+    }
+
+    #[test]
+    fn undo_one_cuts_at_the_second_newest_operation() {
+        let rows = [
+            jrow(9, None),
+            jrow(8, Some(1)),
+            jrow(7, Some(1)),
+            jrow(6, None),
+        ];
+        let cut = undo_cut(&rows, None, 1).expect("cut");
+        assert_eq!(cut.seq, 8, "the batch 8+7 is one operation and it stays");
+        assert_eq!(cut.summary.to_undo, 1);
+        let two = undo_cut(&rows, None, 2).expect("cut");
+        assert_eq!(two.seq, 6);
+        assert_eq!(two.summary.to_undo, 3, "the batch counts its members");
+    }
+
+    #[test]
+    fn the_ceiling_is_the_newest_listed_seq() {
+        let rows = [jrow(9, None), jrow(6, None)];
+        assert_eq!(undo_cut(&rows, None, 1).expect("cut").techo, Some(9));
+    }
+
+    #[test]
+    fn undo_more_than_exist_points_at_zero_only_on_the_last_page() {
+        let rows = [jrow(9, None), jrow(6, None)];
+        assert_eq!(undo_cut(&rows, None, 5).expect("cut").seq, 0);
+        assert_eq!(undo_cut(&rows, Some(6), 5), Err(UndoRefusal::TooFar));
+    }
+
+    #[test]
+    fn undo_zero_or_nothing_is_refused() {
+        assert_eq!(
+            undo_cut(&[jrow(9, None)], None, 0),
+            Err(UndoRefusal::Nothing)
+        );
+        assert_eq!(undo_cut(&[], None, 1), Err(UndoRefusal::Nothing));
+    }
+
     #[test]
     fn only_the_last_stage_may_act() {
         let here = dir();
@@ -597,7 +709,7 @@ mod tests {
         let mut p = pane(vec![file("a.pdf", 1, 1), file("b.txt", 1, 1)]);
         p.mark_all();
         let before = marks_before(&p);
-        preview(&mut p, ":sel ext:pdf", &before, NOW, norte_i18n::Lang::En);
+        let _ = preview(&mut p, ":sel ext:pdf", &before, NOW, norte_i18n::Lang::En);
         // The reader deletes back to a line with no `sel`: their marks return.
         let text = preview(&mut p, ":tra", &before, NOW, norte_i18n::Lang::En);
         assert_eq!(text, "");
@@ -616,7 +728,7 @@ mod tests {
     #[test]
     fn restore_puts_back_exactly_the_marks_from_before() {
         let mut p = pane(vec![file("a.pdf", 1, 1), file("b.txt", 1, 1)]);
-        preview(&mut p, ":sel *", &[], NOW, norte_i18n::Lang::En);
+        let _ = preview(&mut p, ":sel *", &[], NOW, norte_i18n::Lang::En);
         restore(&mut p, &[]);
         assert_eq!(p.marks_len(), 0);
     }

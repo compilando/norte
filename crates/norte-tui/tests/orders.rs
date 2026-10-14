@@ -131,6 +131,28 @@ async fn a_catalogue_stage_runs_like_its_key() {
 }
 
 #[tokio::test]
+async fn log_opens_the_timeline() {
+    let mut app = app_with("mem:///d", &["a"], "mem:///o");
+    let b = backend();
+    let next = norte_tui::orders::run(&mut app, &b, &order("log")).await;
+    assert_eq!(
+        next,
+        Some(norte_frontend::goto::Action::Command(
+            "layout.timeline".into()
+        ))
+    );
+}
+
+#[tokio::test]
+async fn undo_with_an_empty_journal_says_so_and_asks_nothing() {
+    let mut app = app_with("mem:///d", &["a"], "mem:///o");
+    let b = backend();
+    norte_tui::orders::run(&mut app, &b, &order("undo 2")).await;
+    assert!(app.modal.is_none());
+    assert!(app.message.is_some());
+}
+
+#[tokio::test]
 async fn cd_comes_back_as_the_boxs_own_navigation() {
     let mut app = app_with("mem:///d", &["a"], "mem:///o");
     let b = backend();
