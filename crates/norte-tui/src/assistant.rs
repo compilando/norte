@@ -123,7 +123,7 @@ pub async fn apply(
     };
     app.return_keys_to_panes();
     if let Some(norte_frontend::goto::Action::Ir(dir)) =
-        crate::orders::run(app, backend, &order).await
+        crate::orders::run(app, backend, work, &order).await
     {
         let outcome = cd(app, backend, events, dir).await;
         settle_cd(

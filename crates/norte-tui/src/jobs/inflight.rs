@@ -120,6 +120,27 @@ pub struct GotoIndexRun {
     pub query: String,
 }
 
+/// What an order's measuring answers: each row's size and mtime, or the
+/// join error of an aborted job.
+pub type OrderMeasured = Result<Vec<(VPath, Option<u64>, Option<i64>)>, tokio::task::JoinError>;
+
+/// An order's `sel` statting the rows the lazy listing (#52) never measured
+/// (ADR 0185). Off the key, with no time budget: Esc or the next edit of the
+/// box aborts it instead, and the answer only runs the order if the pane is
+/// still where it was asked.
+pub struct OrderMeasureRun {
+    /// The stats, spawned.
+    pub handle: tokio::task::JoinHandle<Vec<(VPath, Option<u64>, Option<i64>)>>,
+    /// The order to run once they land.
+    pub order: norte_orders::Order,
+    /// The focused pane when it was asked.
+    pub pane: usize,
+    /// Its folder.
+    pub dir: VPath,
+    /// The marks from before the box, to start the selection from.
+    pub before: Vec<VPath>,
+}
+
 /// A disk map measurement IN FLIGHT (phase 4).
 ///
 /// Same mold as [`ChecksumRun`] — waiting for the report is spawned and the
@@ -252,6 +273,9 @@ pub struct InFlight {
     /// that, navigating fast through a large tree left the core measuring
     /// three directories nobody was going to look at anymore.
     pub disk_map: Option<DiskMapRun>,
+    /// An order measuring its rows (ADR 0185): at most one — a new order
+    /// replaces it, Esc or the next edit of the box aborts it.
+    pub order_measure: Option<OrderMeasureRun>,
     /// The release check (ADR 0183): at most one, launched at start.
     pub update_check: Option<tokio::task::JoinHandle<Option<String>>>,
     /// Checksums ready that arrived with ANOTHER modal open: they're HELD
