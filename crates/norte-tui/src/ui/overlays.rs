@@ -1043,6 +1043,7 @@ pub(crate) fn draw_goto(
         Mode::Places => t("goto-title"),
         Mode::Commands => t("palette-title"),
         Mode::Help => t("goto-title-help"),
+        Mode::Order => t("goto-title-order"),
     };
     let footer = goto_footer(goto, &query);
     let block = Block::default()

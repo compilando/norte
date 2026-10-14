@@ -4,7 +4,8 @@ expression: render(&app)
 ---
 " Arc┌ Temas de ayuda ──────────────────────────────────────────────────────┐    "
 "   ┌│   > Ejecutar un comando                                              │───┐"
-"   ││   Ir a un sitio                                                      │cha│"
+"   ││   : Ejecutar una orden (sel ext:pdf | cp >other)                     │cha│"
+"   ││   Ir a un sitio                                                      │   │"
 "   ││   Esto es norte                                                      │   │"
 "   ││   Dos paneles, un destino                                            │   │"
 "   ││   Pestañas en un panel                                               │   │"
@@ -15,6 +16,5 @@ expression: render(&app)
 "   ││   Contestar a un diálogo                                             │   │"
 "   ││   Ajustes y temas                                                    │   │"
 "   ││   Lo que la pantalla enseña alrededor del listado                    │   │"
-"   ││   Perfiles y sesión                                                  │   │"
-"   └│   Copiar, mover, renombrar y borrar                                  │───┘"
+"   └│   Perfiles y sesión                                                  │───┘"
 "    └ ❯?_ ─────────────────────────────────────────────────────────────────┘F-8 "

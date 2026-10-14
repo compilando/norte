@@ -829,10 +829,32 @@ goto-section-index = Found by the index
 goto-title-help = Help topics
 goto-prefix-commands = Run a command
 goto-prefix-places = Go to a place
+goto-title-order = Order
+goto-prefix-order =Run an order (sel ext:pdf | cp >other)
+goto-hint-order = sel ext:pdf age<30d | cp >other · trash · mkdir NAME · cd PATH · log · undo N
+order-error-empty = nothing to run
+order-error-unknown-verb = not a verb nor a command
+order-error-not-yet = redo is not available yet
+order-error-stands-alone = log and undo cannot be piped
+order-error-bad-term = this word means nothing here
+order-error-bad-number = not a number with a valid unit (K M G T · s m h d w)
+order-error-bad-escape = an escape is \xHH, \\, \ (space), \| or \'
+order-error-missing-dest = where to? (>other, >here or >PATH)
+order-error-missing-arg = this verb needs an argument
+order-error-unterminated = a quote is never closed
+order-error-no-other-pane = there is no other pane
+order-error-bad-path = not a valid path
+order-error-unknown-command = no such command
+order-error-unknown-command-nearest = no such command — did you mean { $nearest }?
+msg-order-preview = { $n ->
+    [one] 1 item · { $size }
+   *[other] { $n } items · { $size }
+}
+msg-order-nothing-matched = nothing matched — nothing was run
 goto-empty = nothing matches that
 goto-index-off = the semantic index is not switched on
 goto-path-desc = go to this path
-goto-hint = > commands · ? help
+goto-hint = > commands · : orders · ? help
 goto-box-label = Search places and commands (>)
 # The category a command row is filed under: its id's namespace.
 cmd-ns-app = App

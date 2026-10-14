@@ -834,10 +834,32 @@ goto-section-index = Encontrado por el índice
 goto-title-help = Temas de ayuda
 goto-prefix-commands = Ejecutar un comando
 goto-prefix-places = Ir a un sitio
+goto-title-order = Orden
+goto-prefix-order =Ejecutar una orden (sel ext:pdf | cp >other)
+goto-hint-order = sel ext:pdf age<30d | cp >other · trash · mkdir NOMBRE · cd RUTA · log · undo N
+order-error-empty = nada que ejecutar
+order-error-unknown-verb = no es un verbo ni un comando
+order-error-not-yet = rehacer aún no está disponible
+order-error-stands-alone = log y undo no se encadenan con |
+order-error-bad-term = esta palabra no significa nada aquí
+order-error-bad-number = no es un número con unidad válida (K M G T · s m h d w)
+order-error-bad-escape = un escape es \xHH, \\, \ (espacio), \| o \'
+order-error-missing-dest = ¿adónde? (>other, >here o >RUTA)
+order-error-missing-arg = este verbo necesita un argumento
+order-error-unterminated = una comilla no se cierra
+order-error-no-other-pane = no hay otro panel
+order-error-bad-path = no es una ruta válida
+order-error-unknown-command = no existe ese comando
+order-error-unknown-command-nearest = no existe ese comando — ¿quisiste decir { $nearest }?
+msg-order-preview = { $n ->
+    [one] 1 elemento · { $size }
+   *[other] { $n } elementos · { $size }
+}
+msg-order-nothing-matched = nada casó — no se ejecutó nada
 goto-empty = nada casa con eso
 goto-index-off = el índice semántico no está encendido
 goto-path-desc = ir a esta ruta
-goto-hint = > comandos · ? ayuda
+goto-hint = > comandos · : órdenes · ? ayuda
 goto-box-label = Buscar sitios y comandos (>)
 # La categoría bajo la que se archiva una fila de comando: el espacio de nombres de su id.
 cmd-ns-app = Aplicación

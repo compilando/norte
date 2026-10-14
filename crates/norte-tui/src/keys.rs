@@ -609,6 +609,11 @@ pub async fn on_key(
                     crate::jobs::goto::ask_the_index(app, backend, work);
                     return;
                 }
+                // An order that does not parse: the box stays open, its line
+                // already says why.
+                if let Some(crate::goto::Action::OrderInvalid) = &act {
+                    return;
+                }
                 // The screen closes BEFORE acting, and the request to the
                 // index is abandoned: whatever comes next —a cd, a command,
                 // a modal— rules the screen, and a late response no longer
@@ -723,7 +728,9 @@ pub async fn on_key(
                         crate::overlays::open_help_topic(app, lang, help_lines, &id);
                     }
                     // Handled above, before closing.
-                    crate::goto::Action::SetQuery(_) => {}
+                    crate::goto::Action::SetQuery(_)
+                    | crate::goto::Action::OrderInvalid
+                    | crate::goto::Action::Order(_) => {}
                 }
             }
             // The chord of `app.palette` or `app.goto` pressed inside the

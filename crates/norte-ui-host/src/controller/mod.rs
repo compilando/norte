@@ -2679,6 +2679,9 @@ struct State {
     /// if it is open. One more input context, like the incremental search
     /// and the viewer: while it is open, text keys belong to it.
     ir_a: Option<norte_frontend::goto::Goto>,
+    /// The `:` line's preview (`14 items · 38 MB`), translated; empty when
+    /// the line selects nothing yet.
+    order_preview: String,
     /// How many times "go to" has been opened: connections and the index that
     /// answer an earlier opening are dropped.
     gen_ir_a: u64,
@@ -3433,6 +3436,7 @@ impl State {
             token: 0,
             locale,
             ir_a: None,
+            order_preview: String::new(),
             gen_ir_a: 0,
             go_to_index: None,
             wizard: None,

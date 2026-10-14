@@ -162,6 +162,41 @@ pub enum OrderError {
     },
 }
 
+/// The Fluent key that explains a parse error to the reader.
+#[must_use]
+pub fn parse_error_key(kind: norte_orders::ParseErrorKind) -> &'static str {
+    use norte_orders::ParseErrorKind as K;
+    match kind {
+        K::Empty => "order-error-empty",
+        K::UnknownVerb => "order-error-unknown-verb",
+        K::NotYet => "order-error-not-yet",
+        K::StandsAlone => "order-error-stands-alone",
+        K::BadTerm => "order-error-bad-term",
+        K::BadNumber => "order-error-bad-number",
+        K::BadEscape => "order-error-bad-escape",
+        K::MissingDest => "order-error-missing-dest",
+        K::MissingArg => "order-error-missing-arg",
+        K::Unterminated => "order-error-unterminated",
+    }
+}
+
+/// An [`OrderError`], translated.
+#[must_use]
+pub fn order_error_text(e: &OrderError, lang: norte_i18n::Lang) -> String {
+    match e {
+        OrderError::NoOtherPane => norte_i18n::t_in(lang, "order-error-no-other-pane"),
+        OrderError::BadPath => norte_i18n::t_in(lang, "order-error-bad-path"),
+        OrderError::UnknownCommand { nearest: None } => {
+            norte_i18n::t_in(lang, "order-error-unknown-command")
+        }
+        OrderError::UnknownCommand { nearest: Some(n) } => norte_i18n::ta_in(
+            lang,
+            "order-error-unknown-command-nearest",
+            &[("nearest", n)],
+        ),
+    }
+}
+
 /// Resolves an order into steps.
 ///
 /// # Errors
@@ -469,6 +504,43 @@ mod tests {
         );
         let ok = norte_orders::parse("pane.swap").expect("parse");
         assert_eq!(steps(&ok, &cx), Ok(vec![Step::Command("pane.swap".into())]));
+    }
+
+    #[test]
+    fn every_parse_error_reads_in_both_locales() {
+        use norte_orders::ParseErrorKind as K;
+        for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
+            let ids = norte_i18n::message_ids(lang);
+            for k in [
+                K::Empty,
+                K::UnknownVerb,
+                K::NotYet,
+                K::StandsAlone,
+                K::BadTerm,
+                K::BadNumber,
+                K::BadEscape,
+                K::MissingDest,
+                K::MissingArg,
+                K::Unterminated,
+            ] {
+                assert!(
+                    ids.iter().any(|i| i == parse_error_key(k)),
+                    "{lang:?} {k:?}"
+                );
+            }
+            for key in [
+                "order-error-no-other-pane",
+                "order-error-bad-path",
+                "order-error-unknown-command",
+                "order-error-unknown-command-nearest",
+                "msg-order-preview",
+                "msg-order-nothing-matched",
+                "goto-prefix-order",
+                "goto-hint-order",
+            ] {
+                assert!(ids.iter().any(|i| i == key), "{lang:?} {key}");
+            }
+        }
     }
 
     #[test]

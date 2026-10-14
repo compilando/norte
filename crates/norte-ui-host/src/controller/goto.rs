@@ -407,6 +407,11 @@ impl State {
             };
             return (self.applied(), vec![self.parche(vec![change])]);
         }
+        // An order that does not parse: the box stays open, its line
+        // already says why.
+        if let Some(Action::OrderInvalid) = &act {
+            return (self.applied(), Vec::new());
+        }
         self.confirm_go_to(act, backend, mailbox)
     }
 
@@ -492,7 +497,9 @@ impl State {
             Action::Nothing(reason) => (self.applied(), self.say(reason)),
             Action::Help(id) => self.open_help_on(Some(&id), backend, mailbox),
             // Handled by the caller, before closing.
-            Action::SetQuery(_) => (self.applied(), Vec::new()),
+            Action::SetQuery(_) | Action::OrderInvalid | Action::Order(_) => {
+                (self.applied(), Vec::new())
+            }
             Action::Unavailable(why) => {
                 self.status.message = Some(clamp_display(why));
                 (
@@ -553,11 +560,40 @@ impl State {
                 Mode::Places => crate::dto::GotoModeView::Places,
                 Mode::Commands => crate::dto::GotoModeView::Commands,
                 Mode::Help => crate::dto::GotoModeView::Help,
+                Mode::Order => crate::dto::GotoModeView::Order,
             },
             hint: g
                 .hint()
                 .map(|k| norte_i18n::t_in(self.lang, k))
                 .unwrap_or_default(),
+            order: g.order().map(|parsed| crate::dto::OrderLineView {
+                tokens: g
+                    .order_tokens()
+                    .into_iter()
+                    .map(|(r, class)| crate::dto::OrderTokenView {
+                        start: u32::try_from(r.start).unwrap_or(u32::MAX),
+                        end: u32::try_from(r.end).unwrap_or(u32::MAX),
+                        class: token_class(class).to_owned(),
+                    })
+                    .collect(),
+                error: parsed.err().map_or_else(String::new, |e| {
+                    norte_i18n::t_in(self.lang, norte_frontend::orders::parse_error_key(e.kind))
+                }),
+                preview: self.order_preview.clone(),
+            }),
         })
+    }
+}
+
+/// The wire name of a token class.
+fn token_class(c: norte_orders::TokenClass) -> &'static str {
+    use norte_orders::TokenClass as T;
+    match c {
+        T::Verb => "verb",
+        T::Key => "key",
+        T::Value => "value",
+        T::Pipe => "pipe",
+        T::Dest => "dest",
+        T::Error => "error",
     }
 }
