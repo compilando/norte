@@ -27,12 +27,20 @@ impl Spark {
     ///
     /// The same second again replaces its sample: the last word wins.
     /// Skipped seconds take the NEW value — a gap is ticks that did not run,
-    /// not a stop. A clock that goes back is ignored.
+    /// not a stop. A clock that jumps — back, or forward by more than the
+    /// whole history, as a wall clock does when it is set — starts the
+    /// series over: ignoring it froze the graph until time caught up.
     pub fn record(&mut self, now_ms: i64, bps: Option<f64>) {
         let sec = now_ms.div_euclid(1000);
         let v = bps.filter(|b| b.is_finite() && *b > 0.0).unwrap_or(0.0);
+        let window = i64::try_from(SAMPLES).unwrap_or(i64::MAX);
+        if self
+            .last_sec
+            .is_some_and(|last| sec < last || sec - last > window)
+        {
+            *self = Self::default();
+        }
         match self.last_sec {
-            Some(last) if sec < last => return,
             Some(last) if sec == last => {
                 if let Some(x) = self.ring.back_mut() {
                     *x = v;
@@ -133,11 +141,14 @@ mod tests {
     }
 
     #[test]
-    fn a_clock_going_back_is_ignored() {
+    fn a_clock_that_jumps_starts_over() {
         let mut s = Spark::default();
         s.record(5_000, Some(10.0));
         s.record(4_000, Some(99.0));
-        assert_eq!(s.ring, [10.0]);
+        assert_eq!(s.ring, [99.0], "back: the graph keeps moving");
+        s.record(5_000, Some(1.0));
+        s.record(500_000, Some(7.0));
+        assert_eq!(s.ring, [7.0], "far forward: no flat half minute");
     }
 
     #[test]
@@ -147,8 +158,12 @@ mod tests {
             s.record(i * 1_000, Some(1.0));
         }
         assert_eq!(s.ring.len(), SAMPLES);
-        s.record(1_000_000, Some(2.0));
-        assert_eq!(s.ring.len(), SAMPLES, "a huge gap does not grow it");
+        s.record(131_000, Some(2.0));
+        assert_eq!(
+            s.ring.len(),
+            SAMPLES,
+            "a gap within the window does not grow it"
+        );
     }
 
     #[test]

@@ -45,4 +45,5 @@ no wire change.
   rows only when a graph changed. A wake carries its deadline, so one that
   a newer arming superseded does nothing instead of arming a second timer.
 - The TUI samples on its paint clock, which is the wall clock: a clock
-  step back freezes the graph until time catches up.
+  that is set — back, or forward by more than the history — starts the
+  series over rather than freezing it or drawing a flat half minute.

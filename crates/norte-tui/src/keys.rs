@@ -302,7 +302,7 @@ pub async fn on_key(
         // the panel it opened with the caret already in it.
         && !crate::searchpanel::types_text(app, key.modifiers)
         // Nor the assistant's input, for the same reason.
-        && !crate::assistant::types_text(app, key.modifiers)
+        && !crate::assistant::types_text(app, key.modifiers, key.code)
         // A viewer opened from a result row: its keys are the viewer's.
         && !crate::searchpanel::viewer_over(app)
         && matches!(

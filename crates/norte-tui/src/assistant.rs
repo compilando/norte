@@ -15,12 +15,15 @@ use crate::navigate::{cd, settle_cd};
 /// The panel's kind id.
 pub const KIND: &str = "assistant";
 
-/// Whether this key types into the panel's input: plain keys with the panel
-/// holding the keyboard. A chord with ctrl/alt writes nothing, so `alt+Y`
-/// still closes the panel from inside.
+/// Whether this key belongs to the panel's input: plain keys the input uses,
+/// with the panel holding the keyboard. A chord with ctrl/alt writes
+/// nothing, so `alt+Y` still closes the panel from inside; Tab and the F
+/// keys reach the panel commands, as in the window.
 #[must_use]
-pub fn types_text(app: &App, mods: KeyModifiers) -> bool {
-    app.key_owner() == KeyOwner::Assistant && (mods.is_empty() || mods == KeyModifiers::SHIFT)
+pub fn types_text(app: &App, mods: KeyModifiers, code: KeyCode) -> bool {
+    app.key_owner() == KeyOwner::Assistant
+        && (mods.is_empty() || mods == KeyModifiers::SHIFT)
+        && !matches!(code, KeyCode::Tab | KeyCode::BackTab | KeyCode::F(_))
 }
 
 /// Sends what is typed, if anything and if nothing is in flight.
@@ -94,7 +97,17 @@ pub async fn on_key(
         KeyCode::Backspace if plain => app.assistant.backspace(),
         KeyCode::Up if plain => app.assistant.up(),
         KeyCode::Down if plain => app.assistant.down(),
-        KeyCode::Esc if plain => app.return_keys_to_panes(),
+        // Esc first stops a turn in flight; with none, it gives the keys
+        // back.
+        KeyCode::Esc if plain => {
+            if app.assistant.cancel() {
+                if let Some(h) = work.assistant.take() {
+                    h.abort();
+                }
+            } else {
+                app.return_keys_to_panes();
+            }
+        }
         KeyCode::Enter if plain => {
             // Strictly empty: a line of spaces is not "apply".
             if app.assistant.input().is_empty() {
@@ -119,6 +132,9 @@ pub async fn apply(
         return;
     };
     let Ok(order) = norte_orders::parse(&text) else {
+        // Vetted by the core's grammar; only a core newer than this
+        // frontend's gets here, and silence would read as a dead key.
+        app.message = Some(norte_i18n::t("assistant-unparsable"));
         return;
     };
     app.return_keys_to_panes();
