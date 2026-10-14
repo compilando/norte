@@ -26,6 +26,16 @@ independently through `PROTOCOL_VERSION`.
   width, lets Tab and the F keys reach the panel commands in the
   terminal, says so when an order cannot be applied, and no longer loses
   a message the window refused to send.
+- **The order line** (`:` and `norte run`): a no-break or other Unicode space
+  now separates words; `name=NAME` targets one file by its exact name (so a
+  file called `*` can be selected); a typed name finds a folder stored
+  decomposed or in the pane's name encoding; printed orders keep accents
+  and Hindi readable while still escaping invisible and bidi characters;
+  measuring unmeasured rows in the terminal no longer blocks the key and
+  Esc cancels it; `mkdir` in an order refuses on a read-only pane like F7;
+  `norte run` accepts an order that is not UTF-8, prints names with the
+  order's escapes instead of `�`, and `undo N --dry-run` says how many
+  operations it would undo (also in `--json`).
 
 ## [0.3.0-alpha.13] - 2026-10-14
 

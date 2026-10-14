@@ -457,12 +457,14 @@ impl Goto {
     fn refresh_order(&mut self) {
         let query = self.query.clone();
         let body = query.get(PREFIX_ORDER.len()..).unwrap_or_default();
+        // Words split where the grammar splits them: any Unicode space.
         let word_start = body
-            .rfind(|c: char| c.is_ascii_whitespace() || c == '|')
-            .map_or(0, |i| i + 1);
+            .char_indices()
+            .rfind(|&(_, c)| c.is_whitespace() || c == '|')
+            .map_or(0, |(i, c)| i + c.len_utf8());
         let word = &body[word_start..];
         let stage = &body[body.rfind('|').map_or(0, |i| i + 1)..word_start];
-        let first = stage.split_ascii_whitespace().next();
+        let first = stage.split_whitespace().next();
         let before = &query[..PREFIX_ORDER.len() + word_start];
         let row = |text: &str, tail: &str| GotoRow {
             section: SECTION_COMMANDS.id,
@@ -2151,6 +2153,14 @@ mod order_tests {
         let g = boxed(":sel ex");
         assert_eq!(texts(&g), ["ext:"]);
         assert_eq!(g.confirm(), Some(Action::SetQuery(":sel ext:".into())));
+    }
+
+    /// A no-break space separates words here as it does in the grammar.
+    #[test]
+    fn completion_splits_on_a_unicode_space() {
+        let g = boxed(":sel\u{a0}ex");
+        assert_eq!(texts(&g), ["ext:"]);
+        assert_eq!(g.confirm(), Some(Action::SetQuery(":sel\u{a0}ext:".into())));
     }
 
     #[test]

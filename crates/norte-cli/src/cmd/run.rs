@@ -5,6 +5,7 @@
 //! There is no pane: `sel` reads `--cwd`, `>other` is refused, and a
 //! catalogue command or `cd` has nothing to act on.
 
+use std::ffi::OsStr;
 use std::process::ExitCode;
 
 use anyhow::Context as _;
@@ -27,9 +28,50 @@ fn refuse(msg: &str) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::from(BAD_ORDER))
 }
 
+/// A matched name as the grammar writes it: what a script can paste back
+/// into an order, and nothing a terminal would act on.
 fn shown(p: &VPath) -> String {
-    let name = p.file_name().map_or(&b""[..], |n| n.as_bytes());
-    norte_encoding::mask_terminal_hazards(&String::from_utf8_lossy(name))
+    norte_orders::escape_name(p.file_name().map_or(&b""[..], |n| n.as_bytes()))
+}
+
+/// The order argument as the grammar reads it: bytes that are not UTF-8 (a
+/// Latin-1 name a shell glob expanded) become `\xHH`, which the grammar reads
+/// back as exactly those bytes — never a lossy `�`.
+///
+/// # Errors
+/// The byte offset of an invalid byte right after an open `\`: escaped, it
+/// would read as `\\` + `xHH`, another name.
+fn order_line(arg: &OsStr) -> Result<String, usize> {
+    use std::fmt::Write as _;
+    let bytes = arg.as_encoded_bytes();
+    let mut out = String::with_capacity(bytes.len());
+    for chunk in bytes.utf8_chunks() {
+        out.push_str(chunk.valid());
+        for b in chunk.invalid() {
+            let open = out.bytes().rev().take_while(|c| *c == b'\\').count() % 2 == 1;
+            if open {
+                return Err(out.len() - 1);
+            }
+            let _ = write!(out, "\\x{b:02x}");
+        }
+    }
+    Ok(out)
+}
+
+/// Whether resolving the order needs the folder's listing: a `sel`, or a
+/// relative name that must take the listed bytes (NFC, `norte-frontend`).
+fn wants_listing(order: &norte_orders::Order) -> bool {
+    use norte_orders::{Dest, Stage};
+    order.stages.iter().any(|s| {
+        matches!(
+            s,
+            Stage::Sel(_)
+                | Stage::Mkdir(_)
+                | Stage::Cd(_)
+                | Stage::Cp(Dest::Path(_))
+                | Stage::Mv(Dest::Path(_))
+        )
+    })
 }
 
 /// The switches of `norte run`: four independent command-line flags, which
@@ -49,7 +91,7 @@ pub(crate) struct RunFlags {
 
 pub(crate) async fn run(
     backend: &Backend,
-    line: &str,
+    arg: &OsStr,
     cwd: &std::path::Path,
     flags: RunFlags,
 ) -> anyhow::Result<ExitCode> {
@@ -60,7 +102,16 @@ pub(crate) async fn run(
         ..
     } = flags;
     let lang = norte_i18n::active();
-    let order = match norte_orders::parse(line) {
+    let line = match order_line(arg) {
+        Ok(line) => line,
+        Err(offset) => {
+            let why = norte_i18n::t(orders::parse_error_key(
+                norte_orders::ParseErrorKind::BadEscape,
+            ));
+            return refuse(&format!("{why} (byte {offset})"));
+        }
+    };
+    let order = match norte_orders::parse(&line) {
         Ok(o) => o,
         Err(e) => {
             let why = norte_i18n::t(orders::parse_error_key(e.kind));
@@ -68,11 +119,22 @@ pub(crate) async fn run(
         }
     };
     let here = vpath(cwd)?;
+    let listing = if wants_listing(&order) {
+        Some(backend.list(&here).await)
+    } else {
+        None
+    };
+    let known: &[Entry] = match &listing {
+        Some(Ok(entries)) => entries,
+        _ => &[],
+    };
     let steps = match orders::steps(
         &order,
         &Context {
             here: &here,
             other: None,
+            listing: known,
+            enc: None,
         },
     ) {
         Ok(s) => s,
@@ -85,9 +147,9 @@ pub(crate) async fn run(
     let Some(last) = steps.last() else {
         return Ok(ExitCode::SUCCESS);
     };
-    let matched = match &query {
-        Some(q) => select(backend, &here, q, hidden).await?,
-        None => Vec::new(),
+    let matched = match (&query, listing) {
+        (Some(q), Some(entries)) => select(backend, entries, q, hidden).await?,
+        _ => Vec::new(),
     };
     let needs_operands = matches!(last, Step::Copy { .. } | Step::Move { .. } | Step::Trash);
     if needs_operands && query.is_none() {
@@ -102,6 +164,9 @@ pub(crate) async fn run(
         return Ok(ExitCode::SUCCESS);
     }
     if dry_run {
+        if let Step::Undo(n) = last {
+            return undo_preview(backend, *n, json).await;
+        }
         return report(last, &matched, json);
     }
     act(backend, last, matched, flags).await
@@ -179,18 +244,16 @@ async fn act(
     }
 }
 
-/// `sel` over `dir`: the listing (without dotfiles unless `hidden`, as a
+/// `sel` over the folder's `listing` (without dotfiles unless `hidden`, as a
 /// pane with hidden files off), measured where the query needs it (the
 /// local listing is lazy, #52), then the panes' own matcher.
 async fn select(
     backend: &Backend,
-    dir: &VPath,
+    listing: Result<Vec<Entry>, norte_proto::Error>,
     q: &norte_orders::Query,
     hidden: bool,
 ) -> anyhow::Result<Vec<VPath>> {
-    let mut entries: Vec<Entry> = backend
-        .list(dir)
-        .await
+    let mut entries: Vec<Entry> = listing
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context(norte_i18n::t("cli-list-failed"))?;
     if !hidden {
@@ -296,15 +359,59 @@ async fn log(backend: &Backend, n: u32, json: bool) -> anyhow::Result<ExitCode> 
     Ok(ExitCode::SUCCESS)
 }
 
-async fn undo(backend: &Backend, n: u32) -> anyhow::Result<ExitCode> {
-    let page = backend
+/// The reader's newest journal page, the one `undo N` cuts.
+async fn user_page(backend: &Backend) -> anyhow::Result<norte_proto::methods::JournalListResult> {
+    backend
         .journal_list(
             None,
             norte_proto::methods::JOURNAL_LIST_MAX_PAGE,
             Some("user"),
         )
         .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// `undo N --dry-run`: the counts the confirmation would show, and nothing
+/// undone.
+async fn undo_preview(backend: &Backend, n: u32, json: bool) -> anyhow::Result<ExitCode> {
+    let page = user_page(backend).await?;
+    let cut = match orders::undo_cut(&page.rows, page.next_before_seq, n) {
+        Ok(cut) => cut.summary,
+        Err(orders::UndoRefusal::Nothing) => {
+            return refuse(&norte_i18n::t("timeline-undo-nothing"));
+        }
+        Err(orders::UndoRefusal::TooFar) => {
+            return refuse(&norte_i18n::t("msg-order-undo-too-far"));
+        }
+    };
+    if json {
+        let v = serde_json::json!({
+            "action": "undo",
+            "dest": null,
+            "matched": [],
+            "to_undo": cut.to_undo,
+            "irreversible": cut.irreversible,
+            "foreign": cut.foreign,
+        });
+        serde_json::to_writer_pretty(std::io::stdout().lock(), &v)
+            .context(norte_i18n::t("cli-serialize-failed"))?;
+        println!();
+        return Ok(ExitCode::SUCCESS);
+    }
+    for (key, count, always) in [
+        ("timeline-undo-count", cut.to_undo, true),
+        ("timeline-undo-skipped", cut.irreversible, false),
+        ("timeline-undo-foreign", cut.foreign, false),
+    ] {
+        if always || count > 0 {
+            println!("{}", norte_i18n::ta(key, &[("n", &count.to_string())]));
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+async fn undo(backend: &Backend, n: u32) -> anyhow::Result<ExitCode> {
+    let page = user_page(backend).await?;
     match orders::undo_cut(&page.rows, page.next_before_seq, n) {
         Ok(cut) => {
             task::run_guarded(backend, false, "cli-enqueue-undo", || {

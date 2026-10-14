@@ -1261,6 +1261,29 @@ pub async fn run(
                 harvest_semantic(app, &mut work, res);
             }
             res = async {
+                // An order measuring its rows (ADR 0185): the order runs when
+                // the stats land, through the box's own Enter path.
+                match &mut work.order_measure {
+                    Some(r) => (&mut r.handle).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                crate::keys::order_measured(
+                    app,
+                    backend,
+                    capture,
+                    &mut Console::new(&mut events, terminal),
+                    help_lines,
+                    lang,
+                    quick_mode,
+                    confirm_quit,
+                    &cfg,
+                    &mut work,
+                    res,
+                )
+                .await;
+            }
+            res = async {
                 // The same question, for the "go to" SECTION (phase 6): its
                 // own slot because what is done with the response is a
                 // different thing, and because both can be alive at once.

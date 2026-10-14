@@ -7,8 +7,10 @@ use norte_frontend::orders::{self, Context, Step};
 use norte_i18n::t;
 
 use norte_core::backend::Backend;
+use norte_proto::VPath;
 
 use crate::app::{App, TransferKind, error_message};
+use crate::jobs::{InFlight, OrderMeasureRun, OrderMeasured, OrderStats};
 
 /// After every edit of the box. In `:` mode, previews the line's `sel` over
 /// the focused pane from the marks it had when `:` was typed; leaving `:`
@@ -47,7 +49,62 @@ pub fn cancel(app: &mut App) {
 /// Runs an order. Selection and mutations happen here; a final `cd` or
 /// catalogue command comes back as the [`Action`] the box already knows how
 /// to run, so it takes exactly the path its key or row would.
-pub async fn run(app: &mut App, backend: &Backend, order: &norte_orders::Order) -> Option<Action> {
+///
+/// A `sel` that needs rows the lazy listing never measured starts a job
+/// (`work.order_measure`) and returns; [`measured`] runs the order when the
+/// stats land.
+pub async fn run(
+    app: &mut App,
+    backend: &Backend,
+    work: &mut InFlight,
+    order: &norte_orders::Order,
+) -> Option<Action> {
+    cancel_measure(app, work);
+    go(app, backend, Some(work), order).await
+}
+
+/// Esc, or the next edit of the box: the order still measuring is aborted
+/// and runs nothing. Whether there was one.
+pub fn cancel_measure(app: &mut App, work: &mut InFlight) -> bool {
+    let Some(run) = work.order_measure.take() else {
+        return false;
+    };
+    run.handle.abort();
+    app.message = None;
+    true
+}
+
+/// The measuring landed: into the listing, then the order runs — once, and
+/// only if the pane is where it was asked and the box was not opened again;
+/// a row whose stat failed stays unknown and does not match.
+pub async fn measured(
+    app: &mut App,
+    backend: &Backend,
+    work: &mut InFlight,
+    res: OrderMeasured,
+) -> Option<Action> {
+    let run = work.order_measure.take()?;
+    // Aborted: whoever aborted it already said so.
+    let stats = res.ok()?;
+    if app.goto.is_some() || app.focus() != run.pane || app.focused().dir() != &run.dir {
+        app.message = Some(t("msg-order-stale"));
+        return None;
+    }
+    for (path, size, mtime) in stats {
+        app.focused_mut().state_mut().hydrate(&path, size, mtime);
+    }
+    app.order_marks_before = Some(run.before);
+    go(app, backend, None, &run.order).await
+}
+
+/// The order's steps from the marks before the box. `work` is where a
+/// measuring would go; `None` once it has measured.
+async fn go(
+    app: &mut App,
+    backend: &Backend,
+    work: Option<&mut InFlight>,
+    order: &norte_orders::Order,
+) -> Option<Action> {
     // The marks from before the box: every path that does not act gives
     // them back, and the selection below starts from them, so `mark.restore`
     // afterwards returns to them too.
@@ -62,6 +119,8 @@ pub async fn run(app: &mut App, backend: &Backend, order: &norte_orders::Order) 
     let cx = Context {
         here: &here,
         other: other.as_ref(),
+        listing: app.focused().state().real_entries(),
+        enc: app.focused().state().name_encoding(),
     };
     let steps = match orders::steps(order, &cx) {
         Ok(s) => s,
@@ -70,24 +129,80 @@ pub async fn run(app: &mut App, backend: &Backend, order: &norte_orders::Order) 
             return None;
         }
     };
+    if mkdir_refused(app, steps.last()) {
+        return None;
+    }
+    if let Some(work) = work {
+        let missing: Vec<VPath> = steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Select(q) => Some(orders::unmeasured(app.focused().state(), q)),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        if !missing.is_empty() {
+            work.order_measure = Some(OrderMeasureRun {
+                handle: tokio::spawn(measure(backend.clone(), missing)),
+                order: order.clone(),
+                pane: app.focus(),
+                dir: here,
+                before,
+            });
+            app.message = Some(t("msg-order-measuring"));
+            return None;
+        }
+    }
+    finish(app, backend, &steps, &before, &here).await
+}
+
+/// F7's own refusal, per pane: a `mkdir` into a read-only folder — the pane
+/// showing it, or its caps when no pane does — is said, not attempted.
+fn mkdir_refused(app: &mut App, last: Option<&Step>) -> bool {
+    let Some(Step::Mkdir { path }) = last else {
+        return false;
+    };
+    let parent = path.parent().unwrap_or_else(|| path.clone());
+    let read_only = app
+        .panes
+        .iter()
+        .position(|p| *p.dir() == parent)
+        .map_or_else(
+            || norte_frontend::availability::read_only(app.caps(&parent).copied(), parent.scheme()),
+            |i| app.pane_read_only(i),
+        );
+    if read_only {
+        let reason = norte_help::Reason::ReadOnlyBackend;
+        app.message = Some(t(norte_frontend::availability::reason_key(reason)));
+    }
+    read_only
+}
+
+/// Selects, then runs the last stage through the door its key uses.
+async fn finish(
+    app: &mut App,
+    backend: &Backend,
+    steps: &[Step],
+    before: &[VPath],
+    here: &VPath,
+) -> Option<Action> {
     let now = app.now_ms();
     let mut matched = None;
-    for step in &steps {
+    for step in steps {
         if let Step::Select(q) = step {
-            measure(app, backend, q).await;
             let Ok(n) = app.focused_mut().state_mut().select_query(q, now) else {
                 // The glob error quotes the pattern verbatim: never painted
                 // raw (`PatternError`'s own rule).
-                orders::restore(app.focused_mut().state_mut(), &before);
+                orders::restore(app.focused_mut().state_mut(), before);
                 app.message = Some(t("err-bad-pattern"));
                 return None;
             };
             matched = Some(n);
         }
     }
-    let runnable = orders::runnable(&steps, matched);
+    let runnable = orders::runnable(steps, matched);
     let Some(last) = runnable.last() else {
-        orders::restore(app.focused_mut().state_mut(), &before);
+        orders::restore(app.focused_mut().state_mut(), before);
         app.message = Some(t("msg-order-nothing-matched"));
         return None;
     };
@@ -101,7 +216,7 @@ pub async fn run(app: &mut App, backend: &Backend, order: &norte_orders::Order) 
             };
             // The same refusal the typed-destination prompt gives: every mark
             // onto itself is N failed tasks, not a copy.
-            if *to == here {
+            if to == here {
                 app.message = Some(t("msg-transfer-dest-same"));
             } else {
                 app.open_transfer_to_dir(kind, app.focus(), to.clone(), None);
@@ -139,35 +254,24 @@ pub async fn run(app: &mut App, backend: &Backend, order: &norte_orders::Order) 
     }
 }
 
-/// How long Enter may spend measuring before it selects with what it has.
-const MEASURE_BUDGET: std::time::Duration = std::time::Duration::from_secs(3);
 /// Stats in flight at once while measuring.
 const MEASURE_PARALLEL: usize = 32;
 
 /// The lazy listing (#52) measured only the painted rows: stat the rest the
-/// query needs, or `size>` silently skips them. Bounded in time — this runs
-/// on the key — so a slow remote gives up after [`MEASURE_BUDGET`] and the
-/// rows still unknown simply do not match.
-async fn measure(app: &mut App, backend: &Backend, q: &norte_orders::Query) {
+/// query needs, or `size>` silently skips them. A job, not the key: it is
+/// cancelled by aborting it (rule 3), never by a clock.
+async fn measure(backend: Backend, paths: Vec<VPath>) -> OrderStats {
     use futures::StreamExt as _;
-    let paths = orders::unmeasured(app.focused().state(), q);
-    if paths.is_empty() {
-        return;
-    }
-    let mut stats = futures::stream::iter(paths)
+    let backend = &backend;
+    futures::stream::iter(paths)
         .map(|path| async move {
             let st = backend.stat(&path).await;
             (path, st)
         })
-        .buffer_unordered(MEASURE_PARALLEL);
-    let deadline = tokio::time::Instant::now() + MEASURE_BUDGET;
-    while let Ok(Some((path, st))) = tokio::time::timeout_at(deadline, stats.next()).await {
-        if let Ok(st) = st {
-            app.focused_mut()
-                .state_mut()
-                .hydrate(&path, st.size, st.mtime_ms);
-        }
-    }
+        .buffer_unordered(MEASURE_PARALLEL)
+        .filter_map(|(path, st)| async move { st.ok().map(|st| (path, st.size, st.mtime_ms)) })
+        .collect()
+        .await
 }
 
 /// `undo N`: the timeline's own confirmation, over the reader's newest N
