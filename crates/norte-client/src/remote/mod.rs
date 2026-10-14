@@ -1235,6 +1235,20 @@ impl RemoteBackend {
         .await
     }
 
+    /// `ai.chat` (0.87.0, ADR 0186): one assistant turn over the
+    /// conversation. Reads metadata, mutates nothing.
+    ///
+    /// # Errors
+    /// The daemon's (AI gate, `Unsupported`, `PolicyDenied` for an agent),
+    /// or a timeout after [`crate::types::AI_CHAT_TIMEOUT`].
+    pub async fn ai_chat(
+        &self,
+        params: &methods::AiChatParams,
+    ) -> Result<methods::AiChatResult, Error> {
+        self.call_timed_guarded_with(crate::types::AI_CHAT_TIMEOUT, methods::AI_CHAT, params)
+            .await
+    }
+
     /// `ai.organize_plan` (0.77.0, phase 8): a REVIEWABLE plan to reorganize
     /// a directory. Mutates nothing.
     ///

@@ -428,3 +428,80 @@ async fn oversized_semantic_k_is_not_an_error() {
         "the clamp bounds the hits"
     );
 }
+
+fn chat(text: &str) -> methods::AiChatParams {
+    methods::AiChatParams {
+        messages: vec![methods::AiChatMessage {
+            role: methods::AiChatRole::User,
+            text: text.to_owned(),
+        }],
+        here: vp("mem:///"),
+        other: None,
+    }
+}
+
+/// `ai.chat` (0.87.0) answers one turn over the socket.
+#[tokio::test]
+async fn ai_chat_answers_over_the_socket() {
+    let d = spawn_daemon_ai(r#"{"kind":"answer","text":"nothing here"}"#).await;
+    let c = connected_client(&d).await;
+    let r: methods::AiChatResult = c
+        .call(methods::AI_CHAT, &chat("what is here?"))
+        .await
+        .expect("ai.chat");
+    assert_eq!(
+        r.turn,
+        methods::AiChatTurn::Answer {
+            text: "nothing here".into()
+        }
+    );
+}
+
+/// An agent is refused before its params are even read, like the rename
+/// plan: the assistant reads the reader's tree and sends it out.
+#[tokio::test]
+async fn ai_chat_is_refused_to_an_agent_whatever_its_params() {
+    let d = spawn_daemon_policy().await;
+    let agent = connected_agent(&d, "s1").await;
+    for params in [
+        serde_json::json!({ "esto": "no" }),
+        serde_json::to_value(chat("x")).expect("json"),
+    ] {
+        let err = agent
+            .call::<_, methods::AiChatResult>(methods::AI_CHAT, &params)
+            .await
+            .expect_err("denied");
+        match err {
+            ClientError::Rpc(rpc) => assert!(
+                matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"),
+                "{:?}",
+                rpc.data
+            ),
+            other => panic!("expected Rpc, got {other:?}"),
+        }
+    }
+}
+
+/// Over the caps (messages, bytes) is `INVALID_PARAMS`, before any model call.
+#[tokio::test]
+async fn ai_chat_over_the_caps_is_invalid_params() {
+    let d = spawn_daemon_ai(r#"{"kind":"answer","text":"x"}"#).await;
+    let c = connected_client(&d).await;
+    let mut too_many = chat("x");
+    too_many.messages = vec![too_many.messages[0].clone(); methods::AI_CHAT_MAX_MESSAGES + 1];
+    let too_long = chat(&"x".repeat(methods::AI_CHAT_MAX_TEXT_BYTES + 1));
+    let empty = methods::AiChatParams {
+        messages: Vec::new(),
+        ..chat("x")
+    };
+    for p in [too_many, too_long, empty] {
+        let err = c
+            .call::<_, methods::AiChatResult>(methods::AI_CHAT, &p)
+            .await
+            .expect_err("refused");
+        match err {
+            ClientError::Rpc(rpc) => assert_eq!(rpc.code, norte_proto::wire::codes::INVALID_PARAMS),
+            other => panic!("expected Rpc, got {other:?}"),
+        }
+    }
+}

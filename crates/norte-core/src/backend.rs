@@ -82,6 +82,10 @@ pub(crate) fn volume_to_proto(v: crate::volumes::Volume) -> norte_proto::methods
 /// (embedded and remote — cancel-on-drop on the remote one too).
 const AI_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(2);
 
+/// Timeout for one assistant turn (`ai.chat`): up to seven model calls, so
+/// longer than one rename plan.
+const AI_CHAT_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(5);
+
 /// The stream type returned by [`Backend::list_stream`] (ADR 0017),
 /// re-exported so frontends can name it without depending on `norte-vfs`.
 pub use norte_vfs::EntryStream;

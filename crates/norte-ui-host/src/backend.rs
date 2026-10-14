@@ -616,6 +616,17 @@ pub trait HostBackend: Send + Sync + 'static {
         self.journal_list(None, limit)
     }
 
+    /// One assistant turn (`ai.chat`, ADR 0186). The default answers
+    /// `Unsupported`: a backend with no assistant says so, and the panel
+    /// shows it.
+    fn ai_chat(
+        &self,
+        params: methods::AiChatParams,
+    ) -> BoxFuture<'static, Result<methods::AiChatTurn, Error>> {
+        let _ = params;
+        Box::pin(async { Err(Error::Unsupported) })
+    }
+
     /// Undoes the HUMAN's work after `seq` (`journal.undo_after`, phase 7).
     /// The flagged entry stays.
     ///
@@ -1719,6 +1730,14 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<methods::JournalListResult, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.journal_list(None, limit, Some("user")).await })
+    }
+
+    fn ai_chat(
+        &self,
+        params: methods::AiChatParams,
+    ) -> BoxFuture<'static, Result<methods::AiChatTurn, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.ai_chat(&params).await.map(|r| r.turn) })
     }
 
     fn undo_after(
