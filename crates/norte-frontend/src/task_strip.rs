@@ -380,6 +380,10 @@ pub struct Form {
     pub text: String,
     /// Whether the [`BAR_CELLS`]-cell bar goes behind it.
     pub bar: bool,
+    /// Whether the burst's graph goes in front of it (ADR 0187):
+    /// [`crate::spark::CELLS`] cells and a space. Each frontend draws it its
+    /// own way, so it is not in the text.
+    pub graph: bool,
 }
 
 /// The item's forms, from longest to shortest. The status bar uses the
@@ -393,7 +397,11 @@ pub fn forms(v: &StripView, lang: Lang) -> Vec<Form> {
         Some(TaskKind::Delete) => "delete",
         _ => "other",
     };
-    let f = |text: String, bar: bool| Form { text, bar };
+    let f = |text: String, bar: bool| Form {
+        text,
+        bar,
+        graph: false,
+    };
     match v.phase {
         StripPhase::Running | StripPhase::Paused => {
             let paused = v.phase == StripPhase::Paused;
@@ -429,11 +437,13 @@ pub fn forms(v: &StripView, lang: Lang) -> Vec<Form> {
             // `statusbar::fit` gives it up before anything that says what
             // is running (ADR 0187).
             if !v.spark.is_empty() {
-                let graph = crate::spark::braille(&v.spark);
                 let with: Vec<Form> = out
                     .iter()
                     .take(2)
-                    .map(|x| f(format!("{graph} {}", x.text), x.bar))
+                    .map(|x| Form {
+                        graph: true,
+                        ..x.clone()
+                    })
                     .collect();
                 out.splice(0..0, with);
             }
@@ -499,7 +509,9 @@ pub fn bar_glyphs(percent: Option<u8>, now_ms: i64) -> String {
 /// Cells a [`Form`] takes up, with its bar and the space separating it.
 #[must_use]
 pub fn form_cells(f: &Form) -> usize {
-    crate::display::cells(&f.text) + if f.bar { BAR_CELLS + 3 } else { 0 }
+    crate::display::cells(&f.text)
+        + if f.bar { BAR_CELLS + 3 } else { 0 }
+        + if f.graph { crate::spark::CELLS + 1 } else { 0 }
 }
 
 #[cfg(test)]
@@ -674,9 +686,9 @@ mod tests {
         assert_eq!(v.spark.len(), crate::spark::SAMPLES);
         assert_eq!(v.spark.last(), Some(&100));
         let fs = forms(&v, Lang::En);
-        let graph = crate::spark::braille(&v.spark);
-        assert!(fs[0].text.starts_with(&graph) && fs[1].text.starts_with(&graph));
-        assert!(fs.iter().skip(2).all(|f| !f.text.contains(&graph)));
+        assert!(fs[0].graph && fs[1].graph, "{fs:?}");
+        assert!(fs.iter().skip(2).all(|f| !f.graph), "{fs:?}");
+        assert_eq!(fs[0].text, fs[2].text, "the graph is not in the text");
         let widths: Vec<usize> = fs.iter().map(form_cells).collect();
         assert!(widths.windows(2).all(|w| w[0] >= w[1]), "{widths:?}");
     }

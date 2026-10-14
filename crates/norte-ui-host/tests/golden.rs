@@ -1150,6 +1150,8 @@ fn reference_task() -> TaskView {
         detail: Some("notas.txt".to_owned()),
         detail_hostile: false,
         foreign: false,
+        // The graph (bridge 117): one value per second, 0–100.
+        spark: vec![0, 40, 100, 70],
     }
 }
 
@@ -1860,6 +1862,7 @@ fn reference_status_items() -> Vec<norte_ui_host::dto::StatusItemView> {
             progress: Some(StatusProgressView {
                 percent: Some(62),
                 phase: "running".to_owned(),
+                spark: vec![10, 55, 100],
             }),
         },
         StatusItemView {

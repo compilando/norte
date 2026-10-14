@@ -1144,7 +1144,12 @@
         "id": "tasks",
         "progress": {
           "percent": 62,
-          "phase": "running"
+          "phase": "running",
+          "spark": [
+            10,
+            55,
+            100
+          ]
         },
         "text": "⟳ copiando foto.jpg 62 % · 48 MiB/s",
         "tooltip": "1 tareas en marcha. Pulsa para ver los procesos"
@@ -1246,6 +1251,12 @@
         "kind": "copy",
         "percent": 40,
         "rate": "",
+        "spark": [
+          0,
+          40,
+          100,
+          70
+        ],
         "state": "running",
         "task_id": 7
       }

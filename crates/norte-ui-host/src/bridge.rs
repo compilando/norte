@@ -633,7 +633,9 @@ use serde::{Deserialize, Serialize};
 /// - **116**: the assistant panel (ADR 0186): `SlotView::Assistant`
 ///   (`AssistantSlotView`, `AssistantTurnView`), the actions
 ///   `assistant_submit` and `assistant_apply`, and `GotoModeView::Ask`.
-pub const BRIDGE_VERSION: u32 = 116;
+/// - **117**: the throughput graphs (ADR 0187): `StatusProgressView.spark`
+///   and `TaskView.spark`.
+pub const BRIDGE_VERSION: u32 = 117;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

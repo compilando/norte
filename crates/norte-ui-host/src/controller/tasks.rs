@@ -71,6 +71,9 @@ pub(super) struct TaskViva {
     /// copies at once run at different speeds, and an average of the two
     /// describes neither.
     rate: norte_frontend::tasks::Rate,
+    /// Its rate over the last seconds, sampled on the strip's clock (ADR
+    /// 0187).
+    spark: norte_frontend::spark::Spark,
     /// How to ask it to stop. Cancelling twice is not an error.
     pub(super) cancel: std::sync::Arc<dyn Fn() + Send + Sync>,
     /// How to pause or resume it (ADR 0147); `None` if it cannot be.
@@ -484,6 +487,7 @@ impl State {
                 // for there to be a speed, and until then the row stays
                 // silent.
                 rate: norte_frontend::tasks::Rate::default(),
+                spark: norte_frontend::spark::Spark::default(),
                 cancel: task.cancel,
                 pause: task.pause,
                 cola: task.cola,
@@ -587,6 +591,9 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        // The strip's clock, the one the graph samples on (ADR 0187): a
+        // monotonic one, and one a test can advance.
+        let now = self.clock_strip();
         let Some(viva) = self.tasks.get_mut(&p.task_id.get()) else {
             return Vec::new();
         };
@@ -598,7 +605,7 @@ impl State {
         // not carry it, so whoever is watching estimates it — and the host
         // writes it, so the window and the terminal say the same speed with
         // the same units.
-        viva.rate.observe(p, super::now_ms());
+        viva.rate.observe(p, now);
         let (pace, remains) = (
             norte_frontend::tasks::human_rate(viva.rate.bps()),
             norte_frontend::tasks::human_eta(viva.rate.eta_secs(p)),
@@ -1951,6 +1958,20 @@ impl State {
     /// wake-up if the bar is going to change with no progress arriving.
     pub(super) fn annotate_strip(&mut self, mailbox: &mpsc::Sender<Message>) {
         let now = self.clock_strip();
+        // Each row's graph samples here, on the strip's clock, and not on
+        // progress: a stalled task publishes nothing (ADR 0187).
+        for t in self.tasks.values_mut() {
+            if Self::terminal(t.vista.state) || t.epoch != self.epoch_connection {
+                t.vista.spark.clear();
+                continue;
+            }
+            t.spark.record(now, t.rate.bps());
+            t.vista.spark = if t.spark.is_quiet() {
+                Vec::new()
+            } else {
+                t.spark.series()
+            };
+        }
         // Copies: progress lives behind a `watch`, and its guard cannot
         // cross the call. There are few of them (the board has a cap) and
         // they are small.
@@ -1998,11 +2019,24 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let before = self.vistas_de_tasks();
         self.strip_wake = None;
         self.annotate_strip(mailbox);
         let mut sends = self.processes_automaticos(backend, mailbox);
-        if sends.is_empty() && self.last_items.as_ref() != Some(&self.status_items_view()) {
-            sends.push(self.parche(Vec::new()));
+        // The rows' graphs moved with this second (ADR 0187).
+        let tasks = self.vistas_de_tasks();
+        let changes = if tasks == before {
+            Vec::new()
+        } else {
+            vec![ViewChange::Tasks {
+                tasks,
+                cursor: self.board_cursor(),
+            }]
+        };
+        if !changes.is_empty()
+            || (sends.is_empty() && self.last_items.as_ref() != Some(&self.status_items_view()))
+        {
+            sends.push(self.parche(changes));
         }
         sends
     }

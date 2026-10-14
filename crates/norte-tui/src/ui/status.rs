@@ -219,6 +219,11 @@ fn compose(app: &App, area: Rect) -> Composed {
             line.push_str(&" ".repeat(SEP));
             x += SEP;
         }
+        // The burst's graph (ADR 0187) goes in front; `cells()` counts it.
+        if !v.spark.is_empty() {
+            line.push_str(&norte_frontend::spark::braille(&v.spark));
+            line.push(' ');
+        }
         line.push_str(&v.text);
         // The light bar (ADR 0146) goes behind the text, separated by a
         // space; `cells()` already counts it in the layout.
