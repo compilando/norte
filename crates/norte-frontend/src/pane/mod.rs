@@ -19,6 +19,7 @@ mod quick;
 mod viewport;
 
 pub use marks::MarksSummary;
+pub(crate) use marks::NameMatcher;
 
 // `PaneState` is still ONE: what is split up are its methods, in sibling
 // `impl` blocks. A child module sees its parent's private items, so this
@@ -32,7 +33,7 @@ use norte_proto::{Entry, EntryKind, VPath};
 use std::collections::{HashMap, HashSet};
 
 /// Why a mark-by-pattern was rejected (hard rule 6: typed library errors).
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PatternError {
     /// The glob does not compile. Carries the `globset` diagnostic, which

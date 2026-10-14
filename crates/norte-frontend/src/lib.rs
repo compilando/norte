@@ -78,6 +78,7 @@ pub mod mouse;
 pub mod nav;
 pub mod notes;
 pub mod openers;
+pub mod orders;
 mod pane;
 pub mod plugin_config;
 pub mod processes;

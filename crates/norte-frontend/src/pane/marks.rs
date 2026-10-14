@@ -942,12 +942,75 @@ impl PaneState {
     /// [`PatternError::Glob`] if the pattern does not compile. Nothing is
     /// marked in that case.
     pub fn mark_glob(&mut self, pattern: &str, mark: bool) -> Result<usize, PatternError> {
+        let matcher = NameMatcher::new(pattern.as_bytes())?;
         self.snapshot_marks();
+        let enc = self.name_encoding;
+        let mut changed = 0usize;
+        for i in self.markable_indices() {
+            let Some(entry) = self.entries.get(i) else {
+                continue;
+            };
+            let name = entry.path.file_name().map_or(&b""[..], |n| n.as_bytes());
+            if !matcher.is_match(name, enc) {
+                continue;
+            }
+            let path = entry.path.clone();
+            let hit = if mark {
+                self.mark(path)
+            } else {
+                self.unmark_path(&path)
+            };
+            if hit {
+                changed += 1;
+            }
+        }
+        Ok(changed)
+    }
+
+    /// Replaces the marks with the markable rows `query` matches (an order's
+    /// `sel`); returns how many. Snapshots first, like [`Self::mark_glob`],
+    /// so `mark.restore` undoes it.
+    ///
+    /// # Errors
+    /// [`PatternError::Glob`] if a glob does not compile; the marks are
+    /// left as they were.
+    pub fn select_query(
+        &mut self,
+        query: &norte_orders::Query,
+        now_ms: i64,
+    ) -> Result<usize, PatternError> {
+        let compiled = crate::orders::CompiledQuery::new(query, self.name_encoding)?;
+        self.snapshot_marks();
+        self.totals_moved();
+        self.marks.clear();
+        let mut matched = 0usize;
+        for i in self.markable_indices() {
+            let Some(entry) = self.entries.get(i) else {
+                continue;
+            };
+            if crate::orders::matches(entry, &compiled, now_ms) {
+                let path = entry.path.clone();
+                if self.mark(path) {
+                    matched += 1;
+                }
+            }
+        }
+        Ok(matched)
+    }
+}
+
+/// A glob over FOLDED names: the one definition of "this name matches" that
+/// the mark-by-pattern modal and an order's `sel` share.
+pub(crate) struct NameMatcher(regex::Regex);
+
+impl NameMatcher {
+    /// Compiles a glob given as bytes (a name need not be UTF-8).
+    pub(crate) fn new(pattern: &[u8]) -> Result<Self, PatternError> {
         // The pattern is folded with the SAME pipeline as the name (#103):
         // the fold is Unicode, globset's `case_insensitive` is ASCII-only
         // (it emits `(?-u)`), so without folding the needle an NFD pattern
         // or a non-ASCII uppercase letter would match NOTHING, silently.
-        let folded = crate::nav::fold(pattern.as_bytes());
+        let folded = crate::nav::fold(pattern);
         // WITHOUT `case_insensitive`: the fold already lowercases BOTH
         // sides, and the Unicode regex's `(?i)` is a WIDER case-folding than
         // the fold (`s` would match `ſ` U+017F, `μ` would match `µ` U+00B5)
@@ -975,29 +1038,16 @@ impl PaneState {
             .dot_matches_new_line(true)
             .build()
             .map_err(|e| PatternError::Glob(e.to_string()))?;
-        let enc = self.name_encoding;
-        let mut changed = 0usize;
-        for i in self.markable_indices() {
-            let Some(entry) = self.entries.get(i) else {
-                continue;
-            };
-            let name = entry.path.file_name().map_or(&b""[..], |n| n.as_bytes());
-            if !matcher.is_match(crate::nav::fold_with(name, enc).as_str()) {
-                continue;
-            }
-            let path = entry.path.clone();
-            let hit = if mark {
-                self.mark(path)
-            } else {
-                self.unmark_path(&path)
-            };
-            if hit {
-                changed += 1;
-            }
-        }
-        Ok(changed)
+        Ok(Self(matcher))
     }
 
+    /// Whether a name (as bytes, decoded with the pane's `enc`) matches.
+    pub(crate) fn is_match(&self, name: &[u8], enc: Option<norte_encoding::NameEncoding>) -> bool {
+        self.0.is_match(crate::nav::fold_with(name, enc).as_str())
+    }
+}
+
+impl PaneState {
     /// Total size of every marked entry that is NOT a directory, saturating.
     /// A symlink contributes its own size, never its target's. Directories
     /// contribute 0: nothing here walks a tree, and a status bar that added
