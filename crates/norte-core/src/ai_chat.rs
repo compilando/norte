@@ -59,6 +59,10 @@ pub enum ReplyError {
     /// A tool nobody offered, or a path that does not resolve.
     #[error("unknown tool or bad path")]
     UnknownTool,
+    /// A `mkdir` outside the reader's panes: it runs with no dialog, so an
+    /// assistant may only create where the reader is looking.
+    #[error("an assistant may only create folders inside the panes")]
+    LeavesPanes,
 }
 
 /// The marker that opens every tool result the model reads.
@@ -226,7 +230,13 @@ fn resolve(here: &VPath, written: &str) -> Option<VPath> {
     else {
         return None;
     };
-    if leaves_provider(&bytes) {
+    resolve_bytes(here, &bytes)
+}
+
+/// Typed bytes on `here`'s provider: relative, or `/…` from its root; `..`
+/// walked lexically and clamped at the root. `scheme://` is `None`.
+fn resolve_bytes(here: &VPath, bytes: &[u8]) -> Option<VPath> {
+    if leaves_provider(bytes) {
         return None;
     }
     let mut at = if bytes.first() == Some(&b'/') {
@@ -262,6 +272,30 @@ fn leaves_provider(bytes: &[u8]) -> bool {
 /// [`ReplyError::LeavesProvider`].
 pub fn vet_order(text: &str) -> Result<(), ReplyError> {
     let order = norte_orders::parse(text).map_err(|e| ReplyError::Grammar(e.offset))?;
+    vet_stages(&order)
+}
+
+/// [`vet_order`], plus: a `mkdir` must resolve under one of `roots` (the
+/// panes) — it is the one action that runs with no dialog.
+///
+/// # Errors
+/// [`vet_order`]'s, and [`ReplyError::LeavesPanes`].
+pub fn vet_order_in(text: &str, here: &VPath, roots: &[&VPath]) -> Result<(), ReplyError> {
+    let order = norte_orders::parse(text).map_err(|e| ReplyError::Grammar(e.offset))?;
+    vet_stages(&order)?;
+    for stage in &order.stages {
+        if let Stage::Mkdir(p) = stage {
+            let inside = resolve_bytes(here, p)
+                .is_some_and(|at| roots.iter().any(|r| crate::policy::is_under(r, &at)));
+            if !inside {
+                return Err(ReplyError::LeavesPanes);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn vet_stages(order: &norte_orders::Order) -> Result<(), ReplyError> {
     for stage in &order.stages {
         match stage {
             Stage::Catalogue(_) => return Err(ReplyError::CatalogueStage),
@@ -342,7 +376,7 @@ impl crate::Engine {
             };
             match reply {
                 Reply::Answer { text } => return Ok(AiChatTurn::Answer { text }),
-                Reply::Order { text, note } => match vet_order(&text) {
+                Reply::Order { text, note } => match vet_order_in(&text, &p.here, &roots) {
                     Ok(()) => return Ok(AiChatTurn::Order { text, note }),
                     Err(e) if !vetted_out => {
                         vetted_out = true;
@@ -388,27 +422,27 @@ impl crate::Engine {
             ToolCall::List(dir) if allowed(dir) => self.tool_list(dir, config).await,
             ToolCall::Stat(path) if allowed(path) => match self.stat(path).await {
                 Ok(e) => serde_json::json!(entry_json(&e)).to_string(),
-                Err(e) => format!("error: {e}"),
+                Err(e) => tool_error(&e),
             },
             ToolCall::Sizes(dir) if allowed(dir) => self.tool_sizes(dir, cancel).await,
             ToolCall::Log(n) => match self.journal_page(None, *n, Some("user")).await {
                 Ok(rows) => {
                     let page = crate::journal::page_to_wire(&rows, *n);
-                    let out: Vec<serde_json::Value> = page
-                        .rows
-                        .iter()
-                        .map(|r| {
-                            serde_json::json!({
-                                "seq": r.seq,
-                                "op": r.op,
-                                "path": norte_orders::escape_name(r.path.as_bytes()),
-                                "ts_ms": r.ts_ms,
+                    let out: Vec<serde_json::Value> =
+                        confine_log(&page.rows, roots, &config.denied_prefixes)
+                            .into_iter()
+                            .map(|r| {
+                                serde_json::json!({
+                                    "seq": r.seq,
+                                    "op": r.op,
+                                    "path": norte_orders::escape_name(r.path.as_bytes()),
+                                    "ts_ms": r.ts_ms,
+                                })
                             })
-                        })
-                        .collect();
+                            .collect();
                     serde_json::Value::Array(out).to_string()
                 }
-                Err(e) => format!("error: {e}"),
+                Err(e) => tool_error(&e),
             },
             _ => refused(),
         }
@@ -418,7 +452,7 @@ impl crate::Engine {
         use futures::StreamExt as _;
         let mut stream = match self.list(dir).await {
             Ok(s) => s,
-            Err(e) => return format!("error: {e}"),
+            Err(e) => return tool_error(&e),
         };
         let mut rows = Vec::new();
         let mut more = 0usize;
@@ -450,16 +484,18 @@ impl crate::Engine {
         };
         let handle = match self.dir_size_as(params, crate::journal::Actor::User).await {
             Ok(h) => h,
-            Err(e) => return format!("error: {e}"),
+            Err(e) => return tool_error(&e),
         };
         let progress = handle.progress();
-        let canceller = handle.cancel_token();
+        // Cancels the walk on every way out but completion — including this
+        // future being dropped with the turn.
+        let guard = CancelOnDrop(handle.cancel_token());
         let finished = tokio::select! {
             () = cancel.cancelled() => None,
             r = tokio::time::timeout(SIZES_BUDGET, handle.join()) => r.ok(),
         };
-        if finished.is_none() {
-            canceller.cancel();
+        if finished.is_some() {
+            std::mem::forget(guard);
         }
         let p = progress.borrow().clone();
         serde_json::json!({
@@ -468,6 +504,46 @@ impl crate::Engine {
             "complete": finished.is_some(),
         })
         .to_string()
+    }
+}
+
+/// A tool's failure as the model reads it: the error's CATEGORY only. Some
+/// error texts interpolate a host or a name, and a tool result is a
+/// user-role message — raw text there could pose as the reader.
+fn tool_error(e: &norte_proto::Error) -> String {
+    let kind = serde_json::to_value(e)
+        .ok()
+        .and_then(|v| v.get("kind").and_then(|k| k.as_str().map(str::to_owned)))
+        .unwrap_or_else(|| "unknown".to_owned());
+    format!("error: {kind}")
+}
+
+/// The journal rows the model may see: under one of the panes, and not under
+/// a denied prefix. The journal holds everything the reader ever did,
+/// anywhere; the assistant reads only where they are looking.
+fn confine_log<'a>(
+    rows: &'a [norte_proto::methods::JournalRow],
+    roots: &[&VPath],
+    denied: &[VPath],
+) -> Vec<&'a norte_proto::methods::JournalRow> {
+    rows.iter()
+        .filter(|r| {
+            VPath::parse(&r.path).is_ok_and(|p| {
+                roots.iter().any(|root| crate::policy::is_under(root, &p))
+                    && !denied.iter().any(|d| crate::policy::is_under(d, &p))
+            })
+        })
+        .collect()
+}
+
+/// Cancels the walk it guards when dropped: a turn abandoned mid-`sizes`
+/// (`rpc.cancel`, the peer gone, a timeout) must not leave a full-tree walk
+/// holding a scheduler slot.
+struct CancelOnDrop(tokio_util::sync::CancellationToken);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
     }
 }
 
@@ -602,6 +678,65 @@ mod tests {
     fn an_ai_order_may_go_to_another_folder_of_the_same_provider() {
         assert_eq!(vet_order("sel * | cp >/tmp/x"), Ok(()));
         assert_eq!(vet_order("sel ext:pdf | cp >other"), Ok(()));
+    }
+
+    /// `mkdir` runs with no dialog, so an assistant's may only create inside
+    /// the reader's panes; a copy elsewhere still shows its destination.
+    #[test]
+    fn an_ai_mkdir_stays_inside_the_panes() {
+        let other = VPath::parse("file:///srv/o").expect("vpath");
+        let roots = [&here(), &other];
+        assert_eq!(vet_order_in("mkdir new", &here(), &roots), Ok(()));
+        assert_eq!(vet_order_in("mkdir /srv/o/x", &here(), &roots), Ok(()));
+        assert_eq!(
+            vet_order_in("mkdir /etc/x", &here(), &roots),
+            Err(ReplyError::LeavesPanes)
+        );
+        assert_eq!(
+            vet_order_in("mkdir ../../etc", &here(), &roots),
+            Err(ReplyError::LeavesPanes)
+        );
+        assert_eq!(vet_order_in("sel * | cp >/tmp/x", &here(), &roots), Ok(()));
+    }
+
+    /// A tool's error reaches the model as its category, never as text a
+    /// remote server or a name could have put words in.
+    #[test]
+    fn a_tool_error_is_only_its_category() {
+        let e = norte_proto::Error::Internal { panic: false };
+        assert_eq!(tool_error(&e), "error: internal");
+        let nf = norte_proto::Error::NotFound;
+        assert_eq!(tool_error(&nf), "error: not_found");
+    }
+
+    /// `log` keeps only rows under the panes and outside the denied prefixes:
+    /// the journal holds everything the reader ever did, anywhere.
+    #[test]
+    fn the_log_keeps_only_rows_under_the_panes() {
+        let row = |path: &str| norte_proto::methods::JournalRow {
+            undoes_seq: None,
+            undone: false,
+            hostile: false,
+            seq: 1,
+            ts_ms: 0,
+            actor_kind: "user".into(),
+            actor_id: None,
+            op: "moved".into(),
+            path: path.into(),
+            path_to: None,
+            reversible: true,
+            batch_id: None,
+        };
+        let rows = [
+            row("file:///home/ana/a.txt"),
+            row("file:///home/ana/secret/b.txt"),
+            row("file:///home/u/Medical/c.pdf"),
+            row("not a vpath"),
+        ];
+        let denied = [VPath::parse("file:///home/ana/secret").expect("vpath")];
+        let kept = confine_log(&rows, &[&here()], &denied);
+        let paths: Vec<&str> = kept.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(paths, ["file:///home/ana/a.txt"]);
     }
 
     #[test]

@@ -19,6 +19,12 @@
       "text": "lo que más ocupa es video/ (3,2 GiB)"
     }
   },
+  "ai_chat_result_later_kind": {
+    "turn": {
+      "kind": "question",
+      "text": "¿cuál de las dos carpetas?"
+    }
+  },
   "ai_chat_result_order": {
     "turn": {
       "kind": "order",

@@ -1459,9 +1459,9 @@ use crate::{
 ///
 /// A **0.86 client against a 0.87 daemon** never calls it and loses nothing
 /// it had. A **0.87 client against a 0.86 daemon** does not negotiate
-/// ([`version_compatible`]); a frontend talking to an older daemon through
-/// another path gets `METHOD_NOT_FOUND` and says "this daemon has no
-/// assistant".
+/// ([`version_compatible`]). A turn of a kind added later reads as
+/// [`AiChatTurn::Unknown`], so a 0.87 client inside a later window says it
+/// needs a newer norte instead of failing the result.
 pub const PROTOCOL_VERSION: &str = "0.87.0";
 
 /// `initialize` — MANDATORY handshake before any other method
@@ -3561,10 +3561,8 @@ pub struct AiRenamePlanResult {
     pub refused: Option<String>,
 }
 
-/// Params of [`AI_ORGANIZE_PLAN`] (0.77.0, phase 8 of the WOW program).
-///
 /// The most messages an [`AI_CHAT`] request carries: the conversation is the
-/// client's, and an unbounded one is an unbounded frame and prompt.
+/// client's, and every message goes into the prompt.
 pub const AI_CHAT_MAX_MESSAGES: usize = 40;
 
 /// The most bytes of one [`AiChatMessage::text`].
@@ -3614,7 +3612,8 @@ pub struct AiChatMessage {
     pub text: String,
 }
 
-/// Who said an [`AiChatMessage`].
+/// Who said an [`AiChatMessage`]. Strict on purpose: it flows client →
+/// daemon, and a daemon never accepts a client ahead of it.
 ///
 /// ```
 /// use norte_proto::methods::AiChatRole;
@@ -3658,6 +3657,11 @@ pub enum AiChatTurn {
         /// What to show.
         text: String,
     },
+    /// A kind this client does not know yet: a newer daemon inside the
+    /// window may add one. Never emitted; a client says it needs a newer
+    /// norte instead of failing the whole result.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Result of [`AI_CHAT`].
@@ -3674,6 +3678,8 @@ pub struct AiChatResult {
     pub turn: AiChatTurn,
 }
 
+/// Params of [`AI_ORGANIZE_PLAN`] (0.77.0, phase 8 of the WOW program).
+///
 /// The same three fields as [`AiRenamePlanParams`] and for the same reason:
 /// organizing is renaming with permission to move into a subdirectory, so
 /// what is asked of the provider — a directory, an instruction and the

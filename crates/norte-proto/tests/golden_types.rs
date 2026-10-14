@@ -1259,11 +1259,11 @@ fn golden_methods() {
     // 231 → 232 in 0.80.0: `journal.undo_after` with a ceiling. The one
     // without a ceiling stays: it is the one that demonstrates 0.79's wire
     // did not change.
-    // 232 → 235 in 0.87.0: `ai.chat` — the params with both roles, and the
-    // result once per turn kind.
+    // 232 → 236 in 0.87.0: `ai.chat` — the params with both roles, the
+    // result once per turn kind, and one of a kind a later daemon may add.
     assert_eq!(
         fixtures.len(),
-        235,
+        236,
         "[methods.json] fixtures with no Rust case"
     );
 }
@@ -1344,6 +1344,10 @@ fn check_methods_ai_chat(fixtures: &BTreeMap<String, Value>) {
             },
         },
     );
+    // A kind from a newer daemon reads as `Unknown`, not as a failed result.
+    let later: AiChatResult =
+        serde_json::from_value(fixtures["ai_chat_result_later_kind"].clone()).expect("reads");
+    assert_eq!(later.turn, AiChatTurn::Unknown);
     check_one(
         fixtures,
         "ai_chat_result_answer",

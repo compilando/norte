@@ -64,7 +64,7 @@
       "type": "object"
     },
     "AiChatRole": {
-      "description": "Who said an [`AiChatMessage`].\n\n```\nuse norte_proto::methods::AiChatRole;\nassert_eq!(serde_json::to_string(&AiChatRole::User).unwrap(), \"\\\"user\\\"\");\n```",
+      "description": "Who said an [`AiChatMessage`]. Strict on purpose: it flows client →\ndaemon, and a daemon never accepts a client ahead of it.\n\n```\nuse norte_proto::methods::AiChatRole;\nassert_eq!(serde_json::to_string(&AiChatRole::User).unwrap(), \"\\\"user\\\"\");\n```",
       "oneOf": [
         {
           "const": "user",
@@ -121,11 +121,24 @@
             "text"
           ],
           "type": "object"
+        },
+        {
+          "description": "A kind this client does not know yet: a newer daemon inside the\nwindow may add one. Never emitted; a client says it needs a newer\nnorte instead of failing the whole result.",
+          "properties": {
+            "kind": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
         }
       ]
     },
     "AiOrganizePlanParams": {
-      "description": "The same three fields as [`AiRenamePlanParams`] and for the same reason:\norganizing is renaming with permission to move into a subdirectory, so\nwhat is asked of the provider — a directory, an instruction and the\nnames to act on — does not change.",
+      "description": "Params of [`AI_ORGANIZE_PLAN`] (0.77.0, phase 8 of the WOW program).\n\nThe same three fields as [`AiRenamePlanParams`] and for the same reason:\norganizing is renaming with permission to move into a subdirectory, so\nwhat is asked of the provider — a directory, an instruction and the\nnames to act on — does not change.",
       "properties": {
         "dir": {
           "$ref": "#/$defs/VPath",

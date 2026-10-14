@@ -159,6 +159,10 @@ impl Assistant {
                 None => return,
             },
             Ok(AiChatTurn::Answer { text }) => Turn::Answer(text),
+            Ok(AiChatTurn::Unknown) => Turn::Failed(norte_i18n::t_in(
+                norte_i18n::active(),
+                "assistant-newer-kind",
+            )),
             Err(why) => Turn::Failed(why),
         };
         self.turns.push(turn);
@@ -270,6 +274,18 @@ mod tests {
         let p = a.submit(&here(), None).expect("request");
         assert!(p.messages.iter().all(|m| m.text != "AI is off"));
         assert_eq!(p.messages.len(), 2);
+    }
+
+    #[test]
+    fn a_turn_of_a_later_kind_says_it_needs_a_newer_norte() {
+        let mut a = Assistant::default();
+        typed(&mut a, "one");
+        let _ = a.submit(&here(), None);
+        a.land(Ok(AiChatTurn::Unknown));
+        assert!(!a.pending());
+        assert!(
+            matches!(a.turns().last(), Some(Turn::Failed(why)) if !why.starts_with("assistant-"))
+        );
     }
 
     #[test]

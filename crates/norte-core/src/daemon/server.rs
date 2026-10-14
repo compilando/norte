@@ -154,6 +154,10 @@ const LOG_TAIL_MAX_LINES: usize = 1000;
 /// Cap on the `ai.rename_plan` prompt (security review M4-IA): INPUT tokens
 /// are the provider's cost; the 16 MiB frame is not a limit.
 const MAX_AI_INSTRUCTION_BYTES: usize = 4 * 1024;
+
+/// The longest an `ai.chat` turn may hold its dispatch: the same cap the SDK
+/// and the embedded backend apply, enforced where a raw caller cannot skip it.
+const AI_CHAT_TURN_MAX: std::time::Duration = std::time::Duration::from_mins(5);
 /// Cap on the `index.search_semantic` query (same belt as the
 /// `ai.rename_plan` instruction).
 const MAX_AI_QUERY_BYTES: usize = MAX_AI_INSTRUCTION_BYTES;
@@ -6346,10 +6350,13 @@ async fn dispatch_fs_task(
             // Dropping this dispatch (`rpc.cancel`, the peer gone) drops the
             // loop with it; the token is for the engine's own checks.
             let cancel = tokio_util::sync::CancellationToken::new();
-            let turn = shared
-                .engine
-                .ai_chat(&p, &cancel)
+            // Bounded HERE too: a raw JSON-RPC caller sets no timeout, and a
+            // provider that stalls without closing would hold the dispatch.
+            let turn = tokio::time::timeout(AI_CHAT_TURN_MAX, shared.engine.ai_chat(&p, &cancel))
                 .await
+                .map_err(|_| {
+                    RpcError::from(norte_proto::Error::ProviderUnavailable { retryable: true })
+                })?
                 .map_err(RpcError::from)?;
             to_value(&methods::AiChatResult { turn })
         }
