@@ -232,8 +232,9 @@ pub struct InFlight {
     /// The query to the index from the "go to" screen (phase 6): at most
     /// one, and typing another letter ABORTS the previous one.
     pub goto_index: Option<GotoIndexRun>,
-    /// The assistant's turn in flight (ADR 0186): at most one; closing the
-    /// panel aborts it.
+    /// The assistant's turn in flight (ADR 0186): at most one. Closing the
+    /// panel does not abort it: it lands in the conversation, which
+    /// outlives the panel.
     pub assistant: Option<
         tokio::task::JoinHandle<Result<norte_proto::methods::AiChatTurn, norte_proto::Error>>,
     >,

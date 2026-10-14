@@ -130,6 +130,70 @@ async fn at_in_the_box_opens_the_panel_and_asks() {
     assert!(app.assistant_slot().is_none(), "the same key closes it");
 }
 
+fn painted(app: &App, w: u16, h: u16) -> String {
+    let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).expect("term");
+    term.draw(|f| norte_tui::ui::draw(f, app)).expect("draw");
+    term.backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect()
+}
+
+/// Review Focus 5: an order written for one folder, applied after the
+/// focus moved, says so — and runs against the CURRENT pane.
+#[tokio::test]
+async fn an_order_written_elsewhere_says_so_and_runs_here() {
+    let _ = norte_i18n::force(norte_i18n::Lang::En);
+    let (mut app, backend) = rig(&[ORDER], true);
+    let mut work = InFlight::default();
+    ask(&mut app, &backend, &mut work, "copy the pdfs over").await;
+    app.set_focus(1);
+    app.open_assistant();
+    let screen = painted(&app, 160, 40);
+    assert!(
+        screen.contains("written for"),
+        "the panel says where it was written"
+    );
+    let mut stream = futures::stream::pending();
+    let mut events = norte_tui::console::Console::detached(&mut stream);
+    norte_tui::assistant::apply(&mut app, &backend, &mut events, &mut work).await;
+    assert!(
+        app.modal.is_none(),
+        "the other pane has no pdf: nothing to copy"
+    );
+    assert_eq!(
+        app.message.as_deref(),
+        Some(norte_i18n::t("msg-order-nothing-matched").as_str())
+    );
+}
+
+/// The selected turn is always in view: Enter never applies an order the
+/// reader cannot see.
+#[tokio::test]
+async fn the_selected_order_is_scrolled_into_view() {
+    let answers: Vec<String> = (0..12)
+        .map(|i| format!("{{\"kind\":\"answer\",\"text\":\"answer number {i}\"}}"))
+        .collect();
+    let mut script = vec![ORDER];
+    script.extend(answers.iter().map(String::as_str));
+    let (mut app, backend) = rig(&script, true);
+    let mut work = InFlight::default();
+    for i in 0..13 {
+        ask(&mut app, &backend, &mut work, &format!("q{i}")).await;
+    }
+    app.open_assistant();
+    while app.assistant.selected_order().is_none() {
+        app.assistant.up();
+    }
+    let screen = painted(&app, 120, 16);
+    assert!(
+        screen.contains("sel ext:pdf"),
+        "the order under the cursor is painted"
+    );
+}
+
 /// Text the model wrote is masked before it is painted.
 #[tokio::test]
 async fn model_text_is_masked_when_painted() {

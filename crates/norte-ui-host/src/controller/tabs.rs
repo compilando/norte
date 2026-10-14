@@ -379,6 +379,10 @@ impl State {
             }
             return self.close_slot_of_kind(kind, backend, mailbox);
         }
+        // The assistant opens to be typed into, with the keyboard.
+        if kind == super::assistant::KIND {
+            return self.show_assistant(backend, mailbox);
+        }
         let (ack, mut outgoing) = self.open_slot_of_kind(kind, backend, mailbox);
         // The search panel opens to be typed into, as in the terminal: it
         // takes the keyboard, and the renderer focuses its input.

@@ -840,6 +840,7 @@ goto-title-ask = Ask the assistant
 goto-prefix-ask = Ask the assistant in plain words
 goto-hint-ask = copy this month's PDFs to the other pane · what takes the most space here?
 assistant-title = Assistant
+assistant-busy = the assistant is still answering — ask again when it is done
 assistant-apply = Apply…
 assistant-placeholder = Ask in plain words, then Enter
 assistant-thinking = thinking…

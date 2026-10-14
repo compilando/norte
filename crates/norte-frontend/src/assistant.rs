@@ -113,11 +113,21 @@ impl Assistant {
     /// that fit [`AI_CHAT_MAX_MESSAGES`]; an order goes back as its line,
     /// a failure not at all.
     pub fn submit(&mut self, here: &VPath, other: Option<&VPath>) -> Option<AiChatParams> {
-        let text = self.input.trim().to_owned();
+        if self.pending.is_some() || self.input.trim().is_empty() {
+            return None;
+        }
+        let text = std::mem::take(&mut self.input);
+        self.ask(&text, here, other)
+    }
+
+    /// A message that does not come from the input (`@` in the box, the
+    /// window's own field): the request, or `None` while a turn is in flight
+    /// or there is nothing to say. The input is left as it is.
+    pub fn ask(&mut self, text: &str, here: &VPath, other: Option<&VPath>) -> Option<AiChatParams> {
+        let text = capped(text.trim(), AI_CHAT_MAX_TEXT_BYTES);
         if self.pending.is_some() || text.is_empty() {
             return None;
         }
-        self.input.clear();
         self.turns.push(Turn::Reader(text));
         self.cursor = self.turns.len() - 1;
         self.pending = Some(here.clone());
@@ -280,6 +290,22 @@ mod tests {
             panic!()
         };
         assert_eq!(written_for, &here());
+    }
+
+    /// A message from outside the input (`@` in the box, the window's own
+    /// field) never touches what is typed, and while a turn is in flight it
+    /// is refused — not parked to be glued onto the next message.
+    #[test]
+    fn ask_never_parks_text_while_a_turn_is_in_flight() {
+        let mut a = Assistant::default();
+        typed(&mut a, "half typed");
+        assert!(a.ask("a", &here(), None).is_some());
+        assert_eq!(a.input(), "half typed", "the input is not touched");
+        assert!(a.ask("b", &here(), None).is_none(), "refused while pending");
+        a.land(Ok(AiChatTurn::Answer { text: "ok".into() }));
+        let p = a.ask("c", &here(), None).expect("request");
+        assert_eq!(p.messages.last().map(|m| m.text.as_str()), Some("c"));
+        assert!(p.messages.iter().all(|m| m.text != "b" && m.text != "bc"));
     }
 
     #[test]

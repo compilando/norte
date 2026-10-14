@@ -79,6 +79,13 @@ pub fn route_paste(app: &mut App, text: &str) {
         // control characters itself.
         app.command_bar.insert(first_line);
         PasteOutcome::Inserted
+    } else if app.key_owner() == crate::app::KeyOwner::Assistant
+        && app.goto.is_none()
+        && !modal_wins(app)
+    {
+        // The assistant's input: prose is what gets pasted there.
+        app.assistant.push_str(first_line);
+        PasteOutcome::Inserted
     } else if (app.theme_picker.is_some()
         || app.layout_picker.is_some()
         || app.connections_picker.is_some()

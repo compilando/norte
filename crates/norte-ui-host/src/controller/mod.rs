@@ -1499,7 +1499,14 @@ async fn actor(
     while let Some(msg) = rx.recv().await {
         match msg {
             Message::Action(action, answers) => {
-                let (ack, outputs) = state.apply(&action, &backend, &mailbox);
+                let active_before = state.slot().pane.dir().clone();
+                let (ack, mut outputs) = state.apply(&action, &backend, &mailbox);
+                // The assistant's "written for" line compares each order with
+                // the ACTIVE pane's folder: when that changed, whatever moved
+                // it (a Tab, a click, a cd), the panel is projected again.
+                if *state.slot().pane.dir() != active_before {
+                    outputs.extend(state.repaint_assistant());
+                }
                 for u in outputs {
                     // With no subscribers it is not an error: the host is
                     // still alive even if the renderer has gone off to do

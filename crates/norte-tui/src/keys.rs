@@ -641,8 +641,7 @@ pub async fn on_key(
                     Some(crate::goto::Action::Ask(text)) => {
                         crate::orders::cancel(app);
                         app.open_assistant();
-                        app.assistant.push_str(&text);
-                        crate::assistant::submit(app, backend, work);
+                        crate::assistant::ask(app, backend, work, &text);
                         return;
                     }
                     other => {

@@ -30,6 +30,24 @@ pub fn submit(app: &mut App, backend: &Backend, work: &mut InFlight) {
     let Some(params) = app.assistant.submit(&here, other.as_ref()) else {
         return;
     };
+    send(backend, work, params);
+}
+
+/// Sends `text` as the reader's message without touching the input (`@` in
+/// the box); while a turn is in flight it is refused and said.
+pub fn ask(app: &mut App, backend: &Backend, work: &mut InFlight, text: &str) {
+    let here = app.focused().dir().clone();
+    let other = app.target_index().map(|i| app.panes[i].dir().clone());
+    match app.assistant.ask(text, &here, other.as_ref()) {
+        Some(params) => send(backend, work, params),
+        None if app.assistant.pending() => {
+            app.message = Some(norte_i18n::t("assistant-busy"));
+        }
+        None => {}
+    }
+}
+
+fn send(backend: &Backend, work: &mut InFlight, params: norte_proto::methods::AiChatParams) {
     let b = backend.clone();
     let handle = tokio::spawn(async move { b.ai_chat(&params).await });
     if let Some(old) = work.assistant.replace(handle) {
@@ -48,7 +66,8 @@ pub fn harvest(
     let turn = match res {
         Ok(Ok(turn)) => Ok(turn),
         Ok(Err(e)) => Err(norte_frontend::assistant::failure_text(&e, lang)),
-        Err(_) => return,
+        // The task died: said, or the panel would wait forever.
+        Err(_) => Err(norte_i18n::t_in(lang, "err-internal")),
     };
     app.assistant.land(turn);
     app.needs_frame = true;
@@ -77,7 +96,8 @@ pub async fn on_key(
         KeyCode::Down if plain => app.assistant.down(),
         KeyCode::Esc if plain => app.return_keys_to_panes(),
         KeyCode::Enter if plain => {
-            if app.assistant.input().trim().is_empty() {
+            // Strictly empty: a line of spaces is not "apply".
+            if app.assistant.input().is_empty() {
                 apply(app, backend, events, work).await;
             } else {
                 submit(app, backend, work);

@@ -8,6 +8,22 @@ import type { AssistantSlotView } from "../types";
 import type { SlotDom } from "./dom";
 
 const inputs = new WeakMap<SlotDom, HTMLInputElement>();
+const wasActive = new WeakMap<SlotDom, boolean>();
+
+/** The input takes the caret when the panel becomes active, and lets go of
+ *  it when it stops being — the search panel's rule. */
+function followTheKeyboard(dom: SlotDom, input: HTMLInputElement): void {
+  const active = dom.root.dataset["role"] === "active";
+  if (active === wasActive.get(dom)) {
+    return;
+  }
+  wasActive.set(dom, active);
+  if (active && document.activeElement !== input) {
+    input.focus();
+  } else if (!active && document.activeElement === input) {
+    input.blur();
+  }
+}
 
 export function paintAssistant(
   this: Screen,
@@ -71,11 +87,16 @@ export function paintAssistant(
     field.type = "text";
     field.className = "assistant-input";
     field.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter" || field.value.trim() === "") {
+      // Enter, the arrows and Tab belong to the field: let through, an
+      // empty Enter would open the entry under the LISTING's cursor.
+      if (!["Enter", "ArrowUp", "ArrowDown", "Tab"].includes(e.key)) {
         return;
       }
       e.preventDefault();
       e.stopPropagation();
+      if (e.key !== "Enter" || field.value.trim() === "" || field.disabled) {
+        return;
+      }
       this.send({ action: "assistant_submit", slot_id: slot.slot_id, text: field.value });
       field.value = "";
     });
@@ -84,6 +105,14 @@ export function paintAssistant(
   }
   input.disabled = slot.pending;
   input.placeholder = this.t("assistant-placeholder");
-  dom.scroller.replaceChildren(list, input);
+  // Only the list is replaced: taking the field out of the DOM, even to put
+  // it back, drops its focus and the caret in the middle of a word.
+  const old = dom.scroller.querySelector(":scope > .assistant-turns");
+  if (input.parentElement === dom.scroller && old !== null) {
+    old.replaceWith(list);
+  } else {
+    dom.scroller.replaceChildren(list, input);
+  }
   list.lastElementChild?.scrollIntoView({ block: "end" });
+  followTheKeyboard(dom, input);
 }

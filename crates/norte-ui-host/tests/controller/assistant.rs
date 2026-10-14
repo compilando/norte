@@ -87,6 +87,62 @@ async fn apply_opens_the_usual_confirmation() {
     assert!(!snap.dialogs.is_empty(), "the trash asks first");
 }
 
+/// Review Focus 5 in the window: after the active pane changes — a click, no
+/// `cd` — the order says it was written for another folder.
+#[tokio::test]
+async fn an_order_written_elsewhere_says_so_after_the_focus_moves() {
+    let turn = AiChatTurn::Order {
+        text: "sel *.txt | cp >other".into(),
+        note: String::new(),
+    };
+    let mut f = Fake {
+        ai_turn: Some(turn),
+        ..Fake::default()
+    };
+    f.put(
+        "mem:///casa",
+        vec![(b"docs".to_vec(), true), (b"notas.txt".to_vec(), false)],
+    );
+    f.put("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    let (h, _snap) = super::transfers::two_panes_with_separate_destination(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+    let snap = ask(&h, &mut sub, "copia las notas").await;
+    assert_eq!(assistant_of(&snap).expect("open").turns[1].written_for, "");
+    h.dispatch(UiAction::FocusSlot { slot_id: 2 })
+        .await
+        .expect("host alive");
+    let snap = wait_snapshot(&h, &mut sub, "the panel is projected again", |s| {
+        assistant_of(s).is_some_and(|a| !a.turns[1].written_for.is_empty())
+    })
+    .await;
+    assert!(
+        !assistant_of(&snap).expect("open").turns[1]
+            .written_for
+            .is_empty()
+    );
+}
+
+/// Opening the panel gives it the keyboard (the active role), as in the
+/// terminal.
+#[tokio::test]
+async fn opening_the_panel_gives_it_the_keyboard() {
+    let (h, _snap) = host_tree(with_turn(None)).await;
+    let mut sub = h.subscribe();
+    let snap = ask(&h, &mut sub, "hola").await;
+    let id = assistant_of(&snap).expect("open").slot_id;
+    let role = snap
+        .layout
+        .placements
+        .iter()
+        .find(|p| p.slot_id == id)
+        .and_then(|p| p.role);
+    assert_eq!(
+        role,
+        Some(norte_ui_host::dto::SlotRole::Active),
+        "the assistant is the active slot"
+    );
+}
+
 /// With no assistant the panel says how to turn it on.
 #[tokio::test]
 async fn no_assistant_shows_how_to_turn_it_on() {

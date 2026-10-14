@@ -49,8 +49,14 @@ pub(crate) fn draw_assistant(frame: &mut Frame<'_>, area: Rect, app: &App, with_
     let here = app.focused().dir();
     let a = &app.assistant;
     let mut lines: Vec<Line<'static>> = Vec::new();
+    // Where the selected turn starts: the view must show it, hint included,
+    // or Enter would apply an order the reader cannot see.
+    let mut selected_from = None;
     for (i, turn) in a.turns().iter().enumerate() {
         let selected = with_keyboard && i == a.cursor();
+        if selected {
+            selected_from = Some(lines.len());
+        }
         let mut push = |prefix: &str, text: &str, role: Role| {
             for (k, l) in wrapped(text, width).into_iter().enumerate() {
                 let p = if k == 0 { prefix } else { "  " };
@@ -98,7 +104,11 @@ pub(crate) fn draw_assistant(frame: &mut Frame<'_>, area: Rect, app: &App, with_
         }
     }
     let room = usize::from(inner.height).saturating_sub(1);
-    let skip = lines.len().saturating_sub(room);
+    // Anchored at the bottom, unless that hides the selected turn's start.
+    let skip = lines
+        .len()
+        .saturating_sub(room)
+        .min(selected_from.unwrap_or(usize::MAX));
     let body = Rect {
         height: inner.height.saturating_sub(1),
         ..inner

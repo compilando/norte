@@ -75,9 +75,10 @@ impl State {
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let here = self.slot().pane.dir().clone();
         let other = self.directory_dest().ok();
-        self.assistant.push_str(text);
-        let Some(params) = self.assistant.submit(&here, other.as_ref()) else {
-            return Vec::new();
+        // `ask`, not the input buffer: the window's field is the renderer's,
+        // so parked text would be invisible and glued onto the next message.
+        let Some(params) = self.assistant.ask(text, &here, other.as_ref()) else {
+            return self.say("assistant-busy");
         };
         let backend = Arc::clone(backend);
         let mailbox = mailbox.clone();
@@ -149,15 +150,38 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let mut out = Vec::new();
-        let ack = if self.slot_of_kind(KIND).is_none() {
-            let (ack, mut opened) = self.open_slot_of_kind(KIND, backend, mailbox);
-            out.append(&mut opened);
-            ack
-        } else {
-            self.applied()
-        };
+        let (ack, mut out) = self.show_assistant(backend, mailbox);
         out.append(&mut self.assistant_submit(text, backend, mailbox));
+        (ack, out)
+    }
+
+    /// Opens the panel if it is not there, brings it to the front if it is
+    /// behind another tab, and gives it the keyboard — what the terminal's
+    /// `open_assistant` does.
+    pub(super) fn show_assistant(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let (ack, mut out) = match self.slot_of_kind(KIND) {
+            None => self.open_slot_of_kind(KIND, backend, mailbox),
+            Some(id)
+                if self
+                    .tree
+                    .tabs_of(id)
+                    .is_some_and(|(t, a)| t.get(a) != Some(&id)) =>
+            {
+                self.choose_tab(id.0, backend, mailbox)
+            }
+            Some(_) => (self.applied(), Vec::new()),
+        };
+        if let Some(id) = self.slot_of_kind(KIND) {
+            self.roles.set(RoleId::Active, id);
+            self.reconciles_roles();
+            out.push(self.parche(vec![ViewChange::Layout(self.layout())]));
+            // Painted after the layout, so the renderer focuses its input.
+            out.extend(self.repaint_assistant());
+        }
         (ack, out)
     }
 }

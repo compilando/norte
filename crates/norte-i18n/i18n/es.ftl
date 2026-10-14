@@ -845,6 +845,7 @@ goto-title-ask = Preguntar al asistente
 goto-prefix-ask = Pregunta al asistente en palabras
 goto-hint-ask = copia los PDF de este mes al otro panel · ¿qué ocupa más aquí?
 assistant-title = Asistente
+assistant-busy = el asistente aún está respondiendo — vuelve a preguntar cuando termine
 assistant-apply = Aplicar…
 assistant-placeholder = Pide en palabras y pulsa Intro
 assistant-thinking = pensando…
