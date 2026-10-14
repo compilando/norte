@@ -13,7 +13,7 @@ mod print;
 
 pub use ast::{Cmp, Dest, KindSel, Order, Pred, Query, Stage, Term};
 pub use parse::{ParseError, ParseErrorKind, TokenClass, parse, tokens};
-pub use print::print;
+pub use print::{escape_name, print};
 
 /// The verbs that take arguments, for autocompletion. Anything else with a
 /// `.` in it is a catalogue command.

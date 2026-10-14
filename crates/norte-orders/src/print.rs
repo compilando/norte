@@ -30,6 +30,22 @@ pub fn print(order: &Order) -> String {
         .join(" | ")
 }
 
+/// One name written the way the grammar reads it back as exactly its bytes
+/// — the printer's own escape. What is shown to someone who must write the
+/// name in an order (the assistant, ADR 0186).
+///
+/// ```
+/// use norte_orders::{escape_name, parse, Stage};
+/// let e = escape_name(b"two words\xff");
+/// assert_eq!(e, r"two\x20words\xff");
+/// let o = parse(&format!("mkdir {e}")).expect("parse");
+/// assert_eq!(o.stages, vec![Stage::Mkdir(b"two words\xff".to_vec())]);
+/// ```
+#[must_use]
+pub fn escape_name(bytes: &[u8]) -> String {
+    word(bytes)
+}
+
 fn stage(s: &Stage) -> String {
     match s {
         Stage::Sel(q) => {
