@@ -67,11 +67,17 @@ must_be_draft
 say "Windows packages (GitHub runner, ~35 min): started now, collected at the end"
 run_id=""
 if ! has_asset SHA256SUMS-windows; then
-    # This tag's run, if one is queued, running or already green.
+    # This tag's run, if one is queued, running or already green — and
+    # started after the tag was made: a tag moved before publishing has an
+    # older run with the same title, built from the old commit. The run's
+    # own sha is main's at dispatch, not the tag's, so time is the check.
+    tag_date="$(git for-each-ref --format='%(creatordate:iso-strict)' "refs/tags/$tag")"
+    tag_epoch="$(date -d "$tag_date" +%s)"
     find_run() {
         gh run list --workflow windows.yml --event workflow_dispatch -L 20 \
-            --json databaseId,displayTitle,status,conclusion \
+            --json databaseId,displayTitle,status,conclusion,createdAt \
             -q "[.[] | select(.displayTitle == \"Windows packages $tag\")
+                     | select(.createdAt | fromdateiso8601 >= $tag_epoch)
                      | select(.conclusion != \"failure\" and .conclusion != \"cancelled\")][0].databaseId // empty"
     }
     run_id="$(find_run)"
@@ -88,10 +94,23 @@ if ! has_asset SHA256SUMS-windows; then
 fi
 
 say "Linux: build on the baseline, smoke, verify, publish"
-dir="$(find target/baseline -maxdepth 1 -type d -name "$tag-0-g*" 2> /dev/null | sort | tail -1)"
+# The build of THIS commit of the tag: one of a tag since moved has the
+# same `<tag>-0-g` prefix and another hash.
+tag_sha="$(git rev-parse "$tag^{commit}")"
+# `if`, not `&&`: under `set -e` and `pipefail`, a last directory that does
+# not match would fail the pipeline and kill the script without a word.
+this_build() {
+    local d found=""
+    for d in target/baseline/"$tag"-0-g*; do
+        if [ -d "$d" ] && [[ "$tag_sha" == "${d##*-0-g}"* ]]; then found="$d"; fi
+    done
+    echo "$found"
+}
+dir="$(this_build)"
 if [ -z "$dir" ] || ! scripts/baseline/verify.sh "$dir" > /dev/null 2>&1; then
     just baseline "$tag"
-    dir="$(find target/baseline -maxdepth 1 -type d -name "$tag-0-g*" | sort | tail -1)"
+    dir="$(this_build)"
+    [ -n "$dir" ] || { echo "no baseline build of $tag at $tag_sha" >&2; exit 1; }
 fi
 # Published = EVERY file the checksums name is there, not just the sums: an
 # upload cut halfway leaves some.
