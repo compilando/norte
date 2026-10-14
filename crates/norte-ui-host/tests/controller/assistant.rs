@@ -174,3 +174,46 @@ async fn model_text_arrives_masked() {
         "{text:?}"
     );
 }
+
+/// `assistant_cancel` stops waiting: the panel says "cancelled" at once,
+/// and the answer that comes later is dropped.
+#[tokio::test]
+async fn cancel_stops_waiting_and_drops_the_late_answer() {
+    let gate = Arc::new(backend_fake::Gate::default());
+    let mut f = Fake {
+        ai_turn: Some(AiChatTurn::Answer {
+            text: "late".into(),
+        }),
+        gate_chat: Some(Arc::clone(&gate)),
+        ..Fake::default()
+    };
+    f.put("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let (h, _snap) = host_tree(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    for c in "@hola".chars() {
+        h.dispatch(press(&c.to_string())).await.expect("host alive");
+    }
+    h.dispatch(press("Enter")).await.expect("host alive");
+    let snap = wait_snapshot(&h, &mut sub, "thinking", |s| {
+        assistant_of(s).is_some_and(|a| a.pending)
+    })
+    .await;
+    let slot_id = assistant_of(&snap).expect("open").slot_id;
+    h.dispatch(UiAction::AssistantCancel { slot_id })
+        .await
+        .expect("host alive");
+    let snap = wait_snapshot(&h, &mut sub, "cancelled", |s| {
+        assistant_of(s).is_some_and(|a| !a.pending)
+    })
+    .await;
+    let a = assistant_of(&snap).expect("open");
+    assert_eq!(a.turns.last().map(|t| t.kind.as_str()), Some("failed"));
+    let turns = a.turns.len();
+    gate.open();
+    settle().await;
+    let snap = crate::sync::next_snapshot_after_resync(&h, &mut sub).await;
+    let a = assistant_of(&snap).expect("open");
+    assert_eq!(a.turns.len(), turns, "the late answer is dropped");
+    assert!(a.turns.iter().all(|t| t.text != "late"));
+}

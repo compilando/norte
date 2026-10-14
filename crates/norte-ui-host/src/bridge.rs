@@ -635,7 +635,8 @@ use serde::{Deserialize, Serialize};
 ///   `assistant_submit` and `assistant_apply`, and `GotoModeView::Ask`.
 /// - **117**: the throughput graphs (ADR 0187): `StatusProgressView.spark`
 ///   and `TaskView.spark`.
-pub const BRIDGE_VERSION: u32 = 117;
+/// - **118**: `assistant_cancel`, stop waiting for the assistant's turn.
+pub const BRIDGE_VERSION: u32 = 118;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

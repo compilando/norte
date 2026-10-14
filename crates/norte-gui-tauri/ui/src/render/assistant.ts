@@ -9,6 +9,22 @@ import type { SlotDom } from "./dom";
 
 const inputs = new WeakMap<SlotDom, HTMLInputElement>();
 const wasActive = new WeakMap<SlotDom, boolean>();
+/** The latest view of each panel: the field's handlers outlive the paint
+ *  that created them. */
+const views = new WeakMap<SlotDom, AssistantSlotView>();
+/** What the field sent, and how many turns there were then: the field is
+ *  emptied only once the host took it — a refused send keeps the text. */
+const sent = new WeakMap<SlotDom, { text: string; turns: number }>();
+
+/** The index of the newest order turn, or -1. */
+export function lastOrder(slot: AssistantSlotView): number {
+  for (let i = slot.turns.length - 1; i >= 0; i--) {
+    if (slot.turns[i]?.kind === "order") {
+      return i;
+    }
+  }
+  return -1;
+}
 
 /** The input takes the caret when the panel becomes active, and lets go of
  *  it when it stops being — the search panel's rule. */
@@ -78,15 +94,36 @@ export function paintAssistant(
     const thinking = document.createElement("li");
     thinking.className = "assistant-thinking";
     thinking.textContent = this.t("assistant-thinking");
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "assistant-cancel";
+    cancel.textContent = this.t("assistant-cancel");
+    cancel.addEventListener("click", () => {
+      this.send({ action: "assistant_cancel", slot_id: slot.slot_id });
+    });
+    thinking.append(" ", cancel);
     list.append(thinking);
   }
 
+  views.set(dom, slot);
   let input = inputs.get(dom);
   if (input === undefined) {
     const field = document.createElement("input");
     field.type = "text";
     field.className = "assistant-input";
     field.addEventListener("keydown", (e) => {
+      const now = views.get(dom);
+      if (now === undefined) {
+        return;
+      }
+      // Esc while a turn is in flight cancels it; otherwise it goes on and
+      // gives the keys back, as in the terminal.
+      if (e.key === "Escape" && now.pending) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.send({ action: "assistant_cancel", slot_id: now.slot_id });
+        return;
+      }
       // Enter, the arrows and Tab belong to the field: let through, an
       // empty Enter would open the entry under the LISTING's cursor.
       if (!["Enter", "ArrowUp", "ArrowDown", "Tab"].includes(e.key)) {
@@ -94,16 +131,36 @@ export function paintAssistant(
       }
       e.preventDefault();
       e.stopPropagation();
-      if (e.key !== "Enter" || field.value.trim() === "" || field.disabled) {
+      if (e.key !== "Enter" || now.pending) {
         return;
       }
-      this.send({ action: "assistant_submit", slot_id: slot.slot_id, text: field.value });
-      field.value = "";
+      if (field.value.trim() === "") {
+        // An empty Enter applies the newest order, as in the terminal; the
+        // usual confirmation still asks.
+        const turn = lastOrder(now);
+        if (turn >= 0) {
+          this.send({ action: "assistant_apply", slot_id: now.slot_id, turn });
+        }
+        return;
+      }
+      sent.set(dom, { text: field.value, turns: now.turns.length });
+      this.send({ action: "assistant_submit", slot_id: now.slot_id, text: field.value });
     });
     inputs.set(dom, field);
     input = field;
   }
-  input.disabled = slot.pending;
+  // The host took what was sent once a new turn shows up; until then the
+  // text stays, so a refused send loses nothing.
+  const pendingSend = sent.get(dom);
+  if (pendingSend !== undefined && slot.turns.length > pendingSend.turns) {
+    if (input.value === pendingSend.text) {
+      input.value = "";
+    }
+    sent.delete(dom);
+  }
+  // Read-only, not disabled, while a turn is in flight: a disabled field
+  // drops the caret and hears no Esc.
+  input.readOnly = slot.pending;
   input.placeholder = this.t("assistant-placeholder");
   // Only the list is replaced: taking the field out of the DOM, even to put
   // it back, drops its focus and the caret in the middle of a word.

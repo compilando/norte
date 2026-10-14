@@ -23,6 +23,10 @@
     "slot_id": 16,
     "turn": 1
   },
+  "assistant_cancel": {
+    "action": "assistant_cancel",
+    "slot_id": 16
+  },
   "assistant_submit": {
     "action": "assistant_submit",
     "slot_id": 16,

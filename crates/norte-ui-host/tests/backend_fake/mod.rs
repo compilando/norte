@@ -503,6 +503,8 @@ pub struct Fake {
     /// What `ai.chat` answers (ADR 0186); `None` = `Unsupported`, like a
     /// daemon with no assistant.
     pub ai_turn: Option<norte_proto::methods::AiChatTurn>,
+    /// Holds `ai.chat`'s answer until opened: "still thinking" as a fact.
+    pub gate_chat: Option<Arc<Gate>>,
     /// What a `stat` finds on something this fake CREATED (#303).
     ///
     /// `EntryKind::File` — the default — is normal life: the file the daemon
@@ -1365,7 +1367,13 @@ impl HostBackend for Fake {
         _params: norte_proto::methods::AiChatParams,
     ) -> BoxFuture<'static, Result<norte_proto::methods::AiChatTurn, Error>> {
         let turn = self.ai_turn.clone();
-        Box::pin(async move { turn.ok_or(Error::Unsupported) })
+        let gate = self.gate_chat.clone();
+        Box::pin(async move {
+            if let Some(g) = gate {
+                g.wait().await;
+            }
+            turn.ok_or(Error::Unsupported)
+        })
     }
 
     fn journal_list(

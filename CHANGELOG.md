@@ -7,6 +7,26 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **The order line has a key in every preset**: `alt+:` in krusader, far,
+  norton and total-commander, where a bare `:` goes to the quick search or
+  the command line (`:` stays in orthodox, vim and cua).
+- **Cancel the assistant**: Esc while it is thinking (or the Cancel button
+  in the window) stops waiting; a second Esc gives the keys back. In the
+  window, Enter on an empty field applies the newest proposed order.
+
+### Fixed
+
+- **The box, the palette, help and settings take the keys over a focused
+  side panel** in the terminal. Opened over the terminal panel, the box
+  showed up but every key went to the shell, which ran what you typed as
+  a command.
+- **The assistant** keeps at most 200 turns, wraps CJK and emoji by their
+  width, lets Tab and the F keys reach the panel commands in the
+  terminal, says so when an order cannot be applied, and no longer loses
+  a message the window refused to send.
+
 ## [0.3.0-alpha.13] - 2026-10-14
 
 ### Added
