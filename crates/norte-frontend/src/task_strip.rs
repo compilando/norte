@@ -103,6 +103,9 @@ struct Burst {
     name: Option<String>,
     /// The burst's summed throughput, one sample per second (ADR 0187).
     spark: crate::spark::Spark,
+    /// Some task of it is RUNNING — not paused, not queued — on the last
+    /// `update`: only then is there a graph to sample every second.
+    moving: bool,
 }
 
 /// The last burst's outcome, while it is shown.
@@ -198,11 +201,13 @@ impl TaskStrip {
         if any_running {
             // Paused tasks move nothing on purpose (ADR 0147): their last
             // rate is not this second's.
-            let moving = in_burst
+            let moving: Vec<&&StripTask<'a>> = in_burst
                 .iter()
-                .filter(|t| is_running(t.progress) && t.progress.state != TaskState::Paused)
-                .filter_map(|t| t.bps);
-            r.spark.record(now_ms, Some(moving.sum()));
+                .filter(|t| t.progress.state == TaskState::Running)
+                .collect();
+            r.moving = !moving.is_empty();
+            r.spark
+                .record(now_ms, Some(moving.iter().filter_map(|t| t.bps).sum()));
             self.running = Some(running_view(r, &in_burst));
             return;
         }
@@ -269,15 +274,16 @@ impl TaskStrip {
     #[must_use]
     pub fn next_change_ms(&self, now_ms: i64) -> Option<i64> {
         if let Some(r) = &self.burst {
-            // And every whole second while it runs: the graph samples on
-            // this clock, not on progress (ADR 0187).
-            let next_second = (now_ms.div_euclid(1000) + 1) * 1000;
-            return Some(
-                [r.since_ms + UMBRAL_MS, r.since_ms + PANEL_MS]
-                    .into_iter()
-                    .find(|&t| t > now_ms)
-                    .map_or(next_second, |t| t.min(next_second)),
-            );
+            // And every whole second while something moves: the graph
+            // samples on this clock, not on progress (ADR 0187).
+            let next_second = r.moving.then(|| (now_ms.div_euclid(1000) + 1) * 1000);
+            let threshold = [r.since_ms + UMBRAL_MS, r.since_ms + PANEL_MS]
+                .into_iter()
+                .find(|&t| t > now_ms);
+            return match (threshold, next_second) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
         }
         self.outcome
             .as_ref()
@@ -436,17 +442,26 @@ pub fn forms(v: &StripView, lang: Lang) -> Vec<Form> {
             // The graph goes in front of the two longest forms only, so
             // `statusbar::fit` gives it up before anything that says what
             // is running (ADR 0187).
+            //
+            // The second one only while it is still wider than the longest
+            // without graph: a long rate (" · 48 MiB/s") would otherwise be
+            // given up before the graph.
             if !v.spark.is_empty() {
-                let with: Vec<Form> = out
-                    .iter()
-                    .take(2)
-                    .map(|x| Form {
-                        graph: true,
-                        ..x.clone()
-                    })
-                    .collect();
+                let graph = |x: &Form| Form {
+                    graph: true,
+                    ..x.clone()
+                };
+                let mut with = vec![graph(&out[0])];
+                if let Some(second) = out.get(1).map(graph)
+                    && form_cells(&second) >= form_cells(&out[0])
+                {
+                    with.push(second);
+                }
                 out.splice(0..0, with);
             }
+            // The window sends the graph inside the bar's view: a graph on a
+            // form with no bar would never reach it.
+            debug_assert!(out.iter().all(|f| !f.graph || f.bar));
             out
         }
         StripPhase::Done => {
@@ -708,6 +723,36 @@ mod tests {
         let paused = p(1, TaskKind::Copy, TaskState::Paused, 0, Some(1_000));
         s.update(2_000, [t(&paused)]);
         assert!(s.view(2_000).expect("bar").spark.is_empty());
+        assert_eq!(
+            s.next_change_ms(2_000),
+            None,
+            "nothing moves: no wake every second"
+        );
+    }
+
+    /// A long rate is not given up before the graph: the forms stay
+    /// longest-first with the graph on (review m1).
+    #[test]
+    fn a_long_rate_outlives_the_graph() {
+        let v = StripView {
+            phase: StripPhase::Running,
+            count: 1,
+            percent: Some(62),
+            kind: Some(TaskKind::Copy),
+            name: Some("foto.jpg".to_owned()),
+            rate: "48 MiB/s".to_owned(),
+            eta: String::new(),
+            spark: vec![50; crate::spark::SAMPLES],
+        };
+        let fs = forms(&v, Lang::En);
+        let widths: Vec<usize> = fs.iter().map(form_cells).collect();
+        assert!(widths.windows(2).all(|w| w[0] >= w[1]), "{widths:?}");
+        let last_graph = fs.iter().rposition(|f| f.graph).expect("a graph");
+        let last_rate = fs
+            .iter()
+            .rposition(|f| f.text.contains("48 MiB/s"))
+            .expect("the rate");
+        assert!(last_graph < last_rate, "{fs:?}");
     }
 
     /// A copy that starts and ends between two ticks is never seen running,

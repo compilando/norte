@@ -2206,10 +2206,18 @@ async fn a_moving_task_carries_its_graph_and_a_finished_one_does_not() {
     *fake.foreign.lock().expect("ajenas") = Some(rx);
     let (h, _snap) = host_tree(Arc::new(fake)).await;
     let mut sub = h.subscribe();
+    // Wide enough for the item to keep its graph next to its rate: short of
+    // room the graph is the first thing given up.
+    h.dispatch(UiAction::SetViewport {
+        width: 200,
+        height: 60,
+    })
+    .await
+    .expect("host alive");
     let p = inject_task_for(&tx, 5, norte_proto::TaskKind::Copy);
     next_tasks(&mut sub).await;
     for sec in 1..=4_u64 {
-        tokio::time::advance(std::time::Duration::from_millis(1_000)).await;
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
         p.send_modify(|x| x.bytes_done = sec * 1_000_000);
         for _ in 0..4 {
             tokio::task::yield_now().await;
@@ -2225,7 +2233,7 @@ async fn a_moving_task_carries_its_graph_and_a_finished_one_does_not() {
     }
     let row = row.expect("the row carries its graph");
     assert_eq!(row.spark.len(), norte_frontend::spark::SAMPLES);
-    assert!(row.spark.iter().any(|&v| v == 100), "{:?}", row.spark);
+    assert!(row.spark.contains(&100), "{:?}", row.spark);
     let snap = crate::sync::next_snapshot_after_resync(&h, &mut sub).await;
     let item = snap
         .status_items
@@ -2234,6 +2242,24 @@ async fn a_moving_task_carries_its_graph_and_a_finished_one_does_not() {
         .and_then(|i| i.progress.clone())
         .expect("the tasks item, with its bar");
     assert!(!item.spark.is_empty(), "and the burst's graph");
+
+    // Stalled: no progress arrives, and the graph falls to zero instead of
+    // keeping the last speed.
+    for _ in 0..3 {
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+    }
+    let mut fell = false;
+    for _ in 0..10 {
+        let tasks = next_tasks(&mut sub).await;
+        if tasks.first().and_then(|t| t.spark.last()) == Some(&0) {
+            fell = true;
+            break;
+        }
+    }
+    assert!(fell, "a stalled task's graph falls to zero");
 
     p.send_modify(|x| x.state = norte_proto::TaskState::Completed);
     let mut done = false;

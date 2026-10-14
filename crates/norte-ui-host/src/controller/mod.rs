@@ -785,8 +785,10 @@ enum Message {
     /// do).
     Say(&'static str),
     /// The light progress bar changes with no progress arriving: it passed
-    /// its threshold, the panel's, or the "✓"'s time ran out (ADR 0146).
-    Strip,
+    /// its threshold, the panel's, or the "✓"'s time ran out (ADR 0146), or
+    /// a second passed while work moves (ADR 0187). Carries the deadline it
+    /// was armed for: a superseded timer must not arm another.
+    Strip(i64),
     /// The `policy.decide` that WAS APPROVING did not reach the daemon.
     /// A `policy.decide` that did not go well: which approval and under
     /// which key it is counted (#279).
@@ -1677,8 +1679,8 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
-            Message::Strip => {
-                for u in state.wake_strip(&backend, &mailbox) {
+            Message::Strip(when) => {
+                for u in state.wake_strip(when, &backend, &mailbox) {
                     let _ = updates.send(u);
                 }
             }
