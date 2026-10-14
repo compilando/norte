@@ -118,9 +118,9 @@
 # orthodox, cua and vim carry it. Here it is reached through the Go menu
 # (F9), where it is first, and through the palette.
 #
-# `app.orders` (the order line, ADR 0185) likewise: Far's command line is
-# the shell's, and every printable key goes to it. Go menu, or the palette
-# with `:` typed.
+# `app.orders` (the order line, ADR 0185) is `alt+:`, a norte chord Far does
+# not attest: its command line is the shell's and takes every printable
+# key, and its fast find is Alt+letter, which `:` is not.
 #
 # `task.pause` (ADR 0147), `task.retry` (ADR 0148) and the three queue ones
 # (`task.queue`, `task.up`, `task.down`, ADR 0149) are left UNBOUND here,
@@ -148,6 +148,7 @@ keymap = [
     # preset. See the long note in krusader.toml.
     { on = ["alt+9"], run = "app.theme" },
     { on = ["ctrl+p"], run = "app.palette" },
+    { on = ["alt+:"], run = "app.orders" },
     # F9 is the menu bar in FAR (attested: "F9 — Show menu"); alt+m stays as
     # the shared chord every preset carries (spec 2026-09-10).
     { on = ["f9"], run = "app.menu" },
