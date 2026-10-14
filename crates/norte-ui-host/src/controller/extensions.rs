@@ -145,6 +145,7 @@ impl State {
                 .land_page(slot, token, start, res)
                 .into_iter()
                 .collect(),
+            Background::OrderUndo(n, res) => self.order_undo_landed(n, res),
             Background::GoToConnections(opening, res) => {
                 self.goto_connections(opening, res).into_iter().collect()
             }

@@ -605,6 +605,17 @@ pub trait HostBackend: Send + Sync + 'static {
         limit: u32,
     ) -> BoxFuture<'static, Result<methods::JournalListResult, Error>>;
 
+    /// The newest page of the READER's own operations (actor `user`), for an
+    /// order's `undo N` (ADR 0185): N counts what they did, not what an
+    /// agent did in between. The default lists every actor — a backend that
+    /// cannot filter still counts, and the confirmation says what is foreign.
+    fn journal_list_mine(
+        &self,
+        limit: u32,
+    ) -> BoxFuture<'static, Result<methods::JournalListResult, Error>> {
+        self.journal_list(None, limit)
+    }
+
     /// Undoes the HUMAN's work after `seq` (`journal.undo_after`, phase 7).
     /// The flagged entry stays.
     ///
@@ -1700,6 +1711,14 @@ impl HostBackend for norte_client::RemoteBackend {
     ) -> BoxFuture<'static, Result<methods::JournalListResult, Error>> {
         let backend = self.clone();
         Box::pin(async move { backend.journal_list(before_seq, limit, None).await })
+    }
+
+    fn journal_list_mine(
+        &self,
+        limit: u32,
+    ) -> BoxFuture<'static, Result<methods::JournalListResult, Error>> {
+        let backend = self.clone();
+        Box::pin(async move { backend.journal_list(None, limit, Some("user")).await })
     }
 
     fn undo_after(

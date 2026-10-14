@@ -57,6 +57,7 @@ mod listing;
 mod logpanel;
 mod menu;
 mod nav;
+mod orders;
 mod organize;
 mod palette;
 mod panel;
@@ -1095,6 +1096,9 @@ enum Background {
         Option<i64>,
         Result<norte_proto::methods::JournalListResult, Error>,
     ),
+    /// The reader's journal page an order's `undo N` asked for (ADR 0185),
+    /// with N.
+    OrderUndo(u32, Result<norte_proto::methods::JournalListResult, Error>),
     /// The connections for "go to" (#357), with the OPENING that requested
     /// them: an answer from a previous opening does not fill in the current
     /// one.
@@ -2682,6 +2686,9 @@ struct State {
     /// The `:` line's preview (`14 items · 38 MB`), translated; empty when
     /// the line selects nothing yet.
     order_preview: String,
+    /// The active slot's marks when the box went into `:` mode: Esc puts
+    /// them back after a live `sel` preview. `None` = not previewing.
+    order_marks_before: Option<Vec<norte_proto::VPath>>,
     /// How many times "go to" has been opened: connections and the index that
     /// answer an earlier opening are dropped.
     gen_ir_a: u64,
@@ -3437,6 +3444,7 @@ impl State {
             locale,
             ir_a: None,
             order_preview: String::new(),
+            order_marks_before: None,
             gen_ir_a: 0,
             go_to_index: None,
             wizard: None,

@@ -35,6 +35,7 @@ mod help;
 mod keys_palette;
 mod layouts;
 mod log;
+mod orders;
 mod organize;
 mod overlay_dismiss;
 mod panels;
