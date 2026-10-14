@@ -1,0 +1,8 @@
+{"seq":1,"ts_ms":1791989500091,"actor_kind":"user","op":"created","path":"file:///srv/norte/w/dir","reversal":"delete","entry_hash":"1640ab675563c19d5f7a2f5b59e0b3ce606fc4c483a9fc947fdce01375f2f583"}
+{"seq":2,"ts_ms":1791989500096,"actor_kind":"user","op":"created","path":"file:///srv/norte/w/dir/a.txt","reversal":"delete","entry_hash":"df26f2fe013994a027c5ba125afcaa4dd43c386d861e3a19184cb8185dd8b02f"}
+{"seq":3,"ts_ms":1791989500100,"actor_kind":"user","op":"renamed","path":"file:///srv/norte/w/dir/b.txt","path_to":"file:///srv/norte/w/b ñ.txt","reversal":"rename_back","entry_hash":"797e10e1458d4f9d5bf43f1ec659363f97d69e23c0df7c43572dc22219c26626"}
+{"seq":4,"ts_ms":1791989500105,"actor_kind":"user","op":"removed","path":"file:///srv/norte/w/a.txt","reversal":"irreversible","entry_hash":"8ddcc9aaff351276a27cda0914cd6687ffe59e1876f99d59d2291127239878fc"}
+{"seq":5,"ts_ms":1791989500110,"actor_kind":"user","op":"created","path":"file:///srv/norte/w/lat%E9n","reversal":"delete","entry_hash":"5e512ba133abb273a93e15a7d0532d117af29a97222097ff4857a5cebd5abce7"}
+{"seq":6,"ts_ms":1791989500114,"actor_kind":"user","op":"created","path":"file:///srv/norte/w/copia","reversal":"delete","entry_hash":"26f5bcc4fc605f2e7832a12bb98cee967bcd8d4000224f585acc640d245a939e"}
+{"seq":7,"ts_ms":1791989500115,"actor_kind":"user","op":"created","path":"file:///srv/norte/w/copia/a.txt","reversal":"delete","entry_hash":"bfc0545f775b7227fdc7185124d42482cd155d168f5a01a52bcf03071eb38bb2"}
+{"seq":8,"ts_ms":1791989500115,"actor_kind":"user","op":"created","path":"file:///srv/norte/w/copia/b.txt","reversal":"delete","entry_hash":"55ee71e716ffa2a979f77afc0b989cf7b58a79daa2404ac516c7e4bfeb453cc6"}
