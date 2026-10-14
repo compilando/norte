@@ -13,6 +13,7 @@ import type {
   ViewSnapshot,
 } from "../types";
 import { fileIcon, icon as fsIcon } from "./icons";
+import { sparkSvg } from "./spark";
 
 /**
  * Scrolls just enough for `el` to be visible, if the environment knows how.
@@ -737,6 +738,11 @@ export function statusNodes(
         }
         bar.append(fill);
         el.append(bar);
+        // The burst's graph (ADR 0187) leads, as in the terminal.
+        const graph = sparkSvg(it.progress.spark ?? []);
+        if (graph !== null) {
+          el.prepend(graph);
+        }
       }
       if (el instanceof HTMLButtonElement) {
         el.type = "button";
@@ -806,6 +812,17 @@ export function taskNode(t: TaskView, tr: (k: string) => string): HTMLElement {
   detail.textContent = t.detail ?? "";
   detail.dataset["hostile"] = String(t.detail_hostile);
   el.append(kind, state, detail);
+  // Its throughput (ADR 0187) and the speed it ends on.
+  const graph = sparkSvg(t.spark ?? []);
+  if (graph !== null) {
+    el.append(graph);
+  }
+  if (t.rate !== "") {
+    const rate = document.createElement("span");
+    rate.className = "task-rate";
+    rate.textContent = t.rate;
+    el.append(rate);
+  }
   if (t.detail_hostile) {
     // The file in progress paints different from what it is: it is said,
     // same as in a listing row. Without a badge, a masked name reads as the

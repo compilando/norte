@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 116;
+export const BRIDGE_VERSION = 117;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -942,6 +942,8 @@ export interface TaskView {
   detail: string | null;
   detail_hostile: boolean;
   foreign: boolean;
+  /** Throughput, one value per second, 0–100 (bridge 117); absent = none. */
+  spark?: number[];
 }
 
 export interface ViewerView {
@@ -1228,6 +1230,8 @@ export interface StatusProgressView {
   /** 0–100 of the total; `null` = unknown, and the bar animates. */
   percent: number | null;
   phase: "running" | "paused" | "done" | "failed";
+  /** The burst's throughput, drawn in front of the text (bridge 117). */
+  spark?: number[];
 }
 
 /** The panel bar (#324, bridge 51): what panels there are and how they stand. */
