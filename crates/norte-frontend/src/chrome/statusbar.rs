@@ -404,6 +404,7 @@ mod tests {
             name: None,
             rate: String::new(),
             eta: "1m".to_owned(),
+            spark: Vec::new(),
         });
         i.notices = 1;
         i.marked = 1;
@@ -447,11 +448,13 @@ mod tests {
             name: Some("big-photo.jpg".to_owned()),
             rate: "48 MiB/s".to_owned(),
             eta: String::new(),
+            spark: vec![50; crate::spark::SAMPLES],
         });
         let list = StatusItems::parse(&["tasks", "position"]).unwrap();
         let v = items(&i, list, Lang::Es);
         let whole = fit(&v, 200, 2);
         assert!(whole[0].text.contains("big-photo.jpg") && whole[0].bar);
+        assert!(whole[0].text.starts_with('⣤'), "the graph, when it fits");
         // Exactly what the shortest form with a bar takes, plus the
         // position.
         let short = v[0].shorter.iter().rfind(|f| f.bar).expect("short form");
