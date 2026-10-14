@@ -37,6 +37,13 @@ independently through `PROTOCOL_VERSION`.
   order's escapes instead of `�`, and `undo N --dry-run` says how many
   operations it would undo (also in `--json`).
 
+### Security
+
+- **wasmtime 48.0.6** (RUSTSEC-2026-0352 to 0359 and 0361 to 0364), the
+  runtime of WASM plugins: among them, a filesystem sandbox escape when
+  renaming symlinks with trailing slashes, and several host panics a
+  plugin could trigger.
+
 ## [0.3.0-alpha.13] - 2026-10-14
 
 ### Added
