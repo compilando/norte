@@ -229,6 +229,7 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::SearchPanelGo { .. } => "search_panel_go",
         UiAction::AssistantSubmit { .. } => "assistant_submit",
         UiAction::AssistantApply { .. } => "assistant_apply",
+        UiAction::AssistantCancel { .. } => "assistant_cancel",
         UiAction::SearchPanelReroot { .. } => "search_panel_reroot",
         UiAction::SearchPanelFilters { .. } => "search_panel_filters",
         UiAction::SearchPanelActivate { .. } => "search_panel_activate",
@@ -605,6 +606,10 @@ fn overlay_actions() -> Vec<(&'static str, UiAction)> {
                 slot_id: 16,
                 turn: 1,
             },
+        ),
+        (
+            "assistant_cancel",
+            UiAction::AssistantCancel { slot_id: 16 },
         ),
         (
             "search_panel_reroot",

@@ -1111,8 +1111,9 @@ enum Background {
     /// The rows an order's `sel` needed measured (#52 lazy listing), with
     /// what each stat said; the order runs once they are in.
     OrderMeasured(Box<orders::OrderMeasured>),
-    /// The assistant's turn (ADR 0186), or why not.
-    AssistantTurn(Result<norte_proto::methods::AiChatTurn, Error>),
+    /// The assistant's turn (ADR 0186), or why not, with the number of the
+    /// request it answers: a cancelled or older one is dropped.
+    AssistantTurn(u64, Result<norte_proto::methods::AiChatTurn, Error>),
     /// The connections for "go to" (#357), with the OPENING that requested
     /// them: an answer from a previous opening does not fill in the current
     /// one.
@@ -2709,6 +2710,8 @@ struct State {
     order_preview: String,
     /// The assistant panel's conversation (ADR 0186): outlives the panel.
     assistant: norte_frontend::assistant::Assistant,
+    /// The assistant's request in flight, to stop it on cancel.
+    assistant_task: Option<tokio::task::AbortHandle>,
     /// The active slot's marks when the box went into `:` mode: Esc puts
     /// them back after a live `sel` preview. `None` = not previewing.
     order_marks_before: Option<Vec<norte_proto::VPath>>,
@@ -3468,6 +3471,7 @@ impl State {
             ir_a: None,
             order_preview: String::new(),
             assistant: norte_frontend::assistant::Assistant::default(),
+            assistant_task: None,
             order_marks_before: None,
             gen_ir_a: 0,
             go_to_index: None,
@@ -4345,9 +4349,9 @@ impl State {
             }
             UiAction::LayoutActivateRow { row } => self.choose_layout(*row, backend, mailbox),
             UiAction::SearchActivateRow { row } => self.go_to_result(*row, backend, mailbox),
-            UiAction::AssistantSubmit { .. } | UiAction::AssistantApply { .. } => {
-                self.assistant_action(action, backend, mailbox)
-            }
+            UiAction::AssistantSubmit { .. }
+            | UiAction::AssistantApply { .. }
+            | UiAction::AssistantCancel { .. } => self.assistant_action(action, backend, mailbox),
             UiAction::SearchPanelEdit { .. }
             | UiAction::SearchPanelGo { .. }
             | UiAction::SearchPanelReroot { .. }

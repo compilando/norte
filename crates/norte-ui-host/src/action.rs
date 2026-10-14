@@ -775,6 +775,12 @@ pub enum UiAction {
         /// The turn's index, oldest first.
         turn: u32,
     },
+    /// Stop waiting for the turn in flight (bridge 118): its answer, when it
+    /// comes, is dropped. Nothing in flight is not an error.
+    AssistantCancel {
+        /// The panel's slot.
+        slot_id: u32,
+    },
     /// Enter in one of the panel's inputs: searches now, without the pause.
     SearchPanelGo {
         /// The panel's slot.

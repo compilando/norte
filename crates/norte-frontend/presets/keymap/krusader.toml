@@ -95,10 +95,10 @@
 # capability: it is a shortcut not attributed to a source that does not
 # state it.
 #
-# `app.orders` (the order line, ADR 0185) is unbound for the same reason:
-# Krusader's command line runs the shell, which is norte's command bar here,
-# and `:` would be typed into the incremental name search (ADR 0155). It is
-# in the Go menu, and `alt+p` opens the box — type `:` there.
+# `app.orders` (the order line, ADR 0185) is `alt+:`, a norte chord no
+# source attests, in krusader, far, norton and total-commander alike: a bare
+# `:` would be typed into the incremental name search (ADR 0155), and
+# Krusader's command line runs the shell, which is norte's command bar here.
 #
 # `task.pause` (ADR 0147), `task.retry` (ADR 0148) and the three queue ones
 # (`task.queue`, `task.up`, `task.down`, ADR 0149) are left UNBOUND here,
@@ -140,6 +140,7 @@ keymap = [
     # surfaces left out— and there is a test.
     { on = ["alt+9"], run = "app.theme" },
     { on = ["alt+p"], run = "app.palette" },
+    { on = ["alt+:"], run = "app.orders" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },

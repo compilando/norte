@@ -160,24 +160,31 @@ filas que casa el `sel`; Esc devuelve las marcas que tenías. Intro ejecuta la
 preguntando.
 
 - `sel` lleva términos que deben cumplirse todos: `ext:pdf,jpg`,
-  `name:*borrador*` o un glob suelto, `size>10M`, `age<7d` (`s m h d w`; `m`
-  son minutos), `type:file|dir|link`, y `!` delante niega uno.
+  `name:*borrador*` o un glob suelto, `name=NOMBRE` para un nombre exacto
+  (`name=*` es el fichero que se llama `*`), `size>10M`, `age<7d`
+  (`s m h d w`; `m` son minutos), `type:file|dir|link`, y `!` delante niega
+  uno. Las filas que el listado aún no ha medido se miden antes; Esc lo
+  detiene.
 - Después, una acción: `cp >other`, `mv >here`, `cp >/una/ruta`, `trash`,
   `mkdir NOMBRE`, `cd RUTA`, o cualquier comando por su nombre (`pane.swap`).
 - `log` abre la línea de tiempo; `undo 3` deshace tus tres últimas
   operaciones, tras preguntar.
 
 Un nombre que no es texto, o que lleva un espacio o `|`, se escribe con
-escapes: `\xff`, `\ `, `\|`. Un `sel` que no casa nada no ejecuta nada:
-nunca cae en la fila bajo el cursor.
+escapes: `\xff`, `\ `, `\|`; cualquier espacio, también uno de no ruptura,
+separa palabras. Un nombre que escribes encuentra la entrada que nombra
+aunque esté guardada descompuesta, o en la codificación con la que el panel
+lee los nombres. Un `sel` que no casa nada no ejecuta nada: nunca cae en la
+fila bajo el cursor.
 
 ## El asistente: `@`
 
 {{cmd:layout.assistant}} abre un panel donde pides en palabras — «copia los
 PDF de este mes al otro panel», «¿qué ocupa más aquí?». Escribir `@` en la
 caja hace lo mismo con lo que sigue. Cada respuesta es o bien una orden de la
-gramática de arriba, que revisas y aplicas con `a` (abre el mismo diálogo que
-su tecla), o bien una respuesta.
+gramática de arriba, que revisas y aplicas con Intro sobre la línea vacía
+(abre el mismo diálogo que su tecla), o bien una respuesta. Esc mientras
+piensa cancela la pregunta; otro Esc devuelve las teclas.
 
 Está apagado hasta que lo enciendes en `norte.toml` (`[ai] enabled = true` y
 un proveedor). Nunca cambia nada por sí mismo. Para responder lee nombres,

@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 117;
+export const BRIDGE_VERSION = 118;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -636,6 +636,9 @@ export interface AssistantSlotView {
   turns: AssistantTurnView[];
   pending: boolean;
   empty: string;
+  /** The number of `turns[0]` (bridge 118): Apply sends `first + index`,
+   *  which stays the turn's name when older turns are dropped. */
+  first?: number;
 }
 
 /** One turn. `note` is painted below and smaller than `text`. */
@@ -2084,6 +2087,8 @@ export type UiAction =
   /** The assistant panel (bridge 116). */
   | { action: "assistant_submit"; slot_id: number; text: string }
   | { action: "assistant_apply"; slot_id: number; turn: number }
+  /** Stop waiting for the turn in flight (bridge 118). */
+  | { action: "assistant_cancel"; slot_id: number }
   /** "Search here": the focused listing's folder. */
   | { action: "search_panel_reroot"; slot_id: number }
   | { action: "search_panel_filters"; slot_id: number }

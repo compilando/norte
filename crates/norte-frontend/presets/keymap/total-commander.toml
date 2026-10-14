@@ -83,9 +83,9 @@
 # orthodox, cua and vim carry it; here, the Go menu (F9), where it is
 # first.
 #
-# `app.orders` (the order line, ADR 0185) likewise: TC's command line runs
-# programs, and a printable key starts the quick search. Go menu, or
-# `alt+p` and type `:`.
+# `app.orders` (the order line, ADR 0185) is `alt+:`, a norte chord TC does
+# not attest: its command line runs programs, and a printable key starts
+# the quick search.
 #
 # `task.pause` (ADR 0147), `task.retry` (ADR 0148) and the three queue ones
 # (`task.queue`, `task.up`, `task.down`, ADR 0149) are left UNBOUND here,
@@ -120,6 +120,7 @@ keymap = [
     # grammar and NOT on the wire — same byte as `ctrl+p`, which here is
     # `pane.copy-path`. See the long note in krusader.toml. There is a test.
     { on = ["alt+p"], run = "app.palette" },
+    { on = ["alt+:"], run = "app.orders" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },

@@ -165,8 +165,9 @@ enum Cmd {
     /// 'sel ext:pdf age<30d | cp >/mnt/backup'. There is no pane: `sel`
     /// reads `--cwd` and `>other` is refused.
     Run {
-        /// The order.
-        order: String,
+        /// The order. Bytes that are not UTF-8 are read as their `\xHH`
+        /// escape.
+        order: std::ffi::OsString,
         /// Folder that `sel` and relative paths resolve against.
         #[arg(long, default_value = ".")]
         cwd: PathBuf,

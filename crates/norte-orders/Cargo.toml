@@ -10,6 +10,10 @@ authors.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+# `is_combining_mark`, so the printer keeps `é` decomposed and Hindi raw
+# instead of escaping every mark. ALREADY in the workspace (norte-encoding,
+# norte-core, norte-vfs-local…) and not ours, so the boundary holds.
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 norte-encoding.workspace = true

@@ -7,6 +7,36 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **The order line has a key in every preset**: `alt+:` in krusader, far,
+  norton and total-commander, where a bare `:` goes to the quick search or
+  the command line (`:` stays in orthodox, vim and cua).
+- **Cancel the assistant**: Esc while it is thinking (or the Cancel button
+  in the window) stops waiting; a second Esc gives the keys back. In the
+  window, Enter on an empty field applies the newest proposed order.
+
+### Fixed
+
+- **The box, the palette, help and settings take the keys over a focused
+  side panel** in the terminal. Opened over the terminal panel, the box
+  showed up but every key went to the shell, which ran what you typed as
+  a command.
+- **The assistant** keeps at most 200 turns, wraps CJK and emoji by their
+  width, lets Tab and the F keys reach the panel commands in the
+  terminal, says so when an order cannot be applied, and no longer loses
+  a message the window refused to send.
+- **The order line** (`:` and `norte run`): a no-break or other Unicode space
+  now separates words; `name=NAME` targets one file by its exact name (so a
+  file called `*` can be selected); a typed name finds a folder stored
+  decomposed or in the pane's name encoding; printed orders keep accents
+  and Hindi readable while still escaping invisible and bidi characters;
+  measuring unmeasured rows in the terminal no longer blocks the key and
+  Esc cancels it; `mkdir` in an order refuses on a read-only pane like F7;
+  `norte run` accepts an order that is not UTF-8, prints names with the
+  order's escapes instead of `�`, and `undo N --dry-run` says how many
+  operations it would undo (also in `--json`).
+
 ## [0.3.0-alpha.13] - 2026-10-14
 
 ### Added

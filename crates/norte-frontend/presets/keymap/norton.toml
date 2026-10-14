@@ -76,9 +76,9 @@
 # that. `ctrl+g` is free in all seven and orthodox, cua and vim carry it;
 # here it is reached through the Go menu (F9), where it is first.
 #
-# `app.orders` (the order line, ADR 0185) likewise: NC's command line is
-# the shell's and takes every printable key. Go menu, or the palette with
-# `:` typed.
+# `app.orders` (the order line, ADR 0185) is `alt+:`, a norte chord NC does
+# not attest: its command line is the shell's and takes every printable
+# key, and its speed search is Alt+letter, which `:` is not.
 #
 # `task.pause` (ADR 0147), `task.retry` (ADR 0148) and the three queue ones
 # (`task.queue`, `task.up`, `task.down`, ADR 0149) are left UNBOUND here,
@@ -113,6 +113,7 @@ keymap = [
     # chord all seven presets carry. See the long note in krusader.toml.
     { on = ["alt+9"], run = "app.theme" },
     { on = ["ctrl+p"], run = "app.palette" },
+    { on = ["alt+:"], run = "app.orders" },
     { on = ["f9"], run = "app.menu" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },

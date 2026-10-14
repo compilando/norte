@@ -215,3 +215,42 @@ async fn model_text_is_masked_when_painted() {
     assert!(painted.contains("done"), "the answer is painted");
     assert!(!painted.contains('\u{1b}') && !painted.contains('\u{202e}'));
 }
+
+/// Esc with a turn in flight cancels it — the job is aborted and the panel
+/// says so — and keeps the keyboard; a second Esc gives the keys back.
+#[tokio::test]
+async fn esc_cancels_a_turn_in_flight_then_returns_the_keys() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let (mut app, backend) = rig(&[ORDER], true);
+    let mut work = InFlight::default();
+    app.open_assistant();
+    app.assistant.push_str("copy the pdfs");
+    norte_tui::assistant::submit(&mut app, &backend, &mut work);
+    assert!(app.assistant.pending() && work.assistant.is_some());
+    let mut stream = futures::stream::pending();
+    let mut events = norte_tui::console::Console::detached(&mut stream);
+    let (none, esc) = (KeyModifiers::NONE, KeyCode::Esc);
+    norte_tui::assistant::on_key(&mut app, &backend, &mut events, &mut work, none, esc).await;
+    assert!(!app.assistant.pending(), "cancelled");
+    assert!(work.assistant.is_none(), "the job is aborted");
+    assert!(matches!(
+        app.assistant.turns().last(),
+        Some(Turn::Failed(_))
+    ));
+    assert_eq!(app.key_owner(), KeyOwner::Assistant, "the keys stay");
+    norte_tui::assistant::on_key(&mut app, &backend, &mut events, &mut work, none, esc).await;
+    assert_eq!(app.key_owner(), KeyOwner::Panes);
+}
+
+/// Tab and the F keys are not the input's: they reach the panel commands,
+/// as in the window.
+#[test]
+fn tab_and_f_keys_do_not_type() {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let (mut app, _backend) = rig(&[], true);
+    app.open_assistant();
+    let types = |c| norte_tui::assistant::types_text(&app, KeyModifiers::NONE, c);
+    assert!(types(KeyCode::Char('a')));
+    assert!(!types(KeyCode::Tab));
+    assert!(!types(KeyCode::F(5)));
+}
