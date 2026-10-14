@@ -62,6 +62,8 @@ pub async fn run(app: &mut App, backend: &Backend, order: &norte_orders::Order) 
     let cx = Context {
         here: &here,
         other: other.as_ref(),
+        listing: app.focused().state().real_entries(),
+        enc: app.focused().state().name_encoding(),
     };
     let steps = match orders::steps(order, &cx) {
         Ok(s) => s,

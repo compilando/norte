@@ -191,3 +191,59 @@ fn tokens_mark_the_error_from_its_offset() {
     let last = tokens(line).pop().expect("tokens");
     assert_eq!(last, (14..18, TokenClass::Error));
 }
+
+/// A no-break space (or any Unicode space) typed between two words splits
+/// them, as an ASCII space does: `>other` followed by NBSP is still the
+/// other pane, not a folder called `other\u{a0}`.
+#[test]
+fn unicode_whitespace_splits_words_outside_quotes() {
+    assert_eq!(
+        q("cp\u{a0}>other\u{a0}").stages,
+        vec![Stage::Cp(Dest::Other)]
+    );
+    assert_eq!(
+        q("sel\u{3000}*.rs\u{2003}|\u{2009}trash").stages,
+        vec![sel(vec![yes(Pred::Name(b"*.rs".to_vec()))]), Stage::Trash]
+    );
+    // Inside quotes, or escaped, it is part of the name.
+    assert_eq!(
+        q("mkdir 'a\u{a0}b'").stages,
+        vec![Stage::Mkdir("a\u{a0}b".as_bytes().to_vec())]
+    );
+    assert_eq!(
+        q(r"mkdir a\xc2\xa0b").stages,
+        vec![Stage::Mkdir("a\u{a0}b".as_bytes().to_vec())]
+    );
+}
+
+/// The colour spans of a line split on a Unicode space stay on char
+/// boundaries: the box slices the line with them.
+#[test]
+fn tokens_after_a_unicode_space_stay_on_char_boundaries() {
+    let line = "sel\u{a0}*.rs";
+    for (r, _) in tokens(line) {
+        assert!(line.get(r.clone()).is_some(), "{r:?}");
+    }
+}
+
+/// `name=` names one file by its exact name: `*` and `?` are letters there,
+/// so a file literally called `*` can be targeted without its glob twin.
+#[test]
+fn name_equals_is_a_literal_name() {
+    assert_eq!(
+        q("sel name=*").stages,
+        vec![sel(vec![yes(Pred::Literal(b"*".to_vec()))])]
+    );
+    assert_eq!(
+        q(r"sel !name=a\x20b?").stages,
+        vec![sel(vec![Term {
+            negated: true,
+            pred: Pred::Literal(b"a b?".to_vec()),
+        }])]
+    );
+    // Typed escaped, it is a glob again.
+    assert_eq!(
+        q(r"sel name\x3d*").stages,
+        vec![sel(vec![yes(Pred::Name(b"name=*".to_vec()))])]
+    );
+}

@@ -101,6 +101,8 @@ impl State {
         let cx = Context {
             here: &here,
             other: other.as_ref(),
+            listing: self.slot().pane.real_entries(),
+            enc: self.slot().pane.name_encoding(),
         };
         let steps = match orders::steps(order, &cx) {
             Ok(s) => s,

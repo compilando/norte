@@ -26,6 +26,8 @@ enum Compiled {
     /// Folded extensions, each with whether it names raw bytes.
     Ext(Vec<(String, bool)>),
     Name(NameMatcher),
+    /// `name=`: the whole name folded as a glob folds it, no wildcards.
+    Literal(String),
     Size(Cmp, u64),
     Age(Cmp, u64),
     Kind(KindSel),
@@ -54,6 +56,7 @@ impl CompiledQuery {
                         .collect(),
                 ),
                 Pred::Name(g) => Compiled::Name(NameMatcher::new(g)?),
+                Pred::Literal(n) => Compiled::Literal(crate::nav::fold_exact(n, None)),
                 Pred::Size(c, n) => Compiled::Size(*c, *n),
                 Pred::Age(c, n) => Compiled::Age(*c, *n),
                 Pred::Kind(k) => Compiled::Kind(*k),
@@ -107,6 +110,7 @@ pub fn matches(entry: &Entry, q: &CompiledQuery, now_ms: i64) -> bool {
                 }))
             }
             Compiled::Name(m) => Some(m.is_match(name, q.enc)),
+            Compiled::Literal(l) => Some(crate::nav::fold_exact(name, q.enc) == *l),
             Compiled::Size(cmp, n) => {
                 let measured = entry.kind != EntryKind::Dir || q.dirs_asked;
                 entry.size.filter(|_| measured).map(|s| cmp.holds(s, *n))
@@ -168,6 +172,13 @@ pub struct Context<'a> {
     pub here: &'a VPath,
     /// The other pane's folder, if there is one.
     pub other: Option<&'a VPath>,
+    /// What the focused folder is known to hold (empty: nothing known). A
+    /// typed name is matched against it in NFC and through
+    /// [`Self::enc`], and the path keeps the listed bytes: `cd café` reaches
+    /// a folder stored decomposed, or one a cp866 pane paints as `café`.
+    pub listing: &'a [Entry],
+    /// The focused pane's name encoding, if it reinterprets names.
+    pub enc: Option<NameEncoding>,
 }
 
 /// Why an order that parsed cannot run here.
@@ -407,7 +418,7 @@ pub fn steps(order: &Order, cx: &Context<'_>) -> Result<Vec<Step>, OrderError> {
     let dest = |d: &Dest| match d {
         Dest::Other => cx.other.cloned().ok_or(OrderError::NoOtherPane),
         Dest::Here => Ok(cx.here.clone()),
-        Dest::Path(p) => resolve(cx.here, p),
+        Dest::Path(p) => resolve(cx, p),
     };
     order
         .stages
@@ -419,10 +430,10 @@ pub fn steps(order: &Order, cx: &Context<'_>) -> Result<Vec<Step>, OrderError> {
                 Stage::Mv(d) => Step::Move { to: dest(d)? },
                 Stage::Trash => Step::Trash,
                 Stage::Mkdir(n) => Step::Mkdir {
-                    path: resolve(cx.here, n)?,
+                    path: resolve(cx, n)?,
                 },
                 Stage::Cd(p) => Step::Cd {
-                    to: resolve(cx.here, p)?,
+                    to: resolve(cx, p)?,
                 },
                 Stage::Log(n) => Step::Log(n.unwrap_or(LOG_DEFAULT)),
                 Stage::Undo(n) => Step::Undo(n.unwrap_or(1)),
@@ -459,23 +470,63 @@ fn command(id: &str) -> Result<String, OrderError> {
 
 /// A typed path against the focused folder: a full `scheme://` form, an
 /// absolute `/…` on the same provider, or relative. `.` and `..` are walked
-/// here because a [`Segment`] may be neither.
-fn resolve(here: &VPath, typed: &[u8]) -> Result<VPath, OrderError> {
+/// here because a [`Segment`] may be neither. A name typed inside the focused
+/// folder takes the bytes of the entry it names ([`listed`]).
+fn resolve(cx: &Context<'_>, typed: &[u8]) -> Result<VPath, OrderError> {
     let (mut at, rest) = match url_root(typed)? {
         Some((root, rest)) => (root, rest),
-        None => (start_of(here, typed), typed),
+        None => (start_of(cx.here, typed), typed),
     };
     for part in rest.split(|b| *b == b'/') {
         match part {
             b"" | b"." => {}
             b".." => at = at.parent().unwrap_or(at),
             name => {
+                let name = if at == *cx.here {
+                    listed(cx, name)
+                } else {
+                    name
+                };
                 let seg = Segment::new(name.to_vec()).map_err(|_| OrderError::BadPath)?;
                 at = at.join(seg);
             }
         }
     }
     Ok(at)
+}
+
+/// The listed name `typed` means: itself if listed byte for byte, else the
+/// ONE entry equal to it in NFC (decoded with the pane's encoding where it
+/// reinterprets), else `typed` as it is. Two twins and no exact hit: neither
+/// is guessed.
+fn listed<'b>(cx: &Context<'b>, typed: &'b [u8]) -> &'b [u8] {
+    let names = || {
+        cx.listing
+            .iter()
+            .filter_map(|e| e.path.file_name().map(Segment::as_bytes))
+    };
+    if names().any(|n| n == typed) {
+        return typed;
+    }
+    let want = nfc_key(typed, None);
+    let mut hits = names().filter(|n| nfc_key(n, cx.enc) == want);
+    match (hits.next(), hits.next()) {
+        (Some(one), None) => one,
+        _ => typed,
+    }
+}
+
+/// A name in NFC without case folding; a non-UTF-8 name a pane reinterprets
+/// is decoded first, as [`crate::nav::fold_with`] decodes it.
+fn nfc_key(name: &[u8], enc: Option<NameEncoding>) -> Vec<u8> {
+    use unicode_normalization::UnicodeNormalization as _;
+    match (enc, std::str::from_utf8(name)) {
+        (Some(e), Err(_)) => norte_encoding::decode_name(name, e)
+            .nfc()
+            .collect::<String>()
+            .into_bytes(),
+        _ => norte_encoding::name_key(name, norte_encoding::FoldMode::None).into_owned(),
+    }
 }
 
 /// `scheme://authority` at the start of a typed path, detected on ASCII
@@ -650,6 +701,8 @@ mod tests {
             &Context {
                 here: &d,
                 other: None,
+                listing: &[],
+                enc: None,
             },
         )
         .expect("steps");
@@ -681,6 +734,8 @@ mod tests {
         let cx = Context {
             here: &here,
             other: Some(&other),
+            listing: &[],
+            enc: None,
         };
         let s = |line: &str| steps(&norte_orders::parse(line).expect("parse"), &cx).expect("steps");
         assert_eq!(s("cp >other"), [Step::Copy { to: other.clone() }]);
@@ -713,6 +768,8 @@ mod tests {
         let cx = Context {
             here: &here,
             other: None,
+            listing: &[],
+            enc: None,
         };
         let order = norte_orders::parse(r"cp >x\xff").expect("parse");
         let [Step::Copy { to }] = &steps(&order, &cx).expect("steps")[..] else {
@@ -727,6 +784,8 @@ mod tests {
         let cx = Context {
             here: &here,
             other: None,
+            listing: &[],
+            enc: None,
         };
         let order = norte_orders::parse("cp >other").expect("parse");
         assert_eq!(steps(&order, &cx), Err(OrderError::NoOtherPane));
@@ -738,6 +797,8 @@ mod tests {
         let cx = Context {
             here: &here,
             other: None,
+            listing: &[],
+            enc: None,
         };
         let order = norte_orders::parse("pane.swp").expect("parse");
         assert_eq!(
@@ -830,6 +891,8 @@ mod tests {
         let cx = Context {
             here: &here,
             other: None,
+            listing: &[],
+            enc: None,
         };
         let order = norte_orders::parse(r"cp >mem:///o/caf\xe9").expect("parse");
         let [Step::Copy { to }] = &steps(&order, &cx).expect("steps")[..] else {
@@ -847,6 +910,8 @@ mod tests {
         let cx = Context {
             here: &here,
             other: None,
+            listing: &[],
+            enc: None,
         };
         let order = norte_orders::parse("cp >sftp://u:pw@h/x").expect("parse");
         assert_eq!(steps(&order, &cx), Err(OrderError::BadPath));
@@ -912,6 +977,8 @@ mod tests {
         let cx = Context {
             here: &here,
             other: None,
+            listing: &[],
+            enc: None,
         };
         let order = norte_orders::parse("sel *.rs | cp >here | trash").expect("parse");
         assert_eq!(steps(&order, &cx), Err(OrderError::OneAction));
@@ -991,6 +1058,75 @@ mod tests {
                 assert!(ids.iter().any(|i| i == key), "{lang:?} {key}");
             }
         }
+    }
+
+    #[test]
+    fn name_equals_targets_a_file_literally_called_star() {
+        let mut p = pane(vec![file("*", 1, 1), file("a", 1, 1), file("B?", 1, 1)]);
+        assert_eq!(p.select_query(&query("sel name=*"), NOW), Ok(1));
+        assert_eq!(names(&p), ["*"]);
+        assert_eq!(p.select_query(&query("sel name=b?"), NOW), Ok(1), "folded");
+        assert_eq!(p.select_query(&query("sel !name=*"), NOW), Ok(2));
+        assert_eq!(p.select_query(&query("sel *"), NOW), Ok(3));
+    }
+
+    fn corpus(id: &str) -> Vec<u8> {
+        norte_testkit::corpus::hostile_names()
+            .into_iter()
+            .find(|n| n.id == id)
+            .unwrap_or_else(|| panic!("fixture {id}"))
+            .bytes
+    }
+
+    fn cd_in(listing: &[Entry], enc: Option<NameEncoding>, line: &str) -> Vec<u8> {
+        let here = dir();
+        let cx = Context {
+            here: &here,
+            other: None,
+            listing,
+            enc,
+        };
+        let order = norte_orders::parse(line).expect("parse");
+        let [Step::Cd { to }] = &steps(&order, &cx).expect("steps")[..] else {
+            panic!("{line}")
+        };
+        assert_eq!(to.parent(), Some(here));
+        to.file_name().expect("name").as_bytes().to_vec()
+    }
+
+    /// `cd café` typed composed reaches the folder stored decomposed: the
+    /// comparison is in NFC, the path keeps the folder's own bytes.
+    #[test]
+    fn a_typed_name_finds_its_nfd_folder_and_keeps_its_bytes() {
+        let nfd = corpus("nfd_e_acute");
+        let nfc = corpus("nfc_e_acute");
+        let only_nfd = [entry(&nfd, EntryKind::Dir, None, 1)];
+        let typed = format!("cd {}", String::from_utf8(nfc.clone()).expect("utf8"));
+        assert_eq!(cd_in(&only_nfd, None, &typed), nfd);
+        // Both exist (two files on ext4): the exact bytes win, never the twin.
+        let both = [
+            entry(&nfd, EntryKind::Dir, None, 1),
+            entry(&nfc, EntryKind::Dir, None, 1),
+        ];
+        assert_eq!(cd_in(&both, None, &typed), nfc);
+        // Not listed: the typed bytes, as typed.
+        assert_eq!(cd_in(&[], None, &typed), nfc);
+    }
+
+    /// A pane reading its names as cp866 matches what it paints: typing
+    /// `Папка` reaches the folder whose bytes are cp866.
+    #[test]
+    fn a_typed_name_honours_the_panes_name_encoding() {
+        let papka = corpus("cp866_papka");
+        let listing = [entry(&papka, EntryKind::Dir, None, 1)];
+        let enc = Some(norte_encoding::name_reinterpret_cycle()[1]);
+        assert_eq!(enc.map(|e| e.label()), Some("IBM866"));
+        assert_eq!(cd_in(&listing, enc, "cd Папка/"), papka);
+        assert_eq!(
+            cd_in(&listing, None, "cd Папка"),
+            "Папка".as_bytes(),
+            "without the encoding, no reinterpretation"
+        );
     }
 
     #[test]

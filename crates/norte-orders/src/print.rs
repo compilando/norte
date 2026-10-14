@@ -7,12 +7,19 @@ use crate::parse::UNITS_AGE;
 
 /// Prints an order so that [`crate::parse`] gives it back, byte for byte.
 ///
-/// Printable UTF-8 letters and ASCII punctuation are written as they are.
-/// Everything else in a name — a byte that is not UTF-8, a control, a space,
-/// an invisible or bidi character, `|`, `'`, `\`, and `,` inside `ext:` — is
-/// written `\xHH`, one per byte, so a printed order never carries a byte a
-/// terminal would act on. A name that would read as syntax (`other` after
-/// `>`, a glob starting with `!` or a key) is written so it cannot.
+/// Printable UTF-8 letters and ASCII punctuation are written as they are,
+/// and so is a combining mark right after a letter (`é` decomposed, Hindi).
+/// Everything else in a name — a byte that is not UTF-8, a control, any
+/// space, an invisible or bidi character, a mark with no letter before it,
+/// `|`, `'`, `\`, and `,` inside `ext:` — is written `\xHH`, one per byte, so
+/// a printed order never carries a byte a terminal would act on. A name that
+/// would read as syntax (`other` after `>`, a glob starting with `!` or a
+/// key) is written so it cannot.
+///
+/// Total: any tree prints, none panics. A tree the parser can produce reads
+/// back equal; one it cannot (no stages, an empty `sel`, `ext:` with no
+/// list, an empty name, a catalogue id that is not one) prints the nearest
+/// line, which does not parse back to it.
 ///
 /// ```
 /// use norte_orders::{parse, print};
@@ -63,7 +70,10 @@ fn stage(s: &Stage) -> String {
         Stage::Cd(n) => format!("cd {}", word(n)),
         Stage::Log(n) => count("log", *n),
         Stage::Undo(n) => count("undo", *n),
-        Stage::Catalogue(id) => id.clone(),
+        Stage::Catalogue(id) if crate::parse::is_catalogue_id(id) => id.clone(),
+        // A hand-built "id" the parser could never have read: escaped like a
+        // name, so it reads back as an unknown verb and never paints raw.
+        Stage::Catalogue(id) => word(id.as_bytes()),
     }
 }
 
@@ -110,6 +120,10 @@ fn term(t: &Term) -> String {
             }
             out.push_str(&e);
         }
+        Pred::Literal(n) => {
+            out.push_str("name=");
+            out.push_str(&escape(n, false));
+        }
         Pred::Size(c, n) => {
             let _ = write!(out, "size{}{}", c.as_str(), size(*n));
         }
@@ -134,6 +148,7 @@ fn reads_as_syntax(e: &str) -> bool {
     e.starts_with('!')
         || e.starts_with("ext:")
         || e.starts_with("name:")
+        || e.starts_with("name=")
         || e.starts_with("type:")
         || keyed("size")
         || keyed("age")
@@ -165,9 +180,30 @@ fn age(n: u64) -> String {
 /// Hangul fillers: letters to Unicode, invisible to the reader.
 const INVISIBLE_LETTERS: &[char] = &['\u{115F}', '\u{1160}', '\u{3164}', '\u{FFA0}'];
 
-fn safe(c: char, comma: bool) -> bool {
+/// Combining marks that are `Default_Ignorable` — invisible, so a twin maker
+/// (`norte_encoding::is_terminal_hazard`'s table; this crate may not link it,
+/// and `every_terminal_hazard_is_escaped_even_after_a_letter` checks the two
+/// agree). The variation selectors are here too: after a letter they select
+/// nothing a reader can see.
+const INVISIBLE_MARKS: &[(char, char)] = &[
+    ('\u{034F}', '\u{034F}'),
+    ('\u{17B4}', '\u{17B5}'),
+    ('\u{180B}', '\u{180F}'),
+    ('\u{FE00}', '\u{FE0F}'),
+    ('\u{E0100}', '\u{E01EF}'),
+];
+
+/// Whether `c` is written as it is. A combining mark only right after a
+/// letter (or a mark kept on one): alone it would draw on whatever the
+/// terminal printed before it.
+fn safe(c: char, comma: bool, after_letter: bool) -> bool {
     if c.is_ascii() {
         c.is_ascii_graphic() && !matches!(c, '|' | '\'' | '\\') && !(comma && c == ',')
+    } else if unicode_normalization::char::is_combining_mark(c) {
+        after_letter
+            && !INVISIBLE_MARKS
+                .iter()
+                .any(|(lo, hi)| (*lo..=*hi).contains(&c))
     } else {
         c.is_alphanumeric() && !INVISIBLE_LETTERS.contains(&c)
     }
@@ -175,19 +211,25 @@ fn safe(c: char, comma: bool) -> bool {
 
 fn escape(bytes: &[u8], comma: bool) -> String {
     let mut out = String::with_capacity(bytes.len());
+    let mut after_letter = false;
     for chunk in bytes.utf8_chunks() {
         for c in chunk.valid().chars() {
-            if safe(c, comma) {
+            if safe(c, comma, after_letter) {
                 out.push(c);
+                // A kept mark carries the letter on: marks stack (Vietnamese).
+                after_letter =
+                    c.is_alphanumeric() || unicode_normalization::char::is_combining_mark(c);
             } else {
                 let mut buf = [0u8; 4];
                 for b in c.encode_utf8(&mut buf).bytes() {
                     let _ = write!(out, "\\x{b:02x}");
                 }
+                after_letter = false;
             }
         }
         for b in chunk.invalid() {
             let _ = write!(out, "\\x{b:02x}");
+            after_letter = false;
         }
     }
     out

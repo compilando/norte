@@ -37,6 +37,16 @@ fn hex(b: u8) -> Option<u8> {
     }
 }
 
+/// The length of the Unicode space starting at byte `i`, or 0. Any
+/// `White_Space` char separates words, not only ASCII ones: a no-break space
+/// pasted after `>other` must not turn the keyword into a folder name.
+fn space_at(line: &str, i: usize) -> usize {
+    line.get(i..)
+        .and_then(|rest| rest.chars().next())
+        .filter(|c| c.is_whitespace())
+        .map_or(0, char::len_utf8)
+}
+
 /// Lexes as far as the line allows: the tokens before an error survive, so
 /// the box can still colour them.
 pub(crate) fn lex(line: &str) -> (Vec<Tok>, Option<ParseError>) {
@@ -46,8 +56,9 @@ pub(crate) fn lex(line: &str) -> (Vec<Tok>, Option<ParseError>) {
     let err = |offset, kind| Some(ParseError { offset, kind });
     while i < src.len() {
         let b = src[i];
-        if b.is_ascii_whitespace() {
-            i += 1;
+        let space = space_at(line, i);
+        if space > 0 {
+            i += space;
             continue;
         }
         if b == b'|' {
@@ -60,7 +71,7 @@ pub(crate) fn lex(line: &str) -> (Vec<Tok>, Option<ParseError>) {
         let mut quote: Option<usize> = None;
         while i < src.len() {
             let b = src[i];
-            if quote.is_none() && (b.is_ascii_whitespace() || b == b'|') {
+            if quote.is_none() && (b == b'|' || space_at(line, i) > 0) {
                 break;
             }
             match b {

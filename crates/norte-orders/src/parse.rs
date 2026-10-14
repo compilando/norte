@@ -250,7 +250,7 @@ fn stage(
 }
 
 /// A catalogue id: lowercase words joined by dots, e.g. `pane.swap`.
-fn is_catalogue_id(s: &str) -> bool {
+pub(crate) fn is_catalogue_id(s: &str) -> bool {
     s.contains('.')
         && !s.starts_with('.')
         && !s.ends_with('.')
@@ -379,6 +379,9 @@ fn term(r: &Range<usize>, p: &[Piece], spans: &mut Spans) -> Result<Term, ParseE
     } else if plain_prefix(body, b"name:") {
         key(5, spans);
         Pred::Name(bytes(&body[5..]))
+    } else if plain_prefix(body, b"name=") {
+        key(5, spans);
+        Pred::Literal(bytes(&body[5..]))
     } else if plain_prefix(body, b"type:") {
         key(5, spans);
         let rest = &body[5..];
