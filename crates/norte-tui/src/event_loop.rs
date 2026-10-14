@@ -1272,6 +1272,15 @@ pub async fn run(
                 crate::jobs::harvest_goto_index(app, &mut work, res);
             }
             res = async {
+                // The assistant's turn (ADR 0186).
+                match &mut work.assistant {
+                    Some(h) => h.await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                crate::assistant::harvest(app, &mut work, res);
+            }
+            res = async {
                 match &mut work.update_check {
                     Some(h) => h.await,
                     None => std::future::pending().await,

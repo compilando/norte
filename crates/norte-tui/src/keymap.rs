@@ -181,6 +181,7 @@ commands! {
     "layout.processes" => LayoutProcesses,
     "layout.metadata" => LayoutMetadata,
     "layout.log" => LayoutLog,
+    "layout.assistant" => LayoutAssistant,
     "layout.disk-map" => LayoutDiskMap,
     "layout.pick" => LayoutPick,
     "profile.pick" => ProfilePick,
@@ -436,6 +437,7 @@ pub fn pending_display(resolver: &Resolver) -> String {
 /// and a key that works or not depending on which panel has the keyboard
 /// is not learned (review of 2026-10-07).
 const PANEL_SHARED: &[&str] = &[
+    "layout.assistant",
     "layout.places",
     "layout.preview",
     "layout.processes",

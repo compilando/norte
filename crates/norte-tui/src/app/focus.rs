@@ -276,6 +276,7 @@ impl App {
             crate::diskmap::KIND => Some(FocusStop::Side(KeyOwner::DiskMap)),
             crate::timeline::KIND => Some(FocusStop::Side(KeyOwner::Timeline)),
             crate::searchpanel::KIND => Some(FocusStop::Side(KeyOwner::Search)),
+            crate::assistant::KIND => Some(FocusStop::Side(KeyOwner::Assistant)),
             // The terminal is only a ring stop if there IS a way out. With
             // no loose chord to exit it, entering would mean staying stuck
             // inside: the panel is seen and looked at, and the keyboard

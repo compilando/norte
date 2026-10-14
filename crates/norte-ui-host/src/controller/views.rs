@@ -98,6 +98,9 @@ impl State {
                 Some(super::timeline::KIND) => {
                     slots.push(SlotView::Timeline(Box::new(self.timeline_view(id))));
                 }
+                Some(super::assistant::KIND) => {
+                    slots.push(SlotView::Assistant(Box::new(self.assistant_view(id))));
+                }
                 Some(super::searchpanel::KIND) => {
                     slots.push(SlotView::Search(Box::new(self.search_panel_view(id))));
                 }

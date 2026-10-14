@@ -66,6 +66,21 @@ proptest! {
     }
 }
 
+proptest! {
+    /// A name written with `escape_name` is read back as exactly its bytes,
+    /// and carries nothing a terminal would act on: what the assistant is
+    /// shown is what it must write.
+    #[test]
+    fn an_escaped_name_reads_back_as_its_bytes(n in path()) {
+        let e = escape_name(&n);
+        prop_assert_eq!(
+            parse(&format!("mkdir {e}")).map(|o| o.stages),
+            Ok(vec![Stage::Mkdir(n.clone())])
+        );
+        prop_assert!(e.chars().all(|c| !norte_encoding::is_terminal_hazard(c)));
+    }
+}
+
 #[test]
 fn standalone_stages_round_trip() {
     for o in [

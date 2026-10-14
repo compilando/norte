@@ -9,6 +9,16 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **The assistant.** `alt+Y` (all seven presets), the AI button on the
+  panel bar, or `@` in the box opens a panel where you ask in plain words:
+  "copy this month's PDFs to the other pane", "what takes the most space
+  here?". It answers, or proposes an order you review and apply — the
+  usual confirmation still asks. It reads names, sizes, dates and your
+  recent operations under your two panes, never file contents, and
+  nothing under `[ai] denied_prefixes`. Off until you turn it on in
+  `norte.toml`. Protocol 0.87.0: `ai.chat` (ADR 0186).
+- **Panel bar labels**: "Processes" is now "Tasks" (en) and "Detalles" is
+  "Info" (es), so the names still fit 80 columns with the new button.
 - **Type what to do: the order line.** Press `:` (vim, orthodox, cua; the
   Go menu or the palette elsewhere) and write
   `sel ext:pdf age<30d | cp >other`. The rows it would touch are marked as

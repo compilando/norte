@@ -154,6 +154,10 @@ const LOG_TAIL_MAX_LINES: usize = 1000;
 /// Cap on the `ai.rename_plan` prompt (security review M4-IA): INPUT tokens
 /// are the provider's cost; the 16 MiB frame is not a limit.
 const MAX_AI_INSTRUCTION_BYTES: usize = 4 * 1024;
+
+/// The longest an `ai.chat` turn may hold its dispatch: the same cap the SDK
+/// and the embedded backend apply, enforced where a raw caller cannot skip it.
+const AI_CHAT_TURN_MAX: std::time::Duration = std::time::Duration::from_mins(5);
 /// Cap on the `index.search_semantic` query (same belt as the
 /// `ai.rename_plan` instruction).
 const MAX_AI_QUERY_BYTES: usize = MAX_AI_INSTRUCTION_BYTES;
@@ -2569,6 +2573,9 @@ fn is_cancelable(method: &str) -> bool {
             // be left suspended in an Ask just like a mkdir.
             | methods::FS_SET_MODE
             | methods::AI_RENAME_PLAN
+            // 0.87.0: the assistant's turn can take a minute of model calls;
+            // withdrawing it drops the loop between calls.
+            | methods::AI_CHAT
             | methods::INDEX_SEARCH_SEMANTIC
             // 0.36.0: `fs.rename_batch` gates the WHOLE batch before reserving
             // anything, so it can be left suspended in an Ask exactly like an
@@ -6313,6 +6320,45 @@ async fn dispatch_fs_task(
                 refused: None,
                 plan_hash,
             })
+        }
+        // `ai.chat` (0.87.0, ADR 0186): one assistant turn. Human-only and
+        // BEFORE parsing, for the rename plan's reason: the tools read the
+        // reader's tree and the conversation goes to a provider. Both pane
+        // folders pass the read gate like any listing.
+        methods::AI_CHAT => {
+            human_only(&actor)?;
+            let p: methods::AiChatParams = parse_params(req.params)?;
+            let over = p.messages.is_empty()
+                || p.messages.len() > methods::AI_CHAT_MAX_MESSAGES
+                || p.messages
+                    .iter()
+                    .any(|m| m.text.len() > methods::AI_CHAT_MAX_TEXT_BYTES);
+            if over {
+                return Err(RpcError::protocol(
+                    codes::INVALID_PARAMS,
+                    format!(
+                        "1..={} messages of at most {} bytes",
+                        methods::AI_CHAT_MAX_MESSAGES,
+                        methods::AI_CHAT_MAX_TEXT_BYTES
+                    ),
+                ));
+            }
+            read_gate(&actor, &p.here, shared)?;
+            if let Some(other) = &p.other {
+                read_gate(&actor, other, shared)?;
+            }
+            // Dropping this dispatch (`rpc.cancel`, the peer gone) drops the
+            // loop with it; the token is for the engine's own checks.
+            let cancel = tokio_util::sync::CancellationToken::new();
+            // Bounded HERE too: a raw JSON-RPC caller sets no timeout, and a
+            // provider that stalls without closing would hold the dispatch.
+            let turn = tokio::time::timeout(AI_CHAT_TURN_MAX, shared.engine.ai_chat(&p, &cancel))
+                .await
+                .map_err(|_| {
+                    RpcError::from(norte_proto::Error::ProviderUnavailable { retryable: true })
+                })?
+                .map_err(RpcError::from)?;
+            to_value(&methods::AiChatResult { turn })
         }
         // `fs.organize` (0.77.0, phase 8): applying the plan. MUTATES, so it
         // goes by the connection's actor and the engine gates it — a single

@@ -630,7 +630,10 @@ use serde::{Deserialize, Serialize};
 ///   type (ADR 0184).
 /// - **115**: the order line (ADR 0185): `GotoModeView::Order` and
 ///   `GotoView.order` (`OrderLineView`: colour spans, parse error, preview).
-pub const BRIDGE_VERSION: u32 = 115;
+/// - **116**: the assistant panel (ADR 0186): `SlotView::Assistant`
+///   (`AssistantSlotView`, `AssistantTurnView`), the actions
+///   `assistant_submit` and `assistant_apply`, and `GotoModeView::Ask`.
+pub const BRIDGE_VERSION: u32 = 116;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

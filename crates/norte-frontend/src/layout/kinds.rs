@@ -186,6 +186,12 @@ impl KindRegistry {
                 // ONE, and holds no role. 24x6 = an input, the status and
                 // three rows.
                 decl("search", (24, 6), true, true, false, SIN_ROLES),
+                // The assistant (ADR 0186): focusable, takes keys — you type
+                // into it and walk its turns — and there is ONE. Holds no
+                // role: nobody copies into a conversation. 30x6 is a turn of
+                // two lines plus the input and the frame. Last, so its
+                // button joins the end of the bar and moves no other.
+                decl("assistant", (30, 6), true, true, false, SIN_ROLES),
             ],
         }
     }

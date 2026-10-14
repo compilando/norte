@@ -13,6 +13,9 @@ use norte_proto::{CollisionPolicy, Entry, Error, ResumePolicy, SymlinkPolicy, Ve
 /// longer than an `fs.*`.
 pub const AI_CALL_TIMEOUT: Duration = Duration::from_mins(2);
 
+/// Timeout for one assistant turn (`ai.chat`): up to seven model calls.
+pub const AI_CHAT_TIMEOUT: Duration = Duration::from_mins(5);
+
 /// The stream of a paginated listing.
 ///
 /// Its OWN alias and not `norte-vfs`'s (which is identical) because dragging

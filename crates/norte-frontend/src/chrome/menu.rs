@@ -339,6 +339,7 @@ pub const MENUS: &[Menu] = &[
                     "layout.log",
                     "layout.disk-map",
                     "layout.timeline",
+                    "layout.assistant",
                     // #362: the embedded terminal. It goes with the side
                     // panes and not with `app.terminal` in the commands
                     // menu, because what it opens is a PANE: what this menu

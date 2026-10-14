@@ -52,6 +52,7 @@ import * as viewer from "./render/viewer";
 import * as help from "./render/help";
 import * as splash from "./render/splash";
 import * as log from "./render/log";
+import * as assistant from "./render/assistant";
 import * as diskMap from "./render/diskmap";
 import * as terminal from "./render/terminal";
 import * as searchpanel from "./render/searchpanel";
@@ -1095,6 +1096,10 @@ export class Screen {
       this.paintLog(dom, slot);
       return;
     }
+    if (slot.kind === "assistant") {
+      this.paintAssistant(dom, slot);
+      return;
+    }
     if (slot.kind === "panel") {
       this.paintPanel(dom, slot);
       return;
@@ -1193,6 +1198,7 @@ export class Screen {
 
   /** In `render/log.ts`. */
   readonly paintLog = log.paintLog;
+  readonly paintAssistant = assistant.paintAssistant;
   readonly paintTerminal = terminal.paintTerminal;
 
   /** In `render/panel.ts`. */

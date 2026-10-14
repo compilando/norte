@@ -282,6 +282,8 @@ pub async fn on_key(
         // a chord with ctrl/alt writes nothing, and `alt+F` has to close
         // the panel it opened with the caret already in it.
         && !crate::searchpanel::types_text(app, key.modifiers)
+        // Nor the assistant's input, for the same reason.
+        && !crate::assistant::types_text(app, key.modifiers)
         // A viewer opened from a result row: its keys are the viewer's.
         && !crate::searchpanel::viewer_over(app)
         && matches!(
@@ -293,6 +295,7 @@ pub async fn on_key(
                 | crate::app::KeyOwner::DiskMap
                 | crate::app::KeyOwner::Timeline
                 | crate::app::KeyOwner::Search
+                | crate::app::KeyOwner::Assistant
                 | crate::app::KeyOwner::Panel
                 // The terminal too, as in the window, but with its OWN short
                 // list: the ring and `terminal.*`. The panels' list would
@@ -418,6 +421,9 @@ pub async fn on_key(
             key.code,
         )
         .await;
+    } else if app.key_owner() == crate::app::KeyOwner::Assistant && !modal_wins(app) {
+        // The assistant (ADR 0186): what is typed belongs to its input.
+        crate::assistant::on_key(app, backend, events, work, key.modifiers, key.code).await;
     } else if app.key_owner() == crate::app::KeyOwner::Terminal && !modal_wins(app) {
         // The terminal panel (#362), and this arm does NOT look like its
         // neighbors: the others translate keys into commands, and here the
@@ -630,6 +636,14 @@ pub async fn on_key(
                     Some(crate::goto::Action::Order(order)) => {
                         crate::orders::run(app, backend, &order).await
                     }
+                    // `@`: the assistant panel, with the text as the
+                    // reader's first message if there is one.
+                    Some(crate::goto::Action::Ask(text)) => {
+                        crate::orders::cancel(app);
+                        app.open_assistant();
+                        crate::assistant::ask(app, backend, work, &text);
+                        return;
+                    }
                     other => {
                         crate::orders::cancel(app);
                         other
@@ -745,7 +759,8 @@ pub async fn on_key(
                     // Handled above, before closing.
                     crate::goto::Action::SetQuery(_)
                     | crate::goto::Action::OrderInvalid
-                    | crate::goto::Action::Order(_) => {}
+                    | crate::goto::Action::Order(_)
+                    | crate::goto::Action::Ask(_) => {}
                 }
             }
             // The chord of `app.palette` or `app.goto` pressed inside the

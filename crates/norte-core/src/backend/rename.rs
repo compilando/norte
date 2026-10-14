@@ -4,7 +4,7 @@
 
 use norte_proto::{Error, TaskId, VPath};
 
-use super::{AI_CALL_TIMEOUT, Backend, TaskRef};
+use super::{AI_CALL_TIMEOUT, AI_CHAT_TIMEOUT, Backend, TaskRef};
 
 impl Backend {
     /// The REVIEWABLE plan for a batch of renames inside `dir` (spec §17,
@@ -138,6 +138,27 @@ impl Backend {
                 Ok(crate::ai::ai_plan_to_proto(plan))
             }
             Self::Remote(r) => r.ai_rename_plan(dir, instruction, names).await,
+        }
+    }
+
+    /// One assistant turn (`ai.chat`, 0.87.0, ADR 0186): reads metadata,
+    /// mutates nothing.
+    ///
+    /// # Errors
+    /// `Unsupported` with no provider; the AI gate with its reason;
+    /// `ProviderUnavailable` when the turn outlives its five minutes.
+    pub async fn ai_chat(
+        &self,
+        params: &norte_proto::methods::AiChatParams,
+    ) -> Result<norte_proto::methods::AiChatTurn, Error> {
+        match self {
+            Self::Embedded(engine) => {
+                let cancel = tokio_util::sync::CancellationToken::new();
+                tokio::time::timeout(AI_CHAT_TIMEOUT, engine.ai_chat(params, &cancel))
+                    .await
+                    .map_err(|_| Error::ProviderUnavailable { retryable: true })?
+            }
+            Self::Remote(r) => r.ai_chat(params).await.map(|res| res.turn),
         }
     }
 

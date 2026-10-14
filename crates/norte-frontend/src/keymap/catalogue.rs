@@ -240,6 +240,10 @@ pub const CATALOGUE: &[CommandDef] = &[
     // wrong is asking the reader for one extra step at the worst moment.
     // `alt+l` was free in all seven presets.
     live("layout.log", false, Inert),
+    // The assistant panel (ADR 0186). Opening it sends nothing: a turn goes
+    // to the provider only when the reader presses Enter inside, and an
+    // order it proposes runs through the box's own confirmations.
+    live("layout.assistant", false, Inert),
     // The disk map (phase 4). Carries a chord in all seven for the same
     // reason as the log: it is a panel that keeps the KEYBOARD — you walk
     // the rectangles and enter one — and a panel like that has to be

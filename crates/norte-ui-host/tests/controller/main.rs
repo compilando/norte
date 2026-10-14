@@ -22,6 +22,7 @@ use norte_ui_host::dto::{SlotView, UiNotice, UiUpdate};
 mod backend_fake;
 use backend_fake::Fake;
 
+mod assistant;
 mod attributes_processes;
 mod base;
 mod columns;

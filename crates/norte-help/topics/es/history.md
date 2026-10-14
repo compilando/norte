@@ -21,6 +21,7 @@ commands = [
     "pane.hotlist",
     "app.goto",
     "app.orders",
+    "layout.assistant",
 ]
 +++
 
@@ -169,3 +170,17 @@ preguntando.
 Un nombre que no es texto, o que lleva un espacio o `|`, se escribe con
 escapes: `\xff`, `\ `, `\|`. Un `sel` que no casa nada no ejecuta nada:
 nunca cae en la fila bajo el cursor.
+
+## El asistente: `@`
+
+{{cmd:layout.assistant}} abre un panel donde pides en palabras — «copia los
+PDF de este mes al otro panel», «¿qué ocupa más aquí?». Escribir `@` en la
+caja hace lo mismo con lo que sigue. Cada respuesta es o bien una orden de la
+gramática de arriba, que revisas y aplicas con `a` (abre el mismo diálogo que
+su tecla), o bien una respuesta.
+
+Está apagado hasta que lo enciendes en `norte.toml` (`[ai] enabled = true` y
+un proveedor). Nunca cambia nada por sí mismo. Para responder lee nombres,
+tamaños, fechas y tus operaciones recientes — nunca el contenido de un
+fichero — y solo bajo las carpetas de tus dos paneles, menos las rutas que
+vetes en `[ai]`.

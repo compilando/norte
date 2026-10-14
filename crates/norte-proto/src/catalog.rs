@@ -248,6 +248,8 @@ rpc_catalog! {
     // SAME plan is applied by `fs.organize` — creating the directories and
     // moving, under a single `batch_id`, so it undoes as one unit.
     AI_ORGANIZE_PLAN, Request, Direct, methods::AiOrganizePlanParams, methods::AiOrganizePlanResult;
+    // The assistant (0.87.0, ADR 0186): one turn, metadata reads, no effect.
+    AI_CHAT, Request, Direct, methods::AiChatParams, methods::AiChatResult;
     PLUGIN_ORGANIZE_PLAN, Request, Direct, methods::PluginOrganizePlanParams, methods::AiOrganizePlanResult;
     FS_ORGANIZE, Request, Task, methods::FsOrganizeParams, methods::FsTaskResult;
 

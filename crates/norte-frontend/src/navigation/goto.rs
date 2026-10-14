@@ -31,6 +31,8 @@ pub const PREFIX_COMMANDS: &str = ">";
 pub const PREFIX_HELP: &str = "?";
 /// The prefix that turns the box into an order line (`norte-orders`).
 pub const PREFIX_ORDER: &str = ":";
+/// The prefix that hands the text to the assistant panel (ADR 0186).
+pub const PREFIX_ASK: &str = "@";
 
 /// What the box is listing, chosen by the query's first character.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +46,8 @@ pub enum Mode {
     /// An order line, behind [`PREFIX_ORDER`]; the rows complete the word
     /// under the cursor.
     Order,
+    /// A question for the assistant, behind [`PREFIX_ASK`]; no rows.
+    Ask,
 }
 
 impl Mode {
@@ -57,6 +61,8 @@ impl Mode {
             Self::Help
         } else if query.starts_with(PREFIX_ORDER) {
             Self::Order
+        } else if query.starts_with(PREFIX_ASK) {
+            Self::Ask
         } else {
             Self::Places
         }
@@ -71,6 +77,7 @@ impl Mode {
             Self::Commands => "commands",
             Self::Help => "help",
             Self::Order => "order",
+            Self::Ask => "ask",
         }
     }
 }
@@ -83,6 +90,7 @@ pub fn needle(query: &str) -> &str {
         .strip_prefix(PREFIX_COMMANDS)
         .or_else(|| query.strip_prefix(PREFIX_HELP))
         .or_else(|| query.strip_prefix(PREFIX_ORDER))
+        .or_else(|| query.strip_prefix(PREFIX_ASK))
         .unwrap_or(query)
         .trim_start()
 }
@@ -438,6 +446,7 @@ impl Goto {
             }
             Mode::Help => self.refresh_flat(&[SECTION_HELP.id], &needle, false),
             Mode::Order => self.refresh_order(),
+            Mode::Ask => {}
         }
         self.cursor = self.first_row().unwrap_or(0);
     }
@@ -702,6 +711,7 @@ impl Goto {
         match self.mode() {
             Mode::Places if self.query.trim().is_empty() => Some("goto-hint"),
             Mode::Order if needle(&self.query).is_empty() => Some("goto-hint-order"),
+            Mode::Ask if needle(&self.query).is_empty() => Some("goto-hint-ask"),
             _ => None,
         }
     }
@@ -817,6 +827,9 @@ impl Goto {
             return self
                 .order()
                 .map(|o| o.map_or(Action::OrderInvalid, Action::Order));
+        }
+        if self.mode() == Mode::Ask {
+            return Some(Action::Ask(needle(&self.query).trim_end().to_owned()));
         }
         let row = self.selected()?;
         Some(
@@ -1164,6 +1177,9 @@ pub enum Action {
     /// An order that does not parse: the box stays open and shows why
     /// ([`Goto::order`]).
     OrderInvalid,
+    /// Open the assistant panel and, if the text is not empty, send it as
+    /// the reader's first message (`@`, ADR 0186).
+    Ask(String),
 }
 
 /// What to do with the row the reader just confirmed.
@@ -1219,6 +1235,7 @@ pub fn help_rows(lang: norte_i18n::Lang) -> Vec<GotoRow> {
     let mut out = vec![
         prefix(PREFIX_COMMANDS, "goto-prefix-commands"),
         prefix(PREFIX_ORDER, "goto-prefix-order"),
+        prefix(PREFIX_ASK, "goto-prefix-ask"),
         prefix("", "goto-prefix-places"),
     ];
     out.extend(norte_help::topics(lang).iter().map(|t| GotoRow {
@@ -2039,11 +2056,12 @@ mod help_row_tests {
         let rows = help_rows(Lang::En);
         assert_eq!(rows[0].key, "set:>");
         assert_eq!(rows[1].key, "set::");
-        assert_eq!(rows[2].key, "set:");
+        assert_eq!(rows[2].key, "set:@");
+        assert_eq!(rows[3].key, "set:");
         let topics = norte_help::topics(Lang::En);
-        assert_eq!(rows.len(), 3 + topics.len());
-        assert_eq!(rows[3].key, format!("help:{}", topics[0].id.as_str()));
-        assert_eq!(rows[3].text, topics[0].title);
+        assert_eq!(rows.len(), 4 + topics.len());
+        assert_eq!(rows[4].key, format!("help:{}", topics[0].id.as_str()));
+        assert_eq!(rows[4].text, topics[0].title);
         assert!(rows.iter().all(|r| r.section == SECTION_HELP.id));
         assert_eq!(action("set:>"), Action::SetQuery(">".to_owned()));
         assert_eq!(action("help:copying"), Action::Help("copying".to_owned()));
@@ -2170,6 +2188,21 @@ mod order_tests {
             g.order_tokens().last().map(|t| t.0.end),
             Some(g.query_display().len()),
             "spans index what is PAINTED"
+        );
+    }
+
+    #[test]
+    fn at_asks_the_assistant() {
+        assert_eq!(Mode::of("@copy the pdfs"), Mode::Ask);
+        assert_eq!(Mode::Ask.as_str(), "ask");
+        let g = boxed("@ copy the pdfs");
+        assert!(g.rows().is_empty());
+        assert_eq!(g.confirm(), Some(Action::Ask("copy the pdfs".into())));
+        assert_eq!(boxed("@").confirm(), Some(Action::Ask(String::new())));
+        assert!(
+            super::help_rows(norte_i18n::Lang::En)
+                .iter()
+                .any(|r| r.key == "set:@")
         );
     }
 

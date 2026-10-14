@@ -10,6 +10,7 @@
 // does not go without a button: the renderer paints its LETTER, which is
 // what is already known about it.
 
+import assistant from "../../../../norte-frontend/assets/panel-icons/assistant.svg?raw";
 import diskMap from "../../../../norte-frontend/assets/panel-icons/disk-map.svg?raw";
 import help from "../../../../norte-frontend/assets/panel-icons/help.svg?raw";
 import settings from "../../../../norte-frontend/assets/panel-icons/settings.svg?raw";
@@ -93,6 +94,7 @@ const PANEL_SVG: Record<string, string> = {
   timeline,
   terminal,
   search,
+  assistant,
   // The column's foot (bridge 101), not panels.
   settings,
   help,

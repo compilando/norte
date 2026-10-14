@@ -648,7 +648,12 @@ fn every_bar_button_falls_into_its_place() {
         "and the search panel after the terminal, by registration order"
     );
     assert_eq!(
-        press(&mut app, 30),
+        press(&mut app, 31).as_deref(),
+        Some("layout.assistant"),
+        "and the assistant after the search panel, by registration order"
+    );
+    assert_eq!(
+        press(&mut app, 33),
         None,
         "past the last one there is no button"
     );

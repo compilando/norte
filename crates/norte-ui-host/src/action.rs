@@ -759,6 +759,22 @@ pub enum UiAction {
         /// What was done to it.
         value: DialogFieldValue,
     },
+    /// The assistant panel's input sent (bridge 116, ADR 0186): the reader's
+    /// message. Ignored while a turn is in flight.
+    AssistantSubmit {
+        /// The panel's slot.
+        slot_id: u32,
+        /// What was typed.
+        text: String,
+    },
+    /// Apply the order of turn `turn` (bridge 116): it runs through the
+    /// order line's executor, so the usual confirmation asks.
+    AssistantApply {
+        /// The panel's slot.
+        slot_id: u32,
+        /// The turn's index, oldest first.
+        turn: u32,
+    },
     /// Enter in one of the panel's inputs: searches now, without the pause.
     SearchPanelGo {
         /// The panel's slot.

@@ -40,6 +40,7 @@ use crate::dto::{
 mod agents;
 mod ai;
 mod approvals;
+mod assistant;
 mod command_bar;
 mod context_menu;
 mod dialogs;
@@ -1108,6 +1109,8 @@ enum Background {
     /// The rows an order's `sel` needed measured (#52 lazy listing), with
     /// what each stat said; the order runs once they are in.
     OrderMeasured(Box<orders::OrderMeasured>),
+    /// The assistant's turn (ADR 0186), or why not.
+    AssistantTurn(Result<norte_proto::methods::AiChatTurn, Error>),
     /// The connections for "go to" (#357), with the OPENING that requested
     /// them: an answer from a previous opening does not fill in the current
     /// one.
@@ -1496,7 +1499,14 @@ async fn actor(
     while let Some(msg) = rx.recv().await {
         match msg {
             Message::Action(action, answers) => {
-                let (ack, outputs) = state.apply(&action, &backend, &mailbox);
+                let active_before = state.slot().pane.dir().clone();
+                let (ack, mut outputs) = state.apply(&action, &backend, &mailbox);
+                // The assistant's "written for" line compares each order with
+                // the ACTIVE pane's folder: when that changed, whatever moved
+                // it (a Tab, a click, a cd), the panel is projected again.
+                if *state.slot().pane.dir() != active_before {
+                    outputs.extend(state.repaint_assistant());
+                }
                 for u in outputs {
                     // With no subscribers it is not an error: the host is
                     // still alive even if the renderer has gone off to do
@@ -2695,6 +2705,8 @@ struct State {
     /// The `:` line's preview (`14 items · 38 MB`), translated; empty when
     /// the line selects nothing yet.
     order_preview: String,
+    /// The assistant panel's conversation (ADR 0186): outlives the panel.
+    assistant: norte_frontend::assistant::Assistant,
     /// The active slot's marks when the box went into `:` mode: Esc puts
     /// them back after a live `sel` preview. `None` = not previewing.
     order_marks_before: Option<Vec<norte_proto::VPath>>,
@@ -3453,6 +3465,7 @@ impl State {
             locale,
             ir_a: None,
             order_preview: String::new(),
+            assistant: norte_frontend::assistant::Assistant::default(),
             order_marks_before: None,
             gen_ir_a: 0,
             go_to_index: None,
@@ -4330,6 +4343,9 @@ impl State {
             }
             UiAction::LayoutActivateRow { row } => self.choose_layout(*row, backend, mailbox),
             UiAction::SearchActivateRow { row } => self.go_to_result(*row, backend, mailbox),
+            UiAction::AssistantSubmit { .. } | UiAction::AssistantApply { .. } => {
+                self.assistant_action(action, backend, mailbox)
+            }
             UiAction::SearchPanelEdit { .. }
             | UiAction::SearchPanelGo { .. }
             | UiAction::SearchPanelReroot { .. }

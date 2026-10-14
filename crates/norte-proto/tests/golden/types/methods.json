@@ -1,4 +1,37 @@
 {
+  "ai_chat_params": {
+    "messages": [
+      {
+        "role": "user",
+        "text": "copia los pdf de este mes al otro panel"
+      },
+      {
+        "role": "assistant",
+        "text": "sel ext:pdf age<30d | cp >other"
+      }
+    ],
+    "here": "file:///casa/descargas",
+    "other": "file:///casa/archivo"
+  },
+  "ai_chat_result_answer": {
+    "turn": {
+      "kind": "answer",
+      "text": "lo que más ocupa es video/ (3,2 GiB)"
+    }
+  },
+  "ai_chat_result_later_kind": {
+    "turn": {
+      "kind": "question",
+      "text": "¿cuál de las dos carpetas?"
+    }
+  },
+  "ai_chat_result_order": {
+    "turn": {
+      "kind": "order",
+      "text": "sel ext:pdf age<30d | cp >other",
+      "note": "copia 14 pdf de este mes"
+    }
+  },
   "ai_organize_plan_params": {
     "dir": "file:///casa/descargas",
     "instruction": "ordénalas por año",

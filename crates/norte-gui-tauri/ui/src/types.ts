@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 115;
+export const BRIDGE_VERSION = 116;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -626,7 +626,25 @@ export type SlotView =
   | TimelineSlotView
   | SearchPanelSlotView
   | TerminalSlotView
+  | AssistantSlotView
   | UnsupportedSlotView;
+
+/** The assistant panel (bridge 116, ADR 0186): turns already sanitized. */
+export interface AssistantSlotView {
+  kind: "assistant";
+  slot_id: number;
+  turns: AssistantTurnView[];
+  pending: boolean;
+  empty: string;
+}
+
+/** One turn. `note` is painted below and smaller than `text`. */
+export interface AssistantTurnView {
+  kind: "reader" | "order" | "answer" | "failed";
+  text: string;
+  note: string;
+  written_for: string;
+}
 
 /** A color exactly as the shell SAID it, unresolved (bridge 95).
  *
@@ -1047,7 +1065,7 @@ export interface GotoView {
   cursor: number | null;
   empty: string;
   /** Which list the query asks for (bridge 108; `order` bridge 115). */
-  mode?: "places" | "commands" | "help" | "order";
+  mode?: "places" | "commands" | "help" | "order" | "ask";
   /** The empty places box's prefix hint (bridge 108). */
   hint?: string;
   /** The order line in `:` mode (bridge 115, ADR 0185). */
@@ -2059,6 +2077,9 @@ export type UiAction =
     }
   /** Enter in one of its inputs: searches now. */
   | { action: "search_panel_go"; slot_id: number }
+  /** The assistant panel (bridge 116). */
+  | { action: "assistant_submit"; slot_id: number; text: string }
+  | { action: "assistant_apply"; slot_id: number; turn: number }
   /** "Search here": the focused listing's folder. */
   | { action: "search_panel_reroot"; slot_id: number }
   | { action: "search_panel_filters"; slot_id: number }

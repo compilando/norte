@@ -244,6 +244,9 @@ pub enum KeyOwner {
     Tree,
     /// The log panel (#323).
     Log,
+    /// The assistant panel (ADR 0186). No payload: the kind declares
+    /// `multi: false`.
+    Assistant,
     /// The disk map (phase 4).
     ///
     /// No payload, like all of these: `KeyOwner` is compared for equality in
@@ -1018,6 +1021,9 @@ pub struct App {
     pub order_marks_before: Option<Vec<VPath>>,
     /// The `:` line's preview (`14 items · 38 MB`), or empty.
     pub order_preview: String,
+    /// The assistant panel's conversation (ADR 0186). Lives here, not in the
+    /// slot: there is at most one panel, and closing it keeps the turns.
+    pub assistant: norte_frontend::assistant::Assistant,
     /// Open live-search dialog (`Alt+F7`, liveSearch T6): None = closed.
     /// Captures printables like the nav popup's `name_input`.
     pub search_dialog: Option<SearchDialog>,
@@ -1522,6 +1528,7 @@ impl App {
             goto: None,
             order_marks_before: None,
             order_preview: String::new(),
+            assistant: norte_frontend::assistant::Assistant::default(),
             search_dialog: None,
             compare: None,
             compare_size_hints: std::collections::HashMap::new(),
