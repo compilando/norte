@@ -160,16 +160,22 @@ filas que casa el `sel`; Esc devuelve las marcas que tenías. Intro ejecuta la
 preguntando.
 
 - `sel` lleva términos que deben cumplirse todos: `ext:pdf,jpg`,
-  `name:*borrador*` o un glob suelto, `size>10M`, `age<7d` (`s m h d w`; `m`
-  son minutos), `type:file|dir|link`, y `!` delante niega uno.
+  `name:*borrador*` o un glob suelto, `name=NOMBRE` para un nombre exacto
+  (`name=*` es el fichero que se llama `*`), `size>10M`, `age<7d`
+  (`s m h d w`; `m` son minutos), `type:file|dir|link`, y `!` delante niega
+  uno. Las filas que el listado aún no ha medido se miden antes; Esc lo
+  detiene.
 - Después, una acción: `cp >other`, `mv >here`, `cp >/una/ruta`, `trash`,
   `mkdir NOMBRE`, `cd RUTA`, o cualquier comando por su nombre (`pane.swap`).
 - `log` abre la línea de tiempo; `undo 3` deshace tus tres últimas
   operaciones, tras preguntar.
 
 Un nombre que no es texto, o que lleva un espacio o `|`, se escribe con
-escapes: `\xff`, `\ `, `\|`. Un `sel` que no casa nada no ejecuta nada:
-nunca cae en la fila bajo el cursor.
+escapes: `\xff`, `\ `, `\|`; cualquier espacio, también uno de no ruptura,
+separa palabras. Un nombre que escribes encuentra la entrada que nombra
+aunque esté guardada descompuesta, o en la codificación con la que el panel
+lee los nombres. Un `sel` que no casa nada no ejecuta nada: nunca cae en la
+fila bajo el cursor.
 
 ## El asistente: `@`
 

@@ -155,16 +155,20 @@ matches are marked; Esc puts back the marks you had. Enter runs the last
 stage through the same dialog its key opens — a copy still asks.
 
 - `sel` takes terms, all of which must hold: `ext:pdf,jpg`, `name:*draft*`
-  or a bare glob, `size>10M`, `age<7d` (`s m h d w`; `m` is minutes),
-  `type:file|dir|link`, and `!` in front negates one.
+  or a bare glob, `name=NAME` for exactly one name (`name=*` is the file
+  called `*`), `size>10M`, `age<7d` (`s m h d w`; `m` is minutes),
+  `type:file|dir|link`, and `!` in front negates one. Rows the listing has
+  not measured yet are measured first; Esc stops that.
 - Then one action: `cp >other`, `mv >here`, `cp >/a/path`, `trash`,
   `mkdir NAME`, `cd PATH`, or any command by its name (`pane.swap`).
 - `log` opens the timeline; `undo 3` undoes your last three operations,
   after asking.
 
 A name that is not text, or holds a space or `|`, is written with escapes:
-`\xff`, `\ `, `\|`. A `sel` that matches nothing runs nothing — it never
-falls back to the row under the cursor.
+`\xff`, `\ `, `\|`; any space, also a no-break one, separates words. A
+name you type finds the entry it names even when stored decomposed, or in
+the encoding the pane reads names with. A `sel` that matches nothing runs
+nothing — it never falls back to the row under the cursor.
 
 ## The assistant: `@`
 
