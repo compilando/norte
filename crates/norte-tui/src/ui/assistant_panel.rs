@@ -28,8 +28,15 @@ fn wrapped(text: &str, width: usize) -> Vec<String> {
         for c in raw.chars() {
             let w = c.width().unwrap_or(0);
             if cells + w > width {
+                // A space at the break is the break: it starts no line.
+                if c == ' ' {
+                    out.push(std::mem::take(&mut line));
+                    cells = 0;
+                    space = None;
+                    continue;
+                }
                 match space {
-                    Some((at, before)) if at > 0 => {
+                    Some((at, before)) if before > 0 => {
                         let rest = line.split_off(at + 1);
                         line.truncate(at);
                         out.push(std::mem::replace(&mut line, rest));
@@ -134,8 +141,14 @@ pub(crate) fn draw_assistant(frame: &mut Frame<'_>, area: Rect, app: &App, with_
         }
     }
     if a.pending() {
+        // Esc cancels only from inside the panel: the hint says so only there.
+        let hint = if with_keyboard {
+            format!(" ({})", t("assistant-thinking-esc"))
+        } else {
+            String::new()
+        };
         lines.push(Line::styled(
-            format!("  {}", t("assistant-thinking")),
+            format!("  {}{hint}", t("assistant-thinking")),
             theme.role(Role::Info),
         ));
     }
@@ -178,6 +191,13 @@ mod tests {
     #[test]
     fn wraps_at_a_space_and_by_cells() {
         assert_eq!(wrapped("copy the pdfs", 9), ["copy the", "pdfs"]);
+        assert_eq!(wrapped("abcd efgh", 4), ["abcd", "efgh"]);
+        // A zero-width char before the space: the cut still fits.
+        assert!(
+            wrapped("\u{200B} abc日", 4).iter().all(|l| l.width() <= 4),
+            "{:?}",
+            wrapped("\u{200B} abc日", 4)
+        );
         // Wide characters: four ideographs are eight cells.
         let w = wrapped("日本語日本語", 8);
         assert_eq!(w, ["日本語日", "本語"]);

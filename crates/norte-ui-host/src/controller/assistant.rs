@@ -52,6 +52,7 @@ impl State {
             turns,
             pending: self.assistant.pending(),
             empty: norte_i18n::t_in(self.lang, "assistant-empty"),
+            first: u32::try_from(self.assistant.first()).unwrap_or(u32::MAX),
         }
     }
 
@@ -83,7 +84,7 @@ impl State {
         let generation = self.assistant.generation();
         let backend = Arc::clone(backend);
         let mailbox = mailbox.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let res = backend.ai_chat(params).await;
             let _ = mailbox
                 .send(Message::Background(Box::new(Background::AssistantTurn(
@@ -91,6 +92,7 @@ impl State {
                 ))))
                 .await;
         });
+        self.assistant_task = Some(task.abort_handle());
         self.repaint_assistant()
     }
 
@@ -133,25 +135,29 @@ impl State {
                 self.assistant_submit(text, backend, mailbox),
             ),
             UiAction::AssistantApply { turn, .. } => {
-                let order = self
-                    .assistant
-                    .order_at(usize::try_from(*turn).unwrap_or(usize::MAX))
-                    .and_then(|t| norte_orders::parse(t).ok());
-                let index = usize::try_from(*turn).unwrap_or(usize::MAX);
-                match order {
+                // The turn's NUMBER, not its index: older turns dropped by
+                // the cap would shift an index onto its neighbour.
+                let numbered = usize::try_from(*turn)
+                    .ok()
+                    .and_then(|n| self.assistant.order_numbered(n));
+                let order = numbered.and_then(|t| norte_orders::parse(t).ok());
+                match (order, numbered) {
                     // The order line's executor: preview, read-only refusal
                     // and the usual confirmation, exactly as if typed.
-                    Some(order) => self.run_order(&order, false, backend, mailbox),
+                    (Some(order), _) => self.run_order(&order, false, backend, mailbox),
                     // An order this build cannot parse (a newer core's
                     // grammar): said, not a silent click.
-                    None if self.assistant.order_at(index).is_some() => {
-                        (self.applied(), self.say("assistant-unparsable"))
-                    }
-                    None => (Self::stale(StaleAction::Generation), Vec::new()),
+                    (None, Some(_)) => (self.applied(), self.say("assistant-unparsable")),
+                    (None, None) => (Self::stale(StaleAction::Generation), Vec::new()),
                 }
             }
             UiAction::AssistantCancel { .. } => {
-                self.assistant.cancel();
+                // The request itself stops too: a remote model would bill
+                // for an answer nobody reads.
+                if let Some(task) = self.assistant_task.take() {
+                    task.abort();
+                }
+                self.assistant.cancel(self.lang);
                 (self.applied(), self.repaint_assistant())
             }
             _ => (Self::stale(StaleAction::Modal), Vec::new()),

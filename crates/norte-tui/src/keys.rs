@@ -54,6 +54,7 @@ use norte_proto::VPath;
 /// ran the reader's order as a command.
 fn panel_keys(app: &App) -> bool {
     !modal_wins(app)
+        && app.viewer.is_none()
         && app.goto.is_none()
         && app.nav_popup.is_none()
         && app.search_dialog.is_none()

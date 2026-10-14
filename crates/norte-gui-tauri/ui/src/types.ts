@@ -636,6 +636,9 @@ export interface AssistantSlotView {
   turns: AssistantTurnView[];
   pending: boolean;
   empty: string;
+  /** The number of `turns[0]` (bridge 118): Apply sends `first + index`,
+   *  which stays the turn's name when older turns are dropped. */
+  first?: number;
 }
 
 /** One turn. `note` is painted below and smaller than `text`. */

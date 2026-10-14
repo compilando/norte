@@ -12,9 +12,9 @@ const wasActive = new WeakMap<SlotDom, boolean>();
 /** The latest view of each panel: the field's handlers outlive the paint
  *  that created them. */
 const views = new WeakMap<SlotDom, AssistantSlotView>();
-/** What the field sent, and how many turns there were then: the field is
- *  emptied only once the host took it — a refused send keeps the text. */
-const sent = new WeakMap<SlotDom, { text: string; turns: number }>();
+/** What the field sent: it is emptied only once the host took it — a
+ *  refused send keeps the text. */
+const sent = new WeakMap<SlotDom, string>();
 
 /** The index of the newest order turn, or -1. */
 export function lastOrder(slot: AssistantSlotView): number {
@@ -84,7 +84,10 @@ export function paintAssistant(
       apply.className = "assistant-apply";
       apply.textContent = this.t("assistant-apply");
       apply.addEventListener("click", () => {
-        this.send({ action: "assistant_apply", slot_id: slot.slot_id, turn: i });
+        // The turn's number, which the cap dropping older turns does not
+        // shift.
+        const turn = (slot.first ?? 0) + i;
+        this.send({ action: "assistant_apply", slot_id: slot.slot_id, turn });
       });
       item.append(apply);
     }
@@ -137,23 +140,26 @@ export function paintAssistant(
       if (field.value.trim() === "") {
         // An empty Enter applies the newest order, as in the terminal; the
         // usual confirmation still asks.
-        const turn = lastOrder(now);
-        if (turn >= 0) {
+        const index = lastOrder(now);
+        if (index >= 0) {
+          const turn = (now.first ?? 0) + index;
           this.send({ action: "assistant_apply", slot_id: now.slot_id, turn });
         }
         return;
       }
-      sent.set(dom, { text: field.value, turns: now.turns.length });
+      sent.set(dom, field.value);
       this.send({ action: "assistant_submit", slot_id: now.slot_id, text: field.value });
     });
     inputs.set(dom, field);
     input = field;
   }
-  // The host took what was sent once a new turn shows up; until then the
-  // text stays, so a refused send loses nothing.
+  // The host took what was sent once a paint shows a turn in flight (the
+  // field cannot send while one is): until then the text stays, so a
+  // refused send loses nothing. Not by counting turns — at the cap the
+  // count stays put while the oldest drops.
   const pendingSend = sent.get(dom);
-  if (pendingSend !== undefined && slot.turns.length > pendingSend.turns) {
-    if (input.value === pendingSend.text) {
+  if (pendingSend !== undefined && slot.pending) {
+    if (input.value === pendingSend) {
       input.value = "";
     }
     sent.delete(dom);

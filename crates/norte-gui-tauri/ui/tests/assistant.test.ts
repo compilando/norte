@@ -92,6 +92,24 @@ describe("the assistant's field", () => {
     expect(field.value).toBe("");
   });
 
+  it("at the cap, Apply names the turn's number and a send still clears", () => {
+    const { dom, screen, sent } = rig();
+    const turns = Array.from({ length: 200 }, (_, i) => (i === 150 ? order : reader));
+    paintAssistant.call(screen, dom, view({ turns, first: 40 }));
+    const field = dom.scroller.querySelector("input") as HTMLInputElement;
+    key(field, "Enter");
+    expect(sent.at(-1)).toEqual({
+      action: "assistant_apply",
+      slot_id: 7,
+      turn: 190,
+    });
+    field.value = "again";
+    key(field, "Enter");
+    // The host took it: the count stays 200, the oldest dropped.
+    paintAssistant.call(screen, dom, view({ turns, first: 41, pending: true }));
+    expect(field.value).toBe("");
+  });
+
   it("the thinking row carries a cancel button", () => {
     const { dom, screen, sent } = rig();
     paintAssistant.call(screen, dom, view({ pending: true }));

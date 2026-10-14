@@ -48,6 +48,9 @@ pub struct Assistant {
     /// Bumped by every request and every cancel: an answer carrying an
     /// older one is for a request nobody is waiting for any more.
     generation: u64,
+    /// How many turns the cap has dropped: what turns an index into a
+    /// stable name, since a turn dropping shifts every index after it.
+    dropped: usize,
 }
 
 /// `text` cut to at most `max` bytes, on a char boundary.
@@ -200,18 +203,30 @@ impl Assistant {
         self.generation
     }
 
-    /// Stops waiting for the turn in flight, and says so. `false` if there
-    /// was none.
-    pub fn cancel(&mut self) -> bool {
+    /// Stops waiting for the turn in flight, and says so in `lang`. `false`
+    /// if there was none.
+    pub fn cancel(&mut self, lang: norte_i18n::Lang) -> bool {
         if self.pending.take().is_none() {
             return false;
         }
         self.generation += 1;
-        self.push(Turn::Failed(norte_i18n::t_in(
-            norte_i18n::active(),
-            "assistant-cancelled",
-        )));
+        self.push(Turn::Failed(norte_i18n::t_in(lang, "assistant-cancelled")));
         true
+    }
+
+    /// The absolute number of the first kept turn: turn `i` of
+    /// [`Self::turns`] is `first() + i` for as long as it is kept.
+    #[must_use]
+    pub fn first(&self) -> usize {
+        self.dropped
+    }
+
+    /// The order of the turn numbered `abs` (see [`Self::first`]), if it is
+    /// still kept and is one: a click that names a dropped turn finds
+    /// nothing rather than its neighbour.
+    #[must_use]
+    pub fn order_numbered(&self, abs: usize) -> Option<&str> {
+        self.order_at(abs.checked_sub(self.dropped)?)
     }
 
     /// Appends a turn under the cursor, dropping the oldest beyond
@@ -220,6 +235,7 @@ impl Assistant {
         self.turns.push(turn);
         let over = self.turns.len().saturating_sub(MAX_TURNS);
         self.turns.drain(..over);
+        self.dropped += over;
         self.cursor = self.turns.len() - 1;
     }
 
@@ -424,10 +440,10 @@ mod tests {
         let mut a = Assistant::default();
         a.ask("one", &here(), None).expect("request");
         let first = a.generation();
-        assert!(a.cancel());
+        assert!(a.cancel(norte_i18n::Lang::En));
         assert!(!a.pending());
         assert!(matches!(a.turns().last(), Some(Turn::Failed(_))));
-        assert!(!a.cancel(), "nothing left to cancel");
+        assert!(!a.cancel(norte_i18n::Lang::En), "nothing left to cancel");
         a.land_for(
             first,
             Ok(AiChatTurn::Answer {
@@ -463,5 +479,30 @@ mod tests {
         assert_eq!(a.turns().len(), MAX_TURNS);
         assert_eq!(a.cursor(), MAX_TURNS - 1);
         assert_eq!(a.turns().last(), Some(&Turn::Answer("a".into())));
+    }
+
+    /// A turn keeps its number when older ones are dropped: a click that
+    /// names a dropped turn finds nothing, never its neighbour.
+    #[test]
+    fn an_order_keeps_its_number_across_the_cap() {
+        let mut a = Assistant::default();
+        a.ask("q", &here(), None).expect("request");
+        a.land(Ok(AiChatTurn::Order {
+            text: "sel *".into(),
+            note: String::new(),
+        }));
+        let abs = a.first() + 1;
+        assert_eq!(a.order_numbered(abs), Some("sel *"));
+        for _ in 0..MAX_TURNS / 2 - 1 {
+            a.ask("q", &here(), None).expect("request");
+            a.land(Ok(AiChatTurn::Answer { text: "a".into() }));
+        }
+        assert_eq!(a.first(), 0, "nothing dropped yet");
+        assert_eq!(a.order_numbered(abs), Some("sel *"));
+        a.ask("q", &here(), None).expect("request");
+        a.land(Ok(AiChatTurn::Answer { text: "a".into() }));
+        assert_eq!(a.first(), 2);
+        assert_eq!(a.order_numbered(abs), None, "dropped: found nothing");
+        assert_eq!(a.order_numbered(0), None);
     }
 }

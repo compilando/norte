@@ -2710,6 +2710,8 @@ struct State {
     order_preview: String,
     /// The assistant panel's conversation (ADR 0186): outlives the panel.
     assistant: norte_frontend::assistant::Assistant,
+    /// The assistant's request in flight, to stop it on cancel.
+    assistant_task: Option<tokio::task::AbortHandle>,
     /// The active slot's marks when the box went into `:` mode: Esc puts
     /// them back after a live `sel` preview. `None` = not previewing.
     order_marks_before: Option<Vec<norte_proto::VPath>>,
@@ -3469,6 +3471,7 @@ impl State {
             ir_a: None,
             order_preview: String::new(),
             assistant: norte_frontend::assistant::Assistant::default(),
+            assistant_task: None,
             order_marks_before: None,
             gen_ir_a: 0,
             go_to_index: None,

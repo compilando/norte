@@ -100,7 +100,7 @@ pub async fn on_key(
         // Esc first stops a turn in flight; with none, it gives the keys
         // back.
         KeyCode::Esc if plain => {
-            if app.assistant.cancel() {
+            if app.assistant.cancel(norte_i18n::active()) {
                 if let Some(h) = work.assistant.take() {
                     h.abort();
                 }

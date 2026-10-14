@@ -27,20 +27,24 @@ impl Spark {
     ///
     /// The same second again replaces its sample: the last word wins.
     /// Skipped seconds take the NEW value — a gap is ticks that did not run,
-    /// not a stop. A clock that jumps — back, or forward by more than the
-    /// whole history, as a wall clock does when it is set — starts the
-    /// series over: ignoring it froze the graph until time caught up.
+    /// not a stop. A clock nudged back a couple of seconds is ignored; one
+    /// that jumps — further back, or forward by more than the whole
+    /// history, as a wall clock does when it is set — starts the series
+    /// over: ignoring a jump froze the graph until time caught up.
     pub fn record(&mut self, now_ms: i64, bps: Option<f64>) {
+        /// Seconds back that are a nudge, not a jump.
+        const NUDGE: i64 = 2;
         let sec = now_ms.div_euclid(1000);
         let v = bps.filter(|b| b.is_finite() && *b > 0.0).unwrap_or(0.0);
         let window = i64::try_from(SAMPLES).unwrap_or(i64::MAX);
         if self
             .last_sec
-            .is_some_and(|last| sec < last || sec - last > window)
+            .is_some_and(|last| sec < last - NUDGE || sec - last > window)
         {
             *self = Self::default();
         }
         match self.last_sec {
+            Some(last) if sec < last => return,
             Some(last) if sec == last => {
                 if let Some(x) = self.ring.back_mut() {
                     *x = v;
@@ -145,7 +149,9 @@ mod tests {
         let mut s = Spark::default();
         s.record(5_000, Some(10.0));
         s.record(4_000, Some(99.0));
-        assert_eq!(s.ring, [99.0], "back: the graph keeps moving");
+        assert_eq!(s.ring, [10.0], "a nudge back is ignored");
+        s.record(1_000, Some(99.0));
+        assert_eq!(s.ring, [99.0], "a jump back: the graph keeps moving");
         s.record(5_000, Some(1.0));
         s.record(500_000, Some(7.0));
         assert_eq!(s.ring, [7.0], "far forward: no flat half minute");

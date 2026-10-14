@@ -504,10 +504,14 @@ pub struct AssistantSlotView {
     pub slot_id: u32,
     /// The turns, oldest first.
     pub turns: Vec<AssistantTurnView>,
-    /// A turn is in flight: the input is disabled and "thinking…" shows.
+    /// A turn is in flight: the input is read-only and "thinking…" shows.
     pub pending: bool,
     /// What an empty panel says, translated.
     pub empty: String,
+    /// The number of `turns[0]` (bridge 118): Apply names turn
+    /// `first + index`, which stays its name when older turns are dropped.
+    #[serde(default)]
+    pub first: u32,
 }
 
 /// One turn of the assistant panel, already sanitized and translated.
