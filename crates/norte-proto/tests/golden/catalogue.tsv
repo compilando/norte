@@ -1,3 +1,4 @@
+ai.chat	Request	Direct	methods::AiChatParams	methods::AiChatResult	
 ai.organize_plan	Request	Direct	methods::AiOrganizePlanParams	methods::AiOrganizePlanResult	
 ai.rename_plan	Request	Direct	methods::AiRenamePlanParams	methods::AiRenamePlanResult	
 archive.pack	Request	Task	methods::ArchivePackParams	methods::FsTaskResult	

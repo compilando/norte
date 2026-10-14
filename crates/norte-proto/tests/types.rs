@@ -1437,10 +1437,11 @@ fn current_version_window() {
     // file another program holds; the daemon already retried it.
     // 0.86.0: `MatchInfo::offset` and `ranges`, optional. A 0.85 client
     // ignores them and reads a preview centred on the match.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.86.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.85.0"), "N-1");
+    // 0.87.0: `ai.chat`, a new method. A 0.86 client never calls it.
+    assert!(version_compatible(PROTOCOL_VERSION, "0.87.9"), "N");
+    assert!(version_compatible(PROTOCOL_VERSION, "0.86.0"), "N-1");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.84.9"),
+        !version_compatible(PROTOCOL_VERSION, "0.85.9"),
         "N-2 outside the window"
     );
 }

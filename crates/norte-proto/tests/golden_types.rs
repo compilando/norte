@@ -1094,6 +1094,7 @@ fn golden_methods() {
     check_methods_log(&fixtures);
     check_methods_journal(&fixtures);
     check_methods_organize(&fixtures);
+    check_methods_ai_chat(&fixtures);
     // 98 → 101 in 0.32.0: + ai_rename_plan_params/result/result_empty (M4-IA,
     // ADR 0031). 101 → 106 in 0.33.0: + index_embed_params,
     // index_search_semantic_params(/_no_root)/result and semantic_hit
@@ -1258,9 +1259,11 @@ fn golden_methods() {
     // 231 → 232 in 0.80.0: `journal.undo_after` with a ceiling. The one
     // without a ceiling stays: it is the one that demonstrates 0.79's wire
     // did not change.
+    // 232 → 235 in 0.87.0: `ai.chat` — the params with both roles, and the
+    // result once per turn kind.
     assert_eq!(
         fixtures.len(),
-        232,
+        235,
         "[methods.json] fixtures with no Rust case"
     );
 }
@@ -1307,6 +1310,49 @@ fn check_methods_log(fixtures: &BTreeMap<String, Value>) {
         },
     );
     check_methods_log_rest(fixtures);
+}
+
+/// The assistant (0.87.0): a conversation in, one turn out — one fixture per
+/// role and per turn kind, so neither vocabulary can be renamed unnoticed.
+fn check_methods_ai_chat(fixtures: &BTreeMap<String, Value>) {
+    use norte_proto::methods::{AiChatMessage, AiChatParams, AiChatResult, AiChatRole, AiChatTurn};
+    check_one(
+        fixtures,
+        "ai_chat_params",
+        &AiChatParams {
+            messages: vec![
+                AiChatMessage {
+                    role: AiChatRole::User,
+                    text: "copia los pdf de este mes al otro panel".to_owned(),
+                },
+                AiChatMessage {
+                    role: AiChatRole::Assistant,
+                    text: "sel ext:pdf age<30d | cp >other".to_owned(),
+                },
+            ],
+            here: vpath("file:///casa/descargas"),
+            other: Some(vpath("file:///casa/archivo")),
+        },
+    );
+    check_one(
+        fixtures,
+        "ai_chat_result_order",
+        &AiChatResult {
+            turn: AiChatTurn::Order {
+                text: "sel ext:pdf age<30d | cp >other".to_owned(),
+                note: "copia 14 pdf de este mes".to_owned(),
+            },
+        },
+    );
+    check_one(
+        fixtures,
+        "ai_chat_result_answer",
+        &AiChatResult {
+            turn: AiChatTurn::Answer {
+                text: "lo que más ocupa es video/ (3,2 GiB)".to_owned(),
+            },
+        },
+    );
 }
 
 /// Organize (0.77.0, phase 8): the plan, its refusal, and the batch that applies it.
@@ -4954,6 +5000,8 @@ fn method_names_frozen() {
     // `batch_id`: otherwise, undoing the batch gives the files back and
     // forgets the folders.
     assert_eq!(methods::AI_ORGANIZE_PLAN, "ai.organize_plan");
+    // 0.87.0: the assistant — one turn, metadata reads, no effect.
+    assert_eq!(methods::AI_CHAT, "ai.chat");
     assert_eq!(methods::PLUGIN_ORGANIZE_PLAN, "plugin.organize_plan");
     assert_eq!(methods::FS_ORGANIZE, "fs.organize");
     // 0.78.0 (phase 9): releasing the UI session without disconnecting,
@@ -4981,7 +5029,8 @@ fn method_names_frozen() {
     // read (#365).
     // 0.85.0: no new method. An error category, `Error::Busy` (#221).
     // 0.86.0: no new method. fs.search says where it matched.
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.86.0");
+    // 0.87.0: `ai.chat`, the assistant (above).
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.87.0");
 }
 
 /// An [`Entry`] for a comparison row: the four fields the panel paints,
