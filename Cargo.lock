@@ -5184,6 +5184,7 @@ dependencies = [
  "norte-encoding",
  "norte-help",
  "norte-index",
+ "norte-orders",
  "norte-plugin-host",
  "norte-proto",
  "norte-sync",
