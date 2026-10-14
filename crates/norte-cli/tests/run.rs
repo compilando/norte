@@ -210,3 +210,77 @@ fn a_non_utf8_name_survives_sel_and_cp() {
         .success();
     assert!(dst.path().join(name).exists());
 }
+
+/// An order whose argv is not UTF-8 (a shell glob expanded to a Latin-1
+/// name) runs: its invalid bytes are the grammar's `\xHH`, and `--dry-run`
+/// prints the name with that escape, never with a lossy `�`.
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_argv_runs_and_dry_run_prints_the_escape() {
+    use std::os::unix::ffi::OsStrExt;
+    let src = tempfile::tempdir().expect("tempdir");
+    let name = std::ffi::OsStr::from_bytes(b"caf\xe9 x.pdf");
+    std::fs::write(src.path().join(name), b"x").expect("write");
+    let out = norte()
+        .args(["run", "--dry-run", "--cwd"])
+        .arg(src.path())
+        .arg(std::ffi::OsStr::from_bytes(b"sel caf\xe9*"))
+        .output()
+        .expect("runs");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).expect("stdout is UTF-8");
+    assert!(text.contains(r"caf\xe9\x20x.pdf"), "{text}");
+    assert!(!text.contains('\u{fffd}'), "{text}");
+
+    norte()
+        .args(["run", "--cwd"])
+        .arg(src.path())
+        .arg(std::ffi::OsStr::from_bytes(b"mkdir 'd\xff'"))
+        .assert()
+        .success();
+    assert!(
+        src.path()
+            .join(std::ffi::OsStr::from_bytes(b"d\xff"))
+            .is_dir()
+    );
+}
+
+/// `undo N --dry-run` says what the confirmation would: how many operations
+/// it undoes, and touches nothing.
+#[test]
+fn undo_dry_run_says_how_many_it_would_undo() {
+    let src = tempfile::tempdir().expect("tempdir");
+    for n in ["one", "two", "three"] {
+        norte()
+            .args(["run", "--cwd"])
+            .arg(src.path())
+            .arg(format!("mkdir {n}"))
+            .assert()
+            .success();
+    }
+    let out = norte()
+        .args(["run", "--dry-run", "undo 2"])
+        .output()
+        .expect("runs");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("2 entries are undone"), "{text}");
+    let out = norte()
+        .args(["run", "--dry-run", "--json", "undo 2"])
+        .output()
+        .expect("runs");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert_eq!(v["action"], "undo");
+    assert_eq!(v["to_undo"], 2);
+    assert_eq!(v["irreversible"], 0);
+    assert_eq!(v["foreign"], 0);
+    assert!(src.path().join("three").is_dir(), "nothing was undone");
+}
