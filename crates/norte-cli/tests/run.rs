@@ -128,6 +128,72 @@ fn json_output_is_stable() {
     assert_eq!(names, ["a.pdf", "b.pdf"]);
 }
 
+/// Like a pane with hidden files off — and like a shell's `*` — a dotfile is
+/// not matched unless asked for.
+#[test]
+fn dotfiles_are_left_out_unless_hidden_is_asked() {
+    let src = tree();
+    std::fs::write(src.path().join(".env"), b"secret").expect("write");
+    let names = |extra: &[&str]| -> Vec<String> {
+        let out = norte()
+            .args(["run", "--dry-run", "--json", "--cwd"])
+            .arg(src.path())
+            .args(extra)
+            .arg("sel * | trash")
+            .output()
+            .expect("runs");
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+        v["matched"]
+            .as_array()
+            .expect("matched")
+            .iter()
+            .map(|p| {
+                p.as_str()
+                    .expect("wire")
+                    .rsplit('/')
+                    .next()
+                    .expect("name")
+                    .to_owned()
+            })
+            .collect()
+    };
+    assert!(!names(&[]).contains(&".env".to_owned()));
+    assert!(names(&["--hidden"]).contains(&".env".to_owned()));
+}
+
+/// A script that parses `--json` gets JSON even when nothing matched.
+#[test]
+fn zero_matches_still_answer_json() {
+    let src = tree();
+    let out = norte()
+        .args(["run", "--dry-run", "--json", "--cwd"])
+        .arg(src.path())
+        .arg("sel ext:zip | trash")
+        .output()
+        .expect("runs");
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert_eq!(v["matched"].as_array().map(Vec::len), Some(0));
+}
+
+/// The glob error quotes the pattern; it reaches stderr masked.
+#[test]
+fn a_bad_glob_never_reaches_the_terminal_raw() {
+    let src = tree();
+    let out = norte()
+        .args(["run", "--cwd"])
+        .arg(src.path())
+        .arg(r"sel \x1b]2;pwned\x07\xe2\x80\xae[")
+        .output()
+        .expect("runs");
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !err.contains('\u{1b}') && !err.contains('\u{202e}'),
+        "{err:?}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_non_utf8_name_survives_sel_and_cp() {

@@ -156,6 +156,43 @@ async fn sel_by_size_measures_rows_the_listing_never_measured() {
     assert_eq!(marked(&app), ["big.bin"]);
 }
 
+/// An order that fails, or whose `sel` matches nothing, gives back the marks
+/// the pane had before the box — not the preview's, not none.
+#[tokio::test]
+async fn a_failed_or_empty_order_gives_the_marks_back() {
+    let b = backend();
+    for line in [":sel ext:pdf | cp >nowhere\\x00", ":sel ext:zzz | trash"] {
+        let mut app = app_with("mem:///d", &["a.pdf", "b.txt"], "mem:///o");
+        app.focused_mut().toggle_mark();
+        let before = marked(&app);
+        typed(&mut app, line);
+        let order = app
+            .goto
+            .as_ref()
+            .and_then(norte_frontend::goto::Goto::order)
+            .and_then(Result::ok);
+        app.goto = None;
+        if let Some(o) = order {
+            norte_tui::orders::run(&mut app, &b, &o).await;
+        }
+        assert_eq!(marked(&app), before, "{line}");
+    }
+}
+
+/// A glob that does not compile carries the pattern; it must not reach the
+/// status line raw (an RLO or an ESC typed as `\xHH`).
+#[tokio::test]
+async fn a_bad_glob_never_paints_its_pattern_raw() {
+    let mut app = app_with("mem:///d", &["a"], "mem:///o");
+    let b = backend();
+    norte_tui::orders::run(&mut app, &b, &order(r"sel \xe2\x80\xae\x1b[")).await;
+    let msg = app.message.clone().expect("said why");
+    assert!(
+        msg.chars().all(|c| !norte_encoding::is_terminal_hazard(c)),
+        "{msg:?}"
+    );
+}
+
 #[tokio::test]
 async fn log_opens_the_timeline() {
     let mut app = app_with("mem:///d", &["a"], "mem:///o");

@@ -9,6 +9,18 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Type what to do: the order line.** Press `:` (vim, orthodox, cua; the
+  Go menu or the palette elsewhere) and write
+  `sel ext:pdf age<30d | cp >other`. The rows it would touch are marked as
+  you type, with how many and how much; Esc gives your marks back. Enter
+  opens the same confirmation the key would. `sel` takes `ext:`, `name:` or
+  a glob, `size>10M`, `age<7d`, `type:dir` and `!`; the actions are `cp`,
+  `mv`, `trash`, `mkdir`, `cd` or any command by name. `log` opens the
+  timeline and `undo 3` undoes your last three operations, after asking.
+  `norte run '<order>' --cwd DIR` does the same from a script, with
+  `--dry-run` and `--json` (ADR 0185).
+- **vim's `:` opens the order line instead of the palette.** The line still
+  completes every command by name; `ctrl+p` keeps the palette.
 - **The window paints colored icons per file type**, as a desktop file
   manager does: a red PDF, a blue document, a green spreadsheet, a picture
   for an image, and more, plus a blue folder. They are on with no plugin

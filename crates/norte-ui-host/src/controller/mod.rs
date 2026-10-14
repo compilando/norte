@@ -1098,13 +1098,16 @@ enum Background {
     ),
     /// The reader's journal page an order's `undo N` asked for (ADR 0185),
     /// with N.
-    OrderUndo(u32, Result<norte_proto::methods::JournalListResult, Error>),
+    /// With the box's generation when it was asked: a late answer opens no
+    /// dialog over whatever the reader is doing now.
+    OrderUndo(
+        u64,
+        u32,
+        Result<norte_proto::methods::JournalListResult, Error>,
+    ),
     /// The rows an order's `sel` needed measured (#52 lazy listing), with
     /// what each stat said; the order runs once they are in.
-    OrderMeasured(
-        norte_orders::Order,
-        Vec<(norte_proto::VPath, Option<u64>, Option<i64>)>,
-    ),
+    OrderMeasured(Box<orders::OrderMeasured>),
     /// The connections for "go to" (#357), with the OPENING that requested
     /// them: an answer from a previous opening does not fill in the current
     /// one.

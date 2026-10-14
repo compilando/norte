@@ -23,7 +23,8 @@ pub struct CompiledQuery {
 }
 
 enum Compiled {
-    Ext(Vec<String>),
+    /// Folded extensions, each with whether it names raw bytes.
+    Ext(Vec<(String, bool)>),
     Name(NameMatcher),
     Size(Cmp, u64),
     Age(Cmp, u64),
@@ -39,9 +40,19 @@ impl CompiledQuery {
         let mut terms = Vec::with_capacity(q.terms.len());
         for t in &q.terms {
             let c = match &t.pred {
-                Pred::Ext(list) => {
-                    Compiled::Ext(list.iter().map(|e| crate::nav::fold(e)).collect())
-                }
+                Pred::Ext(list) => Compiled::Ext(
+                    list.iter()
+                        .map(|e| {
+                            let exact = std::str::from_utf8(e).is_err();
+                            let folded = if exact {
+                                crate::nav::fold_exact(e, None)
+                            } else {
+                                crate::nav::fold(e)
+                            };
+                            (folded, exact)
+                        })
+                        .collect(),
+                ),
                 Pred::Name(g) => Compiled::Name(NameMatcher::new(g)?),
                 Pred::Size(c, n) => Compiled::Size(*c, *n),
                 Pred::Age(c, n) => Compiled::Age(*c, *n),
@@ -74,12 +85,26 @@ pub fn matches(entry: &Entry, q: &CompiledQuery, now_ms: i64) -> bool {
     q.terms.iter().all(|(negated, c)| {
         let known = match c {
             Compiled::Ext(list) => {
-                let ext = name
-                    .iter()
-                    .rposition(|b| *b == b'.')
-                    .filter(|i| *i > 0)
-                    .map(|i| crate::nav::fold_with(&name[i + 1..], q.enc));
-                Some(ext.is_some_and(|e| list.contains(&e)))
+                // Decoded and folded WHOLE, then split: the extension is the
+                // one `*.X` sees, also when only the stem is not UTF-8. An
+                // element naming raw bytes compares losslessly, as a glob
+                // naming them does.
+                let ext_of = |exact: bool| {
+                    let folded = if exact {
+                        crate::nav::fold_exact(name, q.enc)
+                    } else {
+                        crate::nav::fold_with(name, q.enc)
+                    };
+                    folded
+                        .rfind('.')
+                        .filter(|i| *i > 0)
+                        .and_then(|i| folded.get(i + 1..).map(str::to_owned))
+                };
+                let (lossy, exact) = (ext_of(false), ext_of(true));
+                Some(list.iter().any(|(needle, is_exact)| {
+                    let ext = if *is_exact { &exact } else { &lossy };
+                    ext.as_deref() == Some(needle.as_str())
+                }))
             }
             Compiled::Name(m) => Some(m.is_match(name, q.enc)),
             Compiled::Size(cmp, n) => {
@@ -199,28 +224,57 @@ pub fn undo_cut(
     next_before_seq: Option<i64>,
     n: u32,
 ) -> Result<UndoCut, UndoRefusal> {
-    let mut tl = crate::timeline::Timeline::new(newest_first, next_before_seq);
+    let tl = crate::timeline::Timeline::new(newest_first, next_before_seq);
     let n = usize::try_from(n).unwrap_or(usize::MAX);
-    if n == 0 || tl.is_empty() {
+    if n == 0
+        || !tl
+            .rows()
+            .iter()
+            .any(crate::timeline::TimelineRow::will_undo)
+    {
         return Err(UndoRefusal::Nothing);
     }
-    let seq = if n < tl.len() {
-        tl.set_cursor(n);
-        tl.cutoff().ok_or(UndoRefusal::Nothing)?
-    } else if next_before_seq.is_none() {
-        0
-    } else {
+    // N counts what can still be undone: a compensation or an undone row on
+    // top must not make a second `undo` a no-op. The cut is the row right
+    // after the N-th such operation — and it must exist, because the core
+    // stands on a real row (`undo_after(0)` is refused).
+    let mut seen = 0usize;
+    let mut cut_at = None;
+    for (i, row) in tl.rows().iter().enumerate() {
+        if seen == n {
+            cut_at = Some(i);
+            break;
+        }
+        if row.will_undo() {
+            seen += 1;
+        }
+    }
+    let Some(i) = cut_at else {
         return Err(UndoRefusal::TooFar);
     };
-    let summary = tl.summary_of_newest(n);
-    if summary.no_does_nothing() {
-        return Err(UndoRefusal::Nothing);
-    }
+    let seq = tl.rows().get(i).map(|r| r.seq).ok_or(UndoRefusal::TooFar)?;
     Ok(UndoCut {
         seq,
         techo: tl.techo(),
-        summary,
+        summary: tl.summary_of_newest(i),
     })
+}
+
+/// Whether a row is hidden by the panes' rule (a leading `.` byte): a client
+/// with no pane (`norte run`) leaves it out the way a pane with hidden files
+/// off does.
+///
+/// ```
+/// # use norte_proto::{Entry, EntryKind, Segment, VPath};
+/// let dir = VPath::parse("mem:///d").unwrap();
+/// let e = |n: &str| Entry { path: dir.join(Segment::new(n.as_bytes().to_vec()).unwrap()),
+///     kind: EntryKind::File, size: None, mtime_ms: None, attrs: Default::default() };
+/// assert!(norte_frontend::orders::is_hidden(&e(".env")));
+/// assert!(!norte_frontend::orders::is_hidden(&e("a.env")));
+/// ```
+#[must_use]
+pub fn is_hidden(entry: &Entry) -> bool {
+    crate::pane::is_hidden_entry(entry)
 }
 
 /// How many rows an order measures before its `sel` at most; past this the
@@ -261,8 +315,7 @@ pub fn marks_before(pane: &crate::PaneState) -> Vec<VPath> {
 
 /// Puts back the marks the pane had when the box opened.
 pub fn restore(pane: &mut crate::PaneState, before: &[VPath]) {
-    pane.clear_marks();
-    pane.restore_marks(before);
+    pane.replace_marks(before);
 }
 
 /// The live preview of the box's `query`: starts again from `before`, and
@@ -287,7 +340,7 @@ pub fn preview(
         return String::new();
     };
     let missing = unmeasured(pane, q).len();
-    match pane.select_query(q, now_ms) {
+    match pane.preview_query(q, now_ms) {
         Ok(n) => {
             let n_text = n.to_string();
             let size = crate::human_bytes(pane.marked_bytes());
@@ -408,21 +461,11 @@ fn command(id: &str) -> Result<String, OrderError> {
 /// absolute `/…` on the same provider, or relative. `.` and `..` are walked
 /// here because a [`Segment`] may be neither.
 fn resolve(here: &VPath, typed: &[u8]) -> Result<VPath, OrderError> {
-    if let Ok(s) = std::str::from_utf8(typed)
-        && s.contains("://")
-    {
-        return VPath::parse(s).map_err(|_| OrderError::BadPath);
-    }
-    let mut at = if typed.first() == Some(&b'/') {
-        let mut root = here.clone();
-        while let Some(up) = root.parent() {
-            root = up;
-        }
-        root
-    } else {
-        here.clone()
+    let (mut at, rest) = match url_root(typed)? {
+        Some((root, rest)) => (root, rest),
+        None => (start_of(here, typed), typed),
     };
-    for part in typed.split(|b| *b == b'/') {
+    for part in rest.split(|b| *b == b'/') {
         match part {
             b"" | b"." => {}
             b".." => at = at.parent().unwrap_or(at),
@@ -433,6 +476,50 @@ fn resolve(here: &VPath, typed: &[u8]) -> Result<VPath, OrderError> {
         }
     }
     Ok(at)
+}
+
+/// `scheme://authority` at the start of a typed path, detected on ASCII
+/// bytes so a non-UTF-8 name further on does not turn the URL into a
+/// relative path. The root parses through `VPath`; the segments after it
+/// stay raw bytes. A password typed inline is refused (hard rule 10).
+fn url_root(typed: &[u8]) -> Result<Option<(VPath, &[u8])>, OrderError> {
+    let Some(sep) = typed.windows(3).position(|w| w == b"://") else {
+        return Ok(None);
+    };
+    let scheme = &typed[..sep];
+    let is_scheme = scheme.first().is_some_and(u8::is_ascii_lowercase)
+        && scheme.iter().all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'+' | b'.' | b'-')
+        });
+    if !is_scheme {
+        return Ok(None);
+    }
+    let after = &typed[sep + 3..];
+    let auth_len = after.iter().position(|b| *b == b'/').unwrap_or(after.len());
+    let authority = &after[..auth_len];
+    if let Some(at) = authority.iter().position(|b| *b == b'@')
+        && authority[..at].contains(&b':')
+    {
+        return Err(OrderError::BadPath);
+    }
+    let head =
+        std::str::from_utf8(&typed[..sep + 3 + auth_len]).map_err(|_| OrderError::BadPath)?;
+    let root = VPath::parse(&format!("{head}/")).map_err(|_| OrderError::BadPath)?;
+    Ok(Some((root, &after[auth_len..])))
+}
+
+/// Where a non-URL typed path starts: the provider's root for `/…`, else
+/// the focused folder.
+fn start_of(here: &VPath, typed: &[u8]) -> VPath {
+    if typed.first() == Some(&b'/') {
+        let mut root = here.clone();
+        while let Some(up) = root.parent() {
+            root = up;
+        }
+        root
+    } else {
+        here.clone()
+    }
 }
 
 /// The steps that may run once `Select` reported `matched` rows: none of the
@@ -702,11 +789,84 @@ mod tests {
         assert_eq!(undo_cut(&rows, None, 1).expect("cut").techo, Some(9));
     }
 
+    /// The core refuses `undo_after(0)`: there is no row 0 to stand on. Undoing
+    /// past the oldest row is the timeline's job, not a broken dialog's.
     #[test]
-    fn undo_more_than_exist_points_at_zero_only_on_the_last_page() {
+    fn undo_past_the_oldest_row_is_refused() {
         let rows = [jrow(9, None), jrow(6, None)];
-        assert_eq!(undo_cut(&rows, None, 5).expect("cut").seq, 0);
+        assert_eq!(undo_cut(&rows, None, 2), Err(UndoRefusal::TooFar));
         assert_eq!(undo_cut(&rows, Some(6), 5), Err(UndoRefusal::TooFar));
+    }
+
+    /// `undo` twice: the first leaves a compensation row on top and its
+    /// target marked undone. N counts what can still be undone, so the second
+    /// `undo` reaches the operation before.
+    #[test]
+    fn undo_counts_only_what_can_still_be_undone() {
+        let mut comp = jrow(7, None);
+        comp.undoes_seq = Some(6);
+        let mut done = jrow(6, None);
+        done.undone = true;
+        let rows = [comp, done, jrow(5, None), jrow(4, None)];
+        let cut = undo_cut(&rows, None, 1).expect("cut");
+        assert_eq!(cut.seq, 4, "undoes 5, the newest still undoable");
+        assert_eq!(cut.summary.to_undo, 1);
+    }
+
+    /// `\xff.rs` and `\xfe.rs` both read `�.rs` lossily; an escaped byte
+    /// targets one of them, never its twin.
+    #[test]
+    fn an_escaped_byte_never_selects_its_lossy_twin() {
+        let mk = |b: &[u8]| entry(b, EntryKind::File, Some(1), 1);
+        let mut p = pane(vec![mk(b"\xff.rs"), mk(b"\xfe.rs")]);
+        assert_eq!(p.select_query(&query(r"sel name:\xff.rs"), NOW), Ok(1));
+        assert_eq!(p.select_query(&query(r"sel ext:rs"), NOW), Ok(2));
+        assert_eq!(p.mark_glob("*.rs", true), Ok(0), "both already marked");
+    }
+
+    #[test]
+    fn a_url_destination_keeps_non_utf8_bytes() {
+        let here = dir();
+        let cx = Context {
+            here: &here,
+            other: None,
+        };
+        let order = norte_orders::parse(r"cp >mem:///o/caf\xe9").expect("parse");
+        let [Step::Copy { to }] = &steps(&order, &cx).expect("steps")[..] else {
+            panic!()
+        };
+        assert_eq!(to.scheme(), "mem");
+        assert_eq!(to.file_name().expect("name").as_bytes(), b"caf\xe9");
+        assert_eq!(to.parent(), Some(VPath::parse("mem:///o").expect("vpath")));
+    }
+
+    /// Hard rule 10: a password typed inline never travels on as a path.
+    #[test]
+    fn a_url_with_an_inline_password_is_refused() {
+        let here = dir();
+        let cx = Context {
+            here: &here,
+            other: None,
+        };
+        let order = norte_orders::parse("cp >sftp://u:pw@h/x").expect("parse");
+        assert_eq!(steps(&order, &cx), Err(OrderError::BadPath));
+    }
+
+    /// Restoring the box's marks is not a bulk gesture: `mark.restore` must
+    /// still give back what the reader had before the box.
+    #[test]
+    fn the_preview_never_overwrites_the_restore_slot() {
+        let mut p = pane(vec![file("a.pdf", 1, 1), file("b.txt", 1, 1)]);
+        p.mark_all();
+        p.clear_marks();
+        let before = marks_before(&p);
+        let _ = preview(&mut p, ":sel ext:pdf", &before, NOW, norte_i18n::Lang::En);
+        restore(&mut p, &before);
+        assert_eq!(
+            p.restore_previous_marks(),
+            Some(2),
+            "the unmark-all is still undoable"
+        );
     }
 
     #[test]

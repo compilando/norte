@@ -418,6 +418,25 @@ impl PaneState {
         Some(self.marks.len())
     }
 
+    /// Puts `paths` back as the whole mark set, WITHOUT a snapshot: it undoes
+    /// a preview (an order's live `sel`), it is not a gesture of its own, so
+    /// `mark.restore` keeps what it had. Only paths still listed come back,
+    /// through the same funnel as every mark; linear in rows + paths.
+    pub fn replace_marks(&mut self, paths: &[VPath]) {
+        let wanted: HashSet<&VPath> = paths.iter().collect();
+        let listed: Vec<VPath> = self
+            .entries
+            .iter()
+            .filter(|e| wanted.contains(&e.path))
+            .map(|e| e.path.clone())
+            .collect();
+        self.totals_moved();
+        self.marks.clear();
+        for path in listed {
+            self.mark(path);
+        }
+    }
+
     /// Clears every mark.
     pub fn clear_marks(&mut self) {
         self.snapshot_marks();
@@ -559,6 +578,13 @@ impl PaneState {
         lost
     }
 
+    /// The entries a bulk mark acts on ([`Self::markable_indices`]).
+    pub(crate) fn markable_entries(&self) -> impl Iterator<Item = &Entry> {
+        self.markable_indices()
+            .into_iter()
+            .filter_map(|i| self.entries.get(i))
+    }
+
     /// The indices a BULK mark acts on: the VISIBLE subset under an active
     /// quick filter, the whole listing otherwise — what you see is what you
     /// mark. While a fill is running ([`Self::loading`]) it reaches only what
@@ -569,13 +595,6 @@ impl PaneState {
     /// marking it would put the PARENT in the list of what gets copied or
     /// deleted. Here and not in every caller, because this is the choke
     /// point every bulk mark passes through.
-    /// The entries a bulk mark acts on ([`Self::markable_indices`]).
-    pub(crate) fn markable_entries(&self) -> impl Iterator<Item = &Entry> {
-        self.markable_indices()
-            .into_iter()
-            .filter_map(|i| self.entries.get(i))
-    }
-
     pub(super) fn markable_indices(&self) -> Vec<usize> {
         let from = usize::from(self.is_parent_row(0));
         match self.quick_visible() {
@@ -988,6 +1007,21 @@ impl PaneState {
     ) -> Result<usize, PatternError> {
         let compiled = crate::orders::CompiledQuery::new(query, self.name_encoding)?;
         self.snapshot_marks();
+        Ok(self.select_compiled(&compiled, now_ms))
+    }
+
+    /// [`Self::select_query`] without the snapshot: the live preview, which
+    /// is not a gesture until Enter.
+    pub(crate) fn preview_query(
+        &mut self,
+        query: &norte_orders::Query,
+        now_ms: i64,
+    ) -> Result<usize, PatternError> {
+        let compiled = crate::orders::CompiledQuery::new(query, self.name_encoding)?;
+        Ok(self.select_compiled(&compiled, now_ms))
+    }
+
+    fn select_compiled(&mut self, compiled: &crate::orders::CompiledQuery, now_ms: i64) -> usize {
         self.totals_moved();
         self.marks.clear();
         let mut matched = 0usize;
@@ -995,29 +1029,40 @@ impl PaneState {
             let Some(entry) = self.entries.get(i) else {
                 continue;
             };
-            if crate::orders::matches(entry, &compiled, now_ms) {
+            if crate::orders::matches(entry, compiled, now_ms) {
                 let path = entry.path.clone();
                 if self.mark(path) {
                     matched += 1;
                 }
             }
         }
-        Ok(matched)
+        matched
     }
 }
 
 /// A glob over FOLDED names: the one definition of "this name matches" that
 /// the mark-by-pattern modal and an order's `sel` share.
-pub(crate) struct NameMatcher(regex::Regex);
+pub(crate) struct NameMatcher {
+    re: regex::Regex,
+    /// The pattern names raw bytes (`\xff` in an order): both sides fold
+    /// losslessly ([`crate::nav::fold_exact`]). A pattern typed as text keeps
+    /// the lossy fold, where `�` matches what the pane paints as `�`.
+    exact: bool,
+}
 
 impl NameMatcher {
     /// Compiles a glob given as bytes (a name need not be UTF-8).
     pub(crate) fn new(pattern: &[u8]) -> Result<Self, PatternError> {
+        let exact = std::str::from_utf8(pattern).is_err();
         // The pattern is folded with the SAME pipeline as the name (#103):
         // the fold is Unicode, globset's `case_insensitive` is ASCII-only
         // (it emits `(?-u)`), so without folding the needle an NFD pattern
         // or a non-ASCII uppercase letter would match NOTHING, silently.
-        let folded = crate::nav::fold(pattern);
+        let folded = if exact {
+            crate::nav::fold_exact(pattern, None)
+        } else {
+            crate::nav::fold(pattern)
+        };
         // WITHOUT `case_insensitive`: the fold already lowercases BOTH
         // sides, and the Unicode regex's `(?i)` is a WIDER case-folding than
         // the fold (`s` would match `ſ` U+017F, `μ` would match `µ` U+00B5)
@@ -1045,12 +1090,17 @@ impl NameMatcher {
             .dot_matches_new_line(true)
             .build()
             .map_err(|e| PatternError::Glob(e.to_string()))?;
-        Ok(Self(matcher))
+        Ok(Self { re: matcher, exact })
     }
 
     /// Whether a name (as bytes, decoded with the pane's `enc`) matches.
     pub(crate) fn is_match(&self, name: &[u8], enc: Option<norte_encoding::NameEncoding>) -> bool {
-        self.0.is_match(crate::nav::fold_with(name, enc).as_str())
+        let folded = if self.exact {
+            crate::nav::fold_exact(name, enc)
+        } else {
+            crate::nav::fold_with(name, enc)
+        };
+        self.re.is_match(folded.as_str())
     }
 }
 

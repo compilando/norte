@@ -12,6 +12,7 @@ use norte_core::backend::Backend;
 use norte_frontend::orders::{self, CompiledQuery, Context, Step};
 use norte_proto::{DeleteMode, Entry, VPath};
 
+use crate::EXIT_CANCELLED;
 use crate::cmd::connect::vpath;
 use crate::task;
 
@@ -31,14 +32,33 @@ fn shown(p: &VPath) -> String {
     norte_encoding::mask_terminal_hazards(&String::from_utf8_lossy(name))
 }
 
+/// The switches of `norte run`: four independent command-line flags, which
+/// is what they are — not a state machine in disguise.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RunFlags {
+    /// Print what would run; run nothing.
+    pub dry_run: bool,
+    /// Machine-readable output.
+    pub json: bool,
+    /// `undo` is allowed.
+    pub yes: bool,
+    /// `sel` may match dotfiles.
+    pub hidden: bool,
+}
+
 pub(crate) async fn run(
     backend: &Backend,
     line: &str,
     cwd: &std::path::Path,
-    dry_run: bool,
-    json: bool,
-    yes: bool,
+    flags: RunFlags,
 ) -> anyhow::Result<ExitCode> {
+    let RunFlags {
+        dry_run,
+        json,
+        hidden,
+        ..
+    } = flags;
     let lang = norte_i18n::active();
     let order = match norte_orders::parse(line) {
         Ok(o) => o,
@@ -66,7 +86,7 @@ pub(crate) async fn run(
         return Ok(ExitCode::SUCCESS);
     };
     let matched = match &query {
-        Some(q) => select(backend, &here, q).await?,
+        Some(q) => select(backend, &here, q, hidden).await?,
         None => Vec::new(),
     };
     let needs_operands = matches!(last, Step::Copy { .. } | Step::Move { .. } | Step::Trash);
@@ -74,12 +94,27 @@ pub(crate) async fn run(
         return refuse(&norte_i18n::t("cli-run-needs-selection"));
     }
     if query.is_some() && matched.is_empty() {
+        // Nothing runs; a script reading `--json` still gets its answer.
+        if json {
+            return report(last, &matched, json);
+        }
         eprintln!("{}", norte_i18n::t("msg-order-nothing-matched"));
         return Ok(ExitCode::SUCCESS);
     }
     if dry_run {
         return report(last, &matched, json);
     }
+    act(backend, last, matched, flags).await
+}
+
+/// Runs the acting stage over what `sel` matched.
+async fn act(
+    backend: &Backend,
+    last: &Step,
+    matched: Vec<VPath>,
+    flags: RunFlags,
+) -> anyhow::Result<ExitCode> {
+    let RunFlags { json, yes, .. } = flags;
     match last {
         Step::Select(_) => report(last, &matched, json),
         Step::Copy { to } | Step::Move { to } => {
@@ -104,6 +139,10 @@ pub(crate) async fn run(
                     }
                 })
                 .await?;
+                // Ctrl-C stops the batch, not just the item in flight.
+                if done == ExitCode::from(EXIT_CANCELLED) {
+                    return Ok(done);
+                }
                 if done != ExitCode::SUCCESS {
                     code = done;
                 }
@@ -117,6 +156,9 @@ pub(crate) async fn run(
                     backend.delete(p, DeleteMode::Trash)
                 })
                 .await?;
+                if done == ExitCode::from(EXIT_CANCELLED) {
+                    return Ok(done);
+                }
                 if done != ExitCode::SUCCESS {
                     code = done;
                 }
@@ -137,18 +179,23 @@ pub(crate) async fn run(
     }
 }
 
-/// `sel` over `dir`: the listing, measured where the query needs it (the
+/// `sel` over `dir`: the listing (without dotfiles unless `hidden`, as a
+/// pane with hidden files off), measured where the query needs it (the
 /// local listing is lazy, #52), then the panes' own matcher.
 async fn select(
     backend: &Backend,
     dir: &VPath,
     q: &norte_orders::Query,
+    hidden: bool,
 ) -> anyhow::Result<Vec<VPath>> {
     let mut entries: Vec<Entry> = backend
         .list(dir)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context(norte_i18n::t("cli-list-failed"))?;
+    if !hidden {
+        entries.retain(|e| !orders::is_hidden(e));
+    }
     let measure = q.terms.iter().any(|t| {
         matches!(
             t.pred,
@@ -165,7 +212,10 @@ async fn select(
             }
         }
     }
-    let compiled = CompiledQuery::new(q, None).map_err(|e| anyhow::anyhow!("{e}"))?;
+    // The glob error quotes the pattern verbatim: it never reaches stderr
+    // (`PatternError`'s own rule); the key says what is wrong.
+    let compiled = CompiledQuery::new(q, None)
+        .map_err(|_| anyhow::anyhow!(norte_i18n::t("err-bad-pattern")))?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));

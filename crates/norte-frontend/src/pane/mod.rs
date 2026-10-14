@@ -131,7 +131,7 @@ fn unicode_glob_regex(glob: &globset::Glob) -> Result<String, PatternError> {
 /// not one; a non-UTF8 name starting with 0x2E is. Windows's hidden
 /// attribute will arrive through the wire's attrs (proto 0.30) once some
 /// provider announces it.
-fn is_hidden_entry(e: &Entry) -> bool {
+pub(crate) fn is_hidden_entry(e: &Entry) -> bool {
     e.path
         .file_name()
         .is_some_and(|n| n.as_bytes().first() == Some(&b'.'))

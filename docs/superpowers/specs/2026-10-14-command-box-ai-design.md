@@ -106,6 +106,12 @@ parser; anything that does not parse is never shown as an applicable order.
 
 ## 3. The wire: `orders.plan` and `orders.apply`
 
+> **Superseded by ADR 0185 (2026-10-14).** Orders are resolved against the
+> pane the frontend already has loaded and run through the doors the keys
+> use; there is no new wire. The CLI is `norte run`, not `ntc run`. `redo`
+> is out until the journal has one. The text below is the option that was
+> not taken.
+
 Two methods, a protocol minor bump, `protocol-guardian` mandatory.
 
 - `orders.plan { text, context }` → `OrdersPlan { stages, effects, totals,

@@ -863,7 +863,10 @@ msg-order-preview = { $n ->
    *[other] { $n } elementos · { $size }
 }
 msg-order-nothing-matched = nada casó — no se ejecutó nada
-msg-order-unmeasured = { $n } sin medir aún (Intro las mide)
+msg-order-measuring = midiendo las filas que necesita la orden…
+msg-order-stale = la orden no se ejecutó: el panel cambió mientras medía
+msg-order-journal-failed = no se pudo leer la historia: { $err }
+msg-order-unmeasured ={ $n } sin medir aún (Intro las mide)
 msg-order-undo-too-far = eso va más atrás de una página de historia: deshaz desde la línea de tiempo (log)
 goto-empty = nada casa con eso
 goto-index-off = el índice semántico no está encendido

@@ -858,7 +858,10 @@ msg-order-preview = { $n ->
    *[other] { $n } items · { $size }
 }
 msg-order-nothing-matched = nothing matched — nothing was run
-msg-order-unmeasured = { $n } not measured yet (Enter measures them)
+msg-order-measuring = measuring the rows the order needs…
+msg-order-stale = the order was not run: the pane changed while it was measuring
+msg-order-journal-failed = could not read the history: { $err }
+msg-order-unmeasured ={ $n } not measured yet (Enter measures them)
 msg-order-undo-too-far = that goes further back than one page of history: undo from the timeline (log)
 goto-empty = nothing matches that
 goto-index-off = the semantic index is not switched on

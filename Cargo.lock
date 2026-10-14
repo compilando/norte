@@ -5054,6 +5054,7 @@ dependencies = [
  "norte-help",
  "norte-i18n",
  "norte-mcp",
+ "norte-orders",
  "norte-proto",
  "norte-testkit",
  "norte-theme",

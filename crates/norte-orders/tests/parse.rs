@@ -125,6 +125,14 @@ fn errors_carry_their_offset() {
     assert_eq!(parse("sel *|").unwrap_err().kind, ParseErrorKind::Empty);
 }
 
+/// A size at the edge of u128 with a fraction must be refused, not overflow
+/// (the live preview parses on every key).
+#[test]
+fn a_huge_fractional_size_is_refused_not_overflowed() {
+    let huge = format!("sel size>{}.9T", u128::MAX / 1024);
+    assert_eq!(parse(&huge).unwrap_err().kind, ParseErrorKind::BadNumber);
+}
+
 #[test]
 fn redo_is_refused_until_the_journal_has_one() {
     assert_eq!(parse("redo").unwrap_err().kind, ParseErrorKind::NotYet);

@@ -462,6 +462,9 @@ impl Goto {
             ..GotoRow::default()
         };
         let rows: Vec<GotoRow> = match first {
+            // A verb typed whole is done: offering `layout.log` under `log`
+            // would turn Enter into a different command.
+            None if norte_orders::VERBS.contains(&word) => Vec::new(),
             None => {
                 let verbs = norte_orders::VERBS.iter().map(|v| row(v, " "));
                 if word.is_empty() {
@@ -2135,6 +2138,17 @@ mod order_tests {
     #[test]
     fn a_complete_order_offers_no_completion() {
         assert!(boxed(":trash ").rows().is_empty());
+    }
+
+    /// A verb typed whole is not completed into a command that merely
+    /// contains its letters: `:log` + Enter runs `log`, not `layout.log`.
+    #[test]
+    fn a_whole_verb_is_not_completed_into_something_else() {
+        for v in ["log", "undo", "trash"] {
+            let g = boxed(&format!(":{v}"));
+            assert!(g.rows().is_empty(), "{v}: {:?}", g.rows());
+            assert!(matches!(g.confirm(), Some(Action::Order(_))), "{v}");
+        }
     }
 
     #[test]

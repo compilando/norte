@@ -48,10 +48,15 @@ pub fn cancel(app: &mut App) {
 /// catalogue command comes back as the [`Action`] the box already knows how
 /// to run, so it takes exactly the path its key or row would.
 pub async fn run(app: &mut App, backend: &Backend, order: &norte_orders::Order) -> Option<Action> {
-    // The box closed on Enter: what the preview marked stays marked, which
-    // is what the reader saw and what the step below acts on.
-    app.order_marks_before = None;
+    // The marks from before the box: every path that does not act gives
+    // them back, and the selection below starts from them, so `mark.restore`
+    // afterwards returns to them too.
+    let before = app
+        .order_marks_before
+        .take()
+        .unwrap_or_else(|| orders::marks_before(app.focused().state()));
     app.order_preview.clear();
+    orders::restore(app.focused_mut().state_mut(), &before);
     let here = app.focused().dir().clone();
     let other = app.target_index().map(|i| app.panes[i].dir().clone());
     let cx = Context {
@@ -69,26 +74,20 @@ pub async fn run(app: &mut App, backend: &Backend, order: &norte_orders::Order) 
     let mut matched = None;
     for step in &steps {
         if let Step::Select(q) = step {
-            // The lazy listing (#52) measured only the painted rows: stat
-            // the rest the query needs, or `size>` silently skips them.
-            for path in orders::unmeasured(app.focused().state(), q) {
-                if let Ok(st) = backend.stat(&path).await {
-                    app.focused_mut()
-                        .state_mut()
-                        .hydrate(&path, st.size, st.mtime_ms);
-                }
-            }
-            match app.focused_mut().state_mut().select_query(q, now) {
-                Ok(n) => matched = Some(n),
-                Err(e) => {
-                    app.message = Some(e.to_string());
-                    return None;
-                }
-            }
+            measure(app, backend, q).await;
+            let Ok(n) = app.focused_mut().state_mut().select_query(q, now) else {
+                // The glob error quotes the pattern verbatim: never painted
+                // raw (`PatternError`'s own rule).
+                orders::restore(app.focused_mut().state_mut(), &before);
+                app.message = Some(t("err-bad-pattern"));
+                return None;
+            };
+            matched = Some(n);
         }
     }
     let runnable = orders::runnable(&steps, matched);
     let Some(last) = runnable.last() else {
+        orders::restore(app.focused_mut().state_mut(), &before);
         app.message = Some(t("msg-order-nothing-matched"));
         return None;
     };
@@ -136,6 +135,37 @@ pub async fn run(app: &mut App, backend: &Backend, order: &norte_orders::Order) 
         Step::Undo(n) => {
             undo(app, backend, *n).await;
             None
+        }
+    }
+}
+
+/// How long Enter may spend measuring before it selects with what it has.
+const MEASURE_BUDGET: std::time::Duration = std::time::Duration::from_secs(3);
+/// Stats in flight at once while measuring.
+const MEASURE_PARALLEL: usize = 32;
+
+/// The lazy listing (#52) measured only the painted rows: stat the rest the
+/// query needs, or `size>` silently skips them. Bounded in time — this runs
+/// on the key — so a slow remote gives up after [`MEASURE_BUDGET`] and the
+/// rows still unknown simply do not match.
+async fn measure(app: &mut App, backend: &Backend, q: &norte_orders::Query) {
+    use futures::StreamExt as _;
+    let paths = orders::unmeasured(app.focused().state(), q);
+    if paths.is_empty() {
+        return;
+    }
+    let mut stats = futures::stream::iter(paths)
+        .map(|path| async move {
+            let st = backend.stat(&path).await;
+            (path, st)
+        })
+        .buffer_unordered(MEASURE_PARALLEL);
+    let deadline = tokio::time::Instant::now() + MEASURE_BUDGET;
+    while let Ok(Some((path, st))) = tokio::time::timeout_at(deadline, stats.next()).await {
+        if let Ok(st) = st {
+            app.focused_mut()
+                .state_mut()
+                .hydrate(&path, st.size, st.mtime_ms);
         }
     }
 }

@@ -133,6 +133,101 @@ async fn enter_measures_a_lazy_listing_before_selecting_by_size() {
     assert_eq!(marked(listing(&snap)), ["a.txt", "b.txt"]);
 }
 
+async fn host_read_only(backend: Arc<Fake>) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    UiHost::start(UiHostOptions {
+        backend,
+        initial_dir: dir(),
+        initial_dir_requested: false,
+        attach: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
+        layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
+        viewport: (120, 40),
+        settings: test_settings(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::SoloRead,
+        log_ring: None,
+    })
+    .await
+    .expect("starts")
+}
+
+/// A read-only window refuses an order that writes, whatever door it would
+/// take: `mkdir` straight to its task, or a catalogue command whose key the
+/// read-only keymap would never have offered.
+#[tokio::test]
+async fn a_read_only_window_refuses_orders_that_write() {
+    let fake = fake_tree();
+    let (h, _snap) = host_read_only(Arc::clone(&fake)).await;
+    let mut sub = h.subscribe();
+    for line in [":mkdir x", ":pane.combine-files", ":sel *.txt | trash"] {
+        h.dispatch(ctrl_g()).await.expect("host alive");
+        typed(&h, line).await;
+        h.dispatch(press("Enter")).await.expect("host alive");
+        let snap = resync(&h, &mut sub).await;
+        assert!(snap.dialogs.is_empty(), "{line}: no dialog in read-only");
+    }
+    assert!(
+        fake.created.lock().expect("lock").is_empty(),
+        "nothing created"
+    );
+}
+
+/// Stats that land after the reader opened the box again are dropped: the
+/// order does not select nor open a dialog over what they are doing now.
+#[tokio::test]
+async fn measurements_that_land_late_run_nothing() {
+    let mut f = Fake {
+        lazy: true,
+        delay_ms: 300,
+        ..Fake::default()
+    };
+    f.put(
+        "mem:///casa",
+        vec![(b"a.txt".to_vec(), false), (b"b.txt".to_vec(), false)],
+    );
+    let (h, _snap) = host_tree(Arc::new(f)).await;
+    let mut sub = h.subscribe();
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    typed(&h, ":sel size=1 | trash").await;
+    h.dispatch(press("Enter")).await.expect("host alive");
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    let snap = wait_snapshot(&h, &mut sub, "the stale order is reported", |s| {
+        s.status
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("no se ejecutó"))
+    })
+    .await;
+    assert!(snap.dialogs.is_empty(), "no dialog over the reopened box");
+    assert!(marked(listing(&snap)).is_empty());
+}
+
+/// An order that matched nothing gives the pane's marks back.
+#[tokio::test]
+async fn an_empty_order_gives_the_marks_back() {
+    let (h, _snap) = host_tree(fake_tree()).await;
+    let mut sub = h.subscribe();
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    typed(&h, ":sel *.txt").await;
+    h.dispatch(press("Enter")).await.expect("host alive");
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    typed(&h, ":sel *.zzz | trash").await;
+    h.dispatch(press("Enter")).await.expect("host alive");
+    let snap = resync(&h, &mut sub).await;
+    assert_eq!(
+        marked(listing(&snap)),
+        ["notas.txt"],
+        "the marks from before"
+    );
+}
+
 /// The window and the terminal mark the same rows for the same line: both
 /// go through `PaneState::select_query`, which is the oracle here.
 #[tokio::test]

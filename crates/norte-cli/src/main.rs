@@ -179,6 +179,10 @@ enum Cmd {
         /// Required for `undo`, which changes files.
         #[arg(long)]
         yes: bool,
+        /// Let `sel` match dotfiles too (a pane with hidden files off, and a
+        /// shell's `*`, leave them out).
+        #[arg(long)]
+        hidden: bool,
     },
     /// Deletes a file or directory (recursive), with progress and clean Ctrl-C
     /// Deletes PERMANENTLY (the engine's test bench; the trash lives
@@ -1033,7 +1037,16 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             dry_run,
             json,
             yes,
-        } => cmd::run::run(&backend, &order, &cwd, dry_run, json, yes).await,
+            hidden,
+        } => {
+            let flags = cmd::run::RunFlags {
+                dry_run,
+                json,
+                yes,
+                hidden,
+            };
+            cmd::run::run(&backend, &order, &cwd, flags).await
+        }
         Cmd::Plugin { cmd } => cmd::plugin::plugin_cmd(&backend, cmd, cli.socket).await,
         Cmd::Index { cmd } => cmd::index::index_cmd(&backend, cmd).await,
         Cmd::Audit { .. }

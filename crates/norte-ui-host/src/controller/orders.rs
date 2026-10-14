@@ -11,6 +11,27 @@ use super::*;
 use norte_frontend::goto::Mode;
 use norte_frontend::orders::{self, Context, Step};
 
+/// Where an order that went to measure was asked from.
+#[derive(Debug)]
+pub(super) struct OrderTicket {
+    /// The box's generation (`gen_ir_a`) when it ran.
+    generation: u64,
+    /// The active slot.
+    slot: u32,
+    /// Its folder.
+    dir: VPath,
+    /// The marks from before the box, to start the selection from.
+    before: Vec<VPath>,
+}
+
+/// An order's measurements landing: where it was asked, the order, and
+/// what each stat said.
+pub(super) type OrderMeasured = (
+    OrderTicket,
+    norte_orders::Order,
+    Vec<(VPath, Option<u64>, Option<i64>)>,
+);
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -65,9 +86,16 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // What the preview marked stays marked: it is what the reader saw.
-        self.order_marks_before = None;
+        // The marks from before the box: every path that does not act gives
+        // them back, and the selection starts from them, so `mark.restore`
+        // afterwards returns to them too.
+        let before = match self.order_marks_before.take() {
+            Some(b) => b,
+            None => orders::marks_before(&self.slot().pane),
+        };
         self.order_preview.clear();
+        orders::restore(&mut self.slot_mut().pane, &before);
+        let mut out = vec![self.parche_rows()];
         let here = self.slot().pane.dir().clone();
         let other = self.directory_dest().ok();
         let cx = Context {
@@ -78,9 +106,13 @@ impl State {
             Ok(s) => s,
             Err(e) => {
                 let text = orders::order_error_text(&e, self.lang);
-                return (self.applied(), self.say_text(text));
+                out.extend(self.say_text(text));
+                return (self.applied(), out);
             }
         };
+        if self.refused_in_read_only(steps.last()) {
+            return Self::no_mutates();
+        }
         // The lazy listing (#52) measured only the painted rows: what a `sel`
         // needs and is missing is statted first, and the order runs again
         // when the answers are in (`order_measured`).
@@ -93,36 +125,32 @@ impl State {
             .flatten()
             .collect();
         if !missing.is_empty() && !measured {
-            let backend = Arc::clone(backend);
-            let mailbox = mailbox.clone();
-            let order = order.clone();
-            tokio::spawn(async move {
-                let mut stats = Vec::with_capacity(missing.len());
-                for path in missing {
-                    if let Ok(st) = backend.stat(path.clone(), Vec::new()).await {
-                        stats.push((path, st.size, st.mtime_ms));
-                    }
-                }
-                let _ = mailbox
-                    .send(Message::Background(Box::new(Background::OrderMeasured(
-                        order, stats,
-                    ))))
-                    .await;
-            });
-            return (self.applied(), Vec::new());
+            let ticket = OrderTicket {
+                generation: self.gen_ir_a,
+                slot: self.active(),
+                dir: here,
+                before,
+            };
+            Self::measure_then_run(ticket, order.clone(), missing, backend, mailbox);
+            out.extend(self.say("msg-order-measuring"));
+            return (self.applied(), out);
         }
         let mut matched = None;
-        let mut out = Vec::new();
         for step in &steps {
             if let Step::Select(q) = step {
-                match self.slot_mut().pane.select_query(q, now_ms()) {
-                    Ok(n) => matched = Some(n),
-                    Err(_) => return (self.applied(), self.say("err-bad-pattern")),
-                }
+                let Ok(n) = self.slot_mut().pane.select_query(q, now_ms()) else {
+                    orders::restore(&mut self.slot_mut().pane, &before);
+                    out.push(self.parche_rows());
+                    out.extend(self.say("err-bad-pattern"));
+                    return (self.applied(), out);
+                };
+                matched = Some(n);
                 out.push(self.parche_rows());
             }
         }
         let Some(last) = orders::runnable(&steps, matched).last() else {
+            orders::restore(&mut self.slot_mut().pane, &before);
+            out.push(self.parche_rows());
             out.extend(self.say("msg-order-nothing-matched"));
             return (self.applied(), out);
         };
@@ -143,7 +171,7 @@ impl State {
             // The timeline panel IS the log.
             Step::Log(_) => self.run_command_key("layout.timeline", backend, mailbox),
             Step::Undo(n) => {
-                Self::order_undo(*n, backend, mailbox);
+                Self::order_undo(self.gen_ir_a, *n, backend, mailbox);
                 (self.applied(), Vec::new())
             }
         };
@@ -151,19 +179,76 @@ impl State {
         (ack, out)
     }
 
+    /// Whether a read-only window must refuse the order's acting stage. The
+    /// keymap, palette and menus filter by the same list; an order must not
+    /// be the way around them.
+    fn refused_in_read_only(&self, last: Option<&Step>) -> bool {
+        if self.effects != crate::commands::Effects::SoloRead {
+            return false;
+        }
+        match last {
+            Some(Step::Copy { .. } | Step::Move { .. } | Step::Trash | Step::Mkdir { .. }) => true,
+            Some(Step::Command(id)) => {
+                !crate::commands::all_with(self.effects).contains(&id.as_str())
+            }
+            _ => false,
+        }
+    }
+
+    /// Stats the rows a `sel` needs, then sends the order back. The answer
+    /// travels WITH where it was asked (`ticket`): if the slot, its folder or
+    /// the box's generation changed by then, [`Self::order_measured`] drops
+    /// it instead of running it somewhere the reader never previewed.
+    fn measure_then_run(
+        ticket: OrderTicket,
+        order: norte_orders::Order,
+        missing: Vec<VPath>,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) {
+        let backend = Arc::clone(backend);
+        let mailbox = mailbox.clone();
+        tokio::spawn(async move {
+            let mut stats = Vec::with_capacity(missing.len());
+            for path in missing {
+                if let Ok(st) = backend.stat(path.clone(), Vec::new()).await {
+                    stats.push((path, st.size, st.mtime_ms));
+                }
+            }
+            let _ = mailbox
+                .send(Message::Background(Box::new(Background::OrderMeasured(
+                    Box::new((ticket, order, stats)),
+                ))))
+                .await;
+        });
+    }
+
     /// The stats an order waited for: into the listing, then the order runs
     /// — once; a row whose stat failed stays unknown and does not match.
     pub(super) fn order_measured(
         &mut self,
-        order: &norte_orders::Order,
-        stats: Vec<(VPath, Option<u64>, Option<i64>)>,
+        landed: OrderMeasured,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let (ticket, order, stats) = landed;
+        let moved = ticket.generation != self.gen_ir_a
+            || self.ir_a.is_some()
+            || ticket.slot != self.active()
+            || self.slot().pane.dir() != &ticket.dir;
+        if moved {
+            return self.say("msg-order-stale");
+        }
         for (path, size, mtime) in stats {
             self.slot_mut().pane.hydrate(&path, size, mtime);
         }
-        self.run_order(order, true, backend, mailbox).1
+        self.order_marks_before = Some(ticket.before);
+        let (ack, mut out) = self.run_order(&order, true, backend, mailbox);
+        // A refusal on the second pass is said, not dropped with the ack.
+        if let ActionAck::Unavailable { reason_key } = ack {
+            out.extend(self.say(&reason_key));
+        }
+        out
     }
 
     /// `mkdir` from an order: the path is already resolved, so it goes
@@ -184,7 +269,12 @@ impl State {
 
     /// `undo N`: asks for the reader's newest page; the answer opens the
     /// timeline's own confirmation ([`Self::order_undo_landed`]).
-    fn order_undo(n: u32, backend: &Arc<dyn HostBackend>, mailbox: &mpsc::Sender<Message>) {
+    fn order_undo(
+        generation: u64,
+        n: u32,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) {
         let backend = Arc::clone(backend);
         let mailbox = mailbox.clone();
         tokio::spawn(async move {
@@ -192,20 +282,35 @@ impl State {
                 .journal_list_mine(norte_proto::methods::JOURNAL_LIST_MAX_PAGE)
                 .await;
             let _ = mailbox
-                .send(Message::Background(Box::new(Background::OrderUndo(n, res))))
+                .send(Message::Background(Box::new(Background::OrderUndo(
+                    generation, n, res,
+                ))))
                 .await;
         });
     }
 
     /// The page for `undo N` arrived: cut it and ask, with the ceiling frozen
-    /// at the newest row counted.
+    /// at the newest row counted — unless the reader opened the box again
+    /// meanwhile, which a late dialog would land on.
     pub(super) fn order_undo_landed(
         &mut self,
+        generation: u64,
         n: u32,
         res: Result<norte_proto::methods::JournalListResult, Error>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let Ok(page) = res else {
-            return self.say("timeline-undo-nothing");
+        if generation != self.gen_ir_a || self.ir_a.is_some() {
+            return self.say("msg-order-stale");
+        }
+        let page = match res {
+            Ok(p) => p,
+            Err(e) => {
+                let text = norte_i18n::ta_in(
+                    self.lang,
+                    "msg-order-journal-failed",
+                    &[("err", &e.to_string())],
+                );
+                return self.say_text(clamp_display(text));
+            }
         };
         match orders::undo_cut(&page.rows, page.next_before_seq, n) {
             Ok(cut) => self.ask_undo_cut(cut.seq, cut.summary, cut.techo).1,
