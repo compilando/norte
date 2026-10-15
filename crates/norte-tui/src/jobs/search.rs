@@ -274,6 +274,7 @@ pub fn drain_search(
             runs.remove(slot);
             return;
         };
+        let panel_epoch = s.panel_epoch;
         if let Some(results) = pane.results_mut() {
             // #81: the match's context (line + preview, sanitized AT THE
             // SOURCE by the core) is saved by path in the result set — the
@@ -289,12 +290,29 @@ pub fn drain_search(
             );
             results.note_hits(&batch);
         }
-        pane.extend_listing(batch.entries);
+        if let Some(e) = panel_epoch
+            && let Some(p) = watching_panel(app, e)
+        {
+            p.apply_hits(e, &batch);
+        }
+        if let Some(pane) = app.panes.browser_mut(slot) {
+            pane.extend_listing(batch.entries);
+        }
         return;
     }
     // Channel closed: the walker finished. Non-blocking terminal state.
     let outcome = finalize_outcome(s);
     s.outcome = outcome.clone();
+    if let Some(e) = s.panel_epoch
+        && let Some(p) = watching_panel(app, e)
+    {
+        // The panel words a failure as its own drain does: masked for the bar.
+        let said = match &outcome {
+            Outcome::Failed(category) => Outcome::Failed(detail_for_bar(category)),
+            other => other.clone(),
+        };
+        p.finished(e, said);
+    }
     // The concrete detail goes to the status bar ONCE (error_message); the
     // result set keeps the CATEGORY (inside `Outcome::Failed`) to paint
     // `search-status-failed` persistently after the message clears (review
@@ -312,6 +330,20 @@ pub fn drain_search(
     {
         results.set_outcome(outcome);
     }
+}
+
+/// The search panel, while it still watches the run of `epoch` that it
+/// handed to a results tab (C9): it still shows that query and has not
+/// been stopped ("search here"). Once its epoch moved on, the model would
+/// ignore the batch anyway.
+fn watching_panel(
+    app: &mut App,
+    epoch: u64,
+) -> Option<&mut norte_frontend::search_panel::SearchPanel> {
+    let slot = app.search_panel_slot()?;
+    app.panes
+        .search_panel_mut(slot)
+        .filter(|p| p.epoch() == epoch && p.is_running())
 }
 
 /// Reads a [`SearchRun`]'s terminal state from `TaskProgress` (non-blocking)

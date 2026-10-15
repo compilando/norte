@@ -185,6 +185,23 @@ pub enum PanelStatus {
     },
 }
 
+/// What "Open as listing" takes from the panel ([`SearchPanel::listing`]):
+/// the files of the tree, the query that produced them, the first shown
+/// line of each, and how the run is going.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PanelListing {
+    /// The query of the tree, not what has been typed since.
+    pub search: crate::results::SavedSearch,
+    /// Every file of the tree, in tree order.
+    pub entries: Vec<Entry>,
+    /// The first shown line of each file, as the status bar paints it.
+    pub matches: Vec<(VPath, MatchInfo)>,
+    /// `Some(epoch)` when the run that produced the tree is still live.
+    pub live: Option<u64>,
+    /// How that run is going, or how it ended.
+    pub outcome: Outcome,
+}
+
 /// The run whose batches are accepted.
 #[derive(Debug)]
 struct Run {
@@ -207,6 +224,11 @@ pub struct SearchPanel {
     dimmed: bool,
     /// The run's next batch, or its end, clears the tree first.
     replace_on_arrival: bool,
+    /// The query of the last launch, until its first answer replaces the
+    /// tree and it becomes [`Self::tree_query`].
+    pending_query: Option<crate::results::SavedSearch>,
+    /// The query that produced what the tree shows.
+    tree_query: Option<crate::results::SavedSearch>,
     tree: Vec<FolderNode>,
     /// Folder → its index in `tree`.
     folders: BTreeMap<VPath, usize>,
@@ -244,6 +266,8 @@ impl SearchPanel {
             unreadable: None,
             dimmed: false,
             replace_on_arrival: false,
+            pending_query: None,
+            tree_query: None,
             tree: Vec::new(),
             folders: BTreeMap::new(),
             collapsed: BTreeSet::new(),
@@ -392,6 +416,8 @@ impl SearchPanel {
             self.unreadable = None;
             self.dimmed = false;
             self.replace_on_arrival = false;
+            self.pending_query = None;
+            self.tree_query = None;
             self.clear_tree();
             return Some(Due::Clear);
         }
@@ -414,6 +440,10 @@ impl SearchPanel {
         });
         self.dimmed = true;
         self.replace_on_arrival = true;
+        self.pending_query = Some(crate::results::SavedSearch::from_form(
+            &self.form,
+            self.root.clone(),
+        ));
         let mut params = crate::search::params(&self.form, self.root.clone(), now_ms, MAX_FILES);
         params.max_matches_per_file = Some(ASKED_PER_FILE);
         Some(Due::Launch {
@@ -431,8 +461,52 @@ impl SearchPanel {
         if self.replace_on_arrival {
             self.replace_on_arrival = false;
             self.clear_tree();
+            self.tree_query = self.pending_query.take();
             self.dimmed = self.unreadable.is_some();
         }
+    }
+
+    /// What "Open as listing" takes: the files of the tree with the query
+    /// THAT produced them. `None` with an empty tree, or while a new run
+    /// has launched and its first answer has not replaced the tree yet.
+    #[must_use]
+    pub fn listing(&self) -> Option<PanelListing> {
+        if self.replace_on_arrival || self.tree.is_empty() {
+            return None;
+        }
+        let search = self.tree_query.clone()?;
+        let files = || self.tree.iter().flat_map(|folder| &folder.files);
+        let entries = files().map(|f| f.entry.clone()).collect();
+        let matches = files()
+            .filter_map(|f| {
+                let m = f.matches.first()?;
+                Some((
+                    f.entry.path.clone(),
+                    MatchInfo {
+                        line: Some(m.line),
+                        offset: m.offset,
+                        preview: Some(m.preview.clone()),
+                        ranges: Some(m.ranges.clone()),
+                    },
+                ))
+            })
+            .collect();
+        let outcome = self
+            .run
+            .as_ref()
+            .map_or(Outcome::Done, |r| r.outcome.clone());
+        let live = self
+            .run
+            .as_ref()
+            .filter(|r| r.outcome == Outcome::Running)
+            .map(|r| r.epoch);
+        Some(PanelListing {
+            search,
+            entries,
+            matches,
+            live,
+            outcome,
+        })
     }
 
     /// A batch of the run `epoch`; `false` (and ignored) if it is not the
@@ -1180,5 +1254,100 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    // ── Open as listing (phase B, Task 6) ──────────────────────────────
+
+    /// One batch, one matching line per file: `(path, line)`.
+    fn hits(files: &[(&str, u64)]) -> SearchHits {
+        SearchHits {
+            task_id: TaskId::new(1),
+            entries: files.iter().map(|(p, _)| file(p)).collect(),
+            matches: Some(
+                files
+                    .iter()
+                    .map(|(_, line)| MatchInfo {
+                        line: Some(*line),
+                        offset: None,
+                        preview: Some("…aguja…".to_owned()),
+                        ranges: Some(vec![(1, 6)]),
+                    })
+                    .collect(),
+            ),
+            all_matches: None,
+            more: None,
+        }
+    }
+
+    /// The listing pairs the tree with the query that produced it, not with
+    /// what has been typed since.
+    #[test]
+    fn the_listing_carries_the_query_of_the_tree() {
+        let t0 = Instant::now();
+        let mut p = SearchPanel::new(vp("mem:///casa"));
+        p.edit(SearchField::Content, "aguja".to_owned(), t0);
+        let Some(Due::Launch { epoch, .. }) = p.due(t0 + DEBOUNCE, 0) else {
+            panic!("launch")
+        };
+        p.apply_hits(
+            epoch,
+            &hits(&[("mem:///casa/a/x.txt", 3), ("mem:///casa/b/y.txt", 9)]),
+        );
+        p.edit(SearchField::Content, "agujas".to_owned(), t0 + DEBOUNCE); // typing, pause pending
+        let l = p.listing().expect("tree shown");
+        assert_eq!(l.search.content, "aguja");
+        assert_eq!(l.search.root, vp("mem:///casa"));
+        assert_eq!(l.entries.len(), 2);
+        assert_eq!(l.live, Some(epoch));
+        assert_eq!(l.outcome, Outcome::Running);
+        assert_eq!(
+            l.matches
+                .iter()
+                .find(|(p, _)| p.to_wire().ends_with("x.txt"))
+                .and_then(|(_, m)| m.line),
+            Some(3)
+        );
+        let (_, m) = &l.matches[0];
+        assert_eq!(
+            (m.preview.as_deref(), m.ranges.clone()),
+            (Some("…aguja…"), Some(vec![(1, 6)]))
+        );
+    }
+
+    /// After the next launch and before its first batch, the tree is stale:
+    /// no listing. The new run's first answer brings one back, with the new
+    /// query; once that run ends, the listing is no longer live.
+    #[test]
+    fn no_listing_between_a_launch_and_its_first_answer() {
+        let t0 = Instant::now();
+        let mut p = SearchPanel::new(vp("mem:///casa"));
+        p.edit(SearchField::Content, "aguja".to_owned(), t0);
+        let Some(Due::Launch { epoch, .. }) = p.due(t0 + DEBOUNCE, 0) else {
+            panic!("launch")
+        };
+        p.apply_hits(epoch, &hits(&[("mem:///casa/a/x.txt", 3)]));
+        p.edit(SearchField::Content, "agujas".to_owned(), t0 + DEBOUNCE);
+        let Some(Due::Launch { epoch: new, .. }) = p.due(t0 + DEBOUNCE * 2, 0) else {
+            panic!("relaunch")
+        };
+        assert!(p.listing().is_none(), "the tree is the old query's");
+        p.apply_hits(new, &hits(&[("mem:///casa/c/z.txt", 4)]));
+        let l = p.listing().expect("the new tree");
+        assert_eq!(l.search.content, "agujas");
+        assert_eq!(l.entries.len(), 1);
+        assert_eq!(l.live, Some(new));
+        p.finished(new, Outcome::Done);
+        let l = p.listing().expect("still shown");
+        assert_eq!((l.live, l.outcome), (None, Outcome::Done));
+    }
+
+    /// An empty tree has nothing to list: a new panel, and a query whose
+    /// run found nothing.
+    #[test]
+    fn an_empty_tree_has_no_listing() {
+        assert!(SearchPanel::new(vp("mem:///casa")).listing().is_none());
+        let (mut p, e, _) = searching("ag");
+        p.finished(e, Outcome::Done);
+        assert!(p.listing().is_none());
     }
 }

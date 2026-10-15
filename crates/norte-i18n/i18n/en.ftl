@@ -1822,6 +1822,10 @@ search-panel-more = +{ $n } more
 search-panel-filters = filters ({ $n })
 search-panel-root = in { $root }
 search-panel-reroot = Search here
+# Open as listing (F9 in the panel, a button in the window): the panel's
+# files become a results tab.
+search-panel-open-listing = Open as listing
+search-panel-nothing-to-list = nothing to open as a listing: the search shows no files
 # The viewer opened at a search result's line.
 viewer-lines-from = lines from { $n }
 viewer-target-past-cap = the line is past what the viewer reads

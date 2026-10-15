@@ -1758,6 +1758,10 @@ search-panel-more = +{ $n } más
 search-panel-filters = filtros ({ $n })
 search-panel-root = en { $root }
 search-panel-reroot = Buscar aquí
+# Abrir como listado (F9 en el panel, un botón en la ventana): los ficheros
+# del panel pasan a una pestaña de resultados.
+search-panel-open-listing = Abrir como listado
+search-panel-nothing-to-list = nada que abrir como listado: la búsqueda no muestra ficheros
 # El visor abierto en la línea de un resultado de búsqueda.
 viewer-lines-from = líneas desde { $n }
 viewer-target-past-cap = la línea está más allá de lo que lee el visor
