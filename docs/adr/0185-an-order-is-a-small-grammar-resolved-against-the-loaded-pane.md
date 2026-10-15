@@ -50,7 +50,14 @@ Option 4.
   escape — that depends on no other crate of ours, so the core (to validate
   what an AI writes), both frontends and the CLI link it. Only bytes typed
   plainly can be syntax: a folder called `other` or a name starting with
-  `!` is written escaped and stays a name.
+  `!` is written escaped and stays a name. The converse is refused
+  (`InvisibleChar`): a character drawn as nothing (Unicode `Cf`, and the
+  invisible letters and marks the printer escapes) typed plainly so that a
+  word would read as a verb, key, `!`, `>other` or `>here` without it; any
+  such character in a negated `sel` term, where a value that matches
+  nothing inverts into "everything"; and a destination or argument made of
+  nothing else. In a name or a positive pattern, or escaped, or quoted, the
+  character is a real file's and stays.
 - `norte-frontend::orders` evaluates a `sel` against the loaded listing with
   `mark_glob`'s own fold and glob engine (`NameMatcher`), so the two never
   disagree on a name, and turns the order into steps. Both frontends run the

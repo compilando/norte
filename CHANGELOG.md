@@ -7,6 +7,14 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **An order with an invisible character glued to a keyword is refused**:
+  `cp >other` followed by a zero-width space used to copy into a new folder
+  that looked exactly like `other`, and `sel !*.rs` with one at the end
+  selected every file. The box now points at the character; write it as
+  `\xHH` if it really belongs to a name.
+
 ## [0.3.0-alpha.14] - 2026-10-15
 
 ### Added

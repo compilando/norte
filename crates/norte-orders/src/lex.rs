@@ -143,6 +143,87 @@ pub(crate) fn plain_eq(pieces: &[Piece], word: &[u8]) -> bool {
     pieces.len() == word.len() && plain_prefix(pieces, word)
 }
 
+/// Unicode `Cf` (format characters, Unicode 16): drawn as nothing, so glued
+/// to a keyword they make a name that looks exactly like it. A table of our
+/// own because this crate links no Unicode property crate but
+/// `unicode-normalization`, which does not expose the general category.
+const FORMAT_CHARS: &[(char, char)] = &[
+    ('\u{00AD}', '\u{00AD}'),
+    ('\u{0600}', '\u{0605}'),
+    ('\u{061C}', '\u{061C}'),
+    ('\u{06DD}', '\u{06DD}'),
+    ('\u{070F}', '\u{070F}'),
+    ('\u{0890}', '\u{0891}'),
+    ('\u{08E2}', '\u{08E2}'),
+    ('\u{180E}', '\u{180E}'),
+    ('\u{200B}', '\u{200F}'),
+    ('\u{202A}', '\u{202E}'),
+    ('\u{2060}', '\u{2064}'),
+    ('\u{2066}', '\u{206F}'),
+    ('\u{FEFF}', '\u{FEFF}'),
+    ('\u{FFF9}', '\u{FFFB}'),
+    ('\u{110BD}', '\u{110BD}'),
+    ('\u{110CD}', '\u{110CD}'),
+    ('\u{13430}', '\u{1343F}'),
+    ('\u{1BCA0}', '\u{1BCA3}'),
+    ('\u{1D173}', '\u{1D17A}'),
+    ('\u{E0001}', '\u{E0001}'),
+    ('\u{E0020}', '\u{E007F}'),
+];
+
+/// Drawn as nothing: `Cf`, plus the invisible letters and marks the printer
+/// already escapes (Hangul fillers, CGJ, variation selectors).
+fn is_format(c: char) -> bool {
+    FORMAT_CHARS.iter().any(|(lo, hi)| (*lo..=*hi).contains(&c))
+        || crate::print::INVISIBLE_LETTERS.contains(&c)
+        || crate::print::INVISIBLE_MARKS
+            .iter()
+            .any(|(lo, hi)| (*lo..=*hi).contains(&c))
+}
+
+/// The plain-typed format char that `pieces` starts with, as its piece count.
+fn format_len(pieces: &[Piece]) -> usize {
+    let n = match pieces.first().map(|p| p.byte) {
+        Some(0xC0..=0xDF) => 2,
+        Some(0xE0..=0xEF) => 3,
+        Some(0xF0..=0xF7) => 4,
+        _ => return 0,
+    };
+    let Some(run) = pieces.get(..n) else {
+        return 0;
+    };
+    let c = std::str::from_utf8(&bytes(run))
+        .ok()
+        .and_then(|s| s.chars().next());
+    if run.iter().all(|p| p.plain) && c.is_some_and(is_format) {
+        n
+    } else {
+        0
+    }
+}
+
+/// `pieces` without any invisible character typed plain, and the line
+/// offset of the first one dropped; `None` when there were none. Escaped or
+/// quoted ones are kept: they say "this is a name" on purpose.
+pub(crate) fn strip_format(pieces: &[Piece]) -> Option<(Vec<Piece>, usize)> {
+    let mut kept = Vec::with_capacity(pieces.len());
+    let mut first = None;
+    let mut i = 0;
+    while i < pieces.len() {
+        // A continuation byte is never a lead, so a visible multi-byte char
+        // is kept whole, one piece at a time.
+        let n = format_len(&pieces[i..]);
+        if n == 0 {
+            kept.push(pieces[i]);
+            i += 1;
+        } else {
+            first.get_or_insert(pieces[i].at);
+            i += n;
+        }
+    }
+    first.map(|at| (kept, at))
+}
+
 /// The text of a run of pieces when every one of them was typed plain.
 pub(crate) fn plain_text(pieces: &[Piece]) -> Option<String> {
     pieces

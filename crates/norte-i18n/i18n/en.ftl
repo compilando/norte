@@ -866,6 +866,7 @@ order-error-bad-escape = an escape is \xHH, \\, \ (space), \| or \'
 order-error-missing-dest = where to? (>other, >here or >PATH)
 order-error-missing-arg = this verb needs an argument
 order-error-unterminated = a quote is never closed
+order-error-invisible-char = an invisible character is glued to this word; delete it, or write it as \xHH if it really is part of a name
 order-error-no-other-pane = there is no other pane
 order-error-bad-path = not a valid path
 order-error-one-action = only the last stage may act (sel … | sel … | cp >other)
