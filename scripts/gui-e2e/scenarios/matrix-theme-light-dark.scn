@@ -1,0 +1,24 @@
+# #261: light and dark themes. The selector previews live, Escape gives the
+# old one back, Enter keeps and SAVES it — it survives a restart. `tone` is
+# the body's painted background by luminance, after the CSS variables land.
+start
+expect-dom tone dark
+key alt+9
+expect-dom-has open theme
+# default → catppuccin-mocha → gruvbox-dark → nord → gruvbox-light
+key Down Down Down Down
+expect-dom tone light
+shot preview
+key Escape
+expect-dom tone dark
+key alt+9
+key Down Down Down Down Return
+expect-dom-lacks open theme
+expect-dom tone light
+shot light
+restart
+expect-dom tone light
+# And back: the cursor opens on the current one.
+key alt+9
+key Up Up Up Up Return
+expect-dom tone dark

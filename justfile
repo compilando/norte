@@ -999,7 +999,8 @@ gui-smoke imagen="debian:trixie":
 # a virtual display, in a sandbox with a throwaway home, driven by xdotool
 # and checked against what crossed the bridge (`NORTE_GUI_TRACE`). Scenarios
 # in `scripts/gui-e2e/scenarios/`; screenshots in `target/gui-e2e/`.
-# Needs Xvfb, xdotool, bwrap, jq and ImageMagick. Seconds per scenario.
+# Needs Xvfb, xdotool, bwrap, jq, ImageMagick and xclip. Seconds per
+# scenario. #261's matrix: `docs/gui-matrix-261.md`.
 gui-e2e *scenarios:
     ./scripts/gui-e2e/run.sh {{scenarios}}
 

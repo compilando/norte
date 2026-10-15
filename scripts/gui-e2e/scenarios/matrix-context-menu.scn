@@ -1,0 +1,19 @@
+# #261: the context menu, by mouse (right click on a row) and by keyboard
+# (shift+F10), and the clipboard OUT of the window: "Copy the path" lands on
+# the X clipboard (through xclip inside the sandbox).
+file a/informe.pdf
+file a/notas.txt
+start a
+# By keyboard, on the row under the cursor.
+key Down shift+F10
+expect-dom-has context acts on informe.pdf
+key Escape
+expect-dom context
+# By mouse: rows are 22 px from y=81 (`..`), so notas.txt is the third.
+rclick 300 125
+expect-dom-has context acts on notas.txt
+shot menu
+# The menu opens at the pointer; "Copy the path" is its ninth line.
+click 368 352
+expect-dom context
+expect-clip /home/ada/data/a/notas.txt

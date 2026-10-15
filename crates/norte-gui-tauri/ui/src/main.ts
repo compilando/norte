@@ -19,6 +19,7 @@ import { AltSolo, isForTheField, isPasteIntoTheBox, keyAction, keyInputOf } from
 import { Screen } from "./render";
 import { installContextMenuGuard } from "./render/contextmenu";
 import { mountTitleBar } from "./render/menus";
+import { traceProbes } from "./probes";
 import { Session } from "./session";
 import { BRIDGE_VERSION } from "./types";
 import type { Appearance, HostCatalog, UiAction, WindowVerb } from "./types";
@@ -217,6 +218,18 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     }
   };
 
+  // What the screen SHOWS, into the trace (`scripts/gui-e2e`): after each
+  // paint, after a theme's variables land (they come after the patch that
+  // announced them) and when the focus moves without a host update.
+  const probe = (): void => {
+    if (catalog.trace === true) {
+      void invokeTraceDom(traceProbes(doc));
+    }
+  };
+  if (catalog.trace === true) {
+    doc.addEventListener("focusin", () => requestAnimationFrame(probe));
+  }
+
   // Updates are applied as they arrive and painted once per frame (#400): a
   // scroll, a copy's progress and a listing's batches can land several
   // times inside one frame, and each paint rebuilt the whole screen.
@@ -229,13 +242,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     requestAnimationFrame(() => {
       frameQueued = false;
       repaint();
-      if (catalog.trace === true) {
-        // What the probes SHOW, as laid out (`innerText` follows the
-        // rendering): the harness checks the screen, not only the bridge.
-        const shown = (sel: string): string =>
-          doc.querySelector<HTMLElement>(sel)?.innerText ?? "";
-        void invokeTraceDom({ goto: shown(".palette-query") });
-      }
+      probe();
     });
   };
 
@@ -287,6 +294,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
         currentCatalog = cat;
         applyThemeFor(doc, cat);
         applyAppearance(doc, cat.appearance);
+        requestAnimationFrame(probe);
       })
       .catch((e: unknown) => {
         console.error("could not re-read the catalogue:", e);

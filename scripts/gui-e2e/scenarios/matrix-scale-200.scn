@@ -1,0 +1,22 @@
+# #261: 200 % on X11 (GDK_SCALE=2, integer scaling). The webview paints at
+# devicePixelRatio 2 and the window is still usable: same listing, the box
+# types, a dialog opens. FRACTIONAL scaling (150 %) needs a real compositor
+# and stays a human check.
+env GDK_SCALE=2
+file a/informe.pdf
+file a/notas.txt
+start a
+expect-dom dpr 2
+expect-dom active /›home›ada›data›a
+key Down
+expect-dom-has cursor informe.pdf
+key ctrl+g
+type :sel ext:pdf
+expect-shown :sel ext:pdf
+key Return
+expect-marked 1
+key F7
+expect-dom-has dialog New directory
+shot dialog
+key Escape
+expect-dom dialog
