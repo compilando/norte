@@ -647,9 +647,6 @@ impl State {
     }
 
     /// Opens a SEMANTIC query's prompt.
-    // TODO(translation): review — this one-line doc is duplicated verbatim
-    /// right below (both lines said the exact same thing in the source); it
-    /// looks like a stale leftover from an earlier edit, kept as-is.
     /// Opens a SEMANTIC query's prompt.
     ///
     /// It carries no root, and that is what the dialog says: the index is
@@ -854,11 +851,6 @@ impl State {
         vec![self.parche(vec![change])]
     }
 
-    /// Opens the create-directory prompt, with its text field empty.
-    // TODO(translation): review — this paragraph describes a create-directory
-    /// prompt, but the item right after it is `search_fast`'s own doc,
-    /// about starting the quick search; it looks like a stale fragment left
-    /// by an earlier edit.
     /// Starts the listing's incremental search.
     ///
     /// Filtering is the DEFAULT mode — the one that does not move the
