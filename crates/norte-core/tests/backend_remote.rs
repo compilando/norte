@@ -1288,6 +1288,116 @@ async fn an_abandoned_listing_does_not_keep_the_connection_stuck() {
     );
 }
 
+/// A model that never answers: it says when a call starts, and when that
+/// call's future is DROPPED — which only the daemon's own cancellation does.
+struct StalledModel {
+    started: Arc<tokio::sync::Notify>,
+    dropped: Arc<tokio::sync::Notify>,
+}
+
+/// Fires its `Notify` when the model call it lives in is dropped.
+struct NotifyOnDrop(Arc<tokio::sync::Notify>);
+
+impl Drop for NotifyOnDrop {
+    fn drop(&mut self) {
+        self.0.notify_one();
+    }
+}
+
+#[async_trait::async_trait]
+impl norte_ai::AiProvider for StalledModel {
+    #[expect(clippy::unnecessary_literal_bound, reason = "the trait's signature")]
+    fn id(&self) -> &str {
+        "stalled"
+    }
+    fn capabilities(&self) -> norte_ai::AiCaps {
+        norte_ai::AiCaps::STREAMING
+    }
+    fn is_local(&self) -> bool {
+        true
+    }
+    async fn chat(
+        &self,
+        _req: norte_ai::ChatRequest,
+    ) -> Result<norte_ai::ChatStream, norte_ai::AiError> {
+        let _probe = NotifyOnDrop(Arc::clone(&self.dropped));
+        self.started.notify_one();
+        std::future::pending().await
+    }
+    async fn list_models(&self) -> Result<Vec<norte_ai::ModelInfo>, norte_ai::AiError> {
+        Ok(Vec::new())
+    }
+}
+
+/// ADR 0186: aborting the task that holds `ai_chat` — what the TUI and the
+/// window do on Esc — stops the DAEMON's model call, not only the client's
+/// wait, and frees the connection. Without the cut the model ran on for
+/// nobody until `AI_CHAT_TURN_MAX` (5 min), with every request behind it on
+/// the serial connection waiting.
+#[tokio::test]
+async fn aborting_ai_chat_stops_the_daemons_model_call() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("d.sock");
+    let engine = Arc::new(Engine::new());
+    let mem = Arc::new(MemProvider::new());
+    engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
+    let started = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(tokio::sync::Notify::new());
+    engine.set_ai_provider(Arc::new(StalledModel {
+        started: Arc::clone(&started),
+        dropped: Arc::clone(&dropped),
+    }));
+    engine.set_ai_config(norte_core::ai::AiConfig {
+        enabled: true,
+        ..Default::default()
+    });
+    let daemon = Daemon::bind(
+        engine,
+        DaemonConfig {
+            socket_path: Some(socket.clone()),
+            idle_timeout: None,
+            listing_ttl: Duration::from_mins(2),
+            plugins_dir: Some(dir.path().to_path_buf()),
+            state_dir: None,
+        },
+    )
+    .await
+    .expect("bind");
+    let d = TestDaemon {
+        socket,
+        _run: tokio::spawn(daemon.run()),
+        _dir: dir,
+        mem,
+    };
+    write_file(&d.mem, "mem:///a.txt", b"x").await;
+    let backend = Backend::Remote(remote(&d).await);
+
+    let params = norte_proto::methods::AiChatParams {
+        messages: vec![norte_proto::methods::AiChatMessage {
+            role: norte_proto::methods::AiChatRole::User,
+            text: "what is here?".into(),
+        }],
+        here: vp("mem:///"),
+        other: None,
+    };
+    let b2 = backend.clone();
+    let turn = tokio::spawn(async move { b2.ai_chat(&params).await });
+    tokio::time::timeout(Duration::from_secs(5), started.notified())
+        .await
+        .expect("the daemon asked the model");
+
+    turn.abort();
+    tokio::time::timeout(Duration::from_secs(5), dropped.notified())
+        .await
+        .expect("the daemon dropped the model call when the client gave up");
+
+    let entries = tokio::time::timeout(Duration::from_secs(5), backend.list(&vp("mem:///")))
+        .await
+        .expect("the connection answers instead of staying queued")
+        .expect("list");
+    assert_eq!(entries.len(), 1);
+}
+
 // ---------- remote sync.plan / sync.apply (0.40.0, ADR 0049) ----------
 
 /// A daemon with a journal and a spool: what is needed to plan and apply.

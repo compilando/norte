@@ -69,6 +69,11 @@ stays opt-in (ADR 0031), and the panel says what to add to `norte.toml`.
   learns the grammar from it.
 - A prompt-injecting file name can at worst make the model PROPOSE an
   order, which the reader sees, with its preview, before anything runs.
+- Cancelling a turn stops the daemon's work, with no wire of its own: the
+  client's call is cancel-on-drop, so aborting it sends `rpc.cancel`, and
+  `ai.chat` is on the daemon's cancelable arm — the dispatch, its model call
+  and any `sizes` walk are dropped, and the connection is free at once.
+  `backend_remote.rs` pins it end to end.
 
 ### Negative consequences and residual risks
 
