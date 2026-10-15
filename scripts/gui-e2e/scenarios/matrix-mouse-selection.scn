@@ -1,0 +1,21 @@
+# #261: selecting with the mouse. The listing has no rubber band: a range is
+# click + shift+click (marked by the HOST, which leaves `..` out), a single
+# row is ctrl+click. And a drag that does exist — the border between the
+# panes — resizes them.
+file a/uno.txt
+file a/dos.txt
+file a/tres.txt
+file a/cuatro.txt
+start a
+# Rows are 22 px from y=81 (`..`): cuatro, dos, tres, uno.
+click 300 103
+expect-dom-has cursor cuatro.txt
+click 300 147 shift
+expect-marked 3
+click 300 125 ctrl
+expect-marked 2
+shot marked
+# The border between the panes sits at x≈624.
+drag 624 400 400 400
+expect-jq any(.[]; .kind == "action" and .value.action == "resize_slot")
+shot resized

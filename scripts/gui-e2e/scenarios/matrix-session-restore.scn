@@ -1,0 +1,26 @@
+# #261: the window comes back as it was left. Each pane's folder and the
+# open side panel live in the daemon's session; a restart WITHOUT a folder
+# on the command line must restore them. The FOCUSED pane is not in the
+# session (`SessionBody` has no field for it): it comes back on the left.
+file a/b/x.txt
+file c/y.txt
+start a
+# Left pane into a/b; right pane up to data and into c (rows: .., a, c).
+key Down Return
+expect-dom active /›home›ada›data›a›b
+key Tab BackSpace
+expect-dom active /›home›ada›data
+key Down Down Return
+expect-dom active /›home›ada›data›c
+key alt+j
+expect-dom-has slots Processes
+shot before
+# A clean quit, as a person would.
+key q
+wait 2
+restart
+shot after
+expect-dom-has slots /›home›ada›data›a›b
+expect-dom-has slots /›home›ada›data›c
+expect-dom active /›home›ada›data›a›b
+expect-dom-has slots Processes

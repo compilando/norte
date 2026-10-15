@@ -1,0 +1,79 @@
+# #261: the whole window by keyboard, no mouse — both panes, the menu (F9,
+# alt+m, Alt alone), a dialog, the box, a side panel, help, settings and the
+# theme selector, each opened AND closed.
+file a/b/x.txt
+file a/informe.pdf
+start a
+expect-dom active /›home›ada›data›a
+key Down
+expect-dom-has cursor b
+key Return
+expect-dom active /›home›ada›data›a›b
+key BackSpace
+expect-dom active /›home›ada›data›a
+# The other pane walks on its own.
+key Tab Down Return
+expect-dom slots /›home›ada›data›a | /›home›ada›data›a›b
+key Tab
+expect-dom active /›home›ada›data›a
+# The menu: F9 opens it on File, the arrows move along the bar, Escape shuts.
+key F9
+expect-dom-has menu Copy the path
+key Right
+expect-dom-lacks menu Copy the path
+key Escape
+expect-dom menu
+# alt+m reopens it where it was left (Operate).
+key alt+m
+expect-dom-has menu New directory
+key Escape
+expect-dom menu
+# Alt alone, pressed and released, is the menu too (VS Code, ADR 0106).
+key alt
+expect-dom-has open menu
+key Escape
+expect-dom-lacks open menu
+# A dialog: the field takes the focus, Enter confirms, Escape cancels.
+key F7
+expect-dom-has dialog New directory
+expect-dom focus input
+type nueva
+key Return
+expect-file a/nueva
+expect-dom dialog
+key F7
+expect-dom-has dialog New directory
+key Escape
+expect-dom dialog
+# The box.
+key ctrl+g
+type inf
+expect-shown inf
+key Escape
+expect-dom goto
+# A side panel opens, takes the focus and closes by keyboard. Opening does
+# not move the focus: alt+x right after it closes the FILE pane.
+key alt+j
+expect-dom-has slots Processes
+# The focus ring: left pane → right pane → the panel.
+key alt+o
+expect-dom active /›home›ada›data›a›b
+key alt+o
+expect-dom active Processes
+key alt+x
+expect-dom-lacks slots Processes
+expect-dom slots /›home›ada›data›a | /›home›ada›data›a›b
+# Help, settings and the theme selector.
+key F1
+expect-dom-has open help
+key Escape
+expect-dom-lacks open help
+key F11
+expect-dom-has open settings
+key Escape
+expect-dom-lacks open settings
+key alt+9
+expect-dom-has open theme
+key Escape
+expect-dom-lacks open theme
+shot end
