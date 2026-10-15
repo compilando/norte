@@ -202,6 +202,17 @@ fn format_len(pieces: &[Piece]) -> usize {
     }
 }
 
+/// Whether `run` is a variation selector or the zero-width joiner: the
+/// invisible characters an emoji is made of.
+fn joins_emoji(run: &[Piece]) -> bool {
+    std::str::from_utf8(&bytes(run))
+        .ok()
+        .and_then(|s| s.chars().next())
+        .is_some_and(
+            |c| matches!(c, '\u{200D}' | '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}'),
+        )
+}
+
 /// `pieces` without any invisible character typed plain, and the line
 /// offset of the first one dropped; `None` when there were none. Escaped or
 /// quoted ones are kept: they say "this is a name" on purpose.
@@ -212,7 +223,16 @@ pub(crate) fn strip_format(pieces: &[Piece]) -> Option<(Vec<Piece>, usize)> {
     while i < pieces.len() {
         // A continuation byte is never a lead, so a visible multi-byte char
         // is kept whole, one piece at a time.
-        let n = format_len(&pieces[i..]);
+        let mut n = format_len(&pieces[i..]);
+        // A variation selector or a ZWJ right after a non-ASCII character is
+        // part of what was typed — `❤️`, a family emoji — not a disguise:
+        // every keyword is ASCII, so `other` + ZWJ is still caught.
+        if n > 0
+            && kept.last().is_some_and(|p: &Piece| p.byte >= 0x80)
+            && joins_emoji(&pieces[i..i + n])
+        {
+            n = 0;
+        }
         if n == 0 {
             kept.push(pieces[i]);
             i += 1;

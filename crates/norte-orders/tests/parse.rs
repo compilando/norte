@@ -281,6 +281,29 @@ fn an_invisible_char_glued_to_a_keyword_is_refused() {
 #[test]
 fn an_invisible_char_inside_a_name_stays_valid() {
     let zw = "\u{200B}";
+    // An emoji's own invisible parts — a variation selector, a ZWJ — are
+    // part of what was typed, negated or not; after an ASCII keyword they
+    // are still a disguise.
+    let heart = "\u{2764}\u{FE0F}";
+    assert_eq!(
+        q(&format!("sel !{heart}*")).stages,
+        vec![sel(vec![Term {
+            negated: true,
+            pred: Pred::Name(format!("{heart}*").into_bytes())
+        }])]
+    );
+    let family = "\u{1F468}\u{200D}\u{1F469}";
+    assert_eq!(
+        q(&format!("sel !*{family}")).stages,
+        vec![sel(vec![Term {
+            negated: true,
+            pred: Pred::Name(format!("*{family}").into_bytes())
+        }])]
+    );
+    assert!(
+        norte_orders::parse("cp >other\u{200D}").is_err(),
+        "ZWJ after a keyword"
+    );
     assert_eq!(
         q(&format!("cp >ot{zw}hers")).stages,
         vec![Stage::Cp(Dest::Path(format!("ot{zw}hers").into_bytes()))]
