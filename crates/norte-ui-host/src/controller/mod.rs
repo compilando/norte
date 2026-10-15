@@ -1244,6 +1244,10 @@ enum Background {
     /// channel closed. Through the forwarder and not the board's progress,
     /// so it lands AFTER the run's last batch.
     SearchRunEnded(u64, Box<norte_proto::TaskState>),
+    /// The hits of results tab `slot` that a mutation removed, found by the
+    /// stats it asked for after the mutation ended
+    /// (`results::recheck_results`).
+    ResultsGone(u32, Vec<VPath>),
     /// The volumes, requested by the SIDE PANEL.
     ///
     /// Separate from the selector's for the same reason as the two plugin
@@ -3858,11 +3862,23 @@ impl State {
         mailbox: &mpsc::Sender<Message>,
     ) {
         let backend = backend_arc.as_ref();
+        // A restored results tab re-runs its search, visible or not (C7): it
+        // has no other content, and one left cold would read as a search
+        // that found nothing. It is never listed.
+        let results: Vec<u32> = self
+            .slots
+            .iter()
+            .filter(|(_, h)| h.pane.is_results())
+            .map(|(id, _)| *id)
+            .collect();
+        for id in results {
+            self.launch_results(id, backend_arc, mailbox);
+        }
         let visible: Vec<u32> = self
             .slots
-            .keys()
-            .copied()
-            .filter(|id| !self.hidden(*id))
+            .iter()
+            .filter(|(id, h)| !self.hidden(**id) && !h.pane.is_results())
+            .map(|(id, _)| *id)
             .collect();
         for id in visible {
             let dir = self.slots[&id].pane.dir().clone();

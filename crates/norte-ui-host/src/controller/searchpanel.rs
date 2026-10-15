@@ -270,9 +270,17 @@ fn window_of(window: Option<(u64, u32)>, cursor: u64, total: u64) -> (u64, u64) 
 /// `abandoned` is set, and a Task let go before its id reached the actor is
 /// cancelled here. The panel's runs and the results tabs' share it, so a run
 /// handed from one to the other keeps its messages (C9).
+///
+/// `check_root` stats the root first and fails the run if it cannot be
+/// reached: the core's walk counts an unreachable root as one more skipped
+/// entry and ends "completed, nothing found", which on a results tab
+/// restored over a folder that is gone would read as an answer (Review
+/// Focus 5). The panel, which searches a folder it was just shown, does not
+/// need it.
 pub(super) fn spawn_search_run(
     run: u64,
     params: norte_proto::methods::FsSearchParams,
+    check_root: bool,
     abandoned: Arc<AtomicBool>,
     backend: &Arc<dyn HostBackend>,
     mailbox: &mpsc::Sender<Message>,
@@ -281,6 +289,14 @@ pub(super) fn spawn_search_run(
     let mailbox = mailbox.clone();
     let background = |b: Background| Message::Background(Box::new(b));
     tokio::spawn(async move {
+        if check_root && let Err(e) = backend.stat(params.root.clone(), Vec::new()).await {
+            if !abandoned.load(Ordering::SeqCst) {
+                let _ = mailbox
+                    .send(background(Background::SearchRunBroken(run, Box::new(e))))
+                    .await;
+            }
+            return;
+        }
         let (task, mut rx) = match backend.search(params).await {
             Ok(pair) => pair,
             Err(e) => {
@@ -514,7 +530,7 @@ impl State {
     ) {
         let run = next_run_id();
         let abandoned = Arc::new(AtomicBool::new(false));
-        spawn_search_run(run, params, Arc::clone(&abandoned), backend, mailbox);
+        spawn_search_run(run, params, false, Arc::clone(&abandoned), backend, mailbox);
         if let Some((_, s)) = self.search_panel.as_mut() {
             s.run = Some(PanelRunHost {
                 run,

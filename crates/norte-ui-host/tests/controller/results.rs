@@ -364,3 +364,312 @@ async fn a_hostile_query_is_masked() {
     let b = h.browser(tab).await;
     assert!(b.path_hostile && !b.path_display.contains('\u{1b}'));
 }
+
+// ---------------------------------------------------------------------------
+// Task 8: what a results tab refuses, how it transfers, refreshes, follows
+// mutations and comes back with the session. Two listings side by side
+// (`orthodox`): the results tab joins the left one's group, and the right
+// one, at `mem:///casa`, is the target.
+// ---------------------------------------------------------------------------
+
+/// The held tree, its search answering `hits`, with the hits' folders
+/// listed so `stat` finds them.
+fn fake_answering(hits: &[&str]) -> Fake {
+    let mut f = held_fake();
+    f.answer_search_with(files(hits));
+    f.put("mem:///casa/a", vec![(b"x.txt".to_vec(), false)]);
+    f.put("mem:///casa/b", vec![(b"y.txt".to_vec(), false)]);
+    f
+}
+
+/// Two listings and a results tab over `fake`'s answer, focused: `(harness,
+/// fake, tab)`.
+async fn two_panes_with_results(fake: Fake) -> (Harness, Arc<Fake>, u32) {
+    let fake = Arc::new(fake);
+    let (h, _snap) = Box::pin(host_con_layout(Arc::clone(&fake), "orthodox", (160, 40))).await;
+    let mut h = Harness { h };
+    let panel = h.open_panel().await;
+    h.search(panel, "aguja").await;
+    let tab = h.open_listing(panel).await;
+    (h, fake, tab)
+}
+
+impl Harness {
+    /// Runs `command` through the palette, as a reader would; its ACK.
+    async fn command(&mut self, command: &str) -> ActionAck {
+        let mut sub = self.h.subscribe();
+        let ack = execute_via_palette_ack(&self.h, &mut sub, command).await;
+        self.settle().await;
+        ack
+    }
+
+    /// Answers the dialog on top with `choice`.
+    async fn answer(&mut self, choice: &str) {
+        let id = self.snapshot().await.dialogs.last().expect("a dialog").id;
+        self.act(UiAction::Dialog {
+            id,
+            choice: choice.to_owned(),
+            secret: None,
+        })
+        .await;
+        self.settle().await;
+    }
+}
+
+fn refused_as(ack: &ActionAck, key: &str) -> bool {
+    matches!(ack, ActionAck::Unavailable { reason_key } if reason_key == key)
+}
+
+/// C6: mkdir, organize and mirror refuse in a results tab with the
+/// reason; the folder pane next to it still can.
+#[tokio::test(start_paused = true)]
+async fn location_gestures_refuse_in_a_results_tab() {
+    let (mut h, _fake, _tab) =
+        two_panes_with_results(fake_answering(&["mem:///casa/a/x.txt"])).await;
+    for command in ["pane.mkdir", "pane.organize", "pane.mirror"] {
+        let ack = h.command(command).await;
+        assert!(
+            refused_as(&ack, "host-results-not-a-location"),
+            "{command}: {ack:?}"
+        );
+    }
+    assert!(h.snapshot().await.dialogs.is_empty());
+    h.act(UiAction::FocusSlot { slot_id: 2 }).await;
+    let ack = h.command("pane.mkdir").await;
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    assert_eq!(h.snapshot().await.dialogs.len(), 1, "its dialog opened");
+}
+
+/// Review Focus 2 (C4/C5): copying hits into the root goes to the
+/// confirmation; a hit already in the root refuses; a results tab as the
+/// destination refuses.
+#[tokio::test(start_paused = true)]
+async fn transfers_from_and_into_results_tabs() {
+    let (mut h, _fake, tab) = two_panes_with_results(fake_answering(&[
+        "mem:///casa/notas.txt",
+        "mem:///casa/a/x.txt",
+    ]))
+    .await;
+    // Sorted by name: `notas.txt` (in the root, the target's folder) first.
+    let ack = h.command("pane.copy").await;
+    assert!(refused_as(&ack, "results-already-there"), "{ack:?}");
+    h.act(UiAction::MoveCursor {
+        slot_id: tab,
+        delta: 1,
+    })
+    .await;
+    let ack = h.command("pane.copy").await;
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    assert_eq!(h.snapshot().await.dialogs.len(), 1, "the confirmation");
+    h.answer("cancel").await;
+    // The folder pane copies TOWARD the results tab: refused.
+    h.act(UiAction::FocusSlot { slot_id: 2 }).await;
+    let ack = h.command("pane.copy").await;
+    assert!(refused_as(&ack, "results-not-a-location"), "{ack:?}");
+}
+
+/// Review Focus 3 (C3): two same-named hits copied into one folder go as
+/// two jobs, each with `CollisionPolicy::Fail` (the second fails visibly
+/// on the first's file; nothing is overwritten); on a destination that
+/// folds case, `a/N.txt` + `b/n.txt` still refuse with
+/// `host-batch-folds-to-one`.
+#[tokio::test(start_paused = true)]
+async fn same_named_hits_each_get_their_job() {
+    let (mut h, fake, tab) = two_panes_with_results(fake_answering(&[
+        "mem:///casa/a/n.txt",
+        "mem:///casa/b/n.txt",
+    ]))
+    .await;
+    for row in 0..2 {
+        let generation = h.browser(tab).await.generation;
+        h.act(UiAction::ToggleMark {
+            slot_id: tab,
+            key: RowKey(row),
+            generation,
+        })
+        .await;
+    }
+    let ack = h.command("pane.copy").await;
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    h.answer("confirm").await;
+    let jobs = fake.transfers.lock().expect("transfers").clone();
+    assert_eq!(jobs.len(), 2, "{jobs:?}");
+    for (_, to, mover, policy) in &jobs {
+        assert_eq!(to.to_wire(), "mem:///casa/n.txt");
+        assert!(!mover);
+        assert_eq!(*policy, norte_proto::CollisionPolicy::Fail);
+    }
+
+    let mut folding = fake_answering(&["mem:///casa/a/N.txt", "mem:///casa/b/n.txt"]);
+    folding.capabilities.insert(
+        "mem:///casa".to_owned(),
+        norte_proto::Capabilities {
+            flags: norte_proto::CapabilityFlags::empty(),
+            max_path: None,
+        },
+    );
+    let (mut h, _fake, tab) = two_panes_with_results(folding).await;
+    for row in 0..2 {
+        let generation = h.browser(tab).await.generation;
+        h.act(UiAction::ToggleMark {
+            slot_id: tab,
+            key: RowKey(row),
+            generation,
+        })
+        .await;
+    }
+    let ack = h.command("pane.copy").await;
+    assert!(refused_as(&ack, "host-batch-folds-to-one"), "{ack:?}");
+}
+
+/// C11: a deleted hit leaves the tab once the delete finishes; a hit
+/// whose stat still answers stays.
+#[tokio::test(start_paused = true)]
+async fn deleted_hits_leave_the_tab() {
+    let mut f = fake_answering(&["mem:///casa/a/x.txt", "mem:///casa/b/y.txt"]);
+    f.delete_for_real = true;
+    let (mut h, fake, tab) = two_panes_with_results(f).await;
+    let ack = h.command("pane.delete").await;
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    h.answer("confirm").await;
+    assert_eq!(fake.deleted.lock().expect("deleted").len(), 1);
+    let tx = fake
+        .progress
+        .lock()
+        .expect("progress")
+        .clone()
+        .expect("the delete's progress");
+    tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+    h.settle().await;
+    h.settle().await;
+    let b = h.browser(tab).await;
+    assert_eq!(b.total_rows, Some(1));
+    assert_eq!(b.rows[0].display_name, "y.txt");
+    assert!(b.results_note.contains('1'), "{}", b.results_note);
+}
+
+/// Completes the delete the fake saw last.
+async fn complete_last_delete(h: &mut Harness, fake: &Fake) {
+    let tx = fake
+        .progress
+        .lock()
+        .expect("progress")
+        .clone()
+        .expect("the delete's progress");
+    tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
+    h.settle().await;
+    h.settle().await;
+}
+
+/// Review of Task 8 (M1): a hit whose stat still answers when a mutation in
+/// its folder ends STAYS expected — its own task may not have reached the
+/// window yet — so a later mutation's recheck still takes it out once gone.
+#[tokio::test(start_paused = true)]
+async fn a_hit_still_there_stays_expected() {
+    let mut f = fake_answering(&["mem:///casa/a/x.txt", "mem:///casa/a/z.txt"]);
+    f.put(
+        "mem:///casa/a",
+        vec![(b"x.txt".to_vec(), false), (b"z.txt".to_vec(), false)],
+    );
+    let (mut h, fake, tab) = two_panes_with_results(f).await;
+    // `x.txt` is deleted, but the fake keeps answering its stat: it stays.
+    h.command("pane.delete").await;
+    h.answer("confirm").await;
+    complete_last_delete(&mut h, &fake).await;
+    assert_eq!(h.browser(tab).await.total_rows, Some(2));
+    // Now both are gone, and `z.txt`'s delete ends: both leave.
+    for p in ["mem:///casa/a/x.txt", "mem:///casa/a/z.txt"] {
+        fake.disappeared.lock().expect("gone").insert(p.to_owned());
+    }
+    h.act(UiAction::MoveCursor {
+        slot_id: tab,
+        delta: 1,
+    })
+    .await;
+    h.command("pane.delete").await;
+    h.answer("confirm").await;
+    complete_last_delete(&mut h, &fake).await;
+    assert_eq!(h.browser(tab).await.total_rows, Some(0));
+}
+
+/// C2: pane.refresh re-runs the query into the same tab.
+#[tokio::test(start_paused = true)]
+async fn refresh_re_runs_into_the_same_tab() {
+    let (mut h, fake, tab) = two_panes_with_results(fake_answering(&["mem:///casa/a/x.txt"])).await;
+    assert_eq!(fake.searches_launched(), 1);
+    fake.answer_search_with(files(&["mem:///casa/b/y.txt"]));
+    let ack = h.command("pane.refresh").await;
+    assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
+    assert_eq!(fake.searches_launched(), 2);
+    assert_eq!(h.results_tab().await.map(|t| t.0), Some(tab));
+    let b = h.browser(tab).await;
+    assert_eq!(
+        b.rows
+            .iter()
+            .map(|r| r.display_name.clone())
+            .collect::<Vec<_>>(),
+        ["y.txt"]
+    );
+    assert!(!b.results_note.is_empty(), "still a results tab");
+}
+
+/// Review Focus 5 / C7: a session with a results slot behind another
+/// tab, whose root is gone: re-run at start-up, failed visibly (the root
+/// is stat'ed first: the walk would end "completed, nothing found"), still
+/// a results tab, and its root never listed.
+#[tokio::test(start_paused = true)]
+async fn a_restored_results_slot_re_runs_even_hidden() {
+    let (mut h, fake, tab) = two_panes_with_results(fake_answering(&["mem:///casa/a/x.txt"])).await;
+    // The folder tab in front: the results tab is behind it.
+    h.act(UiAction::SelectTab { slot_id: 1 }).await;
+    h.settle().await;
+    let mut body = fake
+        .written
+        .lock()
+        .expect("written")
+        .clone()
+        .expect("a session");
+    let slot = body["slots"][tab.to_string()]
+        .as_object_mut()
+        .expect("the results slot was saved");
+    assert!(slot["results"].is_object(), "saved as its query: {slot:?}");
+    slot.insert("path".to_owned(), "mem:///gone".into());
+    slot.get_mut("results")
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("results")
+        .insert("root".to_owned(), "mem:///gone".into());
+
+    let restored = fake_answering(&[]);
+    *restored.session.lock().expect("session") = (
+        norte_proto::methods::Session {
+            version: 1,
+            revision: 7,
+            body,
+        },
+        true,
+    );
+    let restored = Arc::new(restored);
+    let (h2, _snap) = Box::pin(host_con_layout(
+        Arc::clone(&restored),
+        "orthodox",
+        (160, 40),
+    ))
+    .await;
+    let mut h2 = Harness { h: h2 };
+    h2.settle().await;
+    assert_eq!(restored.searches_launched(), 0, "the root failed its stat");
+    h2.act(UiAction::SelectTab { slot_id: tab }).await;
+    h2.settle().await;
+    let b = h2.browser(tab).await;
+    assert!(b.results_note.contains("fallida"), "{}", b.results_note);
+    assert!(b.path_segments.is_empty());
+    assert!(
+        !restored
+            .listed_dirs
+            .lock()
+            .expect("listed")
+            .iter()
+            .any(|d| d.to_wire() == "mem:///gone"),
+        "the results tab's root is never listed"
+    );
+}

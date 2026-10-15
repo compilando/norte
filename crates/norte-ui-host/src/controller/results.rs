@@ -17,7 +17,7 @@ use super::*;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use norte_frontend::results::ResultSet;
+use norte_frontend::results::{MAX_HITS, ResultSet};
 use norte_frontend::search_status::Outcome;
 
 /// The run feeding a results tab.
@@ -34,6 +34,214 @@ pub(super) struct ResultsRun {
 }
 
 impl State {
+    /// C6: why `effect` is refused in the active listing, when that is a
+    /// results tab: what writes at, opens at or sends the pane's location,
+    /// which for a results tab is only the search's root.
+    pub(super) fn refuses_in_results(&self, effect: &Effect) -> Option<&'static str> {
+        if !self.slot().pane.is_results() {
+            return None;
+        }
+        matches!(
+            effect,
+            Effect::CreateDirectory
+                | Effect::CreateFile
+                | Effect::Organize
+                | Effect::RenameIa
+                | Effect::RenameBatch
+                | Effect::Pack
+                | Effect::Join
+                | Effect::Sync
+                | Effect::Compare
+                | Effect::Terminal
+                | Effect::OpenTerminal
+                | Effect::CommandLine
+                | Effect::TerminalNew { .. }
+                | Effect::Mirror
+                | Effect::MirrorTarget
+                | Effect::Swap
+                | Effect::Send { .. }
+                | Effect::SearchSemantic
+        )
+        .then_some("host-results-not-a-location")
+    }
+
+    /// C6: the refusal for what would write at, or run in, the active
+    /// listing's `dir()` when it is a results tab, from a door that is not
+    /// an `Effect` (a plugin row of the palette, the command bar).
+    pub(super) fn refuse_in_results_tab(
+        &mut self,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        self.refuse_results_as("host-results-not-a-location")
+    }
+
+    /// The same refusal with `key`: `results-not-a-location` when the
+    /// results tab is a DESTINATION (C5, a desktop drop).
+    pub(super) fn refuse_results_as(
+        &mut self,
+        key: &'static str,
+    ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
+        if !self.slot().pane.is_results() {
+            return None;
+        }
+        Some((
+            ActionAck::Unavailable {
+                reason_key: key.to_owned(),
+            },
+            self.say(key),
+        ))
+    }
+
+    /// C11: a move, delete or rename of `paths` was just submitted; every
+    /// results tab showing one of them checks it once the mutation ends.
+    pub(super) fn expect_gone(&mut self, paths: &[VPath]) {
+        for h in self.slots.values_mut() {
+            let shown: Vec<VPath> = paths
+                .iter()
+                .filter(|p| h.pane.real_entries().iter().any(|e| &e.path == *p))
+                .cloned()
+                .collect();
+            if let Some(set) = h.pane.results_mut()
+                && !shown.is_empty()
+            {
+                set.expect(shown);
+            }
+        }
+    }
+
+    /// (Re)runs `slot`'s query into it (refresh, session restore): it starts
+    /// over empty under a fresh set capped at [`MAX_HITS`], and any run it
+    /// had is let go first.
+    pub(super) fn launch_results(
+        &mut self,
+        slot: u32,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) {
+        self.abandon_results(slot);
+        let Some(h) = self.slots.get_mut(&slot) else {
+            return;
+        };
+        let Some(search) = h.pane.results().map(|r| r.search().clone()) else {
+            return;
+        };
+        h.pane
+            .begin_results(ResultSet::new(search.clone(), MAX_HITS), Vec::new());
+        h.state = SlotState::Ready;
+        let run = super::searchpanel::next_run_id();
+        let abandoned = Arc::new(AtomicBool::new(false));
+        super::searchpanel::spawn_search_run(
+            run,
+            search.params(super::searchpanel::now_ms()),
+            true,
+            Arc::clone(&abandoned),
+            backend,
+            mailbox,
+        );
+        self.results_runs.insert(
+            slot,
+            ResultsRun {
+                run,
+                panel_epoch: None,
+                task: norte_proto::TaskId::new(0),
+                abandoned,
+            },
+        );
+    }
+
+    /// Re-runs every VISIBLE results tab (`pane.refresh`, C2); what to
+    /// publish.
+    pub(super) fn rerun_visible_results(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let slots: Vec<u32> = self
+            .slots
+            .iter()
+            .filter(|(id, h)| h.pane.is_results() && !self.hidden(**id))
+            .map(|(id, _)| *id)
+            .collect();
+        let mut outgoing = Vec::new();
+        for slot in slots {
+            self.launch_results(slot, backend, mailbox);
+            outgoing.extend(self.repaint_results(slot));
+        }
+        outgoing
+    }
+
+    /// C11: after the last live mutation over `affected` ended, every
+    /// results tab expecting paths in those folders stats them in one
+    /// spawned batch.
+    ///
+    /// A path that still answers STAYS expected: its own task may not have
+    /// reached the actor yet (deletes are submitted in parallel, a batch's
+    /// moves in series), and settling it here would leave a gone hit in the
+    /// tab. Only a gone answer, or a re-run, ends an expectation; one whose
+    /// mutation failed costs a stat on the folder's next mutation.
+    pub(super) fn recheck_results(
+        &mut self,
+        affected: &[VPath],
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) {
+        for (slot, h) in &self.slots {
+            let Some(set) = h.pane.results() else {
+                continue;
+            };
+            let paths: Vec<VPath> = set
+                .expected()
+                .into_iter()
+                .filter(|p| p.parent().is_some_and(|d| affected.contains(&d)))
+                .collect();
+            if paths.is_empty() {
+                continue;
+            }
+            let (slot, backend, mailbox) = (*slot, Arc::clone(backend), mailbox.clone());
+            tokio::spawn(async move {
+                let mut gone = Vec::new();
+                for path in paths {
+                    if matches!(
+                        backend.stat(path.clone(), Vec::new()).await,
+                        Err(Error::NotFound)
+                    ) {
+                        gone.push(path);
+                    }
+                }
+                if gone.is_empty() {
+                    return;
+                }
+                let _ = mailbox
+                    .send(Message::Background(Box::new(Background::ResultsGone(
+                        slot, gone,
+                    ))))
+                    .await;
+            });
+        }
+    }
+
+    /// The hits [`Self::recheck_results`] found gone leave the tab. A path
+    /// no longer in the tab (a re-run replaced the entries since) is
+    /// forgotten for nothing.
+    pub(super) fn results_gone(
+        &mut self,
+        slot: u32,
+        gone: &[VPath],
+    ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let Some(h) = self.slots.get_mut(&slot).filter(|h| h.pane.is_results()) else {
+            return Vec::new();
+        };
+        let left = h.pane.forget(gone);
+        if let Some(set) = h.pane.results_mut() {
+            for path in gone {
+                set.settle(path);
+            }
+        }
+        if left == 0 {
+            return Vec::new();
+        }
+        self.repaint_results(slot)
+    }
+
     /// The results tab the run `run` feeds, if any.
     pub(super) fn results_slot_of_run(&self, run: u64) -> Option<u32> {
         self.results_runs

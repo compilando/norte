@@ -68,6 +68,17 @@ impl State {
                 } else {
                     (active, other)
                 };
+                // The location read FROM a results tab is only its search's
+                // root (C6); the active one is refused before this.
+                if self.slots.get(&source).is_some_and(|h| h.pane.is_results()) {
+                    let key = "host-results-not-a-location";
+                    return (
+                        ActionAck::Unavailable {
+                            reason_key: key.to_owned(),
+                        },
+                        self.say(key),
+                    );
+                }
                 let Some(target) = self.gesture_destination(effect, source) else {
                     return (Self::stale(StaleAction::Generation), Vec::new());
                 };

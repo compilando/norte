@@ -22,9 +22,16 @@ impl State {
     /// for another one. The shared layer leaves the role UNSET when there
     /// are several candidates and none chosen (ADR 0058 D7): that is not
     /// "there is no other one", it is "pick which one".
+    ///
+    /// A results tab as the destination is refused (C5): it has no
+    /// directory, and its `dir()` is the search's root.
     pub(super) fn directory_dest(&self) -> Result<VPath, &'static str> {
-        self.slot_dest()
-            .map(|id| self.slots[&id].pane.dir().clone())
+        let id = self.slot_dest()?;
+        let pane = &self.slots[&id].pane;
+        if pane.is_results() {
+            return Err("results-not-a-location");
+        }
+        Ok(pane.dir().clone())
     }
 
     /// The destination SLOT, with the same rule as
@@ -115,7 +122,17 @@ impl State {
     ) -> Result<(VPath, Vec<VPath>), &'static str> {
         let dest = dest.clone();
         let source_dir = self.slot().pane.dir().clone();
-        if source_dir == dest {
+        // A results tab's `dir()` is the search's ROOT, and copying hits
+        // from its subfolders into it is the common case (C4): what is
+        // refused is only a hit that already lives there, with the same
+        // byte-for-byte leniency as the check below.
+        if self.slot().pane.is_results() {
+            if let Some(key) =
+                norte_frontend::results::transfer_refusal(&self.slot().pane.marked_paths(), &dest)
+            {
+                return Err(key);
+            }
+        } else if source_dir == dest {
             // Both listings in the same place. The daemon would reject it
             // just the same, but opening a dialog that promises something
             // impossible is worse than saying so beforehand.
@@ -278,6 +295,11 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // A results tab is not a folder (C5): dropping on it would copy into
+        // the search's root.
+        if let Some(refused) = self.refuse_results_as("results-not-a-location") {
+            return refused;
+        }
         let arrived = paths.len();
         let usables: Vec<VPath> = paths
             .iter()
@@ -606,6 +628,9 @@ impl State {
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
         match Self::bytes_del_rename(from, seed, written) {
             Ok(dest) => {
+                // A renamed hit leaves a results tab too: its new name may
+                // no longer match the query (C11).
+                self.expect_gone(std::slice::from_ref(from));
                 Self::launch_rename(from.clone(), dest, backend, mailbox);
                 (None, Vec::new())
             }

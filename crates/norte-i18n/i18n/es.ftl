@@ -2755,6 +2755,7 @@ task-batch-half = lote a medias: { $applied } aplicados, { $back } devueltos
 task-batch-unverified = terminado, sin informe
 host-plan-unseen = recorre el plan entero antes de aplicarlo
 host-same-directory = el origen y el destino son el mismo directorio
+host-results-not-a-location = los resultados de una búsqueda no son una carpeta: hazlo desde una carpeta
 host-batch-too-large = demasiadas entradas para una sola transferencia
 host-batch-folds-to-one = dos de las marcas son el mismo nombre en el destino
 host-task-board-full = el tablero de tareas está lleno

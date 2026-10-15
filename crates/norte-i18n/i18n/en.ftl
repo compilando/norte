@@ -2732,6 +2732,7 @@ task-batch-half = batch left half done: { $applied } applied, { $back } rolled b
 task-batch-unverified = finished, report unavailable
 host-plan-unseen = scroll through the whole plan before applying it
 host-same-directory = source and destination are the same directory
+host-results-not-a-location = search results are not a folder: do this from a folder
 host-batch-too-large = too many entries for a single transfer
 host-batch-folds-to-one = two of the marks are one name on the destination
 host-task-board-full = the task board is full

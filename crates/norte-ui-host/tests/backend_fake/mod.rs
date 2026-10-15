@@ -416,6 +416,8 @@ pub struct Fake {
     /// ended, until the test pushes more ([`Fake::push_batch`]) or closes it
     /// ([`Fake::close_search`]): a daemon still streaming a big tree.
     pub search_hold: std::sync::atomic::AtomicBool,
+    /// Every directory `list` was asked for, in order.
+    pub listed_dirs: std::sync::Mutex<Vec<VPath>>,
     /// The held channels, by launch order (0 = the first search).
     pub held_searches:
         std::sync::Mutex<Vec<Option<tokio::sync::mpsc::Sender<norte_proto::methods::SearchHits>>>>,
@@ -1666,6 +1668,14 @@ impl HostBackend for Fake {
                 attrs: std::collections::BTreeMap::new(),
             })
         });
+        // What a real delete took away answers `NotFound`, as it would.
+        let entry = entry.filter(|_| {
+            !self
+                .disappeared
+                .lock()
+                .expect("desaparecidos")
+                .contains(&path.to_wire())
+        });
         let served = Arc::clone(&self.served);
         let pulse = Arc::clone(&self.pulse);
         Box::pin(async move {
@@ -2192,6 +2202,7 @@ impl HostBackend for Fake {
         attrs: Vec<String>,
     ) -> BoxFuture<'static, Result<(norte_client::EntryStream, Option<u64>), Error>> {
         self.attrs_requests.lock().expect("attrs").push(attrs);
+        self.listed_dirs.lock().expect("listed").push(dir.clone());
         self.listings.fetch_add(1, Ordering::SeqCst);
         self.heartbeat();
         // #327: the connection asks for its password. It is consumed ONCE —

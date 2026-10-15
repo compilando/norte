@@ -65,6 +65,11 @@ impl State {
         if self.effects == crate::commands::Effects::SoloRead {
             return Self::no_mutates();
         }
+        // Organizing is about a directory; a results tab has none (C6). The
+        // palette's organizer rows come here without an `Effect`.
+        if let Some(refused) = self.refuse_in_results_tab() {
+            return refused;
+        }
         self.epoch_organize += 1;
         let epoch = self.epoch_organize;
         let dir = self.slot().pane.dir().clone();

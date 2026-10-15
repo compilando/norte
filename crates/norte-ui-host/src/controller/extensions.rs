@@ -236,6 +236,7 @@ impl State {
             Background::SearchRunLive(run, id) => self.search_run_live(run, id, mailbox),
             Background::SearchRunBroken(run, e) => self.search_run_broken(run, &e),
             Background::SearchRunEnded(run, state) => self.search_run_ended(run, &state),
+            Background::ResultsGone(slot, gone) => self.results_gone(slot, &gone),
         }
     }
 

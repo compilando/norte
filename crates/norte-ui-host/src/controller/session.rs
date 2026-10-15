@@ -521,6 +521,24 @@ impl State {
             let Some(slot_state) = body.slots.get(id) else {
                 continue;
             };
+            // A results tab comes back as its query, empty and at rest:
+            // `list_initial` re-runs it, visible or not (C7), and never lists
+            // its root into it.
+            if let Some(saved) = &slot_state.results {
+                slot.pane.begin_results(
+                    norte_frontend::results::ResultSet::new(
+                        saved.clone(),
+                        norte_frontend::results::MAX_HITS,
+                    ),
+                    Vec::new(),
+                );
+                slot.pane.set_sort(slot_state.sort.clone());
+                slot.state = SlotState::Ready;
+                slot.history
+                    .seed(slot_state.back.clone(), slot_state.forward.clone());
+                slot.history.seed_jump(slot_state.jump.clone());
+                continue;
+            }
             slot.pane.begin_loading(slot_state.path.clone());
             // Order and hidden state USED TO BE written to the session and
             // nobody read them: the window remembered where you were and
@@ -651,9 +669,9 @@ impl State {
                     } else {
                         Vec::new()
                     },
-                    // A window results tab saves its query once Task 7/8
-                    // gives the host one.
-                    results: None,
+                    // A results tab saves its QUERY, not its hits: it comes
+                    // back by running it again.
+                    results: slot.pane.results().map(|r| r.search().clone()),
                 },
             );
         }

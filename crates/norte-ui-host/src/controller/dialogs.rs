@@ -332,6 +332,7 @@ impl State {
         let mut refused: Option<&'static str> = None;
         match dialog.on_confirm {
             Some(Pending::Delete { paths, permanent }) => {
+                self.expect_gone(&paths);
                 Self::launch_deleted(paths, permanent, backend, mailbox);
             }
             Some(Pending::InstructionIa { dir }) => {
@@ -389,6 +390,9 @@ impl State {
                 dest,
                 mover,
             }) => {
+                if mover {
+                    self.expect_gone(&paths);
+                }
                 self.send_batch(&paths, &source_dir, &dest, mover, backend, mailbox);
                 // The marks are CONSUMED by the send, not by the outcome
                 // (same criterion as the TUI and as mc): a selection
