@@ -1306,6 +1306,22 @@ impl Engine {
         *self.ai_config.write().expect("ai_config lock is sound") = config;
     }
 
+    /// The installed AI provider and a snapshot of the `[ai]` config, for the
+    /// assistant's loop (`ai_chat.rs`); `None` with no provider.
+    pub(crate) fn ai_parts(&self) -> Option<(norte_ai::SharedAiProvider, crate::ai::AiConfig)> {
+        let provider = self
+            .ai_provider
+            .read()
+            .expect("ai_provider lock is sound")
+            .clone()?;
+        let config = self
+            .ai_config
+            .read()
+            .expect("ai_config lock is sound")
+            .clone();
+        Some((provider, config))
+    }
+
     /// Suggests a REVIEWABLE rename plan for `dir`'s files according to
     /// `instruction` (spec §9, ADR 0031). Mutates NOTHING — the plan is the
     /// product; applying it is N governed `fs.move`s (journal + undo +
@@ -5070,7 +5086,7 @@ async fn same_node(
 /// Maps an AI gate denial to [`Error::PolicyDenied`] with the wire's CLOSED
 /// vocabulary (M4-A2/IA-2): the category, never the config's detail. Shared
 /// by `ai_rename_plan` and `index_embed_as`.
-fn ai_denied_to_error(reason: &crate::ai::AiDenied) -> Error {
+pub(crate) fn ai_denied_to_error(reason: &crate::ai::AiDenied) -> Error {
     Error::PolicyDenied {
         rule: match reason {
             crate::ai::AiDenied::Disabled => "ai-disabled",

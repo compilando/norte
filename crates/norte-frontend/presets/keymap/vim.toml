@@ -28,9 +28,10 @@ keymap = [
     { on = ["f12"], run = "app.extensions" },
     { on = ["?"], run = "app.help" },
     { on = ["ctrl+p"], run = "app.palette" },
-    # `:` free in [global]/[pane] (H1 T4): the palette is the analogue of
-    # vim's command-line mode — obvious muscle memory.
-    { on = [":"], run = "app.palette" },
+    # `:` is vim's command line, and norte has one now (ADR 0185): the box on
+    # its order line. It still completes every command by name, so what `:`
+    # used to open (the palette, H1 T4) is one word away — and `ctrl+p`.
+    { on = [":"], run = "app.orders" },
     # `ctrl+g` in vim tells you WHERE you are; here it takes you to wherever
     # you want to be. No clash: vim's `ctrl+g` has no analogue in a manager,
     # where the path is always painted on the pane's header.
@@ -46,6 +47,9 @@ keymap = [
     { on = ["alt+j"], run = "layout.processes" },
     # The log (#323). `alt+l` for "log", free in all seven presets.
     { on = ["alt+l"], run = "layout.log" },
+    # The assistant (ADR 0186). `alt+Y` is free in all seven presets; no
+    # reference manager has an assistant to transcribe a chord from.
+    { on = ["alt+Y"], run = "layout.assistant" },
     # The disk map (phase 4), `alt+z`: the one letter free in all seven.
     # See the note in orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
@@ -154,6 +158,9 @@ keymap = [
     # collision; ctrl+b (free here) for pane.hotlist. Noted in the spec
     # (navTC T3/T6).
     { on = ["ctrl+b"], run = "pane.hotlist" },
+    # vim's `:!` runs a shell command; `!` opens the command bar (ADR 0181),
+    # where each order runs in a shell.
+    { on = ["!"], run = "pane.command-line" },
     { on = ["insert"], run = "mark.toggle" },
     { on = ["space"], run = "mark.toggle" },
     # `v` visual-select muscle memory, alongside `insert` (#103).

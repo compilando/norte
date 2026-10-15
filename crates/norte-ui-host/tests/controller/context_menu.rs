@@ -127,6 +127,36 @@ async fn the_empty_area_touches_no_marks() {
     assert_eq!(browser(&snapshot(&h, &mut sub).await).marks, 1);
 }
 
+/// "Terminal here" is on the empty area's menu, and over a folder that is
+/// not on this disk it shows dimmed with the shared table's reason.
+#[tokio::test]
+async fn terminal_here_off_disk_is_dimmed_with_its_reason() {
+    let (h, _) = host(vec!["a.txt"]).await;
+    let mut sub = h.subscribe();
+    let slot_id = browser(&snapshot(&h, &mut sub).await).slot_id;
+    h.dispatch(UiAction::ContextMenuEmpty {
+        slot_id,
+        x: 5,
+        y: 5,
+    })
+    .await
+    .expect("host alive");
+    let m = snapshot_until(&h, &mut sub, "menu", |s| s.context_menu.clone()).await;
+    let in_both =
+        |key: &str| [norte_i18n::Lang::En, norte_i18n::Lang::Es].map(|l| norte_i18n::t_in(l, key));
+    let label = in_both("menu-item-app-terminal");
+    let term = m
+        .items
+        .iter()
+        .find(|i| label.contains(&i.label))
+        .unwrap_or_else(|| panic!("no terminal entry: {m:?}"));
+    assert!(!term.enabled, "{term:?}");
+    assert!(
+        in_both("reason-not-on-this-disk").contains(&term.reason),
+        "{term:?}"
+    );
+}
+
 #[tokio::test]
 async fn the_name_column_cannot_be_hidden_and_says_why() {
     let (h, _) = host(vec!["a.txt"]).await;

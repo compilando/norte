@@ -219,7 +219,7 @@ pub const MENUS: &[Menu] = &[
             // do not know which of the others you want, and because the
             // four imported presets do not bind it to any key: this is
             // where they find it.
-            sec(None, &["app.goto"]),
+            sec(None, &["app.goto", "app.orders"]),
             sec(
                 None,
                 &["nav.parent", "nav.back", "nav.forward", "pane.refresh"],
@@ -339,6 +339,7 @@ pub const MENUS: &[Menu] = &[
                     "layout.log",
                     "layout.disk-map",
                     "layout.timeline",
+                    "layout.assistant",
                     // #362: the embedded terminal. It goes with the side
                     // panes and not with `app.terminal` in the commands
                     // menu, because what it opens is a PANE: what this menu

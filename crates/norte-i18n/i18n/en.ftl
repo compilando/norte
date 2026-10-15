@@ -80,12 +80,7 @@ modal-transfer-to = To
 modal-transfer-dest-copy = Copy to address
 modal-transfer-dest-move = Move to address
 modal-transfer-dest-hint = address, for example file:///home/you/work
-# `pane.command-line` (#135): the free-text prompt whose Enter runs
-# `$SHELL -c CMD` in the pane's directory, with the TUI suspended. Same mould
-# as the mkdir/AI-rename prompts.
-modal-command-line = Run a command
-modal-command-line-hint = runs in the active pane's directory
-modal-command-line-empty = type a command first
+# Shown by a free-text prompt that can open already long (the transfer address).
 modal-command-line-too-long = the command line is full ({ $max } characters); the rest was not typed
 # Batch rename WITHOUT AI (#310): a template and the same reviewable plan.
 # Checksums (#311).
@@ -373,11 +368,20 @@ cli-enqueue-copy = could not enqueue the copy
 cli-enqueue-move = could not enqueue the move
 cli-enqueue-delete = could not enqueue the delete
 cli-enqueue-mkdir = could not enqueue the mkdir
+cli-enqueue-undo = could not enqueue the undo
+cli-run-needs-selection = this action needs a `sel` first: there is no pane to take marks from
+cli-run-needs-pane = cd and catalogue commands act on a pane; run them in the box
+cli-run-undo-needs-yes = undo changes your files: add --yes to run it from a script
+cli-run-would = { $action }: { $n } matched
 # S3 (shell-integration): `Shell::parse`'s vocabulary is exactly these three
 # tokens — named here instead of echoed back the way `cli-help-unknown-topic`
 # does, because this one is a closed set, not a corpus the user could plausibly
 # have misspelled a new page against.
 cli-shell-init-unknown = unknown shell "{ $shell }" — supported: bash, zsh, fish
+# `norte update check` (ADR 0183).
+cli-update-available = norte { $version } is available (you have { $current }): { $url }
+cli-update-current = norte { $current } is the latest release.
+cli-update-failed = could not check for a newer release: { $reason }
 # `norte theme import` (spec 2026-09-11, F5).
 cli-theme-imported = imported theme { $name } → { $path } (over { $base })
 cli-theme-ignored = warning: { $count } entries are not colours and were skipped: { $ids }
@@ -549,6 +553,7 @@ degraded-reason-unknown = unknown reason
 # saying it switched a plugin's hooks off. `$plugin` and `$text` are wire
 # text, already masked.
 msg-plugin-notice = ⚑ { $plugin }: { $text }
+msg-update-available = norte { $version } is available — `norte update check` says where
 msg-plugin-hooks-disabled = ⚑ { $plugin }: its hooks were switched off after three failures in a row — disable and re-enable it in the extension manager to try again
 msg-plugin-effect-denied = ⚑ { $plugin }: your policy denied a file this plugin asked to write (rule for actor "plugin"); said once while norte runs
 status-connection-failed = ✗ could not connect
@@ -742,12 +747,14 @@ msg-terminal-none-unset = $TERMINAL is not set and no terminal emulator was foun
 help-cmd-app-terminal = open a shell in the active pane's directory
 help-cmd-app-handoff = hand the screen to the other frontend and carry on there (daemon only)
 help-cmd-app-toggle-panels = hide the panels and show the terminal
-help-cmd-pane-command-line = run a command in the active pane's directory
+help-cmd-pane-command-line = open the command bar: each order runs in the active pane's folder
 cli-ls-skipped = warning: { $n } container entries omitted from the index (hostile names/limits)
 
 # --- Help (F1) — built from the effective keymap ---
 help-title = Help
 help-toc = Sections of this page
+help-rail-keys-title = Keys on this page
+help-rail-see-title = See also
 help-section-browse = Browsing (panes)
 help-section-viewer = Viewer
 help-section-dialog = Dialogs and overlays
@@ -815,6 +822,7 @@ modal-undo-session-title = undo everything this session did?
 modal-undo-session-scope = reverts ALL of its operations, newest first; whatever cannot be reverted is named in the report
 help-cmd-app-palette = command palette
 help-cmd-app-goto = go anywhere
+help-cmd-app-orders = type an order (sel … | cp >other)
 # Section titles for "go anywhere" (phase 6). The order they appear in is
 # fixed by `norte_frontend::goto::ORDEN`, not by this file.
 goto-title = Go to
@@ -828,10 +836,57 @@ goto-section-index = Found by the index
 goto-title-help = Help topics
 goto-prefix-commands = Run a command
 goto-prefix-places = Go to a place
+goto-title-order = Order
+goto-title-ask = Ask the assistant
+goto-prefix-ask = Ask the assistant in plain words
+goto-hint-ask = copy this month's PDFs to the other pane · what takes the most space here?
+assistant-title = Assistant
+assistant-busy = the assistant is still answering — ask again when it is done
+assistant-apply = Apply…
+assistant-placeholder = Ask in plain words, then Enter
+assistant-thinking = thinking…
+assistant-thinking-esc = Esc cancels
+assistant-cancelled = cancelled
+assistant-cancel = Cancel
+assistant-unparsable = this order does not parse here; type it with : to see why
+assistant-empty = Ask in plain words: "copy this month's PDFs to the other pane", "what takes the most space here?". Every order it proposes waits for you.
+assistant-apply-hint = Enter with an empty line applies it — the usual confirmation still asks
+assistant-written-for = written for { $dir }; it runs here
+assistant-newer-kind =the assistant replied in a way this norte does not know yet: update norte
+assistant-setup-1 =The assistant is off. To turn it on, add to norte.toml:
+assistant-setup-2 = Names and sizes go to that provider; a local one (Ollama) keeps them on this machine.
+goto-prefix-order =Run an order (sel ext:pdf | cp >other)
+goto-hint-order = sel ext:pdf age<30d | cp >other · trash · mkdir NAME · cd PATH · log · undo N
+order-error-empty = nothing to run
+order-error-unknown-verb = not a verb nor a command
+order-error-not-yet = redo is not available yet
+order-error-stands-alone = log and undo cannot be piped
+order-error-bad-term = this word means nothing here
+order-error-bad-number = not a number with a valid unit (K M G T · s m h d w)
+order-error-bad-escape = an escape is \xHH, \\, \ (space), \| or \'
+order-error-missing-dest = where to? (>other, >here or >PATH)
+order-error-missing-arg = this verb needs an argument
+order-error-unterminated = a quote is never closed
+order-error-no-other-pane = there is no other pane
+order-error-bad-path = not a valid path
+order-error-one-action = only the last stage may act (sel … | sel … | cp >other)
+order-error-unknown-command = no such command
+order-error-unknown-command-nearest = no such command — did you mean { $nearest }?
+msg-order-preview = { $n ->
+    [one] 1 item · { $size }
+   *[other] { $n } items · { $size }
+}
+msg-order-nothing-matched = nothing matched — nothing was run
+msg-order-measuring = measuring the rows the order needs…
+msg-order-stale = the order was not run: the pane changed while it was measuring
+msg-order-journal-failed = could not read the history: { $err }
+msg-order-unmeasured ={ $n } not measured yet (Enter measures them)
+msg-order-bare-key = did you mean { $key }…? Without it, that word is a file name
+msg-order-undo-too-far = that goes further back than one page of history: undo from the timeline (log)
 goto-empty = nothing matches that
 goto-index-off = the semantic index is not switched on
 goto-path-desc = go to this path
-goto-hint = > commands · ? help
+goto-hint = > commands · : orders · @ assistant · ? help
 goto-box-label = Search places and commands (>)
 # The category a command row is filed under: its id's namespace.
 cmd-ns-app = App
@@ -906,7 +961,8 @@ msg-palette-no-help = no help page documents this command yet
 # --- Settings overlay (S3) — same free-text-filter idiom as the palette
 # above (decision 8): search is always active, Enter toggles/cycles/edits.
 settings-title = Settings
-settings-hint = [tab] side · [[/]] section · [enter] edit · [ctrl+r] reset · [esc] close
+settings-search-placeholder = Search settings
+settings-hint = [tab] side · [ and ] section · [enter] edit · [ctrl+r] reset · [esc] close
 settings-edit-hint = [enter] save · [esc] cancel
 # obsolete: all 33 entries used to live here. Removed next cycle.
 settings-section-general = General
@@ -1264,9 +1320,10 @@ menu-item-layout-set-target = Set destination
 panelbar-places = Places
 panelbar-tree = Tree
 panelbar-viewer = Viewer
-panelbar-processes = Processes
+panelbar-processes = Tasks
 panelbar-metadata = Details
 panelbar-log = Log
+panelbar-assistant = AI
 # "Map", the short form of "Disk map": the bar must fit its names in 80
 # columns, and the long one dropped it to letters (ADR 0171).
 panelbar-disk-map = Map
@@ -1329,6 +1386,10 @@ wizard-ask-theme = Pick a theme. What you see while you move is what you are cho
 wizard-ask-icons = Can you see three icons here: 📁 🖼 ⚙ ? If they show as boxes, your terminal font has no emoji.
 wizard-icons-yes = Yes, I see them — use icons
 wizard-icons-no = No — plain ASCII badges
+wizard-step-updates = new releases
+wizard-ask-updates = Should norte ask GitHub, once a day at start, whether a newer release exists? It installs nothing, and it is the only thing it sends over the network without you asking. You can change it in Settings.
+wizard-updates-no = No — never check by itself
+wizard-updates-yes = Yes — once a day, and say so in the status bar
 # Fits WHOLE in the wizard box (66 cells): cut in the middle, it lost exactly
 # `[Esc]`, the one key that says how not to answer.
 wizard-hint = [Enter] next · [Backspace] back · [Esc] keep defaults, never ask
@@ -1344,6 +1405,7 @@ menu-item-layout-places = Places
 menu-item-layout-preview = Viewer
 menu-item-layout-processes = Processes
 menu-item-layout-log = Log
+menu-item-layout-assistant = Assistant
 menu-item-layout-disk-map = Disk map
 menu-item-layout-timeline = Timeline
 menu-item-layout-search = Search panel
@@ -1424,6 +1486,7 @@ menu-item-mark-extension-remove = Unmark by extension
 menu-item-mark-files = Mark the files
 menu-item-mark-dirs = Mark the directories
 menu-item-app-goto = Go to…
+menu-item-app-orders = Order line…
 menu-item-nav-parent = Up
 menu-item-nav-back = Back
 menu-item-nav-jump-back = Jump back
@@ -1436,7 +1499,7 @@ menu-item-pane-history = History
 menu-item-pane-hotlist = Bookmarks
 menu-item-pane-select-drive = Volumes
 menu-item-pane-refresh = Refresh
-menu-item-pane-command-line = Command line
+menu-item-pane-command-line = Command bar
 menu-item-app-terminal = Terminal here
 menu-item-app-handoff = Carry on in the other frontend
 menu-item-layout-focus-next = Next panel
@@ -1478,6 +1541,7 @@ help-cmd-layout-places = show or hide the places sidebar
 help-cmd-layout-preview = show or hide the docked viewer
 help-cmd-layout-processes = show or hide the processes panel
 help-cmd-layout-log = show or hide this session's log
+help-cmd-layout-assistant = show or hide the assistant: ask in plain words, review the order it proposes
 help-cmd-layout-disk-map = show or hide the disk map
 help-cmd-layout-timeline = show or hide the timeline
 help-cmd-layout-search = show or hide the search panel
@@ -1764,18 +1828,21 @@ help-cmd-pane-compare-files = compare TWO files with the program in `[ui] diff`
 help-cmd-pane-sync-dirs = plan a one-way synchronisation from this pane to the other
 help-cmd-pane-copy-path = copy the path of the selection to the clipboard
 search-title = Search
-search-name = name (glob):
-search-content = content:
-search-exclude = skip folders:
-search-min-size = at least:
-search-max-size = at most:
-search-days = changed in last (days):
-search-encoding = read text as:
-search-regex = [F2] regex: { $on }
-search-case = [F3] case: { $on }
-search-whole-word = [F4] whole word: { $on }
-search-recursive = [F5] subfolders: { $on }
-search-kinds = [F6] looking for: { $what }
+search-name = Name
+search-content = Content
+search-exclude = Skip folders
+search-min-size = Minimum size
+search-max-size = Maximum size
+search-days = Changed in the last
+search-encoding = Encoding
+search-name-hint = part of the name, or a glob like *.jpg
+search-content-hint = text inside the file
+search-exclude-hint = e.g. node_modules, .git
+search-min-size-hint = e.g. 500K, 10M, 1.5G
+search-max-size-hint = e.g. 500K, 10M, 1.5G
+search-days-hint = days, e.g. 7
+search-encoding-hint = automatic (or latin1, cp1252…)
+search-in = Search in
 search-kinds-any = anything
 search-kinds-files = files
 search-kinds-dirs = folders
@@ -1792,10 +1859,10 @@ search-toggle-kinds = looking for
 search-query-filters-only = (filters only)
 search-empty = enter a name, some content, or a filter
 search-bad-field = that field cannot be read — fix it or clear it
-search-status-running = search: { $n } hits (searching…)
-search-status-done = search: { $n } hits
-search-status-truncated = search: { $n } hits (truncated)
-search-status-cancelled = search: { $n } hits (cancelled)
+search-status-running = search: { $n } found (searching…)
+search-status-done = search: { $n } found
+search-status-truncated = search: { $n } found (there are more; narrow it down)
+search-status-cancelled = search: { $n } found (cancelled)
 search-status-failed = search failed: { $error }
 # Search results opened as a listing (2026-10-10-search-b-listing).
 results-tab-title = 🔍 { $query } ({ $n })
@@ -2085,6 +2152,10 @@ err-overlapping-roots-source-inside = the source is inside the destination
 err-overlapping-roots-dest-inside = the destination is inside the source
 reason-needs-daemon = needs the daemon (--daemon)
 reason-needs-desktop = needs a desktop: there is nowhere here to open a window
+reason-inside-archive = inside an archive: go up with .. to its folder
+reason-not-on-this-disk = not a folder on this disk
+msg-context-stale = that row changed since the menu opened: nothing done
+msg-bar-cannot-quote = norte cannot quote this name safely for { $shell }: type it
 
 on-yes = on
 on-no = off
@@ -2361,6 +2432,8 @@ setting-ui-menu-bar-name = Menu bar
 setting-ui-menu-bar-desc = Whether the menu bar stays pinned to the top row. On by default: several commands are only reachable through the menu, and nothing on screen said it was there. Turning it off gives the row back — the menu still opens with its key. Ignored by the GUI.
 setting-ui-mouse-name = Mouse
 setting-ui-mouse-desc = Whether the TUI captures the mouse (click, wheel, drag to mark). While it is captured the terminal cannot select text with the mouse; hold Shift to select anyway, or turn this off. Ignored by the GUI.
+setting-updates-check-name = Check for new releases
+setting-updates-check-desc = Once a day at start, asks GitHub whether a newer norte exists and says so in the status bar. It installs nothing. Off by default: it is the only thing norte sends over the network without you asking. `norte update check` asks once, whatever this says. Takes effect on the next start.
 setting-ui-alt-menu-name = Alt opens the menu
 setting-ui-alt-menu-desc = Whether pressing and releasing Alt on its own opens the menu bar in the TUI. Needs a terminal with the kitty keyboard protocol (kitty, foot, WezTerm, Ghostty); tmux, xterm and GNOME Terminal cannot report a lone Alt. Off by default: in that mode the terminal sends keys, not text, so a letter typed with a dead key (é) or a symbol typed with AltGr (@, #) arrives as its base key. The GUI always has it.
 setting-ui-parent-entry-name = Row to go up
@@ -2375,8 +2448,12 @@ setting-ui-diff-name = Compare files
 setting-ui-diff-desc = The program that compares TWO files, as a command line with the field codes of `openers.toml`: `%F` is both files, `%d` the pane's directory. Example: `meld %F`. Empty = `diff -u`, whose output stays on screen until you press a key. Not read from the project layer: it names a program to execute.
 setting-ui-diff-detached-name = The comparison tool opens a window
 setting-ui-diff-detached-desc = Whether that comparison tool opens a window of its own (Meld, Kompare) instead of taking over the terminal. Same deal as the editor, for the same reason.
+setting-ui-terminal-name = External terminal
+setting-ui-terminal-desc = The emulator "Terminal here" opens, as a command line with the field codes of `openers.toml`: `%d` is the pane's directory. Examples: `foot -D %d`, `open -a iTerm %d`, `wt -d .` (the terminal starts in the pane's folder; Windows Terminal splits `%d` at a `;`). Empty = `$TERMINAL`, then the desktop's own and a list of known emulators. When set, it is the only one tried. Not read from the project layer: it names a program to execute.
 setting-ui-confirm-quit-name = Confirm before quitting
 setting-ui-confirm-quit-desc = When quitting asks for confirmation: only with pending work (auto), always, or never. An emergency-exit shortcut, where bound (e.g. the TUI's Ctrl+C), always bypasses this.
+setting-ui-command-bar-name = Command bar
+setting-ui-command-bar-desc = Whether the command line stays under the panels. Each order you type there runs in the terminal panel, in the folder of the focused pane, as a new entry that stays open with its output. The command-line key calls it up even when this is off.
 setting-ui-key-bar-name = Key bar
 setting-ui-key-bar-desc = Terminal only. Whether the row of function keys (F1–F10 and what each does on the current screen) stays pinned at the bottom. It is read from the keymap, so rebinding a key changes its label, and clicking a cell runs the command. The window has none: its commands live in the menu and the palette.
 setting-ui-panel-bar-style-name = Panel bar labels
@@ -2675,6 +2752,9 @@ msg-paths-copied-osc52 = { $n } path(s) sent to the terminal clipboard (OSC 52);
 msg-clipboard-failed = the clipboard refused the paths
 msg-opening-external = opening with the desktop’s application…
 msg-opening-terminal = opening a terminal here…
+msg-terminal-opened = opened { $program } here
+msg-terminal-fallback = no terminal emulator started: opening a shell here instead
+msg-terminal-configured-failed = { $program } (from [ui] terminal) did not start: { $error }; opening a shell here instead
 host-plugin-running = running the extension command…
 host-not-an-int = that is not a whole number
 host-out-of-range = the schema bounds it between { $min } and { $max }

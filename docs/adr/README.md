@@ -178,3 +178,13 @@ edits.
 | [0175](0175-disk-map-tones-per-class.md) | The disk map tells touching rectangles of one class apart by tone | accepted |
 | [0176](0176-the-terminal-panel-holds-several-shells.md) | The terminal panel holds several shells | accepted |
 | [0177](0177-user-commands-run-programs-on-a-key.md) | User commands run programs on a key | accepted |
+| [0178](0178-a-click-outside-closes-a-light-popup.md) | A click outside closes a light popup, never a question | accepted |
+| [0179](0179-a-plain-word-searches-inside-names.md) | A plain word in a search form searches inside names | accepted |
+| [0180](0180-terminal-here-opens-an-emulator-when-there-is-a-desktop.md) | "Terminal here" opens an emulator when there is a desktop | accepted |
+| [0181](0181-the-command-bar-runs-each-order-as-a-terminal-panel-entry.md) | The command bar runs each order as a terminal-panel entry | accepted |
+| [0182](0182-what-a-release-promises-to-keep-working.md) | What a release promises to keep working | accepted |
+| [0183](0183-the-release-check-is-opt-in.md) | The release check is opt-in | accepted |
+| [0184](0184-the-window-paints-colored-file-type-icons.md) | The window paints colored file-type icons of its own | accepted |
+| [0185](0185-an-order-is-a-small-grammar-resolved-against-the-loaded-pane.md) | An order is a small grammar in a pure crate, resolved against the loaded pane | accepted |
+| [0186](0186-the-assistant-reads-metadata-and-writes-orders-a-human-applies.md) | The assistant reads metadata and writes orders a human applies | accepted |
+| [0187](0187-throughput-graphs-sample-on-the-strips-clock.md) | Throughput graphs sample on the strip's clock | accepted |

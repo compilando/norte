@@ -98,9 +98,11 @@ pub fn before_frame(app: &mut App, area: Rect) {
             (grid.width, grid.height)
         });
         let _ = app.terminals.tick(size);
+        crate::termpanel::refresh_wakes(app);
         // The last shell left cleanly: the slot says "no shell" and stays —
         // closing it on its own would move the reader's layout without them
-        // asking. A failed one stays listed, so the keyboard does too.
+        // asking; `terminal.close` closes it. A failed one stays listed, so
+        // the keyboard does too.
         if app.terminals.is_empty() && app.key_owner() == crate::app::KeyOwner::Terminal {
             app.release_keyboard();
         }
@@ -332,7 +334,8 @@ pub(crate) fn body_area(app: &App, area: Rect) -> Rect {
     // And the key bar row BELOW (spec 2026-09-10): subtracted from the
     // height, not the origin. Same criterion as the two above: one
     // subtraction, here.
-    let bottom = u16::from(key_bar_area(app, area).is_some());
+    let bottom = u16::from(key_bar_area(app, area).is_some())
+        + u16::from(command_bar_area(app, area).is_some());
     // And the panel bar in a COLUMN (spec 2026-09-21) is subtracted from
     // the width, from the origin. The question goes to `panel_bar_area`,
     // which already knows whether it fits: a rail that is not painted
@@ -458,6 +461,30 @@ pub(crate) fn key_bar_area(app: &App, area: Rect) -> Option<Rect> {
     })
 }
 
+/// Where the command bar goes (ADR 0181): the row just above the key bar,
+/// or the last row without one. Like the key bar, it is the one that yields
+/// on a terminal too short for the body.
+#[must_use]
+pub(crate) fn command_bar_area(app: &App, area: Rect) -> Option<Rect> {
+    if !app.command_bar_visible() {
+        return None;
+    }
+    let top = u16::from(app.menu_bar) + panel_bar_row(app);
+    let below = u16::from(key_bar_area(app, area).is_some());
+    if area.height <= top.saturating_add(below).saturating_add(1) {
+        return None;
+    }
+    Some(Rect {
+        y: area
+            .y
+            .saturating_add(area.height)
+            .saturating_sub(1)
+            .saturating_sub(below),
+        height: 1,
+        ..area
+    })
+}
+
 /// Where the panel bar goes, if there is one: a row, or a column.
 ///
 /// Below the menu one when both are on: the menu names what can be done and
@@ -476,7 +503,8 @@ pub(crate) fn panel_bar_area(app: &App, area: Rect) -> Option<Rect> {
     if bar_in_column(app) {
         // A terminal that leaves no body next to the rail loses the rail:
         // better a listing with no buttons than buttons with no listing.
-        let bottom = u16::from(key_bar_area(app, area).is_some());
+        let bottom = u16::from(key_bar_area(app, area).is_some())
+            + u16::from(command_bar_area(app, area).is_some());
         let height = area
             .height
             .saturating_sub(u16::from(app.menu_bar))

@@ -1,0 +1,14 @@
+[profile]
+title = "Work"
+
+[profile.start]
+"1" = "file:///home/compat/projects"
+"2" = "sftp://example.invalid/srv"
+
+[ui]
+show_hidden = true
+quick_search = "filter"
+date_format = "relative"
+
+[ui.columns]
+default = ["name", "size", "kind"]

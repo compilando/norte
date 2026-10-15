@@ -1,0 +1,21 @@
+[connections.work]
+url = "sftp://deploy@sftp.example.invalid:2222"
+auth = "key"
+key = "~/.ssh/id_ed25519"
+logical_trash = true
+allow_rsa = true
+
+[connections.backup]
+url = "ftp://backup@ftp.example.invalid:2121"
+auth = "password"
+tls = "allow"
+secret = "prompt"
+
+[connections.archive]
+url = "s3://norte-compat-bucket"
+auth = "access-key"
+access_key_id = "AKIAEXAMPLEEXAMPLE"
+region = "eu-west-1"
+endpoint = "https://s3.example.invalid:9000"
+addressing = "path"
+secret = "prompt"

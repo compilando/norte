@@ -14,7 +14,7 @@ use ratatui::widgets::{
 };
 
 use super::text::{cells, fit_hint_groups, right_ellipsis};
-use super::{centered, clear_themed};
+use super::{centered, clear_popup};
 use crate::app::display_name;
 use crate::theme::TuiTheme;
 use norte_frontend::middle_ellipsis;
@@ -216,7 +216,7 @@ pub fn draw_help(
 
     let (area, sidebar, body_area, footer_area) =
         help_layout(frame.area(), help_sidebar_desired(help.state.lang()));
-    clear_themed(frame, area, theme);
+    clear_popup(frame, area, theme);
     let mut frame_block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", t("help-title")))
@@ -564,9 +564,13 @@ pub(crate) fn render_scrollbar(
     }
     let mut state = ScrollbarState::new(total.saturating_sub(visible)).position(offset);
     frame.render_stateful_widget(
+        // Thin rules, not ratatui's `║` and `█`: a full-height block beside
+        // help's index read as a wall, heavier than the text it measures.
         Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)
             .end_symbol(None)
+            .track_symbol(Some("│"))
+            .thumb_symbol("┃")
             .style(theme.role(Role::BorderUnfocused)),
         area,
         &mut state,

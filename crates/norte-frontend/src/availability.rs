@@ -140,6 +140,14 @@ pub struct Facts {
     /// the process's environment (`DISPLAY`, `WAYLAND_DISPLAY`) and not to
     /// anything this table can look at.
     pub windowed: bool,
+    /// The acting pane's directory is a folder on this disk — what a
+    /// terminal or a shell can sit in.
+    pub pane_on_disk: bool,
+    /// The acting pane is inside an archive whose file is on this disk.
+    /// Asked apart from [`Facts::pane_on_disk`] because the reader fixes it
+    /// differently: the archive's own folder is one `..` away. A remote
+    /// archive is not on disk, and says so.
+    pub pane_in_archive: bool,
 }
 
 /// Fluent id for a reason, WITHOUT a frontend prefix: both frontends read
@@ -163,6 +171,8 @@ pub fn reason_key(reason: Reason) -> &'static str {
         Reason::NeedsDaemon => "reason-needs-daemon",
         Reason::NeedsDesktop => "reason-needs-desktop",
         Reason::AnsweredByTheOverlay => "reason-answered-by-overlay",
+        Reason::InsideArchive => "reason-inside-archive",
+        Reason::NotOnThisDisk => "reason-not-on-this-disk",
         _ => "reason-unavailable",
     }
 }
@@ -285,6 +295,8 @@ fn first_failure(checks: &[(bool, Reason)]) -> Availability {
 ///     journalled: true,
 ///     daemon: true,
 ///     windowed: true,
+///     pane_on_disk: false,
+///     pane_in_archive: true,
 /// };
 /// // Reading FROM the zip: copying is fine.
 /// assert!(verdict("pane.copy", &in_a_zip).is_available());
@@ -380,6 +392,13 @@ pub fn verdict(command: &str, facts: &Facts) -> Availability {
             (!facts.daemon, Reason::NeedsDaemon),
             (!facts.windowed, Reason::NeedsDesktop),
         ]),
+        // A terminal sits in a folder on this disk. The archive case first:
+        // a pane inside a zip is ALSO not on disk, and "go up to its folder"
+        // is the more useful of the two answers.
+        "app.terminal" => first_failure(&[
+            (facts.pane_in_archive, Reason::InsideArchive),
+            (!facts.pane_on_disk, Reason::NotOnThisDisk),
+        ]),
         // Two different things land here, and they should not be confused
         // when reading: commands that have NO possible impediment
         // (`pane.copy-path` never touches the backend — it is fine even
@@ -474,6 +493,8 @@ pub fn plugin_of_command(command: &str) -> Option<&str> {
 ///     journalled: true,
 ///     daemon: true,
 ///     windowed: true,
+///     pane_on_disk: true,
+///     pane_in_archive: false,
 /// };
 /// let active: BTreeSet<String> = ["acme.ftp".to_owned()].into_iter().collect();
 ///
@@ -514,7 +535,29 @@ mod tests {
             journalled: true,
             daemon: true,
             windowed: true,
+            pane_on_disk: true,
+            pane_in_archive: false,
         }
+    }
+
+    /// "Terminal here" needs a folder on this disk, and says which of the
+    /// two ways the pane is not one: inside an archive, the folder is one
+    /// `..` away; remote, there is none.
+    #[test]
+    fn terminal_here_says_why_not_inside_an_archive_or_remote() {
+        let mut f = one_file();
+        assert_eq!(verdict("app.terminal", &f), Availability::Available);
+        f.pane_on_disk = false;
+        f.pane_in_archive = true;
+        assert_eq!(
+            verdict("app.terminal", &f).reason(),
+            Some(Reason::InsideArchive)
+        );
+        f.pane_in_archive = false;
+        assert_eq!(
+            verdict("app.terminal", &f).reason(),
+            Some(Reason::NotOnThisDisk)
+        );
     }
 
     #[test]
@@ -673,6 +716,8 @@ mod tests {
             Reason::ConnectionDegraded,
             Reason::WrongTarget,
             Reason::NeedsDaemon,
+            Reason::InsideArchive,
+            Reason::NotOnThisDisk,
         ] {
             let k = reason_key(r);
             assert!(!k.is_empty(), "{r:?} has no key");
@@ -686,6 +731,8 @@ mod tests {
     #[test]
     fn reason_keys_exist_in_both_locales() {
         for key in [
+            "reason-inside-archive",
+            "reason-not-on-this-disk",
             "reason-read-only",
             "reason-unsupported",
             "reason-plugin-inactive",

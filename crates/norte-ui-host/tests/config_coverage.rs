@@ -46,6 +46,8 @@ fn every_config_key_is_classified_for_the_window() {
                 // (ADR 0066, D10), so there is no mode to choose.
                 mode: _,
             },
+        // The release check (ADR 0183): the host runs it once at start.
+        check_updates: _,
 
         // ─── The host reads these from `self.config`, live against its own
         //     state (a new slot re-reads them).
@@ -58,6 +60,7 @@ fn every_config_key_is_classified_for_the_window() {
         hotlist: _,
         ui_diff: _,
         ui_diff_detached: _,
+        ui_terminal: _,
         // The chrome (spec 2026-09-10): the key bar, the panel bar's style,
         // the panel's footer, the date format, notice expiry and the dialog
         // buttons. Every snapshot reads them.

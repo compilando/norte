@@ -41,6 +41,7 @@ import {
 } from "./render/dom";
 import type { Send, SlotDom } from "./render/dom";
 import { makeDraggable } from "./render/move";
+import * as commandbar from "./render/commandbar";
 import * as dialogs from "./render/dialogs";
 import * as sync from "./render/sync";
 import * as ai from "./render/ai";
@@ -51,6 +52,7 @@ import * as viewer from "./render/viewer";
 import * as help from "./render/help";
 import * as splash from "./render/splash";
 import * as log from "./render/log";
+import * as assistant from "./render/assistant";
 import * as diskMap from "./render/diskmap";
 import * as terminal from "./render/terminal";
 import * as searchpanel from "./render/searchpanel";
@@ -161,6 +163,8 @@ export class Screen {
   menuBarHeight: string | null = null;
   /** The same for the panel bar (#324). */
   panelBarHeight: string | null = null;
+  /** The command bar's reserved height, as last set on the root. */
+  commandBarHeight: string | null = null;
   /** And the width it reserves when it is the activity bar (bridge 84). */
   activityWidth: string | null = null;
   /** The last frame painted: what gets repainted when something local changes. */
@@ -209,7 +213,38 @@ export class Screen {
       Promise.resolve(new ArrayBuffer(0)),
     /** The window's own title bar (ADR 0136): what it asks the window for. */
     readonly windowControl: (verb: WindowVerb) => void = () => undefined,
-  ) {}
+  ) {
+    // A press on an overlay's VEIL — the root itself, outside its box — is
+    // a click outside the popup (bridge 112). The host decides whether the
+    // one in front is light enough to close; a question stays.
+    const veils = [
+      helpRoot,
+      settingsRoot,
+      extensionsRoot,
+      themeRoot,
+      pickerRoot,
+      profilesRoot,
+      layoutsRoot,
+      columnsRoot,
+      searchRoot,
+      compareRoot,
+      syncRoot,
+      agentsRoot,
+      pluginOutputRoot,
+      programOutputRoot,
+      dialogsRoot,
+      aiRenameRoot,
+      organizeRoot,
+      gotoRoot,
+    ];
+    for (const veil of veils) {
+      veil.addEventListener("pointerdown", (e: PointerEvent) => {
+        if (e.target === veil && e.button === 0) {
+          send({ action: "overlay_dismiss" });
+        }
+      });
+    }
+  }
 
   /**
    * Did what the menu bar reserves change since it was last asked? A
@@ -360,6 +395,7 @@ export class Screen {
     layer("ai_rename", view.ai_rename, this.paintAiRename);
     layer("organize", view.organize, this.paintOrganize);
     layer("context_menu", view.context_menu ?? null, this.paintContextMenu);
+    layer("command_bar", view.command_bar ?? null, this.paintCommandBar);
     layer("dialogs", view.dialogs, this.paintDialogs);
     // THE LAST ONE: the splash screen goes in front of everything else, and
     // on this sheet stacking is document order.
@@ -374,6 +410,9 @@ export class Screen {
 
   /** In `render/contextmenu.ts`. */
   readonly paintContextMenu = contextmenu.paintContextMenu;
+
+  /** In `render/commandbar.ts`. */
+  readonly paintCommandBar = commandbar.paintCommandBar;
 
   /** In `render/menus.ts`. */
   readonly paintGoto = menus.paintGoto;
@@ -396,6 +435,9 @@ export class Screen {
 
   /** In `render/help.ts`. */
   readonly helpBody = help.helpBody;
+
+  /** In `render/help.ts`. */
+  readonly helpRail = help.helpRail;
 
   /** In `render/help.ts`. */
   readonly helpBlock = help.helpBlock;
@@ -1054,6 +1096,10 @@ export class Screen {
       this.paintLog(dom, slot);
       return;
     }
+    if (slot.kind === "assistant") {
+      this.paintAssistant(dom, slot);
+      return;
+    }
     if (slot.kind === "panel") {
       this.paintPanel(dom, slot);
       return;
@@ -1152,6 +1198,7 @@ export class Screen {
 
   /** In `render/log.ts`. */
   readonly paintLog = log.paintLog;
+  readonly paintAssistant = assistant.paintAssistant;
   readonly paintTerminal = terminal.paintTerminal;
 
   /** In `render/panel.ts`. */
@@ -1509,6 +1556,10 @@ export class Screen {
       return;
     }
 
+    // A failure's notice is not a row, so the sweep below never removes it:
+    // without this it stayed painted over the first row once the listing
+    // came back.
+    dom.canvas.querySelector(":scope > .error")?.remove();
     // The row stripes (bridge 80): turned on by the CONTAINER, not the row.
     // Every row always carries its parity, so a row recycled by scrolling
     // does not drag along the band from the spot it used to occupy.

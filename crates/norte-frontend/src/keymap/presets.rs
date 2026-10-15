@@ -492,6 +492,9 @@ mod k2b_gate_tests {
             // repository's rule is that a key change is not done until all
             // seven have it — this is what enforces that by machine.
             "layout.log",
+            // The assistant (ADR 0186): it takes the keyboard. `alt+Y` in
+            // all seven.
+            "layout.assistant",
             // The disk map (phase 4): another panel that takes the
             // keyboard, and therefore another that cannot be left with no
             // key in any of them. `alt+z` in all seven — the only letter

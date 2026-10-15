@@ -35,8 +35,8 @@
 # Shift+F7); panel view-mode switches (Ctrl+F1/F2/F7/F10/F11/F12,
 # Ctrl+Shift+F1/F2/F8, "Unsorted"); the directory-tree popup dialog
 # (Alt+F10, a second presentation of the same tree Ctrl+F8 already opens);
-# command-line history and in-line editing (Alt+F8, and the whole
-# "Command Line: Keys" section — history, cut/copy/paste, word-delete);
+# the command line's in-line editing (the "Command Line: Keys" section —
+# cut/copy/paste, word-delete; its history, Alt+F8, opens norte's bar);
 # file comments (Ctrl+Z); directory-branch flattening (Ctrl+B,
 # Ctrl+Shift+B); the open-tabs list menu (Ctrl+Shift+A); the Multi-Rename
 # Tool (Ctrl+M, a batch feature with no single-file analogue); FTP
@@ -83,6 +83,10 @@
 # orthodox, cua and vim carry it; here, the Go menu (F9), where it is
 # first.
 #
+# `app.orders` (the order line, ADR 0185) is `alt+:`, a norte chord TC does
+# not attest: its command line runs programs, and a printable key starts
+# the quick search.
+#
 # `task.pause` (ADR 0147), `task.retry` (ADR 0148) and the three queue ones
 # (`task.queue`, `task.up`, `task.down`, ADR 0149) are left UNBOUND here,
 # just like `task.cancel`:
@@ -116,6 +120,7 @@ keymap = [
     # grammar and NOT on the wire — same byte as `ctrl+p`, which here is
     # `pane.copy-path`. See the long note in krusader.toml. There is a test.
     { on = ["alt+p"], run = "app.palette" },
+    { on = ["alt+:"], run = "app.orders" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },
@@ -128,6 +133,9 @@ keymap = [
     # The log (#323): TC does not attest it, it is bound anyway because it
     # is norte's own and `alt+l` is free. See the header's divergences block.
     { on = ["alt+l"], run = "layout.log" },
+    # The assistant (ADR 0186): norte's own, like the log; Total Commander
+    # has nothing to transcribe. `alt+Y` is free in all seven presets.
+    { on = ["alt+Y"], run = "layout.assistant" },
     # The disk map (phase 4). Total Commander attests no chord for this —its
     # closest equivalent is a dialog, not a panel—, so nothing is
     # transcribed: `alt+z`, the one letter free across all seven. See
@@ -218,6 +226,9 @@ keymap = [
     { on = ["shift+f2"], run = "pane.compare-dirs" },
     { on = ["ctrl+y"], run = "pane.sync-dirs" },
     { on = ["shift+f4"], run = "pane.edit-new" },
+    # Alt+F8 is TC's command-line history; norte's command line is the bar,
+    # whose Up/Down walk that history.
+    { on = ["alt+f8"], run = "pane.command-line" },
     { on = ["alt+down"], run = "pane.history" },
     { on = ["ctrl+f3"], run = "pane.sort-name" },
     { on = ["ctrl+f4"], run = "pane.sort-ext" },

@@ -124,6 +124,7 @@ pub async fn on_tree_key(
         "layout.log" => app.toggle_log(),
         "layout.disk-map" => app.toggle_disk_map(),
         "layout.search" => app.toggle_search_panel(),
+        "layout.assistant" => app.toggle_assistant(),
         "dialog.confirm" => {
             let dest = app.tree().and_then(crate::tree::Tree::selected);
             if let Some(dir) = dest {
@@ -429,6 +430,7 @@ pub async fn on_places_key(
         "layout.log" => app.toggle_log(),
         "layout.disk-map" => app.toggle_disk_map(),
         "layout.search" => app.toggle_search_panel(),
+        "layout.assistant" => app.toggle_assistant(),
         "pane.tree" => app.toggle_tree(),
         // `⏎` over a HEADER folds or unfolds its section, as in the tree
         // next to it. Before, it did nothing: `activate()` returns `None`
@@ -776,7 +778,7 @@ async fn hotlist_add(app: &mut App, name: &str) {
 /// being edited — the active PROFILE if there is one, otherwise the user's
 /// — (`spawn_blocking`, rule 2). Same consistency contract as
 /// [`hotlist_add`].
-async fn hotlist_remove(app: &mut App, name: &str) {
+pub(crate) async fn hotlist_remove(app: &mut App, name: &str) {
     let n = name.to_owned();
     let dest = app.config_write_dir();
     let res = tokio::task::spawn_blocking(move || -> std::io::Result<()> {

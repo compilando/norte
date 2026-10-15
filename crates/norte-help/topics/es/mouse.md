@@ -60,7 +60,7 @@ pulsar mayús sin moverte se refleja en la siguiente fila que cruces.
 
 # El menú del botón derecho
 
-El frontend gráfico abre un menú en el puntero, en cinco sitios:
+Los dos frontends abren un menú en el puntero, en cinco sitios:
 
 - una **fila del listado**
 - la **parte vacía del listado**, y su fila `..`
@@ -70,9 +70,11 @@ El frontend gráfico abre un menú en el puntero, en cinco sitios:
 
 Desde el teclado, {{cmd:pane.context-menu}} o la tecla **Menú** lo abren sobre
 el elemento con el foco: la fila del cursor del listado, el cursor de Lugares,
-el cursor del árbol. Con cualquier otro panel con el foco no hay sobre qué
-abrirlo, y la tecla lo dice. Dentro, las flechas se mueven, Intro ejecuta la
-entrada y Esc lo cierra.
+el cursor del árbol. En la ventana, con cualquier otro panel con el foco no hay
+sobre qué abrirlo, y la tecla lo dice. En el terminal la tecla lo abre sobre la fila del
+cursor del listado; en Lugares y en el árbol, usa el botón derecho. Dentro, las
+flechas se mueven, Intro ejecuta la entrada, Esc lo cierra y un click fuera
+también.
 
 El menú de una fila empieza con las operaciones que ya tienen tecla: abrir
 ({{cmd:nav.enter}}), {{cmd:pane.view}}, {{cmd:pane.copy}}, {{cmd:pane.move}},
@@ -104,8 +106,9 @@ invertir, las operaciones de IA (renombrar, organizar) y, en un remoto,
 desconectar: actúan sobre toda la carpeta o la conexión, así que viven aquí y
 no en una fila. Nunca se ejecutan solas; cada entrada eres tú pidiéndolo. La
 cabecera de columna ofrece *ordenar por esta columna*, *ocultar esta columna*
-(no en Nombre) y *Columnas…*; ocultar desde aquí afecta solo a esta ventana,
-como el selector de columnas, y no toca `norte.toml`. Una unidad o un favorito
+(no en Nombre) y *Columnas…*; ocultar desde aquí hace lo mismo que el selector
+de columnas de cada frontend: la ventana lo guarda solo para esa ventana, el
+terminal lo guarda en `norte.toml`. Una unidad o un favorito
 de Lugares, y una rama del árbol, ofrecen abrir, abrir en el otro panel, abrir
 en una pestaña nueva y copiar la ruta. Una unidad o una rama se pueden añadir a
 favoritos — *Añadir a favoritos…* pide el nombre, ya relleno, igual que el

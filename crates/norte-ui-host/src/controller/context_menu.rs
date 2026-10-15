@@ -47,28 +47,7 @@ pub(super) struct ContextMenu {
     pub(super) anchor: Option<(i32, i32)>,
 }
 
-/// What a listing menu (a row or the empty area) saw at opening.
-///
-/// Paths and a count, not the generation: the generation moves with any
-/// filler batch, a refresh that changed nothing included, and a menu that
-/// went stale on every refresh would refuse a copy that targets exactly
-/// what it said.
-///
-/// The FOLDER is in it, and the entry is its WHOLE path, because
-/// `navigate_slot` keeps `dir()` and the old body until the new listing
-/// lands: a menu opened during a slow load said "in /old", and once /new
-/// lands New folder or Mark all would act there. A last component alone
-/// would let a same-named file in the new folder pass for the one the
-/// header named.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Fingerprint {
-    /// The folder the listing showed.
-    pub(super) dir: VPath,
-    /// The pointed entry's full path.
-    pub(super) entry: Option<VPath>,
-    /// How many marks the pane had.
-    pub(super) marks: usize,
-}
+pub(super) use norte_frontend::context_menu::Fingerprint;
 
 /// What a menu-local verb acts on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,41 +117,10 @@ impl State {
         let Some(entry) = pane.entries().get(i) else {
             return (Self::stale(StaleAction::Generation), Vec::new());
         };
-        let (count, all_files) = if marked {
-            let marks = pane.marked_entries();
-            (
-                pane.marks_len(),
-                marks.iter().all(|e| e.kind == EntryKind::File),
-            )
-        } else {
-            (1, entry.kind == EntryKind::File)
-        };
-        let single = count == 1;
-        let target = norte_frontend::context_menu::RowTarget {
-            count,
-            kind: single.then_some(entry.kind),
-            archive: single && norte_frontend::nav::archive_root_for(entry).is_some(),
-            all_files,
-        };
-        // ONE frame, "acts on …", for both targets: the name or the count
-        // goes inside it, so the header always says it is the operand.
-        let target_text = if single {
-            // The SAME masking as the row's `display_name`, so the header
-            // never says a name the row does not.
-            let bytes = entry
-                .path
-                .file_name()
-                .map_or(&[][..], norte_proto::Segment::as_bytes);
-            let (text, _) = norte_frontend::display_name_with(bytes, pane.name_encoding());
-            norte_frontend::context_menu::elide(&text)
-        } else {
-            norte_i18n::ta_in(
-                self.lang,
-                "gui-menu-target-marks",
-                &[("n", &count.to_string())],
-            )
-        };
-        let header = norte_i18n::ta_in(self.lang, "gui-menu-acts-on", &[("target", &target_text)]);
+        let marks = marked.then(|| pane.marked_entries());
+        let target = norte_frontend::context_menu::row_target(entry, marks.as_deref());
+        let header =
+            norte_frontend::context_menu::acts_on(self.lang, &target, entry, pane.name_encoding());
         let fingerprint = self.fingerprint_of(slot_id);
         let surface = Surface::Row(target);
         let bar = self.install_context_menu(ContextMenu {
@@ -211,19 +159,8 @@ impl State {
             return (Self::stale(StaleAction::Generation), Vec::new());
         }
         let pane = &self.slot().pane;
-        // The BASE scheme, the part after the last `+`: `zip+sftp` is
-        // remote, `zip+file` is not — the same test `disconnect` makes
-        // before refusing with `msg-disconnect-local`.
-        let scheme = pane.dir().scheme();
-        let base = scheme.rsplit('+').next().unwrap_or(scheme);
-        let remote = base != "file";
-        let (dir, _) = norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
-        let header = norte_i18n::ta_in(
-            self.lang,
-            "ctx-acts-on-dir",
-            &[("dir", &norte_frontend::context_menu::elide(&dir))],
-        );
-        let surface = Surface::Empty { remote };
+        let (surface, header) =
+            norte_frontend::context_menu::empty_menu(self.lang, pane.dir(), pane.name_encoding());
         // The SAME fingerprint as a row's: the folder is what this menu
         // names, and the marks are what Mark all / Invert act on.
         let fingerprint = self.fingerprint_of(slot_id);
@@ -450,37 +387,25 @@ impl State {
     /// row and the hand learns it once.
     pub(super) fn vista_context_menu(&self) -> Option<crate::dto::ContextMenuView> {
         let m = self.context_menu.as_ref()?;
-        let items = m
-            .entries
-            .iter()
-            .map(|e| {
-                let reason = self.reason_against(m, e);
-                let (chord, role) = match e.action {
-                    Action::Command(c) => (
-                        norte_frontend::palette::first_chord(c, &self.effective)
-                            .unwrap_or_default(),
-                        norte_frontend::menu::role(c).as_str(),
-                    ),
-                    Action::Verb(_) => (String::new(), "normal"),
-                };
-                crate::dto::ContextItemView {
-                    label: clamp_display(norte_i18n::t_in(self.lang, e.label_key)),
-                    chord: clamp_display(chord),
-                    enabled: reason.is_none(),
-                    reason: reason.map_or_else(String::new, |k| {
-                        clamp_display(norte_i18n::t_in(self.lang, &k))
-                    }),
-                    section: e.section.map(|k| {
-                        if k.is_empty() {
-                            String::new()
-                        } else {
-                            clamp_display(norte_i18n::t_in(self.lang, k))
-                        }
-                    }),
-                    role: role.to_owned(),
-                }
-            })
-            .collect();
+        let implemented = crate::commands::all_with(self.effects);
+        let items = norte_frontend::context_menu::project(
+            &m.entries,
+            &m.facts,
+            &implemented,
+            |c| norte_frontend::palette::first_chord(c, &self.effective),
+            self.lang,
+            |v| verb_reason(m, v),
+        )
+        .into_iter()
+        .map(|r| crate::dto::ContextItemView {
+            label: clamp_display(r.label),
+            chord: clamp_display(r.chord),
+            enabled: r.enabled,
+            reason: clamp_display(r.reason),
+            section: r.section.map(clamp_display),
+            role: r.role.to_owned(),
+        })
+        .collect();
         Some(crate::dto::ContextMenuView {
             header: m.header.clone(),
             items,
@@ -490,44 +415,11 @@ impl State {
         })
     }
 
-    /// Why entry `e` of `m` cannot run, as a Fluent reason key, or `None`
-    /// when it can.
-    ///
-    /// ONE function for the two questions — what the menu PAINTS dimmed and
-    /// what a click REFUSES — so the two cannot disagree: an entry painted
-    /// enabled that refused, or the reverse, would be a menu lying about
-    /// itself. The criteria are the shared table's verdict on the facts
-    /// frozen at opening, plus "this window does not run it"; there is no
-    /// third.
-    ///
-    /// The verbs have exactly two vetoes, both decided at opening: hiding a
-    /// column that cannot be hidden (`name`), and the verbs that need the
-    /// path (the Open ones and Copy path) on a favorite whose target did
-    /// not parse — reason, the config's own error key, the one the bar
-    /// already paints as the row's "broken" note.
+    /// Why entry `e` of `m` cannot run (`context_menu::reason_of`, the one
+    /// function for what is painted dimmed and what a click refuses).
     fn reason_against(&self, m: &ContextMenu, e: &Entry) -> Option<Cow<'static, str>> {
-        match e.action {
-            Action::Command(c) => {
-                if crate::commands::all_with(self.effects).contains(&c) {
-                    norte_frontend::availability::verdict(c, &m.facts)
-                        .reason()
-                        .map(|r| Cow::Borrowed(norte_frontend::availability::reason_key(r)))
-                } else {
-                    Some(Cow::Borrowed("reason-unavailable"))
-                }
-            }
-            Action::Verb(Verb::HideColumn) => (m.surface == (Surface::Header { hideable: false }))
-                .then_some(Cow::Borrowed("reason-wrong-target")),
-            Action::Verb(
-                Verb::OpenHere | Verb::OpenInOther | Verb::OpenInNewTab | Verb::CopyPath,
-            ) => match &m.subject {
-                Subject::Place {
-                    broken: Some(key), ..
-                } => Some(Cow::Owned(key.clone())),
-                _ => None,
-            },
-            Action::Verb(_) => None,
-        }
+        let implemented = crate::commands::all_with(self.effects);
+        norte_frontend::context_menu::reason_of(e, &m.facts, &implemented, |v| verb_reason(m, v))
     }
 
     /// What a listing menu on `slot` would remember if it opened NOW: the
@@ -936,5 +828,26 @@ impl State {
             context_menu: self.vista_context_menu(),
         });
         (self.applied(), vec![self.parche(changes)])
+    }
+}
+
+/// The window's two verb vetoes, both decided at opening: hiding a column
+/// that cannot be hidden (`name`), and the verbs that need the path (the
+/// Open ones and Copy path) on a favorite whose target did not parse —
+/// reason, the config's own error key, the one the bar already paints as
+/// the row's "broken" note.
+fn verb_reason(m: &ContextMenu, v: Verb) -> Option<Cow<'static, str>> {
+    match v {
+        Verb::HideColumn => (m.surface == (Surface::Header { hideable: false }))
+            .then_some(Cow::Borrowed("reason-wrong-target")),
+        Verb::OpenHere | Verb::OpenInOther | Verb::OpenInNewTab | Verb::CopyPath => {
+            match &m.subject {
+                Subject::Place {
+                    broken: Some(key), ..
+                } => Some(Cow::Owned(key.clone())),
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }

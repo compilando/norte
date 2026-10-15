@@ -36,6 +36,10 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
     this.helpPainted === help.topic_id
       ? (this.helpRoot.querySelector(".help-body")?.scrollTop ?? 0)
       : 0;
+  // The topic list is rebuilt too, and on EVERY page: a click on a row
+  // near the bottom opened the page and threw the list back to the top,
+  // the clicked row out of sight.
+  const topicsScroll = this.helpRoot.querySelector(".help-topics")?.scrollTop ?? 0;
   this.helpPainted = help.topic_id;
   this.helpRoot.dataset["open"] = "true";
   this.helpBodyFocused = help.focus === "body";
@@ -47,13 +51,23 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
   box.setAttribute("aria-modal", "true");
   box.setAttribute("aria-label", this.t("help-title"));
 
-  box.append(this.helpSidebar(help), this.helpBody(help));
+  box.append(
+    modalHeader.call(this, this.t("help-title"), "help-head"),
+    this.helpSidebar(help),
+    this.helpBody(help),
+  );
 
   const footer = document.createElement("footer");
   footer.className = "help-hint";
   footer.textContent = this.t("help-hint-gui");
   box.append(footer);
   this.helpRoot.replaceChildren(box);
+  const topics = this.helpRoot.querySelector(".help-topics");
+  if (topics instanceof HTMLElement) {
+    topics.scrollTop = topicsScroll;
+    // Revealed once in the document: on a detached node it does nothing.
+    revealInView(topics.querySelector(".help-topic-rows")?.children[help.cursor]);
+  }
   if (scroll > 0) {
     const body = this.helpRoot.querySelector(".help-body");
     if (body instanceof HTMLElement) {
@@ -66,6 +80,41 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
     this.helpScrollSeq = help.scroll.seq;
     this.scrollHelp(help.scroll.to);
   }
+}
+
+/**
+ * A modal's header: its title and a close button, shared by help and
+ * settings so both read as the same kind of window.
+ *
+ * The button sends `Escape`, the same key that closes (as the extension
+ * manager's does): what the first `esc` undoes is the host's decision.
+ */
+export function modalHeader(this: Screen, title: string, className: string): HTMLElement {
+  const head = document.createElement("header");
+  head.className = `modal-head ${className}`;
+  // Not a heading: the dialog's `aria-label` already names it, and help's
+  // page title is the one `h1` — two roots would break its hierarchy.
+  const h = document.createElement("div");
+  h.className = "modal-title";
+  h.textContent = title;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "modal-close";
+  close.setAttribute("aria-label", this.t("dialog-close"));
+  close.title = this.t("dialog-close");
+  close.textContent = "×";
+  close.addEventListener("click", () => {
+    this.send({
+      action: "key",
+      key: "Escape",
+      ctrl: false,
+      alt: false,
+      shift: false,
+      meta: false,
+    });
+  });
+  head.append(h, close);
+  return head;
 }
 
 /**
@@ -167,10 +216,9 @@ export function helpSidebar(this: Screen, help: HelpView): HTMLElement {
     list.append(row);
   }
   list.setAttribute("aria-activedescendant", `help-topic-${String(help.cursor)}`);
+  // The sidebar is longer than its box: `paintHelp` reveals the cursor once
+  // the list is in the document.
   nav.append(list);
-  // The sidebar is longer than its box: without this, scrolling past the
-  // fold moves a cursor that is not visible.
-  revealInView(list.children[help.cursor]);
   return nav;
 }
 
@@ -184,9 +232,18 @@ export function helpBody(this: Screen, help: HelpView): HTMLElement {
   // to switch halves.
   body.setAttribute("tabindex", "-1");
 
+  // Two columns: the prose at its reading measure, and the page's keys and
+  // links beside it — the room the measure leaves free on a wide window.
+  const page = document.createElement("div");
+  page.className = "help-page";
+  const main = document.createElement("div");
+  main.className = "help-main";
+  page.append(main);
+  body.append(page);
+
   const title = document.createElement("h1");
   title.textContent = help.title;
-  body.append(title);
+  main.append(title);
   if (help.badge !== null) {
     // A third party page's provenance. Always visible on a plugin page: a
     // line that only sometimes shows up teaches the opposite of the truth
@@ -194,9 +251,16 @@ export function helpBody(this: Screen, help: HelpView): HTMLElement {
     const badge = document.createElement("p");
     badge.className = "help-badge";
     badge.textContent = help.badge;
-    body.append(badge);
+    main.append(badge);
   }
-  const blocks = help.blocks.map((b) => this.helpBlock(b));
+  // A corpus page opens with `# <its title>`, which the `h1` already says:
+  // dropped, and its `##` sections move up to `h2` so the index sees them.
+  const first = help.blocks[0];
+  const retitled =
+    first?.block === "heading" && first.level === 1 && first.text === help.title;
+  const blocks = (retitled ? help.blocks.slice(1) : help.blocks).map((b) =>
+    this.helpBlock(b, retitled ? 1 : 0),
+  );
   // The PAGE's table of contents, at the top: its sections, each one a
   // button that brings it into view. Only with three or more — with one or
   // two, the index takes up more than it saves.
@@ -215,27 +279,67 @@ export function helpBody(this: Screen, help: HelpView): HTMLElement {
       });
       toc.append(go);
     }
-    body.append(toc);
+    main.append(toc);
   }
-  body.append(...blocks);
-  if (help.actions.length > 0) {
+  main.append(...blocks);
+  const rail = this.helpRail(help);
+  if (rail !== null) {
+    page.append(rail);
+  }
+  return body;
+}
+
+/**
+ * The page's side column: its keys, then the pages it points to. Two cards
+ * over ONE list of rows — `help.actions` — so each row keeps the index the
+ * host's cursor and `help_activate` speak in; `null` when there are none.
+ */
+export function helpRail(this: Screen, help: HelpView): HTMLElement | null {
+  if (help.actions.length === 0) {
+    return null;
+  }
+  const rail = document.createElement("aside");
+  rail.className = "help-rail";
+  const cards: [string, string, boolean][] = [
+    ["help-rail-keys", this.t("help-rail-keys-title"), false],
+    ["help-rail-see", this.t("help-rail-see-title"), true],
+  ];
+  for (const [className, title, opens] of cards) {
+    const rows = [...help.actions.entries()].filter(([, a]) => a.opens_topic === opens);
+    if (rows.length === 0) {
+      continue;
+    }
+    const card = document.createElement("section");
+    card.className = `help-rail-card ${className}`;
+    const heading = document.createElement("div");
+    heading.className = "help-rail-title";
+    heading.textContent = title;
     const list = document.createElement("ul");
     list.className = "help-actions";
     list.setAttribute("role", "listbox");
-    for (const [i, a] of help.actions.entries()) {
+    list.setAttribute("aria-label", title);
+    card.append(heading, list);
+    rail.append(card);
+    for (const [i, a] of rows) {
       const row = document.createElement("li");
       row.className = "help-action";
       row.id = `help-action-${String(i)}`;
       row.setAttribute("role", "option");
       row.setAttribute("aria-selected", String(help.action_cursor === i));
       row.dataset["enabled"] = String(a.enabled);
-      const chord = document.createElement("span");
-      chord.className = "help-action-chord";
-      chord.textContent = a.chord;
+      // Label first and the key at the right edge, as in a menu: keys of
+      // different widths in front left every label starting somewhere else.
       const label = document.createElement("span");
       label.className = "help-action-label";
       label.textContent = a.label;
-      row.append(chord, label);
+      row.append(label);
+      // A page link has no key, and an empty keycap would only be a hole.
+      if (!opens) {
+        const chord = document.createElement(a.chord === "" ? "span" : "kbd");
+        chord.className = "help-action-chord";
+        chord.textContent = a.chord;
+        row.append(chord);
+      }
       if (a.opens_topic) {
         // The arrow is the ONLY thing that tells apart "opens a page" from
         // "runs a command", so it goes in its own node — glued to the text
@@ -259,26 +363,24 @@ export function helpBody(this: Screen, help: HelpView): HTMLElement {
         });
       }
       list.append(row);
+      if (help.action_cursor === i) {
+        list.setAttribute("aria-activedescendant", row.id);
+      }
     }
-    if (help.action_cursor !== null) {
-      list.setAttribute(
-        "aria-activedescendant",
-        `help-action-${String(help.action_cursor)}`,
-      );
-      revealInView(list.children[help.action_cursor]);
-    }
-    body.append(list);
   }
-  return body;
+  return rail;
 }
 
-/** A corpus block, in its semantic element. */
-export function helpBlock(this: Screen, b: HelpBlockView): HTMLElement {
+/**
+ * A corpus block, in its semantic element. `lift` raises its headings by
+ * that many levels (see `helpBody`'s dropped title).
+ */
+export function helpBlock(this: Screen, b: HelpBlockView, lift = 0): HTMLElement {
   switch (b.block) {
     case "heading": {
       // The level arrives bounded to 1..=3 by the host, and the page's title
       // already occupies `h1`: a body heading starts at `h2`.
-      const level = Math.min(3, Math.max(1, b.level)) + 1;
+      const level = Math.min(3, Math.max(1, b.level - lift)) + 1;
       const h = document.createElement(`h${String(level)}`);
       h.textContent = b.text;
       return h;

@@ -382,7 +382,7 @@ impl State {
         let Some(slot) = self.slot_of_kind(KIND) else {
             return not_here();
         };
-        let names = self.panel_de_terminal(slot.0).profiles;
+        let names = self.profile_names();
         self.open_terminal_picker(crate::pickers::Selector::shell_profiles(slot.0, &names))
     }
 
@@ -508,14 +508,38 @@ impl State {
     pub(super) fn close_terminal(
         &mut self,
         id: Option<u32>,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(id) = id.map(InstanceId).or(self.terminals.active_id()) else {
+        // By key (`None`) with the panel behind a tab: refused. The reader
+        // cannot see WHICH shell that would kill. A click names its shell,
+        // on something on screen.
+        let hidden = self.slot_of_kind(KIND).is_none_or(|s| self.hidden(s.0));
+        // A panel left empty by a shell that exited on its own: no shell to
+        // kill, so the key — or the panel's ✕, which then names no shell —
+        // closes the panel; otherwise nothing could.
+        if self.terminals.is_empty() && (id.is_some() || !hidden) {
+            return self.close_slot_of_kind(KIND, backend, mailbox);
+        }
+        let Some(id) = id
+            .map(InstanceId)
+            .or(self.terminals.active_id().filter(|_| !hidden))
+        else {
             return not_here();
         };
         let Some(gone) = self.terminals.close(id) else {
             return not_here();
         };
         bury(vec![gone]);
+        // The last shell takes its panel with it, as in VS Code: left open it
+        // was an empty box the panel's key could not close.
+        if self.terminals.is_empty() && self.slot_of_kind(KIND).is_some() {
+            let (ack, updates) = self.close_slot_of_kind(KIND, backend, mailbox);
+            // A slot that could not close still has to stop showing the shell.
+            if !updates.is_empty() {
+                return (ack, updates);
+            }
+        }
         (self.applied(), self.republicar_terminal())
     }
 
@@ -607,6 +631,21 @@ impl State {
             self.probe_terminal(mailbox);
         } else {
             self.terminal_epoch += 1;
+        }
+        // The last shell left cleanly with the keyboard inside: it goes back
+        // to the listing, as in the TUI — keys typed into a panel with no
+        // shell went nowhere. The active role travels in the layout, so the
+        // whole frame goes.
+        let slot = self.slot_of_kind(KIND);
+        let inside =
+            slot.is_some() && self.roles.get(norte_frontend::layout::RoleId::Active) == slot;
+        if self.terminals.is_empty() && inside {
+            let listing = norte_frontend::layout::SlotId(self.active());
+            self.roles
+                .set(norte_frontend::layout::RoleId::Active, listing);
+            self.reconciles_roles();
+            let snap = self.snapshot();
+            return vec![self.over(UiUpdate::Snapshot(Box::new(snap)))];
         }
         // A quiet tick produces no patch: a quiet shell does not wake the
         // renderer thirty times a second.
@@ -720,6 +759,21 @@ impl State {
     /// Only the panel (#401): the shell's output touches nothing else, and
     /// the whole frame at up to 30 Hz rebuilt every slot. Without a placed
     /// slot there is nothing to send.
+    /// Marks the entry in front to stay after a clean exit and titles it
+    /// with `title` (in memory only): a command-bar order, whose output is
+    /// why it ran (ADR 0181).
+    pub(super) fn keep_active_terminal(&mut self, title: &str) {
+        if let Some(id) = self.terminals.active_id() {
+            self.terminals.keep_on_success(id);
+            self.terminals.rename(id, title);
+        }
+    }
+
+    /// The terminal panel's patch after a change made from outside it.
+    pub(super) fn republish_terminal_panel(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
+        self.republicar_terminal()
+    }
+
     fn republicar_terminal(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
         let Some(slot) = self.slot_of_kind(KIND) else {
             return Vec::new();
@@ -758,17 +812,22 @@ impl State {
             .collect();
         view.active = self.terminals.active_id().map(|id| id.0);
         view.list_cols = self.list_cols();
+        view.profiles = self.profile_names();
+        view
+    }
+
+    /// The shell profiles' names, the default first: the `▾` menu's rows.
+    fn profile_names(&self) -> Vec<String> {
         let profiles = &self.config.shell_profiles;
         let default = &profiles.default_profile().name;
-        view.profiles = std::iter::once(default.clone())
+        std::iter::once(default.clone())
             .chain(
                 profiles
                     .iter()
                     .filter(|p| &p.name != default)
                     .map(|p| p.name.clone()),
             )
-            .collect();
-        view
+            .collect()
     }
 }
 

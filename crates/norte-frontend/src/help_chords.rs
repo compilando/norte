@@ -48,6 +48,8 @@ const NO_IMPEDIMENT: Facts = Facts {
     journalled: true,
     daemon: true,
     windowed: true,
+    pane_on_disk: true,
+    pane_in_archive: false,
 };
 
 /// A frontend's answer to the three questions `norte-help` asks (H3b): the

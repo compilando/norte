@@ -40,6 +40,8 @@ use crate::dto::{
 mod agents;
 mod ai;
 mod approvals;
+mod assistant;
+mod command_bar;
 mod context_menu;
 mod dialogs;
 mod diskmap;
@@ -56,6 +58,7 @@ mod listing;
 mod logpanel;
 mod menu;
 mod nav;
+mod orders;
 mod organize;
 mod palette;
 mod panel;
@@ -782,8 +785,10 @@ enum Message {
     /// do).
     Say(&'static str),
     /// The light progress bar changes with no progress arriving: it passed
-    /// its threshold, the panel's, or the "✓"'s time ran out (ADR 0146).
-    Strip,
+    /// its threshold, the panel's, or the "✓"'s time ran out (ADR 0146), or
+    /// a second passed while work moves (ADR 0187). Carries the deadline it
+    /// was armed for: a superseded timer must not arm another.
+    Strip(i64),
     /// The `policy.decide` that WAS APPROVING did not reach the daemon.
     /// A `policy.decide` that did not go well: which approval and under
     /// which key it is counted (#279).
@@ -993,6 +998,8 @@ enum Background {
     /// it brings is the DECLARATION of which slots exist, not any of their
     /// content.
     PluginPanes(Result<norte_proto::methods::PluginListResult, Error>),
+    /// The start-up release check found a newer version (ADR 0183).
+    UpdateAvailable(String),
     /// A plugin's page, requested on opening it in help.
     PluginPage(
         String,
@@ -1092,6 +1099,21 @@ enum Background {
         Option<i64>,
         Result<norte_proto::methods::JournalListResult, Error>,
     ),
+    /// The reader's journal page an order's `undo N` asked for (ADR 0185),
+    /// with N.
+    /// With the box's generation when it was asked: a late answer opens no
+    /// dialog over whatever the reader is doing now.
+    OrderUndo(
+        u64,
+        u32,
+        Result<norte_proto::methods::JournalListResult, Error>,
+    ),
+    /// The rows an order's `sel` needed measured (#52 lazy listing), with
+    /// what each stat said; the order runs once they are in.
+    OrderMeasured(Box<orders::OrderMeasured>),
+    /// The assistant's turn (ADR 0186), or why not, with the number of the
+    /// request it answers: a cancelled or older one is dropped.
+    AssistantTurn(u64, Result<norte_proto::methods::AiChatTurn, Error>),
     /// The connections for "go to" (#357), with the OPENING that requested
     /// them: an answer from a previous opening does not fill in the current
     /// one.
@@ -1332,6 +1354,11 @@ impl UiHost {
         // kind repaints, and waiting for an RPC to show the screen would be
         // paying for something that is almost never there.
         State::request_panels(&backend, &tx2);
+        // The release check (ADR 0183), only when the reader turned it on.
+        // Arrives whenever it arrives; the screen does not wait for GitHub.
+        if state.config.common.check_updates {
+            State::request_update_check(&tx2);
+        }
         // And what is already visible is probed: the local listing carries
         // no size or date (#52), so without this the first screen is born
         // with two blank columns that do not fill in until something moves
@@ -1475,7 +1502,14 @@ async fn actor(
     while let Some(msg) = rx.recv().await {
         match msg {
             Message::Action(action, answers) => {
-                let (ack, outputs) = state.apply(&action, &backend, &mailbox);
+                let active_before = state.slot().pane.dir().clone();
+                let (ack, mut outputs) = state.apply(&action, &backend, &mailbox);
+                // The assistant's "written for" line compares each order with
+                // the ACTIVE pane's folder: when that changed, whatever moved
+                // it (a Tab, a click, a cd), the panel is projected again.
+                if *state.slot().pane.dir() != active_before {
+                    outputs.extend(state.repaint_assistant());
+                }
                 for u in outputs {
                     // With no subscribers it is not an error: the host is
                     // still alive even if the renderer has gone off to do
@@ -1646,8 +1680,8 @@ async fn actor(
                     let _ = updates.send(u);
                 }
             }
-            Message::Strip => {
-                for u in state.wake_strip(&backend, &mailbox) {
+            Message::Strip(when) => {
+                for u in state.wake_strip(when, &backend, &mailbox) {
                     let _ = updates.send(u);
                 }
             }
@@ -2671,6 +2705,16 @@ struct State {
     /// if it is open. One more input context, like the incremental search
     /// and the viewer: while it is open, text keys belong to it.
     ir_a: Option<norte_frontend::goto::Goto>,
+    /// The `:` line's preview (`14 items · 38 MB`), translated; empty when
+    /// the line selects nothing yet.
+    order_preview: String,
+    /// The assistant panel's conversation (ADR 0186): outlives the panel.
+    assistant: norte_frontend::assistant::Assistant,
+    /// The assistant's request in flight, to stop it on cancel.
+    assistant_task: Option<tokio::task::AbortHandle>,
+    /// The active slot's marks when the box went into `:` mode: Esc puts
+    /// them back after a live `sel` preview. `None` = not previewing.
+    order_marks_before: Option<Vec<norte_proto::VPath>>,
     /// How many times "go to" has been opened: connections and the index that
     /// answer an earlier opening are dropped.
     gen_ir_a: u64,
@@ -2740,6 +2784,14 @@ struct State {
     /// Its target, facts and entries are decided ONCE at opening, here,
     /// and the renderer only paints its projection.
     context_menu: Option<context_menu::ContextMenu>,
+    /// The command bar's line and history (ADR 0181).
+    command_bar: norte_frontend::command_bar::CommandBar,
+    /// The bar has the keyboard.
+    command_bar_focus: bool,
+    /// Where the bar's history is saved; `None` = not saved.
+    command_history_path: Option<std::path::PathBuf>,
+    /// The bar as it last crossed the bridge, to republish only changes.
+    last_command_bar: Option<crate::dto::CommandBarView>,
     /// The configuration this window started with, to show it.
     config: norte_frontend::config::FrontendConfig,
     /// Where each thing lives.
@@ -3417,6 +3469,10 @@ impl State {
             token: 0,
             locale,
             ir_a: None,
+            order_preview: String::new(),
+            assistant: norte_frontend::assistant::Assistant::default(),
+            assistant_task: None,
+            order_marks_before: None,
             gen_ir_a: 0,
             go_to_index: None,
             wizard: None,
@@ -3434,6 +3490,15 @@ impl State {
             footer_in_flight: false,
             menu: None,
             context_menu: None,
+            command_bar: norte_frontend::command_bar::CommandBar::new(
+                norte_config::command_history::path()
+                    .as_deref()
+                    .map(norte_config::command_history::load)
+                    .unwrap_or_default(),
+            ),
+            command_bar_focus: false,
+            command_history_path: norte_config::command_history::path(),
+            last_command_bar: None,
             help: None,
             settings: None,
             extensions: None,
@@ -4093,6 +4158,9 @@ impl State {
             UiAction::GotoActivateRow { row } => self.activate_in_goto(*row, backend, mailbox),
             UiAction::GotoPaste { text } => self.paste_in_goto(text, backend, mailbox),
             UiAction::ContextMenuClose => self.close_context_menu(),
+            UiAction::CommandBarFocus => self.focus_command_bar(),
+            UiAction::CommandBarPaste { text } => self.paste_in_command_bar(text),
+            UiAction::OverlayDismiss => self.dismiss_overlay(backend, mailbox),
             UiAction::ContextMenuActivateRow { row } => {
                 self.activate_context_menu(*row, backend, mailbox)
             }
@@ -4219,7 +4287,7 @@ impl State {
             } => self.user_command_finished(label, finished, *refresh, backend, mailbox),
             UiAction::FilesDropped { paths } => self.released(paths, backend, mailbox),
             UiAction::TerminalSelect { id } => self.select_terminal(*id),
-            UiAction::TerminalClose { id } => self.close_terminal(Some(*id)),
+            UiAction::TerminalClose { id } => self.close_terminal(Some(*id), backend, mailbox),
             UiAction::TerminalNew { profile } => self.new_terminal(profile.as_deref(), mailbox),
             UiAction::TerminalRename { id, name } => self.rename_terminal(*id, name),
             UiAction::TerminalDecorate { id, icon, color } => {
@@ -4281,6 +4349,9 @@ impl State {
             }
             UiAction::LayoutActivateRow { row } => self.choose_layout(*row, backend, mailbox),
             UiAction::SearchActivateRow { row } => self.go_to_result(*row, backend, mailbox),
+            UiAction::AssistantSubmit { .. }
+            | UiAction::AssistantApply { .. }
+            | UiAction::AssistantCancel { .. } => self.assistant_action(action, backend, mailbox),
             UiAction::SearchPanelEdit { .. }
             | UiAction::SearchPanelGo { .. }
             | UiAction::SearchPanelReroot { .. }

@@ -138,6 +138,7 @@ impl App {
                 .slot_of_kind_visible(crate::searchpanel::KIND)
                 .is_some(),
             KeyOwner::Log => self.slot_of_kind_visible(crate::logview::KIND).is_some(),
+            KeyOwner::Assistant => self.slot_of_kind_visible(crate::assistant::KIND).is_some(),
             // The terminal, same as the rest: if its slot goes behind a
             // tab, the keys go back to the listings. The shell stays alive
             // behind it — what's lost is the keyboard, not the process.
@@ -419,6 +420,23 @@ impl App {
             PlacesClick::Activate
         } else {
             PlacesClick::Focused
+        }
+    }
+
+    /// Places row `index` as it is now, if there is one.
+    #[must_use]
+    pub fn places_row(&self, index: usize) -> Option<norte_frontend::places::PlaceRow> {
+        let id = self.places_slot()?;
+        self.panes.places(id)?.rows().get(index).cloned()
+    }
+
+    /// Puts the sidebar's cursor on row `index` (out of range is ignored).
+    pub fn places_set_cursor(&mut self, index: usize) {
+        if let Some(id) = self.places_slot()
+            && let Some(s) = self.panes.places_mut(id)
+            && index < s.rows().len()
+        {
+            s.set_cursor(index);
         }
     }
 
@@ -886,6 +904,62 @@ impl App {
         self.key_owner = KeyOwner::Timeline;
     }
 
+    /// The assistant panel's slot, if it's open.
+    #[must_use]
+    pub fn assistant_slot(&self) -> Option<norte_frontend::layout::SlotId> {
+        self.slot_of_kind(crate::assistant::KIND)
+    }
+
+    /// Opens the assistant panel, focuses it, or closes it: three states,
+    /// like the search panel. It opens to TYPE into it. The conversation
+    /// outlives the panel; closing only hides it.
+    pub fn toggle_assistant(&mut self) {
+        use norte_frontend::layout::{KindId, Node};
+        match self.assistant_slot() {
+            Some(id) if self.key_owner == KeyOwner::Assistant && self.is_visible(id) => {
+                if let Some(new_layout) = self.layout.close_slot(id) {
+                    self.layout = new_layout;
+                    self.panes.refresh_visible(&self.layout);
+                    self.prune_by_tree();
+                }
+                self.key_owner = KeyOwner::Panes;
+            }
+            Some(id) => {
+                self.reveal(id);
+                self.key_owner = KeyOwner::Assistant;
+            }
+            None => {
+                let id = self.mint_slot();
+                let d = self.dock_for(crate::assistant::KIND);
+                self.layout = self.layout.dock_grouped(
+                    self.focused_slot(),
+                    d.edge,
+                    d.size,
+                    &Node::slot(id, KindId::new(crate::assistant::KIND)),
+                );
+                self.panes.refresh_visible(&self.layout);
+                self.key_owner = KeyOwner::Assistant;
+            }
+        }
+    }
+
+    /// Opens the panel with the keyboard, whatever state it was in (`@`).
+    pub fn open_assistant(&mut self) {
+        if self.key_owner == KeyOwner::Assistant
+            && self.assistant_slot().is_some_and(|id| self.is_visible(id))
+        {
+            return;
+        }
+        if self.assistant_slot().is_some_and(|id| self.is_visible(id)) {
+            self.key_owner = KeyOwner::Assistant;
+            return;
+        }
+        self.toggle_assistant();
+        if self.key_owner != KeyOwner::Assistant {
+            self.toggle_assistant();
+        }
+    }
+
     /// The search panel's slot, if it's open.
     #[must_use]
     pub fn search_panel_slot(&self) -> Option<norte_frontend::layout::SlotId> {
@@ -1252,6 +1326,12 @@ impl App {
         self.key_owner = KeyOwner::Panes;
     }
 
+    /// Is the terminal panel in front of the reader (not behind a tab)?
+    #[must_use]
+    pub fn terminal_visible(&self) -> bool {
+        self.slot_of_kind_visible(crate::termpanel::KIND).is_some()
+    }
+
     /// The terminal panel's slot, if it exists.
     #[must_use]
     pub fn terminal_slot(&self) -> Option<norte_frontend::layout::SlotId> {
@@ -1308,6 +1388,23 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Closes the terminal panel, keyboard included. Only for a panel with
+    /// no shell left: closing one that has shells would kill them. A panel
+    /// that is the layout's last slot cannot close and stays as it is.
+    pub fn close_terminal_slot(&mut self) {
+        if let Some(id) = self.terminal_slot()
+            && let Some(new_layout) = self.layout.close_slot(id)
+        {
+            self.layout = new_layout;
+            self.panes.refresh_visible(&self.layout);
+            self.prune_by_tree();
+        }
+        if self.key_owner == KeyOwner::Terminal {
+            self.key_owner = KeyOwner::Panes;
+        }
+        self.settle_key_owner();
     }
 
     /// The log panel's slot **only if it's really on screen**.
@@ -1524,6 +1621,7 @@ impl App {
             "layout.log" => self.toggle_log(),
             "layout.disk-map" => self.toggle_disk_map(),
             "layout.search" => self.toggle_search_panel(),
+            "layout.assistant" => self.toggle_assistant(),
             "layout.processes" => self.toggle_processes(),
             "layout.places" => self.toggle_places(),
             "layout.preview" => self.toggle_preview(),
@@ -1556,6 +1654,7 @@ impl App {
             "layout.shrink" => self.layout_resize(-1),
             "layout.disk-map" => self.toggle_disk_map(),
             "layout.search" => self.toggle_search_panel(),
+            "layout.assistant" => self.toggle_assistant(),
             "layout.log" => self.toggle_log(),
             "layout.processes" => self.toggle_processes(),
             "layout.places" => self.toggle_places(),
@@ -1590,6 +1689,7 @@ impl App {
             "layout.log" => self.toggle_log(),
             "layout.disk-map" => self.toggle_disk_map(),
             "layout.search" => self.toggle_search_panel(),
+            "layout.assistant" => self.toggle_assistant(),
             "layout.processes" => self.toggle_processes(),
             "layout.places" => self.toggle_places(),
             "layout.preview" => self.toggle_preview(),
@@ -1731,6 +1831,7 @@ impl App {
             KeyOwner::DiskMap => self.disk_map_slot(),
             KeyOwner::Timeline => self.timeline_slot(),
             KeyOwner::Search => self.search_panel_slot(),
+            KeyOwner::Assistant => self.assistant_slot(),
             // The terminal grows like any other: twelve rows is the
             // start, and a `make` inside asks for more.
             KeyOwner::Terminal => self.terminal_slot(),

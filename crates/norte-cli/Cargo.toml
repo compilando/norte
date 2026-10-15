@@ -31,6 +31,7 @@ norte-config = { workspace = true, features = ["logging"] }
 norte-connect.workspace = true
 norte-core.workspace = true
 norte-encoding.workspace = true
+norte-orders.workspace = true
 norte-frontend.workspace = true
 # H3e: `doctor` judges a `help.md` with the SAME cap and the SAME
 # command-ownership rules that apply in the host and in the frontend.
@@ -38,6 +39,8 @@ norte-help.workspace = true
 norte-mcp.workspace = true
 norte-i18n.workspace = true
 norte-proto.workspace = true
+# `norte update check` (ADR 0183).
+norte-update.workspace = true
 # `norte theme import`: the VSCode theme parser and the TOML writer.
 norte-theme.workspace = true
 norte-vfs.workspace = true

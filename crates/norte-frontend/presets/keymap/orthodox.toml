@@ -45,6 +45,9 @@ keymap = [
     { on = ["alt+j"], run = "layout.processes" },
     # The log (#323). `alt+l` for "log", free in all seven presets.
     { on = ["alt+l"], run = "layout.log" },
+    # The assistant (ADR 0186). `alt+Y` is free in all seven presets; no
+    # reference manager has an assistant to transcribe a chord from.
+    { on = ["alt+Y"], run = "layout.assistant" },
     # The disk map (phase 4). `alt+z` was the ONLY letter free across all
     # seven presets: from `a` to `y` none is left unbound in at least one of
     # them. The mnemonic is bad and that is accepted — a strange key is
@@ -170,6 +173,9 @@ keymap = [
     { on = ["f4"], run = "pane.edit" },
     { on = ["shift+f4"], run = "pane.edit-new" },
     { on = ["alt+f4"], run = "pane.open" },
+    # The command bar (ADR 0181), on Krusader's key: below the panes, where
+    # the arrow points.
+    { on = ["ctrl+down"], run = "pane.command-line" },
     # #138: sort by key, with Far/TC's chords (Ctrl+F3..F6). The sort menu
     # is the columns dialog, which already has its own on `alt+c`.
     { on = ["ctrl+f3"], run = "pane.sort-name" },
@@ -198,6 +204,9 @@ keymap = [
     # already uses to disconnect. There is a test.
     { on = ["alt+d"], run = "pane.disconnect" },
     { on = ["/"], run = "pane.quick-search" },
+    # The order line (ADR 0185). `:` was free in the listing; mc has no such
+    # line to transcribe, so the key is vim's, the one people expect.
+    { on = [":"], run = "app.orders" },
     { on = ["alt+down"], run = "pane.history" },
     # mc opens the same list with `Alt+Shift+H`.
     { on = ["alt+H"], run = "pane.history" },

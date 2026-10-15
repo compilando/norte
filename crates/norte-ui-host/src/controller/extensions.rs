@@ -101,6 +101,7 @@ impl State {
                 }
                 Err(_) => Vec::new(),
             },
+            Background::UpdateAvailable(version) => self.update_available(&version),
             Background::PluginPage(id, res) => self
                 .apply_plugin_page(&id, res.as_ref().ok())
                 .into_iter()
@@ -144,6 +145,9 @@ impl State {
                 .land_page(slot, token, start, res)
                 .into_iter()
                 .collect(),
+            Background::OrderUndo(generation, n, res) => self.order_undo_landed(generation, n, res),
+            Background::OrderMeasured(landed) => self.order_measured(*landed, backend, mailbox),
+            Background::AssistantTurn(generation, res) => self.assistant_landed(generation, res),
             Background::GoToConnections(opening, res) => {
                 self.goto_connections(opening, res).into_iter().collect()
             }
@@ -233,6 +237,33 @@ impl State {
             Background::SearchPanelBroken(run, e) => self.search_panel_broken(run, &e),
             Background::SearchPanelEnded(run, state) => self.search_panel_ended(run, &state),
         }
+    }
+
+    /// The release check (ADR 0183). Fail-soft: no network and no cache is
+    /// no message at all, and nothing newer is no message either.
+    ///
+    /// Not a task with a cancellation token (rule 3): it is one request
+    /// bounded by a 10 s timeout, and dropping the window drops its reply.
+    pub(super) fn request_update_check(mailbox: &mpsc::Sender<Message>) {
+        let Some(state) = norte_config::dirs::state_dir() else {
+            return;
+        };
+        let mailbox = mailbox.clone();
+        tokio::spawn(async move {
+            let res = norte_update::check_if_due(
+                state,
+                env!("CARGO_PKG_VERSION"),
+                norte_update::now_ms(),
+            )
+            .await;
+            if let Ok(Some(version)) = res {
+                let _ = mailbox
+                    .send(Message::Background(Box::new(Background::UpdateAvailable(
+                        version,
+                    ))))
+                    .await;
+            }
+        });
     }
 
     /// Requests the catalog to declare which PANES the plugins contribute.

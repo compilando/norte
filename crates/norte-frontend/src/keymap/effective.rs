@@ -160,6 +160,27 @@ pub fn valid_lua_name(name: &str) -> bool {
 /// misspelled it" ([`KeymapError::UnknownCommand`], still fatal, in a preset
 /// and in a user layer alike).
 fn check_binding(raw: &RawBinding, known_commands: &[&str]) -> Result<Binding, KeymapError> {
+    check_binding_in(raw, known_commands, catalogue::RENAMED)
+}
+
+/// [`check_binding`] with the renamed-commands table given (ADR 0182): a
+/// name a release shipped and a later one renamed binds the NEW command.
+fn check_binding_in(
+    raw: &RawBinding,
+    known_commands: &[&str],
+    renamed: &'static [(&'static str, &'static str)],
+) -> Result<Binding, KeymapError> {
+    let resolved;
+    let raw = match catalogue::renamed_in(renamed, &raw.run) {
+        Some(new) => {
+            resolved = RawBinding {
+                run: new.to_owned(),
+                ..raw.clone()
+            };
+            &resolved
+        }
+        None => raw,
+    };
     let seq: Vec<Chord> = raw
         .on
         .iter()
@@ -466,6 +487,12 @@ impl Effective {
         // Diagnostics never expose per-binding provenance, so the section is
         // not stamped here the way `build_for_impl` stamps it.
         for (raw, _origin, _section) in ordered {
+            if let Some(new) = catalogue::renamed_to(&raw.run) {
+                diags.push(KeymapDiagnostic::Renamed {
+                    old: raw.run.clone(),
+                    new,
+                });
+            }
             match check_binding(raw, known_commands) {
                 Ok(binding) => {
                     if seen.insert(binding.seq.clone()) {
@@ -935,6 +962,27 @@ pub(super) enum Lookup<'a> {
     Exact(&'a str, Availability),
     Prefix,
     Miss,
+}
+
+#[cfg(test)]
+mod renamed_tests {
+    use super::super::layer::RawBinding;
+    use super::{Availability, check_binding_in};
+
+    /// An old name binds the NEW command and is available like it; a name
+    /// that is neither current nor renamed is still a load error.
+    #[test]
+    fn an_old_command_name_binds_the_new_command() {
+        static TABLE: &[(&str, &str)] = &[("pane.copy-old", "pane.copy")];
+        let raw = |run: &str| RawBinding {
+            on: vec!["f5".to_owned()],
+            run: run.to_owned(),
+        };
+        let b = check_binding_in(&raw("pane.copy-old"), &["pane.copy"], TABLE).expect("binds");
+        assert_eq!(b.run, "pane.copy");
+        assert!(matches!(b.avail, Availability::Here));
+        assert!(check_binding_in(&raw("pane.never-was"), &["pane.copy"], TABLE).is_err());
+    }
 }
 
 #[cfg(test)]

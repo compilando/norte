@@ -12,10 +12,10 @@ use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::backend::{Backend, TaskRef};
+use norte_frontend::results::ResultSet;
 use norte_frontend::search::{
     ID_CASE, ID_KINDS, ID_RECURSIVE, ID_REGEX, ID_WHOLE_WORD, SearchField,
 };
-use norte_frontend::results::ResultSet;
 use norte_frontend::search_panel::{self, Activation, Due, SearchPanel};
 use norte_frontend::search_status::{Outcome, outcome_of};
 use norte_i18n::t;

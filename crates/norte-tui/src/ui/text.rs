@@ -50,6 +50,28 @@ pub(crate) fn right_ellipsis(s: &str, max: usize) -> String {
     out
 }
 
+/// Left-truncation to `max` CELLS, marking the cut with `…`: for a path,
+/// whose END says where you are.
+pub(crate) fn take_width_end(s: &str, max: usize) -> String {
+    if cells(s) <= max {
+        return s.to_owned();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut kept: Vec<char> = Vec::new();
+    let mut used = 0usize;
+    for c in s.chars().rev() {
+        let cw = c.width().unwrap_or(0);
+        if used + cw > max - 1 {
+            break;
+        }
+        used += cw;
+        kept.push(c);
+    }
+    std::iter::once('…').chain(kept.into_iter().rev()).collect()
+}
+
 /// Splits a generated dialog hint into its whole `[chord] label` groups.
 ///
 /// [`crate::hints::dialog_hints`] joins the groups with a single space and

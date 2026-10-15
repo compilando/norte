@@ -93,6 +93,11 @@ const DO_NOT_FOLLOW: &[(&str, &str)] = &[
         "searches a ROOT, chosen when it opens or by \"Search here\", not \
          the row under the cursor",
     ),
+    (
+        "assistant",
+        "a conversation: a turn reads the panes' FOLDERS when it is sent, \
+         not the row under the cursor",
+    ),
 ];
 
 /// Where the cursor is moved to: a REAL file.
@@ -156,7 +161,8 @@ fn of_kind(slots: &[SlotView], kind: &str) -> Option<SlotView> {
             | ("disk-map", SlotView::DiskMap(_))
             | ("timeline", SlotView::Timeline(_))
             | ("search", SlotView::Search(_))
-            | ("terminal", SlotView::Terminal(_)) => true,
+            | ("terminal", SlotView::Terminal(_))
+            | ("assistant", SlotView::Assistant(_)) => true,
             (_, SlotView::Unsupported { kind_name, .. }) => kind_name == kind,
             _ => false,
         })

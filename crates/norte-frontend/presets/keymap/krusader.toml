@@ -95,6 +95,11 @@
 # capability: it is a shortcut not attributed to a source that does not
 # state it.
 #
+# `app.orders` (the order line, ADR 0185) is `alt+:`, a norte chord no
+# source attests, in krusader, far, norton and total-commander alike: a bare
+# `:` would be typed into the incremental name search (ADR 0155), and
+# Krusader's command line runs the shell, which is norte's command bar here.
+#
 # `task.pause` (ADR 0147), `task.retry` (ADR 0148) and the three queue ones
 # (`task.queue`, `task.up`, `task.down`, ADR 0149) are left UNBOUND here,
 # just like `task.cancel`:
@@ -135,6 +140,7 @@ keymap = [
     # surfaces left out— and there is a test.
     { on = ["alt+9"], run = "app.theme" },
     { on = ["alt+p"], run = "app.palette" },
+    { on = ["alt+:"], run = "app.orders" },
     { on = ["alt+m"], run = "app.menu" },
     { on = ["alt+b"], run = "layout.places" },
     { on = ["alt+q"], run = "layout.preview" },
@@ -155,6 +161,9 @@ keymap = [
     # this—, it is bound anyway because it is norte's own and `alt+l` is
     # free. See the header's divergences block.
     { on = ["alt+l"], run = "layout.log" },
+    # The assistant (ADR 0186): norte's own, like the log; Krusader has
+    # nothing to transcribe. `alt+Y` is free in all seven presets.
+    { on = ["alt+Y"], run = "layout.assistant" },
     # The disk map (phase 4). Krusader attests NO chord for this —it has no
     # panel like this—, so nothing is transcribed: `alt+z` is bound, the one
     # letter free across all seven presets. See orthodox.toml.

@@ -339,7 +339,17 @@ pub fn check_keymaps(layers: &Layers) -> Vec<Finding> {
         }
     }
     for (screen, label) in SCREENS {
-        findings.extend(check_keymap_screen(&preset_kf, &layer_kfs, screen, label));
+        for f in check_keymap_screen(&preset_kf, &layer_kfs, screen, label) {
+            // A renamed name in `[global]` is seen by every screen: say it
+            // once.
+            let repeated = f.code == "keymap-renamed-cmd"
+                && findings
+                    .iter()
+                    .any(|g: &Finding| g.code == f.code && g.detail == f.detail);
+            if !repeated {
+                findings.push(f);
+            }
+        }
     }
     // `user:<id>` bindings are checked against commands.toml (ADR 0177). Only
     // the browse map: `[global]` merges into it, and user commands make no
@@ -395,6 +405,8 @@ pub fn check_keymaps(layers: &Layers) -> Vec<Finding> {
 ///   ambiguous prefix, a `lua:` name that fails the charset, or — since K2a
 ///   (ADR 0044) — a digit key bound while the preset enables counts, or a
 ///   reserved key (`Tab`) taken from `pane.switch` on the Browse screen.
+/// - [`KeymapDiagnostic::Renamed`] → [`Severity::Warn`]
+///   (`keymap-renamed-cmd`): an old command name that still binds.
 ///
 /// No diagnostics → one [`Severity::Ok`] `keymap-ok`. The one-pass builder
 /// reports EVERY finding at once, so this needs no retry loop, no anti-DoS
@@ -446,6 +458,17 @@ fn check_keymap_screen(
                     "{label}: {}",
                     norte_encoding::mask_terminal_hazards(&message)
                 ),
+            },
+            // A name a release shipped and a later one renamed (ADR 0182):
+            // it still works, the file just wants the new name. `old`
+            // matched a catalogue row, so it is norte's own text.
+            KeymapDiagnostic::Renamed { old, new } => Finding {
+                section: "keymap",
+                severity: Severity::Warn,
+                code: "keymap-renamed-cmd",
+                // No screen label: the name is renamed everywhere, and
+                // `check_keymaps` says it once.
+                detail: format!("{old} → {new}"),
             },
         })
         .collect()
@@ -751,6 +774,40 @@ fn masked_and_capped(value: &str) -> String {
     let mut truncated: String = masked.chars().take(PLUGIN_FINDING_TEXT_MAX_CHARS).collect();
     truncated.push('…');
     truncated
+}
+
+/// `policy.toml`: [`Severity::Error`] if it does not parse, because then
+/// the daemon refuses to start (`daemon::compose`). Absent is not a
+/// finding: no file means no rules.
+#[must_use]
+pub fn check_policy(config_dir: &Path) -> Vec<Finding> {
+    let path = config_dir.join("policy.toml");
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            return vec![Finding {
+                section: "policy",
+                severity: Severity::Error,
+                code: "policy-parse",
+                detail: format!("{}: {e}", path.display()),
+            }];
+        }
+    };
+    let (severity, code, detail) = match norte_core::PolicyConfig::parse(&raw) {
+        Ok(_) => (Severity::Ok, "policy-ok", path.display().to_string()),
+        Err(e) => (
+            Severity::Error,
+            "policy-parse",
+            format!("{}: {e}", path.display()),
+        ),
+    };
+    vec![Finding {
+        section: "policy",
+        severity,
+        code,
+        detail,
+    }]
 }
 
 /// The local log's state (roadmap item 9): where it is, how much space it
@@ -2325,6 +2382,23 @@ max = 10
         std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o700)).expect("chmod");
         assert_eq!(f.severity, Severity::Warn);
         assert_eq!(f.code, "logs-unwritable");
+    }
+
+    #[test]
+    fn policy_absent_is_no_finding_valid_is_ok_broken_is_error() {
+        let dir = tempfile::tempdir().expect("tmp");
+        assert!(check_policy(dir.path()).is_empty());
+
+        let path = dir.path().join("policy.toml");
+        std::fs::write(&path, "[[rule]]\naction = \"ask\"\n").expect("write");
+        let findings = check_policy(dir.path());
+        assert_eq!(only(&findings, "policy").code, "policy-ok");
+
+        // An unknown key: what a newer norte's file looks like to this one.
+        std::fs::write(&path, "[[rule]]\naction = \"ask\"\nwhen = 1\n").expect("write");
+        let findings = check_policy(dir.path());
+        let f = only(&findings, "policy");
+        assert_eq!((f.severity, f.code), (Severity::Error, "policy-parse"));
     }
 
     /// The single `section` row in `findings`.

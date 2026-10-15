@@ -193,6 +193,7 @@
             "hostile": false,
             "icon": "",
             "icon_hostile": false,
+            "icon_kind": "file",
             "key": 41,
             "kind": "file",
             "marked": false,
@@ -322,6 +323,13 @@
         }
       ],
       "title": "Columnas — sftp"
+    },
+    "command_bar": {
+      "cursor": 4,
+      "focused": true,
+      "prompt": "/home/u/src",
+      "reason": "",
+      "text": "make test"
     },
     "compare": null,
     "connection": {
@@ -1197,6 +1205,7 @@
             "hostile": false,
             "icon": "",
             "icon_hostile": false,
+            "icon_kind": "file",
             "key": 1,
             "kind": "file",
             "marked": false,
@@ -1222,6 +1231,7 @@
             "hostile": true,
             "icon": "",
             "icon_hostile": false,
+            "icon_kind": "file",
             "key": 2,
             "kind": "file",
             "marked": false,
@@ -1247,6 +1257,7 @@
             "hostile": false,
             "icon": "🦀",
             "icon_hostile": false,
+            "icon_kind": "file",
             "key": 3,
             "kind": "file",
             "marked": false,
@@ -1618,7 +1629,12 @@
         "id": "tasks",
         "progress": {
           "percent": 62,
-          "phase": "running"
+          "phase": "running",
+          "spark": [
+            10,
+            55,
+            100
+          ]
         },
         "text": "⟳ copiando foto.jpg 62 % · 48 MiB/s",
         "tooltip": "1 tareas en marcha. Pulsa para ver los procesos"
@@ -1646,6 +1662,12 @@
         "kind": "copy",
         "percent": 40,
         "rate": "",
+        "spark": [
+          0,
+          40,
+          100,
+          70
+        ],
         "state": "running",
         "task_id": 7
       }

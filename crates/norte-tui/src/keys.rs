@@ -16,7 +16,7 @@ use crate::app::{App, Modal, PAGE, PromptKind, error_message};
 use crate::config::{self};
 use crate::dispatch::dispatch;
 use crate::event_loop::{launch_pending, run_command};
-use crate::gestures::{keyboard_owner, submit_command_line};
+use crate::gestures::keyboard_owner;
 use crate::jobs::{
     AiRenameRun, InFlight, RenameBatchRun, SemanticRun, launch_results, on_compare_key,
     on_search_dialog_key, on_sync_key, open_hit_folder,
@@ -47,6 +47,26 @@ use norte_frontend::SEMANTIC_K;
 use norte_i18n::{t, ta};
 use norte_proto::VPath;
 
+/// Whether a side panel with the keyboard may take this key: no modal, and
+/// none of the overlays the chain checks AFTER the panels is open. Those
+/// paint over the panel, so they must win over it — the box opened over the
+/// terminal panel used to paint while every key went to the shell, which
+/// ran the reader's order as a command.
+fn panel_keys(app: &App) -> bool {
+    !modal_wins(app)
+        && app.viewer.is_none()
+        && app.goto.is_none()
+        && app.nav_popup.is_none()
+        && app.search_dialog.is_none()
+        && app.splash.is_none()
+        && app.wizard.is_none()
+        && app.sync.is_none()
+        && app.compare.is_none()
+        && app.shortcuts.is_none()
+        && app.settings.is_none()
+        && app.help.is_none()
+}
+
 /// Routes a key through the precedence chain. See the module.
 #[expect(
     clippy::too_many_arguments,
@@ -75,7 +95,61 @@ pub async fn on_key(
     key: KeyEvent,
 ) {
     app.message = None;
-    if app.menu.is_some() && !modal_wins(app) {
+    // A modal that arrived over the open menu owns the keys; the menu goes.
+    if app.context_menu.is_some() && modal_wins(app) {
+        app.context_menu = None;
+    }
+    // The bar takes keys only with nothing in front of it, the order the
+    // window's host keeps: a menu, help or a picker opened over it own them.
+    if app.command_bar_focus
+        && app.context_menu.is_none()
+        && app.menu.is_none()
+        && !modal_wins(app)
+        && !crate::mouse::overlay_open(app)
+    {
+        crate::command_bar::on_key(app, key);
+        if let Some(order) = app.pending_order.take()
+            && let Err(msg) = crate::termpanel::start_order(app, &order)
+        {
+            app.message = Some(msg);
+        }
+    } else if app.context_menu.is_some() {
+        // The context menu: fixed keys like the menu bar's, and what it
+        // picks runs through the same path as its key.
+        let picked = crate::context_menu::on_key(app, key.code);
+        if let Some(
+            p @ crate::context_menu::Picked {
+                action: norte_frontend::context_menu::Action::Verb(_),
+                ..
+            },
+        ) = picked
+        {
+            crate::mouse::run_context_verb(app, backend, events, work, p).await;
+        } else if let Some(crate::context_menu::Picked {
+            action: norte_frontend::context_menu::Action::Command(id),
+            ..
+        }) = picked
+            && let Some(cmd) = Command::parse(id)
+        {
+            run_command(
+                app,
+                backend,
+                events,
+                help_lines,
+                lang,
+                quick_mode,
+                confirm_quit,
+                cfg,
+                &mut work.fill,
+                &mut work.decorate,
+                &mut work.probed,
+                &mut work.search,
+                cmd,
+            )
+            .await;
+            launch_pending(app, events, capture).await;
+        }
+    } else if app.menu.is_some() && !modal_wins(app) {
         // The menu bar: FIXED keys, like the palette.
         // There are no `dialog.*` verbs for "next
         // menu", so they cannot come from the keymap
@@ -221,13 +295,15 @@ pub async fn on_key(
             key.code,
         )
         .await;
-    } else if !modal_wins(app)
+    } else if panel_keys(app)
         // Typing the log's filter is a text field: its keys are its own.
         && app.log_filter_input.is_none()
         // Nor the search panel's inputs — but only for the keys that type:
         // a chord with ctrl/alt writes nothing, and `alt+F` has to close
         // the panel it opened with the caret already in it.
         && !crate::searchpanel::types_text(app, key.modifiers)
+        // Nor the assistant's input, for the same reason.
+        && !crate::assistant::types_text(app, key.modifiers, key.code)
         // A viewer opened from a result row: its keys are the viewer's.
         && !crate::searchpanel::viewer_over(app)
         && matches!(
@@ -239,6 +315,7 @@ pub async fn on_key(
                 | crate::app::KeyOwner::DiskMap
                 | crate::app::KeyOwner::Timeline
                 | crate::app::KeyOwner::Search
+                | crate::app::KeyOwner::Assistant
                 | crate::app::KeyOwner::Panel
                 // The terminal too, as in the window, but with its OWN short
                 // list: the ring and `terminal.*`. The panels' list would
@@ -279,7 +356,7 @@ pub async fn on_key(
             &mut work.search,
             outcome,
         );
-    } else if app.key_owner() == crate::app::KeyOwner::Tree && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Tree && panel_keys(app) {
         // #136: the tree sends the listing to the branch
         // chosen through the usual cd flow.
         let outcome = on_tree_key(
@@ -300,7 +377,7 @@ pub async fn on_key(
             &mut work.search,
             outcome,
         );
-    } else if app.key_owner() == crate::app::KeyOwner::Places && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Places && panel_keys(app) {
         // Places sidebar (L3): Enter over a row sends
         // the focused LISTING to that place, through the
         // usual cd flow.
@@ -322,7 +399,7 @@ pub async fn on_key(
             &mut work.search,
             outcome,
         );
-    } else if app.key_owner() == crate::app::KeyOwner::Processes && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Processes && panel_keys(app) {
         // Process panel (#243): the keys arrive HERE,
         // not at the listing behind it. Without this
         // arm the panel got the focus border, the `▶`
@@ -331,24 +408,24 @@ pub async fn on_key(
         // thought they had the keyboard in the task
         // list.
         on_processes_key(app, dialog_resolver, key.modifiers, key.code);
-    } else if app.key_owner() == crate::app::KeyOwner::Log && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Log && panel_keys(app) {
         // Log panel (#323), for the same reason as the process one:
         // its keys are single letters and have to arrive here and not at
         // the listing, where `d` means something else.
         crate::logview::apply(app, dialog_resolver, key.modifiers, key.code);
-    } else if app.key_owner() == crate::app::KeyOwner::DiskMap && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::DiskMap && panel_keys(app) {
         // The disk map (phase 4), for the same reason as its neighbors: its
         // keys are arrows and one loose letter, and have to arrive here and
         // not at the listing, where `r` means something else.
         on_disk_map_key(app, dialog_resolver, key.modifiers, key.code);
-    } else if app.key_owner() == crate::app::KeyOwner::Timeline && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Timeline && panel_keys(app) {
         // The timeline (phase 7), for the same reason as its neighbors.
         // It is async because reaching the bottom asks for the next page and
         // because Enter opens the undo question, which needs the backend.
         on_timeline_key(app, backend, dialog_resolver, key.modifiers, key.code).await;
     } else if app.key_owner() == crate::app::KeyOwner::Search
         && !crate::searchpanel::viewer_over(app)
-        && !modal_wins(app)
+        && panel_keys(app)
     {
         // The search panel, for the same reason as its neighbors: what is
         // typed into it must not reach the listing behind it. Not while a
@@ -364,7 +441,10 @@ pub async fn on_key(
             key.code,
         )
         .await;
-    } else if app.key_owner() == crate::app::KeyOwner::Terminal && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Assistant && panel_keys(app) {
+        // The assistant (ADR 0186): what is typed belongs to its input.
+        crate::assistant::on_key(app, backend, events, work, key.modifiers, key.code).await;
+    } else if app.key_owner() == crate::app::KeyOwner::Terminal && panel_keys(app) {
         // The terminal panel (#362), and this arm does NOT look like its
         // neighbors: the others translate keys into commands, and here the
         // BYTES are passed to a shell. Everything typed belongs to it —
@@ -394,7 +474,7 @@ pub async fn on_key(
         {
             i.shell.0.write(&bytes);
         }
-    } else if app.key_owner() == crate::app::KeyOwner::Panel && !modal_wins(app) {
+    } else if app.key_owner() == crate::app::KeyOwner::Panel && panel_keys(app) {
         // Plugin panel (phase 3), for the same reason as the two above:
         // without this arm the keys fell to the listing behind it while
         // the screen said the keyboard was here.
@@ -491,14 +571,20 @@ pub async fn on_key(
                     g.push_char(c);
                 }
                 crate::jobs::goto::ask_the_index(app, backend, work);
+                // The next edit supersedes an order still measuring.
+                crate::orders::cancel_measure(app, work);
+                crate::orders::after_edit(app);
             }
             KeyCode::Backspace if plain => {
                 if let Some(g) = &mut app.goto {
                     g.backspace();
                 }
                 crate::jobs::goto::ask_the_index(app, backend, work);
+                crate::orders::cancel_measure(app, work);
+                crate::orders::after_edit(app);
             }
             KeyCode::Esc if plain => {
+                crate::orders::cancel(app);
                 app.goto = None;
                 crate::jobs::goto::forget(work);
             }
@@ -553,6 +639,12 @@ pub async fn on_key(
                         g.set_query(q);
                     }
                     crate::jobs::goto::ask_the_index(app, backend, work);
+                    crate::orders::after_edit(app);
+                    return;
+                }
+                // An order that does not parse: the box stays open, its line
+                // already says why.
+                if let Some(crate::goto::Action::OrderInvalid) = &act {
                     return;
                 }
                 // The screen closes BEFORE acting, and the request to the
@@ -561,116 +653,40 @@ pub async fn on_key(
                 // has anywhere to land.
                 app.goto = None;
                 crate::jobs::goto::forget(work);
+                let act = match act {
+                    // An order runs its selection and its action here; a
+                    // final `cd` or command comes back to the arms below.
+                    Some(crate::goto::Action::Order(order)) => {
+                        crate::orders::run(app, backend, work, &order).await
+                    }
+                    // `@`: the assistant panel, with the text as the
+                    // reader's first message if there is one.
+                    Some(crate::goto::Action::Ask(text)) => {
+                        crate::orders::cancel(app);
+                        app.open_assistant();
+                        crate::assistant::ask(app, backend, work, &text);
+                        return;
+                    }
+                    other => {
+                        crate::orders::cancel(app);
+                        other
+                    }
+                };
                 let Some(act) = act else { return };
-                match act {
-                    crate::goto::Action::Ir(dir) => {
-                        let outcome = crate::navigate::cd(app, backend, events, dir).await;
-                        settle_cd(
-                            app,
-                            backend,
-                            &mut work.fill,
-                            &mut work.decorate,
-                            &mut work.probed,
-                            &mut work.search,
-                            outcome,
-                        );
-                    }
-                    crate::goto::Action::Command(cmd) => {
-                        // What is launched goes to the top next time (spec
-                        // 2026-09-10); the session saves it with the next
-                        // push.
-                        norte_frontend::session::note_palette_recent(&mut app.palette_recent, &cmd);
-                        // A user command row (ADR 0177): `user:<id>`.
-                        if let Some(id) = cmd.strip_prefix("user:") {
-                            crate::user_cmd::request(app, id);
-                            return;
-                        }
-                        // (P1) Enter over a PLUGIN row: the `key` is
-                        // `plugin:{id}:{command}` (`palette::plugin_rows`,
-                        // never painted) — it does not live in `COMMANDS`,
-                        // so it is routed HERE, before the typed vocabulary
-                        // (#112). The plugin's result is UNTRUSTED text:
-                        // `detail_for_bar` (masked + capped, #73 pattern).
-                        if let Some((id, command)) = parse_plugin_key(&cmd) {
-                            let (id, command) = (id.to_owned(), command.to_owned());
-                            run_plugin_command(app, backend, &id, &command).await;
-                            return;
-                        }
-                        // A RENAMER row (C3, ADR 0095): asks the plugin for
-                        // the plan and leaves it in the SAME run as the AI
-                        // one's.
-                        if let Some((id, renamer)) =
-                            norte_frontend::palette::parse_renamer_key(&cmd)
-                        {
-                            let (id, renamer) = (id.to_owned(), renamer.to_owned());
-                            crate::jobs::spawn_renamer_plan(app, backend, work, &id, &renamer);
-                            return;
-                        }
-                        // An ORGANIZER row (phase 8): the same split, a
-                        // different method — and the plan lands in the same
-                        // reviewable tree as the model's.
-                        if let Some((id, org)) = norte_frontend::palette::parse_organizer_key(&cmd)
-                        {
-                            let (id, org) = (id.to_owned(), org.to_owned());
-                            crate::jobs::spawn_organize_plan(
-                                app,
-                                backend,
-                                work,
-                                Some((id.as_str(), org.as_str())),
-                            );
-                            return;
-                        }
-                        // The rows were born from `COMMANDS`, but a hot
-                        // reload can remove a command while the box is open:
-                        // said, not asserted.
-                        let Some(parsed) = Command::parse(&cmd) else {
-                            app.message = Some(norte_frontend::keymap::unavailable_message_in(
-                                &cmd,
-                                norte_frontend::keymap::Availability::NotHere,
-                                lang,
-                            ));
-                            return;
-                        };
-                        // The SAME dispatch the keymap resolver invokes
-                        // (#dispatch): a command chosen here runs EXACTLY as
-                        // if its key had been pressed — including opening
-                        // another overlay (e.g. `app.help`). Two paths for
-                        // the same verb diverge the moment one of them grows
-                        // a detail.
-                        //
-                        // Parity with the resolver's spot (#118 review): a
-                        // cd chosen here (nav.parent…) can also turn off
-                        // virtual mode — harvested by the run (rule 3); and
-                        // a `pane.open` leaves its external command resolved
-                        // — launch it NOW, not on the next key.
-                        run_command(
-                            app,
-                            backend,
-                            events,
-                            help_lines,
-                            lang,
-                            quick_mode,
-                            confirm_quit,
-                            cfg,
-                            &mut work.fill,
-                            &mut work.decorate,
-                            &mut work.probed,
-                            &mut work.search,
-                            parsed,
-                        )
-                        .await;
-                        launch_pending(app, events, capture).await;
-                    }
-                    crate::goto::Action::Nothing(msg_id) => {
-                        app.message = Some(norte_i18n::t(msg_id));
-                    }
-                    crate::goto::Action::Unavailable(why) => app.message = Some(why),
-                    crate::goto::Action::Help(id) => {
-                        crate::overlays::open_help_topic(app, lang, help_lines, &id);
-                    }
-                    // Handled above, before closing.
-                    crate::goto::Action::SetQuery(_) => {}
-                }
+                settle_goto(
+                    app,
+                    backend,
+                    capture,
+                    events,
+                    help_lines,
+                    lang,
+                    quick_mode,
+                    confirm_quit,
+                    cfg,
+                    work,
+                    act,
+                )
+                .await;
             }
             // The chord of `app.palette` or `app.goto` pressed inside the
             // box switches the mode in place; a plain character typed above.
@@ -682,6 +698,7 @@ pub async fn on_key(
                         g.set_query(q);
                     }
                     crate::jobs::goto::ask_the_index(app, backend, work);
+                    crate::orders::after_edit(app);
                 }
             }
         }
@@ -918,11 +935,6 @@ pub async fn on_key(
                     PromptKind::TransferDest => {
                         let _ = app.transfer_dest_confirm();
                     }
-                    PromptKind::CommandLine => {
-                        if let Some(cmd) = app.command_line_confirm() {
-                            submit_command_line(app, &cmd);
-                        }
-                    }
                     PromptKind::AiRename => {
                         if let Some(instruction) = app.ai_rename_confirm() {
                             let dir = app.focused().dir().clone();
@@ -1140,6 +1152,16 @@ pub async fn on_key(
             // K3a: same as above — Esc consumed here also
             // cancels the in-flight sequence, never just its
             // painting.
+            app.abandon_pending(resolver);
+            return;
+        }
+        // Esc with an order measuring its rows (ADR 0185): the
+        // same contract — cancelled, nothing runs, key consumed.
+        if app.viewer.is_none()
+            && key.modifiers.is_empty()
+            && key.code == KeyCode::Esc
+            && crate::orders::cancel_measure(app, work)
+        {
             app.abandon_pending(resolver);
             return;
         }
@@ -1491,5 +1513,167 @@ pub async fn on_key(
             active.reset();
             app.clear_pending();
         }
+    }
+}
+
+/// An order's measuring landed (`InFlight::order_measure`): the order runs
+/// now, and a final `cd` or command takes the box's own path.
+#[expect(clippy::too_many_arguments, reason = "loop wiring, not an API")]
+pub async fn order_measured(
+    app: &mut App,
+    backend: &Backend,
+    capture: &mut crate::mouse::Capture,
+    events: &mut crate::console::Console<'_>,
+    help_lines: &mut Vec<ratatui::text::Line<'static>>,
+    lang: norte_i18n::Lang,
+    quick_mode: nav::Mode,
+    confirm_quit: config::ConfirmQuit,
+    cfg: &config::LoadedConfig,
+    work: &mut InFlight,
+    res: crate::jobs::OrderMeasured,
+) {
+    let Some(act) = crate::orders::measured(app, backend, work, res).await else {
+        return;
+    };
+    settle_goto(
+        app,
+        backend,
+        capture,
+        events,
+        help_lines,
+        lang,
+        quick_mode,
+        confirm_quit,
+        cfg,
+        work,
+        act,
+    )
+    .await;
+}
+
+/// What the box's Enter does once the screen closed: navigate, run a
+/// command as its key would, or say why not.
+#[expect(clippy::too_many_arguments, reason = "loop wiring, not an API")]
+async fn settle_goto(
+    app: &mut App,
+    backend: &Backend,
+    capture: &mut crate::mouse::Capture,
+    events: &mut crate::console::Console<'_>,
+    help_lines: &mut Vec<ratatui::text::Line<'static>>,
+    lang: norte_i18n::Lang,
+    quick_mode: nav::Mode,
+    confirm_quit: config::ConfirmQuit,
+    cfg: &config::LoadedConfig,
+    work: &mut InFlight,
+    act: crate::goto::Action,
+) {
+    match act {
+        crate::goto::Action::Ir(dir) => {
+            let outcome = crate::navigate::cd(app, backend, events, dir).await;
+            settle_cd(
+                app,
+                backend,
+                &mut work.fill,
+                &mut work.decorate,
+                &mut work.probed,
+                &mut work.search,
+                outcome,
+            );
+        }
+        crate::goto::Action::Command(cmd) => {
+            // What is launched goes to the top next time (spec
+            // 2026-09-10); the session saves it with the next
+            // push.
+            norte_frontend::session::note_palette_recent(&mut app.palette_recent, &cmd);
+            // A user command row (ADR 0177): `user:<id>`.
+            if let Some(id) = cmd.strip_prefix("user:") {
+                crate::user_cmd::request(app, id);
+                return;
+            }
+            // (P1) Enter over a PLUGIN row: the `key` is
+            // `plugin:{id}:{command}` (`palette::plugin_rows`,
+            // never painted) — it does not live in `COMMANDS`,
+            // so it is routed HERE, before the typed vocabulary
+            // (#112). The plugin's result is UNTRUSTED text:
+            // `detail_for_bar` (masked + capped, #73 pattern).
+            if let Some((id, command)) = parse_plugin_key(&cmd) {
+                let (id, command) = (id.to_owned(), command.to_owned());
+                run_plugin_command(app, backend, &id, &command).await;
+                return;
+            }
+            // A RENAMER row (C3, ADR 0095): asks the plugin for
+            // the plan and leaves it in the SAME run as the AI
+            // one's.
+            if let Some((id, renamer)) = norte_frontend::palette::parse_renamer_key(&cmd) {
+                let (id, renamer) = (id.to_owned(), renamer.to_owned());
+                crate::jobs::spawn_renamer_plan(app, backend, work, &id, &renamer);
+                return;
+            }
+            // An ORGANIZER row (phase 8): the same split, a
+            // different method — and the plan lands in the same
+            // reviewable tree as the model's.
+            if let Some((id, org)) = norte_frontend::palette::parse_organizer_key(&cmd) {
+                let (id, org) = (id.to_owned(), org.to_owned());
+                crate::jobs::spawn_organize_plan(
+                    app,
+                    backend,
+                    work,
+                    Some((id.as_str(), org.as_str())),
+                );
+                return;
+            }
+            // The rows were born from `COMMANDS`, but a hot
+            // reload can remove a command while the box is open:
+            // said, not asserted.
+            let Some(parsed) = Command::parse(&cmd) else {
+                app.message = Some(norte_frontend::keymap::unavailable_message_in(
+                    &cmd,
+                    norte_frontend::keymap::Availability::NotHere,
+                    lang,
+                ));
+                return;
+            };
+            // The SAME dispatch the keymap resolver invokes
+            // (#dispatch): a command chosen here runs EXACTLY as
+            // if its key had been pressed — including opening
+            // another overlay (e.g. `app.help`). Two paths for
+            // the same verb diverge the moment one of them grows
+            // a detail.
+            //
+            // Parity with the resolver's spot (#118 review): a
+            // cd chosen here (nav.parent…) can also turn off
+            // virtual mode — harvested by the run (rule 3); and
+            // a `pane.open` leaves its external command resolved
+            // — launch it NOW, not on the next key.
+            run_command(
+                app,
+                backend,
+                events,
+                help_lines,
+                lang,
+                quick_mode,
+                confirm_quit,
+                cfg,
+                &mut work.fill,
+                &mut work.decorate,
+                &mut work.probed,
+                &mut work.search,
+                parsed,
+            )
+            .await;
+            launch_pending(app, events, capture).await;
+        }
+        crate::goto::Action::Nothing(msg_id) => {
+            app.message = Some(norte_i18n::t(msg_id));
+        }
+        crate::goto::Action::Unavailable(why) => app.message = Some(why),
+        crate::goto::Action::Help(id) => {
+            crate::overlays::open_help_topic(app, lang, help_lines, &id);
+        }
+        // Handled by the Enter arm, before closing.
+        crate::goto::Action::SetQuery(_)
+        | crate::goto::Action::OrderInvalid
+        | crate::goto::Action::Order(_)
+        | crate::goto::Action::Ask(_) => {}
     }
 }

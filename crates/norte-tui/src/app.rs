@@ -244,6 +244,9 @@ pub enum KeyOwner {
     Tree,
     /// The log panel (#323).
     Log,
+    /// The assistant panel (ADR 0186). No payload: the kind declares
+    /// `multi: false`.
+    Assistant,
     /// The disk map (phase 4).
     ///
     /// No payload, like all of these: `KeyOwner` is compared for equality in
@@ -554,6 +557,8 @@ pub struct App {
     /// The menu bar, if open. An overlay: it keeps ALL the keys while it is,
     /// like the rest.
     pub menu: Option<norte_frontend::menu::MenuState>,
+    /// The open context menu (right click, the Menu key), if any.
+    pub context_menu: Option<crate::context_menu::ContextMenu>,
     /// Which menu was opened last.
     ///
     /// Reopened from there ([`norte_frontend::menu::MenuState::reopen_at`]):
@@ -771,6 +776,17 @@ pub struct App {
     /// its own: two paths to open the same panel diverge the moment one of
     /// the two grows a detail.
     pub pending_panel_command: Option<String>,
+    /// A context-menu verb the mouse picked, for the run loop to run
+    /// (`mouse::After::ContextVerb`).
+    pub pending_context_verb: Option<crate::context_menu::Picked>,
+    /// The command bar's line and history (ADR 0181).
+    pub command_bar: norte_frontend::command_bar::CommandBar,
+    /// The bar has the keyboard (`pane.command-line`).
+    pub command_bar_focus: bool,
+    /// Where the bar's history is saved; `None` = not saved (tests).
+    pub command_history_path: Option<std::path::PathBuf>,
+    /// A bar order for the run loop to start in the terminal panel.
+    pub pending_order: Option<crate::command_bar::Order>,
     /// The disk map's child to enter, if someone asked for it.
     ///
     /// Set by the key or the click and consumed by the LOOP, which is the one
@@ -872,6 +888,12 @@ pub struct App {
     /// reopened. What kills them is closing the slot (`layout.close-slot`),
     /// closing an instance by name, or quitting norte.
     pub terminals: crate::termpanel::Shells,
+    /// Per shell, whether its output wakes the screen
+    /// ([`crate::termpanel::refresh_wakes`]).
+    pub term_wakes: std::collections::HashMap<
+        norte_frontend::terminals::InstanceId,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    >,
     /// Rung by the terminal panel's reader thread when its shell writes
     /// (#405): the loop paints the echo at once, and a quiet terminal no
     /// longer keeps the 100 ms tick drawing.
@@ -1000,6 +1022,14 @@ pub struct App {
     /// model belongs to `norte-frontend`; where its rows come from and what
     /// confirming them means comes from [`crate::goto`].
     pub goto: Option<norte_frontend::goto::Goto>,
+    /// The focused pane's marks when the box went into `:` mode: Esc puts
+    /// them back after a live `sel` preview. `None` = not previewing.
+    pub order_marks_before: Option<Vec<VPath>>,
+    /// The `:` line's preview (`14 items · 38 MB`), or empty.
+    pub order_preview: String,
+    /// The assistant panel's conversation (ADR 0186). Lives here, not in the
+    /// slot: there is at most one panel, and closing it keeps the turns.
+    pub assistant: norte_frontend::assistant::Assistant,
     /// Open live-search dialog (`Alt+F7`, liveSearch T6): None = closed.
     /// Captures printables like the nav popup's `name_input`.
     pub search_dialog: Option<SearchDialog>,
@@ -1181,13 +1211,15 @@ pub struct App {
     /// because it is the same deal: norte chooses the operand, the program
     /// chooses the format.
     pub diff: Option<EditorSpec>,
+    /// `[ui] terminal`: the emulator "terminal here" opens, if the reader
+    /// chose one (`None` = probe).
+    pub ui_terminal: Option<Vec<String>>,
     /// External command resolved by `pane.open` and pending launch (#28).
     /// `dispatch` sets it after validating; the run loop —owner of the
     /// terminal— executes it.
     pub pending_open: Option<PendingOpen>,
     /// Suspension resolved by dispatch and pending execution (#135):
-    /// `app.terminal`, `app.toggle-panels` and the Enter of
-    /// [`Modal::CommandLine`]. Same split as [`Self::pending_open`], and
+    /// `app.terminal` and `app.toggle-panels`. Same split as [`Self::pending_open`], and
     /// drained in ONE single place in the run loop (at the very top of the
     /// turn, before the draw) so that none of the `continue`s that answer
     /// keys can leave it stuck.
@@ -1248,6 +1280,10 @@ pub struct App {
     /// pressing the key, and the loop dispatches it through `on_key`, which
     /// is the only path with all three resolvers at hand.
     pub pending_key: Option<crossterm::event::KeyEvent>,
+    /// The light popup box in front in the last frame, written by the paint
+    /// (`ui::draw` takes `&App`) and read by the mouse: a click outside it
+    /// closes the popup as `Esc` does.
+    pub painted_popup: std::cell::Cell<Option<ratatui::layout::Rect>>,
     /// Keys typed while a wait painted its spinner (#390): kept and run
     /// afterwards, one per loop turn, instead of thrown away. A watcher
     /// refresh starts a wait nobody asked for, and the reader's typing used
@@ -1415,6 +1451,7 @@ impl App {
             // going to use is a process, a pty and someone's `.bashrc`
             // running just in case.
             terminals: crate::termpanel::Shells::new(),
+            term_wakes: std::collections::HashMap::new(),
             term_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
             log_panel: norte_frontend::logpanel::LogPanel::default(),
             log_filter_input: None,
@@ -1423,6 +1460,7 @@ impl App {
             log_remote: crate::logview::LogRemote::default(),
             busy: None,
             menu: None,
+            context_menu: None,
             menu_last: 0,
             // The first four are the `orthodox` preset's.
             next_slot: 5,
@@ -1472,6 +1510,11 @@ impl App {
             volumes: Vec::new(),
             volumes_stale: true,
             pending_panel_command: None,
+            pending_context_verb: None,
+            command_bar: norte_frontend::command_bar::CommandBar::default(),
+            command_bar_focus: false,
+            command_history_path: None,
+            pending_order: None,
             pending_disk_map_enter: None,
             disk_map_stale: false,
             timeline_stale: false,
@@ -1494,6 +1537,9 @@ impl App {
             hotlist: Vec::new(),
             nav_popup: None,
             goto: None,
+            order_marks_before: None,
+            order_preview: String::new(),
+            assistant: norte_frontend::assistant::Assistant::default(),
             search_dialog: None,
             compare: None,
             compare_size_hints: std::collections::HashMap::new(),
@@ -1525,6 +1571,7 @@ impl App {
             user_chords: std::collections::HashMap::new(),
             editor: None,
             diff: None,
+            ui_terminal: None,
             pending_open: None,
             pending_shell: None,
             pending_subshell: false,
@@ -1535,6 +1582,7 @@ impl App {
             key_bars: KeyBars::default(),
             chord_split_h: None,
             pending_key: None,
+            painted_popup: std::cell::Cell::new(None),
             typed_ahead: std::collections::VecDeque::new(),
             version_line: "",
             help_chords: default_help_chords(),
@@ -1649,6 +1697,13 @@ impl App {
             self.menu_last = m.menu();
         }
         self.menu = None;
+    }
+
+    /// Is the command bar on screen: pinned by `[ui] command_bar`, or
+    /// called up by `pane.command-line`.
+    #[must_use]
+    pub fn command_bar_visible(&self) -> bool {
+        self.chrome.command_bar() || self.command_bar_focus
     }
 
     /// The highlighted command in the menu, and the menu closed: what

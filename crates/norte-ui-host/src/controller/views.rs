@@ -61,6 +61,7 @@ impl State {
                 .as_ref()
                 .is_some_and(|path| norte_frontend::path_display(path).1),
             foreign: false,
+            spark: Vec::new(),
         }
     }
 
@@ -97,6 +98,9 @@ impl State {
                 }
                 Some(super::timeline::KIND) => {
                     slots.push(SlotView::Timeline(Box::new(self.timeline_view(id))));
+                }
+                Some(super::assistant::KIND) => {
+                    slots.push(SlotView::Assistant(Box::new(self.assistant_view(id))));
                 }
                 Some(super::searchpanel::KIND) => {
                     slots.push(SlotView::Search(Box::new(self.search_panel_view(id))));
@@ -154,6 +158,7 @@ impl State {
             tasks: self.vistas_de_tasks(),
             menu: self.vista_menu(),
             context_menu: self.vista_context_menu(),
+            command_bar: self.vista_command_bar(),
             panel_bar: self.view_pane_bar(),
             status_items: self.status_items_view(),
             layout_buttons: self.view_layout_buttons(),
@@ -490,6 +495,7 @@ impl State {
                                 StripPhase::Failed => "failed",
                             }
                             .to_owned(),
+                            spark: v.spark.clone(),
                         }
                     }),
                 }

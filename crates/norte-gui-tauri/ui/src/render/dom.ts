@@ -12,7 +12,8 @@ import type {
   ViewerView,
   ViewSnapshot,
 } from "../types";
-import { icon as fsIcon } from "./icons";
+import { fileIcon, icon as fsIcon } from "./icons";
+import { sparkSvg } from "./spark";
 
 /**
  * Scrolls just enough for `el` to be visible, if the environment knows how.
@@ -453,14 +454,26 @@ export function updateRow(
     // No plugin icons: the window's own folder and page, the Tree's same
     // drawing (2026-10-08). A `/` glued to the name was the only mark of a
     // folder; an icon says it at a glance and keeps the names aligned.
-    const own = fsIcon(document, row.kind === "dir" ? "fs:folder" : "fs:file");
-    if (own !== null) {
-      own.classList.add("row-icon");
-      if (row.name_color !== "" && !row.selected) {
-        own.style.color = row.name_color;
-      }
-      block.append(own);
+    //
+    // Since bridge 114 (ADR 0184) it is a COLORED drawing per file type,
+    // like a desktop file manager's: the type's colors are the drawing's,
+    // so it does not take the entry color the stroke icon took. An id
+    // without a drawing — a newer host — falls back to the stroke page.
+    const colored = fileIcon(document, row.icon_kind);
+    if (colored !== null) {
+      colored.classList.add("row-file-icon");
+      block.append(colored);
       el.classList.add("own-icon");
+    } else {
+      const own = fsIcon(document, row.kind === "dir" ? "fs:folder" : "fs:file");
+      if (own !== null) {
+        own.classList.add("row-icon");
+        if (row.name_color !== "" && !row.selected) {
+          own.style.color = row.name_color;
+        }
+        block.append(own);
+        el.classList.add("own-icon");
+      }
     }
   }
   block.append(name);
@@ -725,6 +738,11 @@ export function statusNodes(
         }
         bar.append(fill);
         el.append(bar);
+        // The burst's graph (ADR 0187) leads, as in the terminal.
+        const graph = sparkSvg(it.progress.spark ?? []);
+        if (graph !== null) {
+          el.prepend(graph);
+        }
       }
       if (el instanceof HTMLButtonElement) {
         el.type = "button";
@@ -794,6 +812,17 @@ export function taskNode(t: TaskView, tr: (k: string) => string): HTMLElement {
   detail.textContent = t.detail ?? "";
   detail.dataset["hostile"] = String(t.detail_hostile);
   el.append(kind, state, detail);
+  // Its throughput (ADR 0187) and the speed it ends on.
+  const graph = sparkSvg(t.spark ?? []);
+  if (graph !== null) {
+    el.append(graph);
+  }
+  if (t.rate !== "") {
+    const rate = document.createElement("span");
+    rate.className = "task-rate";
+    rate.textContent = t.rate;
+    el.append(rate);
+  }
   if (t.detail_hostile) {
     // The file in progress paints different from what it is: it is said,
     // same as in a listing row. Without a badge, a masked name reads as the

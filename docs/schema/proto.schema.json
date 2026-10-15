@@ -1,5 +1,142 @@
 {
   "$defs": {
+    "AiChatMessage": {
+      "description": "One message of an [`AI_CHAT`] conversation.\n\n```\nuse norte_proto::methods::{AiChatMessage, AiChatRole};\nlet m = AiChatMessage { role: AiChatRole::Assistant, text: \"sel *.pdf\".into() };\nassert_eq!(m.role, AiChatRole::Assistant);\n```",
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/AiChatRole",
+          "description": "Who said it."
+        },
+        "text": {
+          "description": "What was said; at most [`AI_CHAT_MAX_TEXT_BYTES`].",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ],
+      "type": "object"
+    },
+    "AiChatParams": {
+      "description": "Params of [`AI_CHAT`]: the conversation so far and where the reader is.\n\nStateless on purpose: the daemon keeps no session, so a frontend that\nreconnects, or a second frontend, loses nothing it did not hold.\n\n```\nuse norte_proto::methods::{AiChatMessage, AiChatParams, AiChatRole};\nlet p = AiChatParams {\n    messages: vec![AiChatMessage { role: AiChatRole::User, text: \"hola\".into() }],\n    here: norte_proto::VPath::parse(\"file:///home\").unwrap(),\n    other: None,\n};\nassert!(serde_json::to_string(&p).unwrap().contains(\"\\\"role\\\":\\\"user\\\"\"));\n```",
+      "properties": {
+        "here": {
+          "$ref": "#/$defs/VPath",
+          "description": "The focused pane's folder: where an order's `sel` and relative paths\nresolve, and one of the two roots the assistant may read under."
+        },
+        "messages": {
+          "description": "Oldest first; the last one is the reader's new message. At most\n[`AI_CHAT_MAX_MESSAGES`].",
+          "items": {
+            "$ref": "#/$defs/AiChatMessage"
+          },
+          "type": "array"
+        },
+        "other": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VPath"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The other pane's folder (`>other`), the other root it may read under."
+        }
+      },
+      "required": [
+        "messages",
+        "here"
+      ],
+      "type": "object"
+    },
+    "AiChatResult": {
+      "description": "Result of [`AI_CHAT`].\n\n```\nuse norte_proto::methods::{AiChatResult, AiChatTurn};\nlet r = AiChatResult { turn: AiChatTurn::Answer { text: \"ok\".into() } };\nassert!(serde_json::to_string(&r).unwrap().contains(\"\\\"kind\\\":\\\"answer\\\"\"));\n```",
+      "properties": {
+        "turn": {
+          "$ref": "#/$defs/AiChatTurn",
+          "description": "The turn."
+        }
+      },
+      "required": [
+        "turn"
+      ],
+      "type": "object"
+    },
+    "AiChatRole": {
+      "description": "Who said an [`AiChatMessage`]. Strict on purpose: it flows client →\ndaemon, and a daemon never accepts a client ahead of it.\n\n```\nuse norte_proto::methods::AiChatRole;\nassert_eq!(serde_json::to_string(&AiChatRole::User).unwrap(), \"\\\"user\\\"\");\n```",
+      "oneOf": [
+        {
+          "const": "user",
+          "description": "The reader.",
+          "type": "string"
+        },
+        {
+          "const": "assistant",
+          "description": "The assistant (an earlier turn, sent back as context).",
+          "type": "string"
+        }
+      ]
+    },
+    "AiChatTurn": {
+      "description": "What the assistant said this turn.\n\nAn `Order` is a line in the order grammar (ADR 0185) that the daemon has\nalready parsed and vetted — no catalogue commands, no destination on\nanother provider. It is a PROPOSAL: the daemon applies nothing, and a\nclient must only run it on the reader's explicit gesture (ADR 0050).\n\n```\nuse norte_proto::methods::AiChatTurn;\nlet t: AiChatTurn = serde_json::from_str(r#\"{\"kind\":\"answer\",\"text\":\"3 GiB\"}\"#).unwrap();\nassert_eq!(t, AiChatTurn::Answer { text: \"3 GiB\".into() });\n```",
+      "oneOf": [
+        {
+          "description": "A vetted order for the reader to review and, if they want, apply.",
+          "properties": {
+            "kind": {
+              "const": "order",
+              "type": "string"
+            },
+            "note": {
+              "description": "One sentence on what it does, from the model.",
+              "type": "string"
+            },
+            "text": {
+              "description": "The line, e.g. `sel ext:pdf age<30d | cp >other`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text",
+            "note"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Prose built from metadata (names, sizes, dates, the journal).",
+          "properties": {
+            "kind": {
+              "const": "answer",
+              "type": "string"
+            },
+            "text": {
+              "description": "What to show.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A kind this client does not know yet: a newer daemon inside the\nwindow may add one. Never emitted; a client says it needs a newer\nnorte instead of failing the whole result.",
+          "properties": {
+            "kind": {
+              "const": "unknown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "AiOrganizePlanParams": {
       "description": "Params of [`AI_ORGANIZE_PLAN`] (0.77.0, phase 8 of the WOW program).\n\nThe same three fields as [`AiRenamePlanParams`] and for the same reason:\norganizing is renaming with permission to move into a subdirectory, so\nwhat is asked of the provider — a directory, an instruction and the\nnames to act on — does not change.",
       "properties": {
@@ -6802,6 +6939,21 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Aggregate root: one field per top-level wire type. `schema_for!` emits each\nas a property and pulls every nested type into `$defs`, so the single\ndocument covers the whole protocol surface. Field values are never read.",
   "properties": {
+    "ai_chat_message": {
+      "$ref": "#/$defs/AiChatMessage"
+    },
+    "ai_chat_params": {
+      "$ref": "#/$defs/AiChatParams"
+    },
+    "ai_chat_result": {
+      "$ref": "#/$defs/AiChatResult"
+    },
+    "ai_chat_role": {
+      "$ref": "#/$defs/AiChatRole"
+    },
+    "ai_chat_turn": {
+      "$ref": "#/$defs/AiChatTurn"
+    },
     "ai_organize_plan_params": {
       "$ref": "#/$defs/AiOrganizePlanParams"
     },
@@ -7625,6 +7777,11 @@
     "policy_pending_result",
     "ai_organize_plan_params",
     "ai_organize_plan_result",
+    "ai_chat_params",
+    "ai_chat_message",
+    "ai_chat_role",
+    "ai_chat_turn",
+    "ai_chat_result",
     "fs_organize_params",
     "organize_move",
     "plugin_organize_plan_params",

@@ -63,6 +63,7 @@ function row(key: number, name: string, extra: Partial<RowView> = {}): RowView {
     badge_role: "",
     icon: "",
     icon_hostile: false,
+    icon_kind: "file",
     name_color: "",
     name_bold: false,
     name_dim: false,
@@ -992,6 +993,21 @@ describe("Screen", () => {
     const err = root.querySelector(".error") as HTMLElement;
     expect(err.getAttribute("role")).toBe("alert");
     expect(err.textContent).toContain("EACCES");
+  });
+
+  // The failure's notice used to stay painted over the first row once the
+  // listing came back: only rows were swept, and it is not a row.
+  it("a listing that recovers from an error drops the error notice", () => {
+    const { screen, root } = mount();
+    screen.paint(
+      view({
+        state: { state: "error", reason_key: "listing-failed", detail: "EACCES" },
+      }),
+    );
+    expect(root.querySelector(".error")).not.toBeNull();
+    screen.paint(view({ rows: [row(0, "a.txt")] }));
+    expect(root.querySelector(".error")).toBeNull();
+    expect(root.querySelector(".slot-retry")).toBeNull();
   });
 
   it("rows carry roles and state for the screen reader", () => {
@@ -2752,6 +2768,17 @@ describe("help's scroll", () => {
     expect(body().scrollTop).toBe(120);
   });
 
+  it("the topic list keeps its scroll when a click opens another page", () => {
+    const { screen } = mount();
+    screen.paint(withHelp("copying", 0));
+    const topics = () => document.querySelector(".help-topics") as HTMLElement;
+    topics().scrollTop = 200;
+    // A click on a row near the bottom: the host answers with the new page
+    // and the cursor on that row.
+    screen.paint(withHelp("moving", 1));
+    expect(topics().scrollTop).toBe(200);
+  });
+
   it("and changing PAGE starts at the top, which is what a reader does", () => {
     const { screen } = mount();
     screen.paint(withHelp("copying", 0));
@@ -3668,6 +3695,78 @@ describe("the menu bar", () => {
   });
 });
 
+describe("command bar", () => {
+  it("paints the folder and the line as text, and a press asks for the keys", () => {
+    const { screen, sent } = mount();
+    const v = view({});
+    v.command_bar = {
+      prompt: "/home/<b>x</b>",
+      text: "echo <i>hi</i>",
+      cursor: 2,
+      focused: true,
+      reason: "",
+    };
+    screen.paint(v);
+    const bar = document.getElementById("commandbar") as HTMLElement;
+    expect(bar.dataset["open"]).toBe("true");
+    expect(bar.querySelector("b")).toBeNull();
+    expect(bar.querySelector("i")).toBeNull();
+    expect(bar.textContent).toContain("/home/<b>x</b>");
+    expect(bar.textContent).toContain("echo <i>hi</i>");
+    expect(bar.querySelector(".commandbar-caret")?.textContent).toBe("h");
+    expect(document.documentElement.style.getPropertyValue("--commandbar-h")).toBe(
+      "var(--cell-h)",
+    );
+    bar.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(sent).toContainEqual({ action: "command_bar_focus" });
+  });
+
+  it("a paste goes to the focused bar, and a press elsewhere gives the keys back", () => {
+    const { screen, sent } = mount();
+    const v = view({});
+    v.command_bar = { prompt: "/x", text: "", cursor: 0, focused: true, reason: "" };
+    screen.paint(v);
+    const paste = new Event("paste", {
+      bubbles: true,
+      cancelable: true,
+    }) as ClipboardEvent;
+    Object.defineProperty(paste, "clipboardData", {
+      value: { getData: () => "make\nrm -rf x" },
+    });
+    document.body.dispatchEvent(paste);
+    expect(sent).toContainEqual({ action: "command_bar_paste", text: "make\nrm -rf x" });
+    document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(sent).toContainEqual({
+      action: "key",
+      key: "Escape",
+      ctrl: false,
+      alt: false,
+      shift: false,
+      meta: false,
+    });
+  });
+
+  it("off disk an empty line shows why, and hidden it gives its row back", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.command_bar = {
+      prompt: "sftp://h/x",
+      text: "",
+      cursor: 0,
+      focused: false,
+      reason: "no",
+    };
+    screen.paint(v);
+    const bar = document.getElementById("commandbar") as HTMLElement;
+    expect(bar.querySelector('.commandbar-line[data-reason="true"]')?.textContent).toBe(
+      "no",
+    );
+    screen.paint(view({}));
+    expect(bar.dataset["open"]).toBe("false");
+    expect(document.documentElement.style.getPropertyValue("--commandbar-h")).toBe("0px");
+  });
+});
+
 describe("help", () => {
   /** A page with prose, already-resolved marks and one disabled row. */
   function withHelp(): ViewSnapshot {
@@ -3980,6 +4079,65 @@ describe("help", () => {
     }
     screen.paint(v);
     expect(document.querySelector(".help-toc")).toBeNull();
+  });
+
+  it("the corpus's own `# Title` is not painted twice, and its sections move up", () => {
+    // Every corpus page opens with `# <its title>`: painted under the `h1`
+    // it read as the title twice, and the real sections (`##`) ended up as
+    // `h3` — out of the page index, which only counts `h2`.
+    const { screen } = mount();
+    const v = withHelp();
+    if (v.help !== null) {
+      v.help.blocks = [
+        { block: "heading", level: 1, text: "Copiar" },
+        ...["Uno", "Dos", "Tres"].map((t) => ({
+          block: "heading" as const,
+          level: 2,
+          text: t,
+        })),
+      ];
+    }
+    screen.paint(v);
+    const body = document.querySelector(".help-body") as HTMLElement;
+    expect(body.textContent?.split("Copiar")).toHaveLength(2);
+    expect(
+      [...body.querySelectorAll(".help-main > h2")].map((h) => h.textContent),
+    ).toEqual(["Uno", "Dos", "Tres"]);
+    expect(
+      [...document.querySelectorAll(".help-toc-item")].map((b) => b.textContent),
+    ).toEqual(["Uno", "Dos", "Tres"]);
+  });
+
+  it("the page's keys and its links go in the side column, keeping their indices", () => {
+    const { screen, sent } = mount();
+    const v = withHelp();
+    if (v.help !== null) {
+      v.help.action_cursor = 2;
+    }
+    screen.paint(v);
+    const rail = document.querySelector(".help-rail") as HTMLElement;
+    const keys = rail.querySelector(".help-rail-keys") as HTMLElement;
+    const see = rail.querySelector(".help-rail-see") as HTMLElement;
+    expect(keys.querySelectorAll(".help-action")).toHaveLength(2);
+    expect(see.querySelectorAll(".help-action")).toHaveLength(1);
+    // The cursor lives in the list that holds it, and only there.
+    const seeList = see.querySelector("[role=listbox]") as HTMLElement;
+    expect(seeList.getAttribute("aria-activedescendant")).toBe("help-action-2");
+    expect(
+      keys.querySelector("[role=listbox]")?.hasAttribute("aria-activedescendant"),
+    ).toBe(false);
+    (see.querySelector(".help-action") as HTMLElement).click();
+    expect(sent).toEqual([{ action: "help_activate", index: 2 }]);
+  });
+
+  it("a page with no keys and no links has no side column", () => {
+    const { screen } = mount();
+    const v = withHelp();
+    if (v.help !== null) {
+      v.help.actions = [];
+    }
+    screen.paint(v);
+    expect(document.querySelector(".help-rail")).toBeNull();
   });
 
   it("a click on the sidebar requests THAT page", () => {
@@ -6241,6 +6399,18 @@ describe("context menu", () => {
     expect(items[1]?.textContent).toContain("read-only backend");
     expect(items[2]?.dataset["role"]).toBe("destructive");
     expect(box.querySelectorAll(".context-menu-rule")).toHaveLength(1);
+  });
+
+  it("a press on an overlay's veil asks to dismiss it; one inside its box does not", () => {
+    const { screen, sent } = mount();
+    screen.paint(view({}));
+    const columns = screen.columnsRoot;
+    const box = document.createElement("div");
+    columns.append(box);
+    box.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    expect(sent.filter((a) => a.action === "overlay_dismiss")).toEqual([]);
+    columns.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    expect(sent.at(-1)).toEqual({ action: "overlay_dismiss" });
   });
 
   it("hover points, click activates, outside closes, blur closes", () => {

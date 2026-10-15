@@ -837,10 +837,6 @@ mod help_key_tests {
                 name: "new".into(),
                 error: None,
             },
-            Modal::CommandLine {
-                command: "make test".into(),
-                error: None,
-            },
             Modal::AiRenameInstruction {
                 instruction: "in snake_case".into(),
                 error: None,

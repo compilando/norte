@@ -48,6 +48,12 @@ export function invokeMetrics(what: string, samples: number[]): Promise<void> {
   return invoke<void>("metrics", { sample: { what, samples } });
 }
 
+/** What the probes SHOW after a paint, into `NORTE_GUI_TRACE` (the
+ *  end-to-end harness). Only sent with tracing on. */
+export function invokeTraceDom(probes: Record<string, string>): Promise<void> {
+  return invoke<void>("trace_dom", { probes });
+}
+
 export const tauriPort: HostPort = {
   initialSnapshot: () => invoke<BridgeEnvelope<UiUpdate>>("initial_snapshot"),
   dispatch: (action) => invoke<ActionAck>("dispatch", { action }),

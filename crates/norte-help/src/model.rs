@@ -241,6 +241,12 @@ pub enum Reason {
     /// differently — one by starting norte against the daemon, the other by
     /// sitting at the machine.
     NeedsDesktop,
+    /// The command needs a folder on this disk and the pane is inside an
+    /// archive: the archive's own folder is one `..` away.
+    InsideArchive,
+    /// The command needs a folder on this disk and the pane is somewhere
+    /// else (a remote machine, an object store).
+    NotOnThisDisk,
 }
 
 /// Availability of a command row in the CURRENT context.

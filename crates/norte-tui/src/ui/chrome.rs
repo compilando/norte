@@ -92,7 +92,29 @@ pub(crate) const DROP_MAX: u16 = 44;
 /// the menu is closed — it has to: with no menu open there is no dropdown to
 /// measure — and with the bar pinned that left the row blank. Titles do not
 /// depend on anything being open; the dropdown does.
-pub(crate) fn menu_titles(area: Rect) -> Vec<(String, u16, u16)> {
+pub(crate) fn menu_titles(app: &App, area: Rect) -> Vec<(String, u16, u16)> {
+    menu_bar_layout(app, area).1
+}
+
+/// The key that opens the menu (`app.menu`, from the LIVE keymap: presets
+/// and rebinds differ) as the bar paints it, fenced off from the titles.
+fn menu_key_label(app: &App) -> Option<String> {
+    app.palette_rows
+        .iter()
+        .find(|r| r.key == "app.menu")
+        .filter(|r| !r.chord.is_empty())
+        .map(|r| format!(" {} │", r.chord))
+}
+
+/// ONE measurement of the bar for painting and for the mouse: the menu
+/// key's label, if it fits, and each title's label and cells after it.
+///
+/// The key goes on the LEFT: read first, it says how to enter the titles
+/// that follow. On the right it sat against the layout buttons and read as
+/// their label. It does not depend on a menu being open, so opening one
+/// moves no title under the pointer. A title is worth more than the key:
+/// narrow, the key goes first.
+fn menu_bar_layout(app: &App, area: Rect) -> (Option<String>, Vec<(String, u16, u16)>) {
     let names: Vec<String> = norte_frontend::menu::MENUS
         .iter()
         .map(|m| norte_i18n::t(m.title))
@@ -108,9 +130,20 @@ pub(crate) fn menu_titles(area: Rect) -> Vec<(String, u16, u16)> {
             .map(|n| UnicodeWidthStr::width(n.as_str()) + sep)
             .sum()
     };
-    let roomy = width(2) <= usize::from(area.width);
+    let key = menu_key_label(app);
+    let key_w = key.as_deref().map_or(0, UnicodeWidthStr::width);
+    let fits = |sep: usize, extra: usize| width(sep) + extra <= usize::from(area.width);
+    let (roomy, key) = if key.is_some() && fits(2, key_w) {
+        (true, key)
+    } else if key.is_some() && fits(1, key_w) {
+        (false, key)
+    } else {
+        (fits(2, 0), None)
+    };
     let mut titles = Vec::new();
-    let mut x = area.x;
+    let mut x = area.x.saturating_add(
+        u16::try_from(key.as_deref().map_or(0, UnicodeWidthStr::width)).unwrap_or(0),
+    );
     for name in names {
         let label = if roomy {
             format!(" {name} ")
@@ -122,11 +155,11 @@ pub(crate) fn menu_titles(area: Rect) -> Vec<(String, u16, u16)> {
         titles.push((label, x, x1));
         x = x.saturating_add(w);
     }
-    titles
+    (key, titles)
 }
 
 pub(crate) fn menu_geom(app: &App, area: Rect) -> Option<MenuGeom> {
-    let titles = menu_titles(area);
+    let titles = menu_titles(app, area);
     let st = app.menu.as_ref()?;
     let m = norte_frontend::menu::MENUS.get(st.menu())?;
     let mut lines: Vec<MenuLine> = Vec::new();
@@ -234,7 +267,7 @@ pub fn menu_zones(app: &App, area: Rect) -> Vec<MenuZone> {
     // could not be clicked: a bar that exists so you can find the menu, on
     // which the click does nothing.
     let mut out: Vec<MenuZone> = if app.menu_bar || app.menu.is_some() {
-        menu_titles(area)
+        menu_titles(app, area)
             .iter()
             .enumerate()
             .map(|(i, (_, x0, x1))| MenuZone {
@@ -289,11 +322,13 @@ pub(crate) fn layout_button_cells(
     if !app.menu_bar || app.menu.is_some() || crate::mouse::overlay_open(app) {
         return Vec::new();
     }
-    let used: usize = menu_titles(area)
+    // Up to the last title that fits, the menu key included.
+    let used: usize = menu_titles(app, area)
         .iter()
         .filter(|(_, _, x1)| *x1 < area.x.saturating_add(area.width))
-        .map(|(l, _, _)| UnicodeWidthStr::width(l.as_str()))
-        .sum();
+        .map(|(_, _, x1)| usize::from(x1.saturating_add(1).saturating_sub(area.x)))
+        .max()
+        .unwrap_or(0);
     // A title is worth more than a button: what is left, minus a
     // separating space, decides which fit whole — and the first to yield is
     // rotate (ADR 0138), the shared rule.
@@ -312,16 +347,19 @@ pub(crate) fn layout_button_cells(
     out
 }
 
-/// Paints the layout buttons (ADR 0133) on `bar`'s right edge and returns
-/// how many cells they reserve, separator included — what the menu
-/// shortcut's hint has to leave them.
-fn draw_layout_buttons(frame: &mut Frame<'_>, app: &App, area: Rect, bar: Rect) -> u16 {
+/// Paints the layout buttons (ADR 0133) on `bar`'s right edge.
+fn draw_layout_buttons(frame: &mut Frame<'_>, app: &App, area: Rect, bar: Rect) {
     let buttons = layout_button_cells(app, area);
+    // With pixels, the shared icon is placed over the cells
+    // (`chrome_icons_to_place`): the glyph is not painted under it, and the
+    // cells and the click zones stay the same.
+    let pixels = super::layout_pixels_shown(app);
     for (x, b) in &buttons {
         let w = u16::try_from(b.glyph.len()).unwrap_or(0);
+        let glyph = if pixels { "   " } else { b.glyph };
         frame.render_widget(
             Paragraph::new(ratatui::text::Line::styled(
-                b.glyph,
+                glyph,
                 app.theme.role(Role::Title),
             )),
             Rect {
@@ -330,13 +368,6 @@ fn draw_layout_buttons(frame: &mut Frame<'_>, app: &App, area: Rect, bar: Rect) 
                 ..bar
             },
         );
-    }
-    let painted: Vec<&norte_frontend::layoutbar::LayoutButton> =
-        buttons.iter().map(|(_, b)| *b).collect();
-    if painted.is_empty() {
-        0
-    } else {
-        u16::try_from(norte_frontend::layoutbar::width_of(&painted) + 1).unwrap_or(u16::MAX)
     }
 }
 
@@ -472,6 +503,7 @@ fn kind_with_keyboard(app: &App) -> Option<&str> {
         crate::app::KeyOwner::DiskMap => Some(crate::diskmap::KIND),
         crate::app::KeyOwner::Timeline => Some(crate::timeline::KIND),
         crate::app::KeyOwner::Search => Some(crate::searchpanel::KIND),
+        crate::app::KeyOwner::Assistant => Some(crate::assistant::KIND),
         crate::app::KeyOwner::Terminal => Some(crate::termpanel::KIND),
         // Which one it is is said by the layout, not the enum: there is at
         // most one visible.
@@ -894,7 +926,7 @@ pub(crate) fn draw_menu(frame: &mut Frame<'_>, app: &App) {
     // that is why titles are measured separately, without going through
     // `menu_geom`.
     let open = app.menu.as_ref();
-    let titles = menu_titles(area);
+    let (key, titles) = menu_bar_layout(app, area);
     let bar = Rect { height: 1, ..area };
     clear_themed(frame, bar, &app.theme);
     // A title that does not fit WHOLE is not painted halfway: at forty
@@ -902,70 +934,30 @@ pub(crate) fn draw_menu(frame: &mut Frame<'_>, app: &App) {
     // noise. The last one that does not fit is dropped and that is it —
     // what the bar has to say is that a menu EXISTS, and the first ones are
     // enough for that.
-    let spans: Vec<ratatui::text::Span<'static>> = titles
-        .iter()
-        .filter(|(_, _, x1)| *x1 < area.x.saturating_add(area.width))
-        .enumerate()
-        .map(|(i, (label, _, _))| {
-            let style = if open.is_some_and(|st| i == st.menu()) {
-                app.theme.role(Role::Selection)
-            } else {
-                app.theme.role(Role::Title)
-            };
-            ratatui::text::Span::styled(label.clone(), style)
-        })
+    // The key that opens the menu first, in its own colour (see
+    // `menu_bar_layout`): a bar of titles that does not say how to enter
+    // them leaves the mouse as the only door.
+    let key = key.map(|k| ratatui::text::Span::styled(k, app.theme.role(Role::Info)));
+    let spans: Vec<ratatui::text::Span<'static>> = key
+        .into_iter()
+        .chain(
+            titles
+                .iter()
+                .filter(|(_, _, x1)| *x1 < area.x.saturating_add(area.width))
+                .enumerate()
+                .map(|(i, (label, _, _))| {
+                    let style = if open.is_some_and(|st| i == st.menu()) {
+                        app.theme.role(Role::Selection)
+                    } else {
+                        app.theme.role(Role::Title)
+                    };
+                    ratatui::text::Span::styled(label.clone(), style)
+                }),
+        )
         .collect();
     frame.render_widget(Paragraph::new(ratatui::text::Line::from(spans)), bar);
 
-    let reserve = draw_layout_buttons(frame, app, area, bar);
-
-    // And the key that opens it, on the right, PULLED FROM THE LIVE KEYMAP.
-    //
-    // A bar that shows seven titles and does not say how to enter them
-    // leaves the reader with the mouse as the only door. The key is not
-    // written by hand — it is `alt+m` in some presets and something else in
-    // whichever ones someone rebound — so it comes from wherever the
-    // dropdown items' come from.
-    //
-    // Only with the menu CLOSED: open, the key is no longer needed and that
-    // slot is wanted by the title further to the right.
-    if open.is_none()
-        && let Some(chord) = app
-            .palette_rows
-            .iter()
-            .find(|r| r.key == "app.menu")
-            .map(|r| r.chord.clone())
-    {
-        let text = format!("{chord} ");
-        let w = u16::try_from(UnicodeWidthStr::width(text.as_str())).unwrap_or(0);
-        let used = titles
-            .iter()
-            .filter(|(_, _, x1)| *x1 < area.x.saturating_add(area.width))
-            .map(|(l, _, _)| u16::try_from(UnicodeWidthStr::width(l.as_str())).unwrap_or(0))
-            .sum::<u16>();
-        // Only if it fits WITHOUT stepping on the titles: a menu's name is
-        // worth more than its shortcut, and half a shortcut is worth
-        // nothing.
-        // To the left of the buttons, if there are any.
-        if bar.width > used.saturating_add(w).saturating_add(reserve) {
-            let hint = Rect {
-                x: bar
-                    .x
-                    .saturating_add(bar.width)
-                    .saturating_sub(w)
-                    .saturating_sub(reserve),
-                width: w,
-                ..bar
-            };
-            frame.render_widget(
-                Paragraph::new(ratatui::text::Line::styled(
-                    text,
-                    app.theme.role(Role::Info),
-                )),
-                hint,
-            );
-        }
-    }
+    draw_layout_buttons(frame, app, area, bar);
 
     let (Some(st), Some(g)) = (open, menu_geom(app, area)) else {
         return;

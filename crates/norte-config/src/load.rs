@@ -1679,6 +1679,9 @@ impl DirIndicator {
 pub struct UiChrome {
     /// `[ui] key_bar` (None = pinned).
     pub key_bar: Option<bool>,
+    /// `[ui] command_bar` (None = hidden until called up; the `krusader`
+    /// preset fills it in as shown).
+    pub command_bar: Option<bool>,
     /// `[ui] panel_bar_style` (None = names), validated.
     pub panel_bar_style: Option<PanelBarStyle>,
     /// `[ui] panel_bar_position` (None = auto), validated.
@@ -1786,6 +1789,11 @@ impl UiChrome {
     #[must_use]
     pub fn key_bar(self) -> bool {
         self.key_bar.unwrap_or(true)
+    }
+    /// Effective `command_bar` (absent = hidden until called up).
+    #[must_use]
+    pub fn command_bar(self) -> bool {
+        self.command_bar.unwrap_or(false)
     }
     /// Effective `panel_bar_style` (absent = names).
     #[must_use]
@@ -2070,6 +2078,11 @@ pub struct CommonConfig {
     /// `[ui] diff_detached` (last-wins; None = `false`): that comparator opens
     /// its OWN WINDOW. Same fail-closed layer as [`Self::ui_diff`].
     pub ui_diff_detached: Option<bool>,
+    /// `[ui] terminal` (last-wins; None = probe `$TERMINAL` and the known
+    /// emulators): the program "terminal here" opens, as an argv template
+    /// with `openers.toml`'s field codes (`%d` the pane's directory). Same
+    /// fail-closed layer as [`Self::ui_editor`]: it names a program to run.
+    pub ui_terminal: Option<Vec<String>>,
     /// The `[ui]` chrome keys (key bar, panel bar style, pane footer, date
     /// format, notice expiry, dialog buttons), last-wins per key from ALL
     /// layers including Project: presentation-only, like the scalars above.
@@ -2090,6 +2103,9 @@ pub struct CommonConfig {
     /// `[log]` merged (last-wins per key; never from Project or a profile —
     /// choosing where a process writes is not presentation).
     pub log: crate::LogSettings,
+    /// `[updates] check` merged (last-wins; never from Project or a profile;
+    /// absent = `false`, ADR 0183).
+    pub check_updates: bool,
     /// `[ai]` merged (never from Project).
     pub ai: AiSettings,
     /// Files that participated (watcher + diagnostics).
@@ -2351,6 +2367,7 @@ fn merge_ui_chrome(
         message: message.to_owned(),
     };
     acc.key_bar = ui.key_bar.or(acc.key_bar);
+    acc.command_bar = ui.command_bar.or(acc.command_bar);
     acc.pane_footer = ui.pane_footer.or(acc.pane_footer);
     acc.row_stripes = ui.row_stripes.or(acc.row_stripes);
     acc.dialog_buttons = ui.dialog_buttons.or(acc.dialog_buttons);
@@ -2793,10 +2810,11 @@ fn carve_out_warnings(parsed: &NorteToml, path: &std::path::Path, kind: Layer) -
         || ui.editor_detached.is_some()
         || ui.diff.is_some()
         || ui.diff_detached.is_some()
+        || ui.terminal.is_some()
     {
         say(
             "ui",
-            "`editor` and `diff` choose a program that gets run, and that is not \
+            "`editor`, `diff` and `terminal` choose a program that gets run, and that is not \
              presentation",
         );
     }
@@ -2829,6 +2847,12 @@ fn carve_out_warnings(parsed: &NorteToml, path: &std::path::Path, kind: Layer) -
     }
     if crate::ArchiveSettings::declares(&parsed.archive) {
         say("archive", "does not raise the anti-bomb limits");
+    }
+    if parsed.updates != crate::schema::UpdatesSection::default() {
+        say(
+            "updates",
+            "does not decide that this machine talks to the network",
+        );
     }
     out
 }
@@ -2918,12 +2942,14 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
     let mut ui_editor_detached: Option<bool> = None;
     let mut ui_diff: Option<Vec<String>> = None;
     let mut ui_diff_detached: Option<bool> = None;
+    let mut ui_terminal: Option<Vec<String>> = None;
     let mut ui_layout: Option<String> = None;
     let mut ui_columns = ColumnsConfig::default();
     let mut ui_chrome = UiChrome::default();
     let mut ui_status_plugins: Vec<(String, String)> = Vec::new();
     let mut daemon = crate::DaemonSettings::default();
     let mut log = crate::LogSettings::default();
+    let mut check_updates: Option<bool> = None;
     let mut hotlist: Vec<HotlistItem> = Vec::new();
     let mut archive = crate::ArchiveSettings::default();
     let mut ai = AiSettings::default();
@@ -3047,6 +3073,8 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
             //   redirect its providers.
             // - **`[log]`** (roadmap item 9): does not decide where this
             //   process writes.
+            // - **`[updates]`** (ADR 0183): does not make this machine talk
+            //   to the network.
             //
             // The UI SCALARS (quick_search, theme, lang) ARE honored from a
             // project: they are presentation, and none of them launches,
@@ -3081,16 +3109,24 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 // the editor: it is another program that gets run.
                 ui_diff = parsed.ui.diff.clone().or(ui_diff);
                 ui_diff_detached = parsed.ui.diff_detached.or(ui_diff_detached);
+                ui_terminal = parsed.ui.terminal.clone().or(ui_terminal);
                 archive.merge(parsed.archive);
                 daemon.merge(parsed.daemon);
                 log.merge(parsed.log);
+                check_updates = parsed.updates.check.or(check_updates);
                 merge_ai_layer(&mut ai, parsed.ai, &norte)?;
             }
             sources.push(norte);
         }
     }
+    let effective_preset = preset.unwrap_or_else(|| schema::DEFAULT_PRESET.to_owned());
+    // Krusader's command line is always on screen: its preset shows the
+    // command bar unless `[ui] command_bar` says otherwise (ADR 0181).
+    if effective_preset == "krusader" {
+        ui_chrome.command_bar = ui_chrome.command_bar.or(Some(true));
+    }
     Ok(CommonConfig {
-        preset: preset.unwrap_or_else(|| schema::DEFAULT_PRESET.to_owned()),
+        preset: effective_preset,
         ui_lang,
         ui_theme,
         ui_theme_light,
@@ -3112,11 +3148,13 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
         ui_editor_detached,
         ui_diff,
         ui_diff_detached,
+        ui_terminal,
         ui_columns,
         ui_chrome,
         ui_status_plugins,
         daemon,
         log,
+        check_updates: check_updates.unwrap_or(false),
         hotlist,
         archive,
         ai,
@@ -3309,6 +3347,87 @@ mod hotlist_tests {
             cfg.project_warnings.iter().any(|w| w.contains("[hotlist]")),
             "and it IS SAID that it does not get in: {:?}",
             cfg.project_warnings
+        );
+    }
+
+    /// `[ui] terminal` names a program that gets run: a user's applies, a
+    /// cloned repository's is refused and said.
+    #[test]
+    fn a_project_cannot_choose_the_terminal_a_user_can() {
+        let user = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            user.path().join("norte.toml"),
+            "[ui]\nterminal = [\"foot\", \"-D\", \"%d\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.path().join("norte.toml"),
+            "[ui]\nterminal = [\"/tmp/evil\"]\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (user.path().to_path_buf(), Layer::User),
+                (project.path().to_path_buf(), Layer::Project),
+            ],
+        };
+        let cfg = load(&layers).expect("loads");
+        assert_eq!(
+            cfg.ui_terminal.as_deref(),
+            Some(&["foot".to_owned(), "-D".to_owned(), "%d".to_owned()][..])
+        );
+        assert!(
+            cfg.project_warnings.iter().any(|w| w.contains("terminal")),
+            "{:?}",
+            cfg.project_warnings
+        );
+    }
+
+    /// Krusader keeps its command line on screen, so its preset shows the
+    /// command bar unless `[ui] command_bar` says otherwise; the others
+    /// keep it hidden until called up.
+    #[test]
+    fn the_krusader_preset_shows_the_command_bar() {
+        let load_with = |toml: &str| {
+            let user = tempfile::tempdir().unwrap();
+            std::fs::write(user.path().join("norte.toml"), toml).unwrap();
+            let layers = Layers {
+                dirs: vec![(user.path().to_path_buf(), Layer::User)],
+            };
+            load(&layers).expect("loads").ui_chrome.command_bar()
+        };
+        assert!(load_with("[keymap]\npreset = \"krusader\"\n"));
+        assert!(!load_with(
+            "[keymap]\npreset = \"krusader\"\n[ui]\ncommand_bar = false\n"
+        ));
+        assert!(!load_with("[keymap]\npreset = \"orthodox\"\n"));
+        assert!(load_with("[ui]\ncommand_bar = true\n"));
+    }
+
+    /// A profile is presentation too: it cannot choose the program either,
+    /// and says so where profiles report.
+    #[test]
+    fn a_profile_cannot_choose_the_terminal() {
+        let user = tempfile::tempdir().unwrap();
+        let profile = tempfile::tempdir().unwrap();
+        std::fs::write(
+            profile.path().join("norte.toml"),
+            "[ui]\nterminal = [\"/tmp/evil\"]\n",
+        )
+        .unwrap();
+        let layers = Layers {
+            dirs: vec![
+                (user.path().to_path_buf(), Layer::User),
+                (profile.path().to_path_buf(), Layer::Profile),
+            ],
+        };
+        let cfg = load(&layers).expect("loads");
+        assert_eq!(cfg.ui_terminal, None);
+        assert!(
+            cfg.profile_warnings.iter().any(|w| w.contains("terminal")),
+            "{:?}",
+            cfg.profile_warnings
         );
     }
 
@@ -3638,6 +3757,14 @@ mod hotlist_tests {
 
     fn load_one_layer(toml: &str) -> CommonConfig {
         load_one_layer_result(toml).expect("loads")
+    }
+
+    /// ADR 0183: off unless the user's own file says so.
+    #[test]
+    fn the_release_check_is_off_unless_the_user_turns_it_on() {
+        assert!(!load_one_layer("").check_updates);
+        assert!(load_one_layer("[updates]\ncheck = true\n").check_updates);
+        assert!(load_one_layer_result("[updates]\nchek = true\n").is_err());
     }
 
     /// `[[ui.columns.spec]]` (#108 7b): parsing a single layer — global spec
@@ -5802,12 +5929,15 @@ enabled = true
 dir = "/tmp/foreign-logs"
 [archive]
 max_entries = 999999999
+[updates]
+check = true
 "#,
         )
         .expect("write");
 
         let cfg = load(&layers(user.path(), profile.path())).expect("loads");
 
+        assert!(!cfg.check_updates, "the network is not turned on");
         assert_eq!(cfg.daemon.socket, None, "the transport is not redirected");
         assert!(!cfg.ai.enabled, "AI does not turn on by itself");
         assert_eq!(cfg.log.dir, None, "the logs do not move");
@@ -5817,11 +5947,11 @@ max_entries = 999999999
         );
         assert_eq!(
             cfg.profile_warnings.len(),
-            4,
-            "and all four ARE said: staying silent about them turns the \
+            5,
+            "and all five ARE said: staying silent about them turns the \
              picker into a privilege escalator"
         );
-        for section in ["daemon", "ai", "log", "archive"] {
+        for section in ["daemon", "ai", "log", "archive", "updates"] {
             assert!(
                 cfg.profile_warnings.iter().any(|w| w.contains(section)),
                 "missing the warning for [{section}]: {:?}",

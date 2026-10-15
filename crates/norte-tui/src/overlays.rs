@@ -132,6 +132,7 @@ pub fn settle_help_over_modal(app: &mut App) {
 /// search dialog) yield the key but SURVIVE: their rows do not expire and the
 /// reader gets them back intact after answering.
 pub fn close_stale_overlays(app: &mut App) {
+    crate::orders::cancel(app);
     app.goto = None;
     app.settings = None;
     // K3c: and with settings the shortcuts editor goes too, since it lives
@@ -166,7 +167,7 @@ pub fn close_stale_overlays(app: &mut App) {
 /// Which modals allow it is a DECISION, not routing hangover: it is said by
 /// [`crate::help_context::help_over_modal_allowed`], exhaustive over `Modal`
 /// and with no wildcard (review MINOR-3). The six FREE-TEXT editors
-/// (`Mkdir`, `MarkPattern`, `CommandLine`, `AiRenameInstruction`,
+/// (`Mkdir`, `MarkPattern`, `AiRenameInstruction`,
 /// `SemanticQuery`, `TransferName`) and Lua's TOFU answer `false`: today they
 /// do not even reach here either — the run loop intercepts them earlier to
 /// read RAW keys (decision 8 of the H1 plan: the keymap must not
@@ -449,6 +450,7 @@ pub fn goto_help(
         app.message = Some(t("msg-palette-no-help"));
         return false;
     };
+    crate::orders::cancel(app);
     app.goto = None;
     open_help_topic(app, lang, help_lines, topic.id.as_str());
     true

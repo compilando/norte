@@ -55,7 +55,7 @@
 # commands menu (F11) and plugin configuration (Alt+Shift+F9); internal/
 # external viewer and editor toggles (Alt+F3, Alt+F4— norte has one viewer
 # and one editor, no alternate to switch to); printing (Alt+F5); NTFS
-# hard-link creation (Alt+F6); command-line history (Alt+F8) and file
+# hard-link creation (Alt+F6); file
 # view/edit history (Alt+F11), distinct from the folder history at Alt+F12,
 # which IS bound to `pane.history`; console window resize (Alt+F9); find
 # folder (Alt+F10), a narrower relative of find file already bound at
@@ -118,6 +118,10 @@
 # orthodox, cua and vim carry it. Here it is reached through the Go menu
 # (F9), where it is first, and through the palette.
 #
+# `app.orders` (the order line, ADR 0185) is `alt+:`, a norte chord Far does
+# not attest: its command line is the shell's and takes every printable
+# key, and its fast find is Alt+letter, which `:` is not.
+#
 # `task.pause` (ADR 0147), `task.retry` (ADR 0148) and the three queue ones
 # (`task.queue`, `task.up`, `task.down`, ADR 0149) are left UNBOUND here,
 # just like `task.cancel`:
@@ -144,6 +148,7 @@ keymap = [
     # preset. See the long note in krusader.toml.
     { on = ["alt+9"], run = "app.theme" },
     { on = ["ctrl+p"], run = "app.palette" },
+    { on = ["alt+:"], run = "app.orders" },
     # F9 is the menu bar in FAR (attested: "F9 — Show menu"); alt+m stays as
     # the shared chord every preset carries (spec 2026-09-10).
     { on = ["f9"], run = "app.menu" },
@@ -159,6 +164,9 @@ keymap = [
     # The log (#323): far does not attest it, it is bound anyway because it
     # is norte's own and `alt+l` is free. See the header's divergences block.
     { on = ["alt+l"], run = "layout.log" },
+    # The assistant (ADR 0186): norte's own, like the log; FAR has nothing
+    # to transcribe. `alt+Y` is free in all seven presets.
+    { on = ["alt+Y"], run = "layout.assistant" },
     # The disk map (phase 4). FAR has no panel like this and attests no
     # chord, so this is not a transcription: `alt+z` is the one letter free
     # across all seven presets. See orthodox.toml.
@@ -231,6 +239,9 @@ keymap = [
     { on = ["alt+f2"], run = "pane.select-drive-right" },
     { on = ["alt+f7"], run = "pane.search" },
     { on = ["alt+f12"], run = "pane.history" },
+    # Alt+F8 is Far's command-line history; norte's command line is the
+    # bar, whose Up/Down walk that history — the same door.
+    { on = ["alt+f8"], run = "pane.command-line" },
     { on = ["shift+f1"], run = "pane.pack" },
     { on = ["shift+f2"], run = "pane.unpack" },
     { on = ["shift+f4"], run = "pane.edit-new" },

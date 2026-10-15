@@ -1,0 +1,25 @@
+[package]
+name = "norte-orders"
+description = "The order grammar typed in the box (`sel ext:pdf | cp >other`): parser, printer and byte escapes, no I/O"
+license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+# `is_combining_mark`, so the printer keeps `é` decomposed and Hindi raw
+# instead of escaping every mark. ALREADY in the workspace (norte-encoding,
+# norte-core, norte-vfs-local…) and not ours, so the boundary holds.
+unicode-normalization.workspace = true
+
+[dev-dependencies]
+norte-encoding.workspace = true
+norte-testkit.workspace = true
+proptest.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

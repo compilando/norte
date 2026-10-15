@@ -1450,7 +1450,19 @@ use crate::{
 ///
 /// The cost is the reader's to know: asking makes the daemon read every
 /// content file to the end instead of stopping at its first hit.
-pub const PROTOCOL_VERSION: &str = "0.86.0";
+/// # 0.87.0 — the assistant
+///
+/// [`AI_CHAT`]: one assistant turn over a conversation the client holds. It
+/// reads metadata only and mutates nothing; an `Order` turn is a proposal
+/// the reader applies — or not — through the methods that already exist
+/// (ADR 0186). Human connections only.
+///
+/// A **0.86 client against a 0.87 daemon** never calls it and loses nothing
+/// it had. A **0.87 client against a 0.86 daemon** does not negotiate
+/// ([`version_compatible`]). A turn of a kind added later reads as
+/// [`AiChatTurn::Unknown`], so a 0.87 client inside a later window says it
+/// needs a newer norte instead of failing the result.
+pub const PROTOCOL_VERSION: &str = "0.87.0";
 
 /// `initialize` — MANDATORY handshake before any other method
 /// (ADR 0011). Rejects incompatible versions (see
@@ -2556,6 +2568,16 @@ pub const JOURNAL_UNDO_AFTER: &str = "journal.undo_after";
 /// assert_eq!(norte_proto::methods::AI_ORGANIZE_PLAN, "ai.organize_plan");
 /// ```
 pub const AI_ORGANIZE_PLAN: &str = "ai.organize_plan";
+/// `ai.chat` — one assistant turn over the conversation so far (0.87.0, ADR
+/// 0186). Stateless: the client sends the whole conversation. Reads
+/// metadata only and mutates nothing; an [`AiChatTurn::Order`] is a proposal
+/// the reader applies through the methods that already exist (ADR 0050).
+/// Human connections only, behind the same AI gate as the rename plan.
+///
+/// ```
+/// assert_eq!(norte_proto::methods::AI_CHAT, "ai.chat");
+/// ```
+pub const AI_CHAT: &str = "ai.chat";
 /// `plugin.organize_plan` — the same plan, proposed by an `organizer`-kind
 /// plugin (`norte:organizer@0.1.0`, 0.77.0).
 ///
@@ -3537,6 +3559,123 @@ pub struct AiRenamePlanResult {
     /// empty plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
+}
+
+/// The most messages an [`AI_CHAT`] request carries: the conversation is the
+/// client's, and every message goes into the prompt.
+pub const AI_CHAT_MAX_MESSAGES: usize = 40;
+
+/// The most bytes of one [`AiChatMessage::text`].
+pub const AI_CHAT_MAX_TEXT_BYTES: usize = 4096;
+
+/// Params of [`AI_CHAT`]: the conversation so far and where the reader is.
+///
+/// Stateless on purpose: the daemon keeps no session, so a frontend that
+/// reconnects, or a second frontend, loses nothing it did not hold.
+///
+/// ```
+/// use norte_proto::methods::{AiChatMessage, AiChatParams, AiChatRole};
+/// let p = AiChatParams {
+///     messages: vec![AiChatMessage { role: AiChatRole::User, text: "hola".into() }],
+///     here: norte_proto::VPath::parse("file:///home").unwrap(),
+///     other: None,
+/// };
+/// assert!(serde_json::to_string(&p).unwrap().contains("\"role\":\"user\""));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiChatParams {
+    /// Oldest first; the last one is the reader's new message. At most
+    /// [`AI_CHAT_MAX_MESSAGES`].
+    pub messages: Vec<AiChatMessage>,
+    /// The focused pane's folder: where an order's `sel` and relative paths
+    /// resolve, and one of the two roots the assistant may read under.
+    pub here: VPath,
+    /// The other pane's folder (`>other`), the other root it may read under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other: Option<VPath>,
+}
+
+/// One message of an [`AI_CHAT`] conversation.
+///
+/// ```
+/// use norte_proto::methods::{AiChatMessage, AiChatRole};
+/// let m = AiChatMessage { role: AiChatRole::Assistant, text: "sel *.pdf".into() };
+/// assert_eq!(m.role, AiChatRole::Assistant);
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiChatMessage {
+    /// Who said it.
+    pub role: AiChatRole,
+    /// What was said; at most [`AI_CHAT_MAX_TEXT_BYTES`].
+    pub text: String,
+}
+
+/// Who said an [`AiChatMessage`]. Strict on purpose: it flows client →
+/// daemon, and a daemon never accepts a client ahead of it.
+///
+/// ```
+/// use norte_proto::methods::AiChatRole;
+/// assert_eq!(serde_json::to_string(&AiChatRole::User).unwrap(), "\"user\"");
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiChatRole {
+    /// The reader.
+    User,
+    /// The assistant (an earlier turn, sent back as context).
+    Assistant,
+}
+
+/// What the assistant said this turn.
+///
+/// An `Order` is a line in the order grammar (ADR 0185) that the daemon has
+/// already parsed and vetted — no catalogue commands, no destination on
+/// another provider. It is a PROPOSAL: the daemon applies nothing, and a
+/// client must only run it on the reader's explicit gesture (ADR 0050).
+///
+/// ```
+/// use norte_proto::methods::AiChatTurn;
+/// let t: AiChatTurn = serde_json::from_str(r#"{"kind":"answer","text":"3 GiB"}"#).unwrap();
+/// assert_eq!(t, AiChatTurn::Answer { text: "3 GiB".into() });
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AiChatTurn {
+    /// A vetted order for the reader to review and, if they want, apply.
+    Order {
+        /// The line, e.g. `sel ext:pdf age<30d | cp >other`.
+        text: String,
+        /// One sentence on what it does, from the model.
+        note: String,
+    },
+    /// Prose built from metadata (names, sizes, dates, the journal).
+    Answer {
+        /// What to show.
+        text: String,
+    },
+    /// A kind this client does not know yet: a newer daemon inside the
+    /// window may add one. Never emitted; a client says it needs a newer
+    /// norte instead of failing the whole result.
+    #[serde(other)]
+    Unknown,
+}
+
+/// Result of [`AI_CHAT`].
+///
+/// ```
+/// use norte_proto::methods::{AiChatResult, AiChatTurn};
+/// let r = AiChatResult { turn: AiChatTurn::Answer { text: "ok".into() } };
+/// assert!(serde_json::to_string(&r).unwrap().contains("\"kind\":\"answer\""));
+/// ```
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AiChatResult {
+    /// The turn.
+    pub turn: AiChatTurn,
 }
 
 /// Params of [`AI_ORGANIZE_PLAN`] (0.77.0, phase 8 of the WOW program).

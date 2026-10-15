@@ -621,7 +621,23 @@ use serde::{Deserialize, Serialize};
 ///   2026-10-09). `SearchPanelSlotView.generation` numbers the rows'
 ///   indexing, and `_activate` and `_fold` echo it back: a row renumbered
 ///   since that generation is refused as `StaleAction::Generation`.
-pub const BRIDGE_VERSION: u32 = 111;
+/// - **112**: the action `overlay_dismiss`: a press on the veil behind the
+///   overlay in front closes it when it is a light popup.
+/// - **113**: the command bar (ADR 0181): `ViewSnapshot.command_bar`,
+///   `ViewChange::CommandBar` (`CommandBarView`), and the actions
+///   `command_bar_focus` and `command_bar_paste`.
+/// - **114**: `RowView.icon_kind`, the window's own colored icon per file
+///   type (ADR 0184).
+/// - **115**: the order line (ADR 0185): `GotoModeView::Order` and
+///   `GotoView.order` (`OrderLineView`: colour spans, parse error, preview).
+/// - **116**: the assistant panel (ADR 0186): `SlotView::Assistant`
+///   (`AssistantSlotView`, `AssistantTurnView`), the actions
+///   `assistant_submit` and `assistant_apply`, and `GotoModeView::Ask`.
+/// - **117**: the throughput graphs (ADR 0187): `StatusProgressView.spark`
+///   and `TaskView.spark`.
+/// - **118**: `assistant_cancel`, stop waiting for the assistant's turn, and
+///   `AssistantSlotView.first`, so `assistant_apply` names a turn by number.
+pub const BRIDGE_VERSION: u32 = 118;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

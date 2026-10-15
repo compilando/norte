@@ -152,6 +152,39 @@ async fn a_pass_through_chord_switches_instead_of_typing() {
     terminal_until(&mut sub, |t| t.active == first).await;
 }
 
+/// Closing the LAST shell closes its panel. It used to leave an empty "no
+/// shell" box that the panel's key could not close.
+#[tokio::test]
+async fn closing_the_last_shell_closes_the_panel() {
+    let (h, mut sub, _tmp) = local_host(None).await;
+    let t = open_panel(&h, &mut sub).await;
+    let id = t.active.expect("a shell in front");
+    h.dispatch(UiAction::TerminalClose { id })
+        .await
+        .expect("host alive");
+    snapshot_until(&h, &mut sub, "the terminal slot gone", |s| {
+        (!s.slots.iter().any(|x| matches!(x, SlotView::Terminal(_)))).then_some(())
+    })
+    .await;
+}
+
+/// A shell that EXITS on its own leaves the panel, empty; the panel's ✕
+/// (a close naming no live shell) closes it. Nothing could before.
+#[tokio::test]
+async fn an_empty_panel_closes_with_its_close_button() {
+    let (h, mut sub, _tmp) = local_host(None).await;
+    open_panel(&h, &mut sub).await;
+    type_line(&h, "exit").await;
+    terminal_until(&mut sub, |t| t.instances.is_empty()).await;
+    h.dispatch(UiAction::TerminalClose { id: 0 })
+        .await
+        .expect("host alive");
+    snapshot_until(&h, &mut sub, "the empty terminal slot gone", |s| {
+        (!s.slots.iter().any(|x| matches!(x, SlotView::Terminal(_)))).then_some(())
+    })
+    .await;
+}
+
 /// `alt+x` inside the panel is the shell's (Emacs's `M-x`), NOT
 /// `layout.close-slot`: closing the slot would kill every shell in it.
 #[tokio::test]
@@ -249,6 +282,54 @@ async fn the_door_key_inside_an_empty_panel_starts_a_shell() {
     .await
     .expect("host alive");
     terminal_until(&mut sub, |t| t.instances.len() == 1 && !t.no_shell).await;
+}
+
+/// `terminal.close` by key with the panel BEHIND a tab kills nothing: the
+/// reader cannot see which shell that would be.
+#[tokio::test]
+async fn closing_a_hidden_terminal_kills_nothing() {
+    let key = |k: &str, ctrl: bool, alt: bool| {
+        UiAction::Key(norte_ui_host::keys::KeyInput {
+            key: k.to_owned(),
+            ctrl,
+            alt,
+            shift: false,
+            meta: false,
+        })
+    };
+    let (h, mut sub, _tmp) = local_host(None).await;
+    open_panel(&h, &mut sub).await;
+    // Out of the panel, then the log over it (same bottom group).
+    h.dispatch(key("s", true, true)).await.expect("host alive");
+    h.dispatch(key("l", false, true)).await.expect("host alive");
+    let ack = h.dispatch(key("w", true, true)).await.expect("host alive");
+    assert!(
+        matches!(ack, ActionAck::Unavailable { .. }),
+        "refused, not applied: {ack:?}"
+    );
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let t = terminal_until(&mut sub, |_| true).await;
+    assert_eq!(t.instances.len(), 1, "the shell lives");
+}
+
+/// The last shell leaving hands the keyboard back to the listing, as the
+/// TUI does: keys sent into a panel with no shell went nowhere.
+#[tokio::test]
+async fn the_last_clean_exit_gives_the_keyboard_back() {
+    use norte_ui_host::dto::SlotRole;
+    let (h, mut sub, _tmp) = local_host(None).await;
+    let t = open_panel(&h, &mut sub).await;
+    type_line(&h, "exit").await;
+    terminal_until(&mut sub, |t| t.no_shell).await;
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = next_snapshot(&mut sub).await;
+    let active = snap
+        .layout
+        .placements
+        .iter()
+        .find(|p| p.role == Some(SlotRole::Active))
+        .map(|p| p.slot_id);
+    assert_ne!(active, Some(t.slot_id), "the listing has the keyboard");
 }
 
 /// The last shell leaving leaves the panel saying "no shell".

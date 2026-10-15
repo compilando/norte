@@ -552,42 +552,6 @@ pub enum Modal {
         /// The last invalid attempt's diagnostic.
         error: Option<String>,
     },
-    /// `pane.command-line` (#135). Free text, [`Modal::Mkdir`]'s mold: the
-    /// user's RAW line, masked when painted.
-    ///
-    /// What Enter does with it does NOT go through the core: the shell takes
-    /// it with the TUI suspended, which is the user acting with their own
-    /// permissions and not a norte mutation (design §D — the journal sees
-    /// none of this, and saying so is more honest than putting irreversible
-    /// entries in the chain).
-    ///
-    /// # It's the one place in norte where what's painted is code to approve
-    ///
-    /// Two consequences the S4 review left decided, not inherited:
-    ///
-    /// - **Multi-line paste confirms on the first newline** (encoding H2).
-    ///   The TUI has no bracketed paste — a paste arrives as loose
-    ///   keystrokes and crossterm maps `\n` to `Enter` — so the first line
-    ///   gets sent alone. The REST doesn't execute: [`crate::app::PendingShell`]
-    ///   gets drained with the type-ahead already discarded, so it doesn't
-    ///   reach the child nor the TUI's dispatch as commands. It's stated in
-    ///   the `shell` topic's honest limits. The full fix (turning on
-    ///   bracketed paste and routing `Event::Paste` in the SIX free-text
-    ///   surfaces there are) is work for the whole TUI, not this item, and
-    ///   doing it halfway would break paste in the other five.
-    /// - **ZWJ and NBSP pass unmarked.** `must_mask` allows them knowingly
-    ///   (emoji fidelity), which is correct for a file NAME. Here
-    ///   `git\u{200D}status` reads the same as `git status` and the shell
-    ///   splits it differently. It gets the same treatment as the rest of
-    ///   the fields — an exception per surface would be worse to reason
-    ///   about — and it's stated: what's truly dangerous (RLO and friends)
-    ///   DOES get masked.
-    CommandLine {
-        /// What's been typed so far.
-        command: String,
-        /// The last invalid attempt's diagnostic, under the field.
-        error: Option<String>,
-    },
     /// A batch's checksums, already computed (#311): a READ surface.
     ///
     /// Two faces of the same modal, and that's why they aren't two:
@@ -815,8 +779,6 @@ pub enum PromptKind {
     EditNew,
     /// [`Modal::ProfileSaveAs`].
     ProfileSaveAs,
-    /// [`Modal::CommandLine`].
-    CommandLine,
     /// [`Modal::AiRenameInstruction`].
     AiRename,
     /// [`Modal::RenameBatchPattern`].
@@ -939,7 +901,6 @@ impl Modal {
             Self::Mkdir { .. } => PromptKind::Mkdir,
             Self::EditNew { .. } => PromptKind::EditNew,
             Self::ProfileSaveAs { .. } => PromptKind::ProfileSaveAs,
-            Self::CommandLine { .. } => PromptKind::CommandLine,
             Self::AiRenameInstruction { .. } => PromptKind::AiRename,
             Self::RenameBatchPattern { .. } => PromptKind::RenameBatch,
             Self::SemanticQuery { .. } => PromptKind::Semantic,
@@ -1015,14 +976,6 @@ impl Modal {
                 None,
                 CHMOD_MAX_CHARS,
                 OverLimit::Silent,
-                PopMode::Char,
-            ),
-            Self::CommandLine { command, error } => (
-                command,
-                error,
-                None,
-                TEXT_FIELD_MAX_CHARS,
-                OverLimit::Say,
                 PopMode::Char,
             ),
             Self::AiRenameInstruction { instruction, error } => (
@@ -1140,13 +1093,6 @@ mod tests {
                 },
             ),
             (
-                PromptKind::CommandLine,
-                Modal::CommandLine {
-                    command: String::new(),
-                    error: None,
-                },
-            ),
-            (
                 PromptKind::AiRename,
                 Modal::AiRenameInstruction {
                     instruction: String::new(),
@@ -1198,19 +1144,6 @@ mod tests {
         let tp = m.text_prompt().expect("field");
         assert_eq!(tp.text().chars().count(), 32, "the cap didn't stop it");
         assert!(tp.error().is_none(), "the split cap is silent");
-    }
-
-    /// The command line's DOES say so (#246 M3).
-    #[test]
-    fn the_command_lines_cap_gets_stated() {
-        let mut m = Modal::CommandLine {
-            command: "x".repeat(TEXT_FIELD_MAX_CHARS),
-            error: None,
-        };
-        m.text_prompt().expect("field").push('y');
-        let tp = m.text_prompt().expect("field");
-        assert_eq!(tp.text().chars().count(), TEXT_FIELD_MAX_CHARS);
-        assert!(tp.error().is_some(), "the line's cap gets stated");
     }
 
     /// The destination's backspace erases the WHOLE escape, not one

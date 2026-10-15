@@ -185,7 +185,7 @@ pub fn execute(effect: &NativeEffect) -> RunOutcome {
     match effect {
         NativeEffect::CopyBytes { bytes, .. } => copy_bytes(bytes),
         NativeEffect::OpenPath { path } => open_path(path),
-        NativeEffect::OpenTerminal { dir } => terminal(dir),
+        NativeEffect::OpenTerminal { dir, configured } => terminal(dir, configured.as_deref()),
         // Phase 9: `pump` handles it, since it is the one that can close
         // the window and notify the host depending on how it turns out. This
         // is only reached if someone calls `execute` by hand, and then the
@@ -358,11 +358,14 @@ fn open_path(path: &norte_proto::VPath) -> RunOutcome {
 }
 
 /// Opens a terminal sitting in `dir`.
-fn terminal(dir: &norte_proto::VPath) -> RunOutcome {
-    let Ok(native) = norte_vfs::native::vpath_to_native(dir) else {
+fn terminal(dir: &norte_proto::VPath, configured: Option<&[String]>) -> RunOutcome {
+    // Through `shell_dir`, like the terminal: on Windows the raw native path
+    // is verbatim (`\\?\`), which `cmd`'s cwd and `%d` mishandle, and a
+    // reserved name must be refused, not opened somewhere else.
+    let Some(native) = norte_frontend::shell::shell_dir(dir) else {
         return RunOutcome::NoProgram;
     };
-    for argv in norte_frontend::shell::terminal_candidates(&native) {
+    for argv in norte_frontend::shell::terminal_candidates(configured, &native) {
         let Some(program) = argv.first() else {
             continue;
         };
@@ -380,10 +383,9 @@ fn terminal(dir: &norte_proto::VPath) -> RunOutcome {
 /// The HANDOFF to the terminal (phase 9): opens an emulator with
 /// `ntc --attach` inside.
 ///
-/// Reuses `terminal_candidates`, the shared list of emulators and their
-/// command flag, and sets `ntc` as the program to run: this way the handoff
-/// opens the same emulator as `app.terminal`, and a desktop where that one
-/// works needs nothing else configured for this one.
+/// Uses `terminal_command_candidates`, the shared list of emulators and
+/// their run-this-command flag, with `ntc` as the program. `[ui] terminal`
+/// does NOT apply here: its template has no way to say where a command goes.
 ///
 /// `--daemon` travels if this window carries it, and it has to: the session
 /// that was just let go of is the daemon's, and an `ntc` against its embedded
@@ -550,8 +552,24 @@ fn launch(
     if let Some(d) = cwd {
         cmd.current_dir(d);
     }
+    // Its own process group, as the terminal's launches: a Ctrl+C or a
+    // hangup aimed at the window does not take the launched program along.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
+    }
     match cmd.spawn() {
-        Ok(_) => RunOutcome::Done,
+        Ok(mut child) => {
+            // Reaped off the window's threads: dropped, it stays a zombie
+            // until the window exits. A reaper that cannot start costs one.
+            let _ = std::thread::Builder::new()
+                .name("norte-reap".into())
+                .spawn(move || {
+                    let _ = child.wait();
+                });
+            RunOutcome::Done
+        }
         Err(_) => RunOutcome::Failure,
     }
 }
@@ -587,6 +605,39 @@ mod tests {
         ));
     }
 
+    /// A launched program gets its own process group, away from the
+    /// window's signals (Linux: the group is read from `/proc`).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_launch_runs_in_its_own_process_group() {
+        let d = tempfile::tempdir().unwrap();
+        let out = d.path().join("pgid");
+        let script = format!(
+            "cut -d' ' -f5 /proc/$$/stat > '{}.t' && mv '{0}.t' '{0}'",
+            out.display()
+        );
+        let outcome = super::launch(
+            std::path::Path::new("sh"),
+            &["-c".into(), script.into()],
+            None,
+        );
+        assert_eq!(outcome, RunOutcome::Done);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let pgid = loop {
+            if let Ok(s) = std::fs::read_to_string(&out) {
+                break s;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the child never wrote"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let ours = std::fs::read_to_string("/proc/self/stat").unwrap();
+        let ours = ours.split(' ').nth(4).unwrap();
+        assert_ne!(pgid.trim(), ours, "its own group");
+    }
+
     /// A location that is NOT on this disk is not handed to the desktop.
     ///
     /// The host already checks this and says so; this is the belt on the
@@ -604,7 +655,10 @@ mod tests {
             RunOutcome::NoProgram
         );
         assert_eq!(
-            execute(&NativeEffect::OpenTerminal { dir: remote }),
+            execute(&NativeEffect::OpenTerminal {
+                dir: remote,
+                configured: None
+            }),
             RunOutcome::NoProgram
         );
     }

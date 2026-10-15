@@ -99,6 +99,7 @@ pub const ZONE_ALLOWED: &[&str] = &[
     "layout.processes",
     "layout.metadata",
     "layout.log",
+    "layout.assistant",
     "pane.tree",
 ];
 

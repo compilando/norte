@@ -22,6 +22,7 @@ use norte_ui_host::dto::{SlotView, UiNotice, UiUpdate};
 mod backend_fake;
 use backend_fake::Fake;
 
+mod assistant;
 mod attributes_processes;
 mod base;
 mod columns;
@@ -35,7 +36,9 @@ mod help;
 mod keys_palette;
 mod layouts;
 mod log;
+mod orders;
 mod organize;
+mod overlay_dismiss;
 mod panels;
 mod plugin_panes;
 mod rename;

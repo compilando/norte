@@ -41,6 +41,9 @@ keymap = [
     { on = ["alt+j"], run = "layout.processes" },
     # The log (#323). `alt+l` for "log", free in all seven presets.
     { on = ["alt+l"], run = "layout.log" },
+    # The assistant (ADR 0186). `alt+Y` is free in all seven presets; no
+    # reference manager has an assistant to transcribe a chord from.
+    { on = ["alt+Y"], run = "layout.assistant" },
     # The disk map (phase 4), `alt+z`: the one letter free in all seven.
     # See the note in orthodox.toml.
     { on = ["alt+z"], run = "layout.disk-map" },
@@ -112,6 +115,8 @@ keymap = [
     { on = ["menu"], run = "pane.context-menu" },
     { on = ["f4"], run = "pane.open" },
     { on = ["/"], run = "pane.quick-search" },
+    # The order line (ADR 0185): `:` was free in the listing.
+    { on = [":"], run = "app.orders" },
     { on = ["alt+down"], run = "pane.history" },
     { on = ["alt+f7"], run = "pane.search" },
     { on = ["shift+f2"], run = "pane.compare-dirs" },
@@ -128,6 +133,8 @@ keymap = [
     { on = ["alt+."], run = "pane.toggle-hidden" },
     { on = ["alt+c"], run = "pane.columns" },
     { on = ["ctrl+d"], run = "pane.hotlist" },
+    # The command bar (ADR 0181): below the panes, where the arrow points.
+    { on = ["ctrl+down"], run = "pane.command-line" },
     { on = ["insert"], run = "mark.toggle" },
     { on = ["space"], run = "mark.toggle" },
     { on = ["ctrl+a"], run = "mark.all" },

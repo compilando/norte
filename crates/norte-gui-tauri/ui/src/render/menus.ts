@@ -10,6 +10,7 @@ import type {
   PanelBarView,
   WizardView,
   GotoView,
+  OrderTokenView,
   TabGroupView,
   WhichKeyView,
   WindowVerb,
@@ -541,6 +542,38 @@ function enablePaste(e: Event): void {
   e.preventDefault();
 }
 
+/**
+ * An order line as coloured spans. The host's ranges are UTF-8 BYTE offsets
+ * of `query` (what the Rust side counts), so they are cut on the encoded
+ * bytes and decoded back: slicing the JS string by them would split a
+ * character the moment the line holds anything but ASCII.
+ */
+export function orderSpans(query: string, tokens: OrderTokenView[]): Node[] {
+  const bytes = new TextEncoder().encode(query);
+  const text = (a: number, b: number): string =>
+    new TextDecoder().decode(bytes.subarray(a, b));
+  const out: Node[] = [];
+  let at = 0;
+  for (const t of tokens) {
+    if (t.start < at || t.end < t.start || t.end > bytes.length) {
+      continue;
+    }
+    if (t.start > at) {
+      out.push(document.createTextNode(text(at, t.start)));
+    }
+    const span = document.createElement("span");
+    span.className = "order-token";
+    span.dataset["class"] = t.class;
+    span.textContent = text(t.start, t.end);
+    out.push(span);
+    at = t.end;
+  }
+  if (at < bytes.length) {
+    out.push(document.createTextNode(text(at, bytes.length)));
+  }
+  return out;
+}
+
 function markGotoCursor(painted: PaintedGoto, cursor: number | null): void {
   painted.pointed = cursor;
   for (const [i, row] of painted.rows.entries()) {
@@ -684,9 +717,33 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
 
   const query = document.createElement("div");
   query.className = "palette-query";
-  query.textContent = goto.query;
+  // ONE flex item holding the whole line: the row is a flex box, and a
+  // whitespace-only text node between two spans is no item at all — the
+  // spaces of `:sel ext:pdf` vanished from the screen while they were typed.
+  const text = document.createElement("span");
+  text.className = "palette-query-text";
+  if (goto.order !== undefined) {
+    text.append(...orderSpans(goto.query, goto.order.tokens));
+  } else {
+    text.textContent = goto.query;
+  }
+  query.append(text);
   box.append(query);
-  if (goto.hint !== undefined && goto.hint !== "") {
+  // The order line (bridge 115): why it does not parse, or what it would
+  // touch. The error wins: a preview of a line that cannot run is a promise.
+  const orderNote =
+    goto.order === undefined
+      ? ""
+      : goto.order.error !== ""
+        ? goto.order.error
+        : goto.order.preview;
+  if (orderNote !== "") {
+    const note = document.createElement("div");
+    note.className = "order-note";
+    note.dataset["error"] = String(goto.order?.error !== "");
+    note.textContent = orderNote;
+    box.append(note);
+  } else if (goto.hint !== undefined && goto.hint !== "") {
     const hint = document.createElement("div");
     hint.className = "goto-hint";
     hint.textContent = goto.hint;

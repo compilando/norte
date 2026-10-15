@@ -41,9 +41,11 @@ the protocol, a frontend cannot provide it.
 | `norte-frontend` | UI-independent state and behaviour shared by every frontend. | MIT OR Apache-2.0 |
 | `norte-help` | Help corpus and markdown-lite model, consumed by every frontend and the CLI (ADR 0040). | MIT OR Apache-2.0 |
 | `norte-encoding` | Text encoding detection and decoding. | MIT OR Apache-2.0 |
+| `norte-orders` | The order grammar typed in the box (`sel ext:pdf age<30d \| cp >other`): parser, printer and the reversible byte escape. No I/O and no matching — the frontend evaluates an order against the pane it has loaded. Depends on no other crate of ours; a boundary test enforces it. | MIT OR Apache-2.0 |
 | `norte-i18n` | Fluent localization resources shared by the frontends. | MIT OR Apache-2.0 |
 | `norte-term` | A terminal grid: pty bytes parsed into cells, cursor and attributes. No pty, no toolkit, no theme — indexed colours travel unresolved so the theme still decides them. | MIT OR Apache-2.0 |
 | `norte-theme` | Semantic theme roles, true-colour values, terminal fallbacks, and bundled presets. | MIT OR Apache-2.0 |
+| `norte-update` | The opt-in check for a newer release (ADR 0183): version comparison, a once-a-day cache in the state directory, and the fetch of the release list. Not in the core, because the window may not depend on it. | MIT OR Apache-2.0 |
 
 Other subsystems include `norte-index` and `norte-mcp`.
 

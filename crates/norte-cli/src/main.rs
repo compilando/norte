@@ -161,6 +161,30 @@ enum Cmd {
         #[arg(long)]
         resume: bool,
     },
+    /// Runs an order in the box's grammar (ADR 0185), e.g.
+    /// 'sel ext:pdf age<30d | cp >/mnt/backup'. There is no pane: `sel`
+    /// reads `--cwd` and `>other` is refused.
+    Run {
+        /// The order. Bytes that are not UTF-8 are read as their `\xHH`
+        /// escape.
+        order: std::ffi::OsString,
+        /// Folder that `sel` and relative paths resolve against.
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        /// Print what would run; run nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Machine-readable output.
+        #[arg(long)]
+        json: bool,
+        /// Required for `undo`, which changes files.
+        #[arg(long)]
+        yes: bool,
+        /// Let `sel` match dotfiles too (a pane with hidden files off, and a
+        /// shell's `*`, leave them out).
+        #[arg(long)]
+        hidden: bool,
+    },
     /// Deletes a file or directory (recursive), with progress and clean Ctrl-C
     /// Deletes PERMANENTLY (the engine's test bench; the trash lives
     /// in the TUI — ADR 0009).
@@ -286,6 +310,13 @@ enum Cmd {
     Theme {
         #[command(subcommand)]
         cmd: theme::ThemeCmd,
+    },
+    /// Asks GitHub whether a newer norte release exists, and says so. Only
+    /// when you run it, or once a day at start with `[updates] check = true`
+    /// (ADR 0183). Never installs anything
+    Update {
+        #[command(subcommand)]
+        cmd: UpdateCmd,
     },
     /// Prints the cd-on-quit wrapper for a shell, to be `eval`ed (bash/zsh)
     /// or `source`d (fish) from the shell's rc file (S3, shell-integration)
@@ -448,6 +479,13 @@ enum AuditCmd {
     /// writes the line to STDOUT — keep it OFF this machine too: the
     /// external copy is what makes a file truncation detectable
     Anchor,
+}
+
+/// Release-check subcommands (ADR 0183).
+#[derive(Subcommand, Clone, Copy)]
+enum UpdateCmd {
+    /// Asks now, whatever `[updates] check` says: you asked
+    Check,
 }
 
 /// Journal subcommands (ADR 0167).
@@ -788,6 +826,13 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     if let Cmd::ShellInit { ref shell } = cli.cmd {
         return Ok(cmd::environment::shell_init_cmd(shell));
     }
+    // The release check talks to GitHub and to nothing of ours.
+    if let Cmd::Update {
+        cmd: UpdateCmd::Check,
+    } = cli.cmd
+    {
+        return Ok(cmd::environment::update_check_cmd().await);
+    }
     // `theme import` reads a JSON and writes a TOML into the config dir:
     // no engine or daemon, and all synchronous, so `spawn_blocking` (hard
     // rule 2).
@@ -987,6 +1032,22 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             })
             .await
         }
+        Cmd::Run {
+            order,
+            cwd,
+            dry_run,
+            json,
+            yes,
+            hidden,
+        } => {
+            let flags = cmd::run::RunFlags {
+                dry_run,
+                json,
+                yes,
+                hidden,
+            };
+            cmd::run::run(&backend, &order, &cwd, flags).await
+        }
         Cmd::Plugin { cmd } => cmd::plugin::plugin_cmd(&backend, cmd, cli.socket).await,
         Cmd::Index { cmd } => cmd::index::index_cmd(&backend, cmd).await,
         Cmd::Audit { .. }
@@ -996,6 +1057,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         | Cmd::Paths { .. }
         | Cmd::Help { .. }
         | Cmd::ShellInit { .. }
+        | Cmd::Update { .. }
         | Cmd::Theme { .. }
         | Cmd::Tui { .. } => unreachable!("handled above"),
         Cmd::Daemon { .. } | Cmd::Mcp { .. } | Cmd::Policy { .. } | Cmd::Undo { .. } => {

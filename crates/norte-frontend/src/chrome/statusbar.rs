@@ -93,6 +93,9 @@ pub struct StatusItemView {
     /// Shorter forms of the same item, from longest to shortest: [`fit`]
     /// tries them before dropping any item.
     pub shorter: Vec<crate::task_strip::Form>,
+    /// The burst's throughput series when its graph goes in front of the
+    /// text (ADR 0187); empty = no graph.
+    pub spark: Vec<u8>,
 }
 
 /// The `tasks` item's progress.
@@ -105,7 +108,7 @@ pub struct ItemProgress {
 }
 
 impl StatusItemView {
-    /// The cells it takes up, with its bar if it carries one.
+    /// The cells it takes up, with its bar and its graph if it carries them.
     #[must_use]
     pub fn cells(&self) -> usize {
         crate::display::cells(&self.text)
@@ -113,6 +116,11 @@ impl StatusItemView {
                 crate::task_strip::BAR_CELLS + 3
             } else {
                 0
+            }
+            + if self.spark.is_empty() {
+                0
+            } else {
+                crate::spark::CELLS + 1
             }
     }
 }
@@ -126,7 +134,13 @@ pub fn items(input: &StatusInput, list: StatusItems, lang: Lang) -> Vec<StatusIt
 }
 
 fn item(input: &StatusInput, which: StatusItem, lang: Lang) -> Option<StatusItemView> {
-    let mut form: Option<(bool, Option<ItemProgress>, Vec<crate::task_strip::Form>)> = None;
+    type Forms = (
+        bool,
+        Option<ItemProgress>,
+        Vec<crate::task_strip::Form>,
+        Vec<u8>,
+    );
+    let mut form: Option<Forms> = None;
     let (text, command, priority) = match which {
         StatusItem::Position => {
             let (pos, total) = input.position?;
@@ -158,6 +172,11 @@ fn item(input: &StatusInput, which: StatusItem, lang: Lang) -> Option<StatusItem
                     phase: v.phase,
                 }),
                 forms.collect(),
+                if first.graph {
+                    v.spark.clone()
+                } else {
+                    Vec::new()
+                },
             ));
             (first.text, Some("layout.processes"), 80)
         }
@@ -174,7 +193,7 @@ fn item(input: &StatusInput, which: StatusItem, lang: Lang) -> Option<StatusItem
         &format!("status-item-{id}-tip"),
         &[("n", &tip_count(input, which))],
     );
-    let (bar, progress, shorter) = form.unwrap_or_default();
+    let (bar, progress, shorter, spark) = form.unwrap_or_default();
     Some(StatusItemView {
         id: id.to_owned(),
         text,
@@ -184,6 +203,7 @@ fn item(input: &StatusInput, which: StatusItem, lang: Lang) -> Option<StatusItem
         bar,
         progress,
         shorter,
+        spark,
     })
 }
 
@@ -234,6 +254,7 @@ pub fn plugin_items(
                 bar: false,
                 progress: None,
                 shorter: Vec::new(),
+                spark: Vec::new(),
             })
         })
         .collect()
@@ -316,7 +337,7 @@ fn sort_text(s: &SortSpec, lang: Lang) -> String {
 /// use norte_frontend::statusbar::{StatusItemView, fit};
 /// let v = |id: &str, text: &str, priority| StatusItemView {
 ///     id: id.into(), text: text.into(), tooltip: String::new(), command: None, priority,
-///     bar: false, progress: None, shorter: Vec::new(),
+///     bar: false, progress: None, shorter: Vec::new(), spark: Vec::new(),
 /// };
 /// let items = [v("a", "aaaa", 10), v("b", "bb", 90), v("c", "cc", 50)];
 /// let ids = |w| fit(&items, w, 2).into_iter().map(|i| i.id).collect::<Vec<_>>();
@@ -339,6 +360,9 @@ pub fn fit(items: &[StatusItemView], width: usize, sep: usize) -> Vec<StatusItem
             let f = v.shorter.remove(0);
             v.text = f.text;
             v.bar = f.bar;
+            if !f.graph {
+                v.spark.clear();
+            }
             continue;
         }
         // The lowest priority; at equal priority, the rightmost.
@@ -405,6 +429,7 @@ mod tests {
             name: None,
             rate: String::new(),
             eta: "1m".to_owned(),
+            spark: Vec::new(),
         });
         i.notices = 1;
         i.marked = 1;
@@ -448,11 +473,15 @@ mod tests {
             name: Some("big-photo.jpg".to_owned()),
             rate: "48 MiB/s".to_owned(),
             eta: String::new(),
+            spark: vec![50; crate::spark::SAMPLES],
         });
         let list = StatusItems::parse(&["tasks", "position"]).unwrap();
         let v = items(&i, list, Lang::Es);
         let whole = fit(&v, 200, 2);
         assert!(whole[0].text.contains("big-photo.jpg") && whole[0].bar);
+        assert!(!whole[0].spark.is_empty(), "the graph, when it fits");
+        let narrow = fit(&v, crate::task_strip::form_cells(&v[0].shorter[2]) + 7, 2);
+        assert!(narrow[0].spark.is_empty(), "the first thing given up");
         // Exactly what the shortest form with a bar takes, plus the
         // position.
         let short = v[0].shorter.iter().rfind(|f| f.bar).expect("short form");

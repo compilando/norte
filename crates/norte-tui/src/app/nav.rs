@@ -110,7 +110,19 @@ impl App {
             include_pseudo: false,
             side,
             filter,
+            add_target: None,
         });
+    }
+
+    /// "Add to favorites" from a context menu: the favorites popup with its
+    /// name input open and pre-filled, saving `path` instead of the focused
+    /// folder — the same popup, the same name rule, the same save.
+    pub fn open_hotlist_add_for(&mut self, path: VPath) {
+        self.open_nav_popup(NavPopupKind::Hotlist);
+        if let Some(p) = &mut self.nav_popup {
+            p.add_target = Some(path);
+        }
+        self.nav_popup_open_name_input();
     }
 
     /// The OTHER panel relative to the one the open popup navigates: the
@@ -209,6 +221,7 @@ impl App {
             include_pseudo,
             side: None,
             filter: None,
+            add_target: None,
         });
     }
 
@@ -285,6 +298,9 @@ impl App {
     #[must_use]
     pub fn nav_popup_add_target(&self) -> Option<VPath> {
         let p = self.nav_popup.as_ref()?;
+        if let Some(t) = &p.add_target {
+            return Some(t.clone());
+        }
         match p.kind {
             NavPopupKind::Hotlist => Some(self.focused().dir().clone()),
             NavPopupKind::History | NavPopupKind::Popular => p.selected()?.target.clone(),

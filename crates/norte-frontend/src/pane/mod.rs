@@ -19,6 +19,7 @@ mod quick;
 mod viewport;
 
 pub use marks::MarksSummary;
+pub(crate) use marks::NameMatcher;
 
 // `PaneState` is still ONE: what is split up are its methods, in sibling
 // `impl` blocks. A child module sees its parent's private items, so this
@@ -33,7 +34,7 @@ use norte_proto::{Entry, EntryKind, VPath};
 use std::collections::{HashMap, HashSet};
 
 /// Why a mark-by-pattern was rejected (hard rule 6: typed library errors).
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PatternError {
     /// The glob does not compile. Carries the `globset` diagnostic, which
@@ -131,7 +132,7 @@ fn unicode_glob_regex(glob: &globset::Glob) -> Result<String, PatternError> {
 /// not one; a non-UTF8 name starting with 0x2E is. Windows's hidden
 /// attribute will arrive through the wire's attrs (proto 0.30) once some
 /// provider announces it.
-fn is_hidden_entry(e: &Entry) -> bool {
+pub(crate) fn is_hidden_entry(e: &Entry) -> bool {
     e.path
         .file_name()
         .is_some_and(|n| n.as_bytes().first() == Some(&b'.'))
@@ -505,7 +506,7 @@ impl PaneState {
         if !matches!(self.parent_row, ParentRow::Requested) || self.results.is_some() {
             return;
         }
-        let Some(parent) = self.dir.parent() else {
+        let Some((parent, _)) = crate::nav::up_from(&self.dir) else {
             return;
         };
         let row = Entry {

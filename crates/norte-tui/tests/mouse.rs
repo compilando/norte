@@ -91,33 +91,39 @@ fn paint_at(app: &mut App, w: u16, h: u16) -> Vec<String> {
     // the geometry. Without the first step it would paint a window nobody
     // reconciled, i.e. a screen no user sees.
     ui::before_frame(app, ratatui::layout::Rect::new(0, 0, w, h));
-    let frame = terminal.draw(|f| ui::draw(f, app)).expect("draw");
-    let geometry = ui::pane_geometry(app, frame.area);
-    mouse::after_frame(
-        app,
-        geometry,
-        mouse::FrameZones {
-            tabs: ui::tab_zones(app, frame.area),
-            menus: ui::menu_zones(app, frame.area),
-            panels: ui::panel_zones(app, frame.area),
-            keys: ui::key_zones(app, frame.area),
-            modal: ui::modal_zones(app, frame.area),
-            places: ui::places_zones(app, frame.area),
-            tree: ui::tree_zones(app, frame.area),
-            extensions: ui::extension_zones(app, frame.area),
-            help: ui::help_zones(app, frame.area),
-            session: ui::session_zone(app, frame.area),
-            status_items: ui::status_item_zones(app, frame.area),
-            borders: ui::resize_borders(app, frame.area),
-            slots: ui::panel_slots(app, frame.area),
-        },
-    );
+    let area = terminal.draw(|f| ui::draw(f, app)).expect("draw").area;
+    hand_back(app, area);
     terminal
         .backend()
         .to_string()
         .lines()
         .map(ToOwned::to_owned)
         .collect()
+}
+
+/// Returns a painted frame's geometry to the model, as the run loop does
+/// after the paint.
+fn hand_back(app: &mut App, area: ratatui::layout::Rect) {
+    let geometry = ui::pane_geometry(app, area);
+    mouse::after_frame(
+        app,
+        geometry,
+        mouse::FrameZones {
+            tabs: ui::tab_zones(app, area),
+            menus: ui::menu_zones(app, area),
+            panels: ui::panel_zones(app, area),
+            keys: ui::key_zones(app, area),
+            modal: ui::modal_zones(app, area),
+            places: ui::places_zones(app, area),
+            tree: ui::tree_zones(app, area),
+            extensions: ui::extension_zones(app, area),
+            help: ui::help_zones(app, area),
+            session: ui::session_zone(app, area),
+            status_items: ui::status_item_zones(app, area),
+            borders: ui::resize_borders(app, area),
+            slots: ui::panel_slots(app, area),
+        },
+    );
 }
 
 /// Checks that row `row` of the frame paints entry `index` of the LEFT
@@ -644,7 +650,12 @@ fn every_bar_button_falls_into_its_place() {
         "and the search panel after the terminal, by registration order"
     );
     assert_eq!(
-        press(&mut app, 30),
+        press(&mut app, 31).as_deref(),
+        Some("layout.assistant"),
+        "and the assistant after the search panel, by registration order"
+    );
+    assert_eq!(
+        press(&mut app, 33),
         None,
         "past the last one there is no button"
     );
@@ -2205,11 +2216,16 @@ fn the_wheel_scrolls_down_through_help_and_a_click_chooses_a_page() {
         "the click selected THAT row's page"
     );
 
-    // And none of this reaches the panes below.
+    // And none of this reaches the panes below: a click outside help closes
+    // it as `Esc` does (ADR 0178), it is not a click on the listing.
     assert_eq!(
         mouse::handle(&mut app, ev(DOWN, 0, 0)),
-        After::Nothing,
-        "with help in front, a click outside it does nothing"
+        After::SynthKey,
+        "with help in front, a click outside it closes help"
+    );
+    assert_eq!(
+        app.pending_key.map(|k| k.code),
+        Some(crossterm::event::KeyCode::Esc)
     );
 }
 
@@ -2329,6 +2345,113 @@ fn the_door_key_on_an_empty_panel_starts_a_shell() {
     assert_eq!(app.key_owner(), KeyOwner::Panes);
 }
 
+/// A shell behind another wakes the screen until it is marked `●`, and then
+/// no more: a `yes` behind a tab no longer repaints the TUI at its output
+/// rate. The one in front always wakes it.
+#[cfg(unix)]
+#[test]
+fn a_marked_shell_behind_stops_waking_the_screen() {
+    let (mut app, _) = app_with_shells(2);
+    let [behind, front]: [_; 2] = app
+        .terminals
+        .iter()
+        .map(|i| i.id)
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("two");
+    // Its prompt may already have marked it: seen once, then behind again.
+    app.terminals.select(behind);
+    app.terminals.select(front);
+    norte_tui::termpanel::refresh_wakes(&mut app);
+    assert!(norte_tui::termpanel::wakes(&app, behind), "not marked yet");
+    app.terminals.on_output(behind);
+    norte_tui::termpanel::refresh_wakes(&mut app);
+    assert!(!norte_tui::termpanel::wakes(&app, behind), "marked: quiet");
+    assert!(norte_tui::termpanel::wakes(&app, front));
+    app.terminals.select(behind);
+    norte_tui::termpanel::refresh_wakes(&mut app);
+    assert!(norte_tui::termpanel::wakes(&app, behind), "in front again");
+}
+
+/// Every shell failed (kept, with its last screen): the panel's key starts
+/// a live one instead of leaving — the TUI half of the window's test.
+#[cfg(unix)]
+#[test]
+fn the_door_key_with_only_failed_shells_starts_a_live_one() {
+    let (mut app, _) = app_with_shells(1);
+    assert_eq!(app.key_owner(), KeyOwner::Terminal);
+    if let Some(i) = app.terminals.active_mut() {
+        i.shell.0.write(b"exit 3\n");
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while app.terminals.active().and_then(|i| i.exited).is_none()
+        && std::time::Instant::now() < deadline
+    {
+        let _ = paint_at(&mut app, 100, 30);
+        std::thread::yield_now();
+    }
+    assert_eq!(app.terminals.active().and_then(|i| i.exited), Some(3));
+    let cfg = norte_frontend::config::load(&norte_config::Layers { dirs: Vec::new() })
+        .expect("factory config");
+    // `app_with_shells` sits on a made-up `file:///casa`: a shell needs a
+    // real directory, so the focused pane goes to the temp dir first.
+    let tmp = vp(&format!("file://{}", std::env::temp_dir().display()));
+    app.panes[0] = Pane::new(tmp.clone(), Vec::new());
+    app.panes[1] = Pane::new(tmp, Vec::new());
+    norte_tui::termpanel::on_door(&mut app, &cfg);
+    assert_eq!(app.terminals.len(), 2, "{:?}", app.message);
+    assert_eq!(app.terminals.active().and_then(|i| i.exited), None);
+}
+
+/// `terminal.close` with the panel BEHIND a tab kills nothing: the reader
+/// cannot see which shell that would be, and closing is a destruction.
+#[cfg(unix)]
+#[test]
+fn closing_a_hidden_terminal_kills_nothing() {
+    let (mut app, _) = app_with_shells(1);
+    app.toggle_log();
+    let _ = paint_at(&mut app, 100, 30);
+    assert!(
+        !app.terminal_visible(),
+        "the log is in front of the terminal"
+    );
+    norte_tui::termpanel::cmd_close(&mut app);
+    assert_eq!(app.terminals.len(), 1, "the shell lives");
+    assert!(app.message.is_some(), "and the refusal is said");
+}
+
+/// Closing the LAST shell closes its panel and hands the keyboard back. It
+/// used to leave an empty "no shell" box that no key could close: the
+/// panel's key only moves the keyboard.
+#[cfg(unix)]
+#[test]
+fn closing_the_last_shell_closes_the_panel() {
+    let (mut app, _) = app_with_shells(1);
+    let _ = paint_at(&mut app, 100, 30);
+    assert!(app.terminal_visible());
+    norte_tui::termpanel::cmd_close(&mut app);
+    assert!(app.terminals.is_empty());
+    assert!(
+        app.terminal_slot().is_none(),
+        "the panel goes with its shell"
+    );
+    assert_ne!(app.key_owner(), norte_tui::app::KeyOwner::Terminal);
+}
+
+/// A panel left EMPTY (its shell exited on its own) closes with
+/// `terminal.close`: there is no shell to kill, and no other key closed it.
+#[cfg(unix)]
+#[test]
+fn closing_an_empty_terminal_panel_closes_it() {
+    let (mut app, _) = app_with_shells(1);
+    let _ = paint_at(&mut app, 100, 30);
+    let id = app.terminals.active_id().expect("a shell");
+    let _ = app.terminals.close(id);
+    assert!(app.terminal_slot().is_some(), "the slot outlives its shell");
+    norte_tui::termpanel::cmd_close(&mut app);
+    assert!(app.terminal_slot().is_none());
+}
+
 /// With the terminal's list open on top, a click behind it does nothing.
 #[cfg(unix)]
 #[test]
@@ -2422,4 +2545,69 @@ fn a_click_on_a_search_result_selects_the_row_under_it() {
         After::SearchPanelActivate
     );
     assert_eq!(app.panes.search_panel(slot).expect("model").cursor(), 3);
+}
+
+/// A click outside the search box closes it as `Esc` does; one inside it
+/// does not.
+#[test]
+fn a_click_outside_a_light_popup_sends_esc() {
+    let mut app = app_painted(20);
+    app.goto = Some(norte_frontend::goto::Goto::new(Vec::new()));
+    let _ = paint(&mut app);
+    assert_eq!(
+        mouse::handle(&mut app, ev(DOWN, W / 2, H / 2 - 1)),
+        After::Nothing
+    );
+    assert!(app.pending_key.is_none(), "inside the box");
+    assert_eq!(mouse::handle(&mut app, ev(DOWN, 0, H - 3)), After::SynthKey);
+    assert_eq!(
+        app.pending_key.map(|k| k.code),
+        Some(crossterm::event::KeyCode::Esc)
+    );
+}
+
+/// The run loop awaits between the paint and the mouse, and the runtime may
+/// resume it on another thread: the popup's box travels in the app, not in
+/// the painting thread. Kept on that thread, the real `ntc` ignored the
+/// click.
+#[test]
+fn the_popup_box_survives_a_thread_hop() {
+    let mut app = app_painted(20);
+    app.goto = Some(norte_frontend::goto::Goto::new(Vec::new()));
+    let area = std::thread::scope(|s| {
+        s.spawn(|| {
+            let mut terminal = Terminal::new(TestBackend::new(W, H)).expect("test terminal");
+            ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, W, H));
+            terminal.draw(|f| ui::draw(f, &app)).expect("draw").area
+        })
+        .join()
+        .expect("paint thread")
+    });
+    hand_back(&mut app, area);
+    assert_eq!(mouse::handle(&mut app, ev(DOWN, 0, H - 3)), After::SynthKey);
+}
+
+/// A double click INSIDE the profiles picker does not reach the listing it
+/// covers: the picker was missing from `overlay_open`, and a click there
+/// entered the row underneath.
+#[test]
+fn a_click_inside_the_profiles_picker_stays_in_it() {
+    let mut app = app_painted(20);
+    app.open_profile_picker(Vec::new());
+    let _ = paint(&mut app);
+    let (col, row) = (W / 2, H / 2);
+    assert_eq!(mouse::handle(&mut app, ev(DOWN, col, row)), After::Nothing);
+    assert_eq!(mouse::handle(&mut app, ev(DOWN, col, row)), After::Nothing);
+    assert!(app.pending_key.is_none());
+}
+
+/// A question painted over the popup is not answered by a click outside.
+#[test]
+fn a_click_outside_leaves_a_question_open() {
+    let mut app = app_painted(20);
+    app.goto = Some(norte_frontend::goto::Goto::new(Vec::new()));
+    app.modal = Some(Modal::ConfirmQuit);
+    let _ = paint(&mut app);
+    assert_eq!(mouse::handle(&mut app, ev(DOWN, 0, H - 3)), After::Nothing);
+    assert!(app.pending_key.is_none());
 }

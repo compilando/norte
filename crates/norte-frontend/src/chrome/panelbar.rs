@@ -175,6 +175,7 @@ pub fn icon(kind: &str, set: IconSet) -> Option<&'static str> {
         "timeline" => ("◷", "\u{f017}"),
         "terminal" => ("❯", "\u{f120}"),
         "search" => ("⌕", "\u{f002}"),
+        "assistant" => ("✦", "\u{f075}"),
         _ => return None,
     };
     Some(match set {
@@ -195,7 +196,8 @@ pub fn icon(kind: &str, set: IconSet) -> Option<&'static str> {
 #[must_use]
 pub fn icon_svg(kind: &str) -> Option<&'static str> {
     Some(match kind {
-        "places" => include_str!("../../assets/panel-icons/places.svg"),
+        // A favorite is drawn with Places' own star.
+        "places" | "fs:favorite" => include_str!("../../assets/panel-icons/places.svg"),
         "tree" => include_str!("../../assets/panel-icons/tree.svg"),
         "viewer" => include_str!("../../assets/panel-icons/viewer.svg"),
         "processes" => include_str!("../../assets/panel-icons/processes.svg"),
@@ -205,12 +207,53 @@ pub fn icon_svg(kind: &str) -> Option<&'static str> {
         "timeline" => include_str!("../../assets/panel-icons/timeline.svg"),
         "terminal" => include_str!("../../assets/panel-icons/terminal.svg"),
         "search" => include_str!("../../assets/panel-icons/search.svg"),
+        "assistant" => include_str!("../../assets/panel-icons/assistant.svg"),
         // The column's foot (`FOOTER`), not panels.
         "settings" => include_str!("../../assets/panel-icons/settings.svg"),
         "help" => include_str!("../../assets/panel-icons/help.svg"),
+        // The chrome's own (`CHROME_ICONS`), prefixed so they never cross
+        // a panel kind.
+        "layout:split-h" => include_str!("../../assets/ui-icons/layout-split-h.svg"),
+        "layout:split-v" => include_str!("../../assets/ui-icons/layout-split-v.svg"),
+        "layout:equalize" => include_str!("../../assets/ui-icons/layout-equalize.svg"),
+        "layout:flip" => include_str!("../../assets/ui-icons/layout-flip.svg"),
+        "layout:pick" => include_str!("../../assets/ui-icons/layout-pick.svg"),
+        "ui:remote" => include_str!("../../assets/ui-icons/ui-remote.svg"),
+        "ui:bell" => include_str!("../../assets/ui-icons/ui-bell.svg"),
+        "ui:search" => include_str!("../../assets/ui-icons/ui-search.svg"),
+        "fs:folder" => include_str!("../../assets/ui-icons/fs-folder.svg"),
+        "fs:file" => include_str!("../../assets/ui-icons/fs-file.svg"),
+        "fs:folder-open" => include_str!("../../assets/ui-icons/fs-folder-open.svg"),
+        "fs:drive" => include_str!("../../assets/ui-icons/fs-drive.svg"),
+        "fs:removable" => include_str!("../../assets/ui-icons/fs-removable.svg"),
+        "fs:network" => include_str!("../../assets/ui-icons/fs-network.svg"),
+        "fs:home" => include_str!("../../assets/ui-icons/fs-home.svg"),
         _ => return None,
     })
 }
+
+/// The chrome icons that are shared drawings (`assets/ui-icons/<id with
+/// '-' for ':'>.svg`, except `fs:favorite`, which is Places' star): the
+/// layout buttons, Places and the tree, and the status bar's indicators.
+/// The window imports the same files.
+pub const CHROME_ICONS: &[&str] = &[
+    "layout:split-h",
+    "layout:split-v",
+    "layout:equalize",
+    "layout:flip",
+    "layout:pick",
+    "ui:remote",
+    "ui:bell",
+    "ui:search",
+    "fs:folder",
+    "fs:file",
+    "fs:folder-open",
+    "fs:drive",
+    "fs:removable",
+    "fs:network",
+    "fs:home",
+    "fs:favorite",
+];
 
 /// The buttons pinned to the FOOT of the column, apart from the panels:
 /// settings and help, as VS Code keeps the gear at the bottom of its
@@ -508,6 +551,24 @@ mod tests {
         KindRegistry::builtin()
     }
 
+    /// The chrome's own icons (layout buttons, places and tree, status bar)
+    /// are shared files too: one per id in `CHROME_ICONS`, named after it,
+    /// so the terminal rasterises the drawing the window paints.
+    #[test]
+    fn every_chrome_icon_has_its_shared_svg() {
+        assert!(!CHROME_ICONS.is_empty());
+        for id in CHROME_ICONS {
+            let svg = icon_svg(id).unwrap_or_else(|| panic!("{id} has no svg"));
+            assert!(
+                svg.starts_with("<svg") && svg.contains("currentColor"),
+                "{id}"
+            );
+        }
+        for id in ["layout:split-h", "fs:folder", "ui:bell"] {
+            assert!(CHROME_ICONS.contains(&id), "{id}");
+        }
+    }
+
     /// Every built-in button has the shared SVG both frontends draw, and
     /// it is colourable (`currentColor`) — the TUI swaps that for the
     /// state's colour before rasterising.
@@ -598,6 +659,8 @@ mod tests {
                 "terminal",
                 // The search panel, registered after the terminal.
                 "search",
+                // The assistant (ADR 0186), the last one registered.
+                "assistant",
             ],
             "the built-in buttons' order changed"
         );

@@ -272,7 +272,6 @@ pub async fn confirm_modal(
         | Modal::Mkdir { .. }
         | Modal::ProfileSaveAs { .. }
         | Modal::EditNew { .. }
-        | Modal::CommandLine { .. }
         | Modal::AiRenameInstruction { .. }
         | Modal::RenameBatchPattern { .. }
         | Modal::SemanticQuery { .. }

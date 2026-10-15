@@ -342,6 +342,9 @@ pub async fn run(
     // would open with the slot undeclared: it neither gets placed, nor
     // focused, nor shows up in the bar.
     work.panels = Some(crate::probes::spawn_panels(backend));
+    if cfg.common.check_updates {
+        work.update_check = crate::probes::spawn_update_check();
+    }
     let mut dir_watch = norte_frontend::watch::DirWatch::new();
     let mut dir_watch_alive = true;
     // #405: set by a 100 ms tick that changed nothing on screen; the next
@@ -449,7 +452,7 @@ pub async fn run(
         // takes them down on this very frame).
         let keep_frame = crate::rail_icons::backend(app) == crate::rail_icons::RailBackend::Sixel
             || crate::rail_icons::any_sixel_placed();
-        let mut drawn: Option<ratatui::buffer::Buffer> = None;
+        let mut drawn: Option<crate::rail_icons::KeptFrame> = None;
         let painted_area = if skip_frame {
             last_area
         } else {
@@ -466,7 +469,7 @@ pub async fn run(
                 .draw(|f| ui::draw(f, app))
                 .map_err(RunError::Terminal)?;
             if keep_frame {
-                drawn = Some(crate::rail_icons::column_strip(frame.buffer));
+                drawn = Some(crate::rail_icons::kept_frame(frame.buffer));
             }
             frame.area
         };
@@ -600,11 +603,11 @@ pub async fn run(
         // frame to repaint its cells from. With nothing to place and
         // nothing placed it writes nothing.
         if !skip_frame {
-            crate::rail_icons::sync(
-                terminal.backend_mut(),
-                &ui::rail_icons_to_place(app, painted_area, crate::rail_icons::cell_px()),
-                drawn.as_ref(),
-            );
+            let cell = crate::rail_icons::cell_px();
+            let mut icons = ui::rail_icons_to_place(app, painted_area, cell);
+            // And the chrome's own (the layout buttons), in their own slots.
+            icons.extend(ui::chrome_icons_to_place(app, painted_area, cell));
+            crate::rail_icons::sync(terminal.backend_mut(), &icons, drawn.as_ref());
         }
         if app.quit {
             // The last snapshot, and waiting for it. The one-second tick
@@ -1273,6 +1276,29 @@ pub async fn run(
                 harvest_semantic(app, &mut work, res);
             }
             res = async {
+                // An order measuring its rows (ADR 0185): the order runs when
+                // the stats land, through the box's own Enter path.
+                match &mut work.order_measure {
+                    Some(r) => (&mut r.handle).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                crate::keys::order_measured(
+                    app,
+                    backend,
+                    capture,
+                    &mut Console::new(&mut events, terminal),
+                    help_lines,
+                    lang,
+                    quick_mode,
+                    confirm_quit,
+                    &cfg,
+                    &mut work,
+                    res,
+                )
+                .await;
+            }
+            res = async {
                 // The same question, for the "go to" SECTION (phase 6): its
                 // own slot because what is done with the response is a
                 // different thing, and because both can be alive at once.
@@ -1282,6 +1308,29 @@ pub async fn run(
                 }
             } => {
                 crate::jobs::harvest_goto_index(app, &mut work, res);
+            }
+            res = async {
+                // The assistant's turn (ADR 0186).
+                match &mut work.assistant {
+                    Some(h) => h.await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                crate::assistant::harvest(app, &mut work, res);
+            }
+            res = async {
+                match &mut work.update_check {
+                    Some(h) => h.await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                work.update_check = None;
+                if let Ok(Some(version)) = res {
+                    app.message = Some(norte_frontend::banners::update_line(
+                        norte_i18n::active(),
+                        &version,
+                    ));
+                }
             }
             res = async {
                 // A checksum batch's report (#311): same shape. Waiting for

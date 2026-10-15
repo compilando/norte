@@ -63,9 +63,8 @@ pub async fn drain_pending(
     // #135: the suspension is drained HERE and NOWHERE else. #28's opener
     // is launched at three points (key dispatch, the palette's and help's)
     // because each has its own `continue`; a suspension is also left
-    // pending by `Modal::CommandLine`'s Enter, which lives in a fourth arm
-    // with its own `continue` — so the spot that covers all of them,
-    // present and future, is the turn's header. Before the draw: the panels
+    // pending by other arms with their own `continue` — so the spot that
+    // covers all of them, present and future, is the turn's header. Before the draw: the panels
     // that get repainted are already the refreshed listing's.
     // `Shift+F2`: dispatch resolved WHAT to compare; the run loop owns the
     // channel and the Task, so it launches. Same split as

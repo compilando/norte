@@ -759,6 +759,28 @@ pub enum UiAction {
         /// What was done to it.
         value: DialogFieldValue,
     },
+    /// The assistant panel's input sent (bridge 116, ADR 0186): the reader's
+    /// message. Ignored while a turn is in flight.
+    AssistantSubmit {
+        /// The panel's slot.
+        slot_id: u32,
+        /// What was typed.
+        text: String,
+    },
+    /// Apply the order of turn `turn` (bridge 116): it runs through the
+    /// order line's executor, so the usual confirmation asks.
+    AssistantApply {
+        /// The panel's slot.
+        slot_id: u32,
+        /// The turn's index, oldest first.
+        turn: u32,
+    },
+    /// Stop waiting for the turn in flight (bridge 118): its answer, when it
+    /// comes, is dropped. Nothing in flight is not an error.
+    AssistantCancel {
+        /// The panel's slot.
+        slot_id: u32,
+    },
     /// Enter in one of the panel's inputs: searches now, without the pause.
     SearchPanelGo {
         /// The panel's slot.
@@ -992,6 +1014,19 @@ pub enum UiAction {
     /// Closes the context menu without running anything (a click outside,
     /// `Escape`). The marks it dropped on opening stay dropped.
     ContextMenuClose,
+    /// A click on the command bar: it takes the keyboard (bridge 113).
+    CommandBarFocus,
+    /// A paste into the focused command bar: the host keeps the first line;
+    /// a newline must never run an order (bridge 113).
+    CommandBarPaste {
+        /// What was pasted.
+        text: String,
+    },
+    /// A press on the veil behind the overlay in front, outside its box
+    /// (bridge 112). The host decides: a light popup (the search box, a
+    /// picker, the search form, help, an output) closes as with `Escape`;
+    /// a question or a whole screen stays, and the press does nothing.
+    OverlayDismiss,
     /// Alt pressed and released ALONE, with no other key in between
     /// (bridge 68).
     ///

@@ -327,8 +327,14 @@ impl Timeline {
     /// be loaded, a cutoff here does not touch.
     #[must_use]
     pub fn summary(&self) -> Cutoff {
+        self.summary_of_newest(self.cursor)
+    }
+
+    /// The same count over the newest `n` rows, whatever the cursor.
+    #[must_use]
+    pub fn summary_of_newest(&self, n: usize) -> Cutoff {
         let mut summary = Cutoff::default();
-        for row in self.rows.iter().take(self.cursor) {
+        for row in self.rows.iter().take(n) {
             if !row.is_from_human() {
                 summary.foreign += row.members;
             } else if row.will_undo() {

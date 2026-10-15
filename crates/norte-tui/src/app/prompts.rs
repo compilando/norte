@@ -830,64 +830,6 @@ impl App {
         }
     }
 
-    /// Opens the `pane.command-line` prompt (#135).
-    pub fn open_command_line(&mut self) {
-        self.modal = Some(Modal::CommandLine {
-            command: String::new(),
-            error: None,
-        });
-    }
-
-    /// Adds a character to the command line. No-op without its modal. Same
-    /// cap in `chars` as the rest of the free-text prompts. Reaching the cap
-    /// LEAVES A DIAGNOSTIC, unlike the rest of the free-text prompts (S4
-    /// review, M4). A truncated directory name fails to create and it
-    /// shows; a truncated command line RUNS — `rm -rf /old-project` trimmed
-    /// to `rm -rf /project` is a different order, not journalled and not
-    /// undoable. Staying quiet about the truncation here is letting Enter
-    /// get pressed blind.
-    pub fn command_line_push(&mut self, c: char) {
-        self.prompt_push(PromptKind::CommandLine, c);
-    }
-
-    /// Erases the line's last character. No-op without its modal.
-    pub fn command_line_pop(&mut self) {
-        self.prompt_pop(PromptKind::CommandLine);
-    }
-
-    /// Cancels `Modal::CommandLine` without running anything (same contract
-    /// and guard as [`Self::cancel_mkdir`]: a DECISION modal never closes
-    /// through here).
-    pub fn cancel_command_line(&mut self) {
-        self.cancel_prompt(PromptKind::CommandLine);
-    }
-
-    /// Validates and returns the line; does NOT close the modal — the
-    /// caller closes with [`Self::command_line_submitted`] after leaving
-    /// the suspension pending (same discipline as
-    /// [`Self::ai_rename_confirm`]).
-    ///
-    /// The line is returned AS IS, without `trim`: the trimmed version is
-    /// only used to decide if it's empty. A command starting with a space
-    /// is a real bash/zsh convention (`HISTCONTROL=ignorespace`), and
-    /// trimming it would silently change what the user wrote.
-    pub fn command_line_confirm(&mut self) -> Option<String> {
-        if let Some(Modal::CommandLine { command, error }) = &mut self.modal {
-            if command.trim().is_empty() {
-                *error = Some(t("modal-command-line-empty"));
-                return None;
-            }
-            return Some(command.clone());
-        }
-        None
-    }
-
-    /// Closes the prompt after leaving the suspension queued (same closing
-    /// discipline as [`Self::ai_rename_submitted`]).
-    pub fn command_line_submitted(&mut self) {
-        self.prompt_submitted(PromptKind::CommandLine);
-    }
-
     /// Opens the batch rename TEMPLATE prompt (#310), pre-filled with
     /// `[N].[E]` — the name exactly as it is.
     ///

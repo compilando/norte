@@ -26,6 +26,7 @@ pub mod links;
 pub mod native;
 pub mod sink;
 pub mod startup;
+pub mod trace;
 
 pub use commands::Bridge;
 pub use sink::{EVENT_LAGGED, EVENT_UPDATE, UpdateSink, pump};

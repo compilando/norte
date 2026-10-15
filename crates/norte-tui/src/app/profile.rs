@@ -185,6 +185,8 @@ mod tests {
             //   comparator.
             ui_diff: _,
             ui_diff_detached: _,
+            // — Same: read from the config when "terminal here" runs.
+            ui_terminal: _,
             // — Arrive via steps 4 and 5 (layout and slot seeding).
             ui_layout: _,
             ui_show_hidden: _,
@@ -211,6 +213,7 @@ mod tests {
             archive: _,
             log: _,
             ai: _,
+            check_updates: _,
             // — Load diagnostics, not settings.
             sources: _,
             project_warnings: _,

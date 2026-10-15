@@ -49,8 +49,8 @@ sha2.workspace = true
 # `crossbeam-*`), the de-facto Rust work-stealing pool, maintained by the
 # rust-lang org's contributors and already used by wasmtime upstream by
 # default; the alternative is no parallelism, which is what we had.
-wasmtime = { version = "48.0.4", default-features = false, features = ["runtime", "component-model", "cranelift", "std", "parallel-compilation"] }
-wasmtime-wasi = "48.0.4"
+wasmtime = { version = "48.0.6", default-features = false, features = ["runtime", "component-model", "cranelift", "std", "parallel-compilation"] }
+wasmtime-wasi = "48.0.6"
 # Reads a component's imports WITHOUT compiling it (ADR 0094): the catalog
 # notes which `norte:*@version` each guest was compiled against and lists as
 # broken — with both versions — the one that does not match, instead of

@@ -464,6 +464,14 @@
           ],
           "description": "`[ui.columns]` (#108 block 4): column selection and sort order."
         },
+        "command_bar": {
+          "default": null,
+          "description": "Whether the command bar (one line under the panels whose orders run\nin the terminal panel, ADR 0181) stays on screen. Absent = `false`:\nit costs a row, and the command-line key calls it up anyway.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "confirm_quit": {
           "default": null,
           "description": "Whether `app.quit` confirms before closing (S2): `\"auto\"` (default)\nconfirms only with pending work (active tasks in the TUI's board,\ntasks/marks in the GUI — the behavior before this setting existed,\npreserved as the default rather than a fixed point in time);\n`\"always\"` always confirms, even with nothing pending; `\"never\"`\ncloses immediately.\n\n[`crate::load::load`] rejects other values (same pattern as\n`quick_search`) so its diagnostic can include the source path.",
@@ -747,6 +755,17 @@
             "null"
           ]
         },
+        "terminal": {
+          "default": null,
+          "description": "`[ui] terminal`: the terminal emulator \"terminal here\" opens, as an\nargv template with `openers.toml`'s field codes — `%d` is the pane's\ndirectory: `terminal = [\"open\", \"-a\", \"iTerm\", \"%d\"]`. `%d` is\nreplaced only as a WHOLE element (`\"--cwd=%d\"` stays literal), and\n`%f`/`%F` expand to nothing here. When set it is the only one tried.\nAbsent = `$TERMINAL`, then the desktop's own answer and a short list\nof known emulators.\n\n**Never honoured from the PROJECT layer**, same rule as\n[`Self::editor`]: it names a program to run.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "theme": {
           "default": null,
           "description": "Theme preset name or a path to a custom TOML theme (ADR 0020). When\nabsent, use `default`.\n\nThe bundled presets are `default`, `vscode-dark`, `vscode-light`,\n`catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`,\n`gruvbox-light`, `nord`, `retro-crt` and `retro-crt-amber`.\n`norte_theme::preset_names()` is the source of truth; this list is a\ncopy for readers of the schema, and it had gone stale before (it named\nsix of the eight that existed).",
@@ -776,6 +795,21 @@
           "description": "The window's title bar: `\"custom\"` (default), none from the desktop,\nand the menu bar doubles as the title bar with its own minimize,\nmaximize and close buttons, as in VS Code; `\"native\"`, the desktop's\nown. Read at start-up. The terminal has no title bar and ignores it.\n\n[`crate::load::load`] rejects other values.",
           "type": [
             "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "UpdatesSection": {
+      "additionalProperties": false,
+      "description": "`[updates]`: whether norte may ask GitHub, once a day, if a newer release\nexists (ADR 0183). Off unless the reader says so: it is the one thing\nthat leaves the machine without a request in front of it.\n\nNever honoured from the project layer nor a profile: a repository does\nnot decide that this machine talks to the network.",
+      "properties": {
+        "check": {
+          "default": null,
+          "description": "`true` = check at start, at most once a day. Absent = `false`.",
+          "type": [
+            "boolean",
             "null"
           ]
         }
@@ -870,6 +904,10 @@
     "ui": {
       "$ref": "#/$defs/UiSection",
       "description": "User-interface settings."
+    },
+    "updates": {
+      "$ref": "#/$defs/UpdatesSection",
+      "description": "The opt-in release check (`[updates]`, ADR 0183)."
     }
   },
   "title": "NorteToml",

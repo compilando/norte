@@ -53,6 +53,9 @@ norte-plugin-host.workspace = true
 # equal.
 norte-help.workspace = true
 norte-proto.workspace = true
+# The assistant parses and vets the orders it writes (ADR 0186): a pure
+# crate with no dependency of ours.
+norte-orders.workspace = true
 # fs.search matchers (M4 live search): needle encoding detection/decoding
 # (multi-encoding transcoding) and name NFC.
 norte-encoding.workspace = true

@@ -591,8 +591,8 @@ pub fn write_resume_prologue(out: &mut impl std::io::Write) -> std::io::Result<(
 #[cfg(test)]
 mod suspend_tests {
     use super::run_suspended;
-    use crate::app::{App, Modal, Pane};
-    use crate::gestures::{shell_remote_message, submit_command_line};
+    use crate::app::{App, Pane};
+    use crate::gestures::shell_remote_message;
     use norte_proto::VPath;
 
     fn app_at(wire: &str) -> App {
@@ -670,61 +670,6 @@ mod suspend_tests {
             msg.contains(crate::ui::HOSTILE_BADGE),
             "and it is marked as hostile: {msg:?}"
         );
-    }
-
-    /// `pane.command-line`'s prompt returns the line AS IS (a leading
-    /// space is the `HISTCONTROL=ignorespace` convention, not garbage to
-    /// trim) and a blank line launches nothing.
-    #[test]
-    fn the_command_line_does_not_trim_and_rejects_the_empty() {
-        let mut app = app_at("file:///tmp");
-        app.open_command_line();
-        for c in " make test".chars() {
-            app.command_line_push(c);
-        }
-        assert_eq!(app.command_line_confirm().as_deref(), Some(" make test"));
-        let mut app = app_at("file:///tmp");
-        app.open_command_line();
-        for c in "   ".chars() {
-            app.command_line_push(c);
-        }
-        assert!(app.command_line_confirm().is_none());
-        assert!(
-            matches!(app.modal, Some(Modal::CommandLine { error: Some(_), .. })),
-            "and the diagnostic stays under the field"
-        );
-    }
-
-    /// The command line's Enter arms `$SHELL -c CMD` with the WHOLE line
-    /// as a single argument and the pane's dir as cwd.
-    #[test]
-    fn the_lines_enter_arms_shell_dash_c() {
-        let mut app = app_at("file:///tmp");
-        submit_command_line(&mut app, "ls | wc -l");
-        let p = app.pending_shell.expect("leaves the suspension pending");
-        assert_eq!(p.argv.len(), 3, "binary, -c and the line: {:?}", p.argv);
-        assert_eq!(p.argv[1], std::ffi::OsString::from("-c"));
-        assert_eq!(
-            p.argv[2],
-            std::ffi::OsString::from("ls | wc -l"),
-            "the line is not chopped up: the shell parses it"
-        );
-        assert_eq!(p.cwd, Some(std::path::PathBuf::from("/tmp")));
-        assert!(p.wait_for_key, "the output has to be readable");
-        assert!(app.modal.is_none(), "and the prompt closes");
-    }
-
-    /// The pane moved to a remote between opening the prompt and confirming
-    /// it: NOTHING gets executed (running it in norte's dir would be doing
-    /// it where the user is not looking), it warns, and the prompt closes
-    /// anyway.
-    #[test]
-    fn a_confirmed_line_over_a_remote_pane_executes_nothing() {
-        let mut app = app_at("sftp://host/x");
-        submit_command_line(&mut app, "rm -rf .");
-        assert!(app.pending_shell.is_none(), "nothing to execute");
-        assert!(app.message.is_some(), "and it says why");
-        assert!(app.modal.is_none());
     }
 
     /// The rule for which error wins when several things fail, tested WITH

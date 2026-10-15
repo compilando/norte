@@ -42,8 +42,8 @@ pub use compare::{
 pub use diskmap::{harvest as harvest_disk_map, launch as launch_disk_map, tend as tend_disk_map};
 pub use goto::harvest_goto_index;
 pub use inflight::{
-    AiRenameRun, ChecksumRun, DiskMapRun, GotoIndexRun, InFlight, OrganizeRun, PendingAiPlan,
-    Published, RenameBatchRun, SemanticRun,
+    AiRenameRun, ChecksumRun, DiskMapRun, GotoIndexRun, InFlight, OrderMeasureRun, OrderMeasured,
+    OrderStats, OrganizeRun, PendingAiPlan, Published, RenameBatchRun, SemanticRun,
 };
 pub use search::{
     SearchRun, drain_search, finalize_outcome, launch_results, on_search_dialog_key,

@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 111;
+export const BRIDGE_VERSION = 118;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -153,6 +153,11 @@ export interface RowView {
   icon: string;
   /** The icon paints different from what it is: a plugin writes it. */
   icon_hostile: boolean;
+  /**
+   * The window's own colored icon when `icon` is empty (bridge 114, ADR
+   * 0184): a file-type id the HOST chose from the raw name.
+   */
+  icon_kind: string;
   /**
    * The `#rrggbb` color the THEME paints this entry's name with, via
    * `[files.ext]` (wins) or `[files.kind]` (bridge 66). Empty = the theme
@@ -621,7 +626,28 @@ export type SlotView =
   | TimelineSlotView
   | SearchPanelSlotView
   | TerminalSlotView
+  | AssistantSlotView
   | UnsupportedSlotView;
+
+/** The assistant panel (bridge 116, ADR 0186): turns already sanitized. */
+export interface AssistantSlotView {
+  kind: "assistant";
+  slot_id: number;
+  turns: AssistantTurnView[];
+  pending: boolean;
+  empty: string;
+  /** The number of `turns[0]` (bridge 118): Apply sends `first + index`,
+   *  which stays the turn's name when older turns are dropped. */
+  first?: number;
+}
+
+/** One turn. `note` is painted below and smaller than `text`. */
+export interface AssistantTurnView {
+  kind: "reader" | "order" | "answer" | "failed";
+  text: string;
+  note: string;
+  written_for: string;
+}
 
 /** A color exactly as the shell SAID it, unresolved (bridge 95).
  *
@@ -919,6 +945,8 @@ export interface TaskView {
   detail: string | null;
   detail_hostile: boolean;
   foreign: boolean;
+  /** Throughput, one value per second, 0–100 (bridge 117); absent = none. */
+  spark?: number[];
 }
 
 export interface ViewerView {
@@ -1041,10 +1069,27 @@ export interface GotoView {
   lines: GotoLineView[];
   cursor: number | null;
   empty: string;
-  /** Which list the query asks for (bridge 108). */
-  mode?: "places" | "commands" | "help";
+  /** Which list the query asks for (bridge 108; `order` bridge 115). */
+  mode?: "places" | "commands" | "help" | "order" | "ask";
   /** The empty places box's prefix hint (bridge 108). */
   hint?: string;
+  /** The order line in `:` mode (bridge 115, ADR 0185). */
+  order?: OrderLineView;
+}
+
+/** An order typed in the box: colour spans over `query`, why it does not
+ *  parse, and what it would touch (bridge 115). */
+export interface OrderLineView {
+  tokens: OrderTokenView[];
+  error: string;
+  preview: string;
+}
+
+/** One colour span: byte range of `GotoView.query`. */
+export interface OrderTokenView {
+  start: number;
+  end: number;
+  class: "verb" | "key" | "value" | "pipe" | "dest" | "error";
 }
 
 export interface ProfileRowView {
@@ -1112,6 +1157,20 @@ export interface ContextItemView {
 
 /** The right-click menu (bridge 107), owned by the host: the renderer paints
  *  it and reports where the pointer went. */
+/** The command bar (ADR 0181, bridge 113). The host owns the line. */
+export interface CommandBarView {
+  /** The focused pane's folder, masked. */
+  prompt: string;
+  /** The line, masked. */
+  text: string;
+  /** The cursor, in chars of `text`. */
+  cursor: number;
+  /** The bar has the keyboard. */
+  focused: boolean;
+  /** Why an order cannot run here, translated; empty when it can. */
+  reason: string;
+}
+
 export interface ContextMenuView {
   /** What the menu acts on, already worded and masked. */
   header: string;
@@ -1174,6 +1233,8 @@ export interface StatusProgressView {
   /** 0–100 of the total; `null` = unknown, and the bar animates. */
   percent: number | null;
   phase: "running" | "paused" | "done" | "failed";
+  /** The burst's throughput, drawn in front of the text (bridge 117). */
+  spark?: number[];
 }
 
 /** The panel bar (#324, bridge 51): what panels there are and how they stand. */
@@ -1750,6 +1811,9 @@ export interface ViewSnapshot {
   /** The right-click menu (bridge 107), if one is open. Optional: an earlier
    *  host does not send it. */
   context_menu?: ContextMenuView | null;
+  /** The command bar (ADR 0181, bridge 113), when on screen. Optional: an
+   *  earlier host does not send it. */
+  command_bar?: CommandBarView | null;
   panel_bar: PanelBarView;
   /** The status bar's right half (ADR 0132, bridge 85). Optional: an
    *  earlier host does not send it. */
@@ -1847,6 +1911,7 @@ export type ViewChange =
   | { change: "which_key"; whichkey: WhichKeyView | null }
   | { change: "menu"; menu: MenuView }
   | { change: "context_menu"; context_menu: ContextMenuView | null }
+  | { change: "command_bar"; command_bar: CommandBarView | null }
   | { change: "panel_bar"; panel_bar: PanelBarView }
   | { change: "status_items"; status_items: StatusItemView[] }
   | { change: "profiles"; profiles: ProfilePickerView | null }
@@ -2019,6 +2084,11 @@ export type UiAction =
     }
   /** Enter in one of its inputs: searches now. */
   | { action: "search_panel_go"; slot_id: number }
+  /** The assistant panel (bridge 116). */
+  | { action: "assistant_submit"; slot_id: number; text: string }
+  | { action: "assistant_apply"; slot_id: number; turn: number }
+  /** Stop waiting for the turn in flight (bridge 118). */
+  | { action: "assistant_cancel"; slot_id: number }
   /** "Search here": the focused listing's folder. */
   | { action: "search_panel_reroot"; slot_id: number }
   | { action: "search_panel_filters"; slot_id: number }
@@ -2089,9 +2159,15 @@ export type UiAction =
   | { action: "context_menu_point_row"; row: number }
   | { action: "context_menu_activate_row"; row: number }
   | { action: "context_menu_close" }
+  /** A press on an overlay's veil, outside its box (bridge 112). */
+  | { action: "overlay_dismiss" }
   | { action: "goto_point_row"; row: number }
   | { action: "goto_activate_row"; row: number }
   | { action: "goto_paste"; text: string }
+  /** A click on the command bar: it takes the keys (bridge 113). */
+  | { action: "command_bar_focus" }
+  /** A paste into the focused command bar (bridge 113). */
+  | { action: "command_bar_paste"; text: string }
   /** Alt pressed and released alone: folds or opens the menu (bridge 68). */
   | { action: "menu_toggle" }
   | { action: "wizard_open" }
@@ -2132,6 +2208,8 @@ export interface HostCatalog {
   theme: Record<string, string>;
   /** Task 3.6's measurement pass (`NORTE_GUI_MEASURE=1`). */
   measure: boolean;
+  /** `NORTE_GUI_TRACE` is set: report what the probes show after a paint. */
+  trace?: boolean;
   /** How long to wait before SHOWING that it is waiting, in ms. Travels
    *  instead of being written in the CSS because it is a decision shared
    *  with the terminal (`norte_frontend::busy::THRESHOLD`), and a number

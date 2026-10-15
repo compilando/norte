@@ -1058,6 +1058,18 @@ pub(crate) fn draw_processes(
                 + 10
                 + state_txt.chars().count()
                 + measured.chars().count();
+            // The graph (ADR 0187) only while it runs and has moved, and
+            // only where it leaves the operand a name's worth of room: what
+            // runs matters more than how fast.
+            let graph = (!p.state.is_terminal() && !row.spark.is_quiet())
+                .then(|| norte_frontend::spark::braille(&row.spark.series()) + " ")
+                .filter(|_| {
+                    usize::from(inner.width).saturating_sub(fixed)
+                        >= 2 * (norte_frontend::spark::CELLS + 1)
+                })
+                .unwrap_or_default();
+            let fixed = fixed + graph.chars().count();
+            let measured = graph + &measured;
             let slot = usize::from(inner.width).saturating_sub(fixed);
             let operating = operand_text(row, app, slot);
             let mark = if i == cursor { '▶' } else { ' ' };
@@ -1817,7 +1829,10 @@ fn search_input_line(
     width: usize,
     theme: &TuiTheme,
 ) -> Line<'static> {
-    let label = format!("{label} ");
+    // The labels are bare nouns («Nombre»), shared with the dialog that
+    // paints them in a column; on one line the colon is what separates it
+    // from what was typed.
+    let label = format!("{label}: ");
     let room = width
         .saturating_sub(super::text::cells(&label))
         .saturating_sub(usize::from(caret));

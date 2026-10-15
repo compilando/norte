@@ -108,6 +108,23 @@ impl TerminalIcon {
     }
 }
 
+/// A program's title as a list shows it: bash's and zsh's `user@host:dir`
+/// becomes `dir` — in a narrow list the user and host fill the row and are
+/// the same for every shell. Any other shape is left alone.
+fn short_title(t: &str) -> &str {
+    let Some((who, dir)) = t.split_once(':') else {
+        return t;
+    };
+    let user_at_host = who
+        .split_once('@')
+        .is_some_and(|(u, h)| !u.is_empty() && !h.is_empty() && !who.contains(' '));
+    if user_at_host && !dir.is_empty() {
+        dir
+    } else {
+        t
+    }
+}
+
 /// What [`Terminals::tick`] needs from a shell. A trait so the rules are
 /// tested without a pty; each frontend implements it over `norte-term`'s.
 pub trait TerminalShell {
@@ -150,10 +167,16 @@ pub struct Instance<S> {
     pub exited: Option<i32>,
     /// Output arrived while another instance was in front.
     pub unseen: bool,
+    /// Kept after a clean exit too: a command-bar order, whose output is
+    /// why it was run (ADR 0181).
+    pub keep: bool,
     /// The shell. Kept after a non-zero exit: dead, it still holds the last
     /// screen the reader has to see.
     pub shell: S,
 }
+
+/// How many finished command-bar entries stay with their output.
+pub const KEPT_MAX: usize = 20;
 
 /// The panel's instances and which one is in front.
 #[derive(Debug)]
@@ -239,6 +262,7 @@ impl<S> Terminals<S> {
             color,
             exited: None,
             unseen: false,
+            keep: false,
             shell,
         });
         self.active = Some(id);
@@ -332,10 +356,36 @@ impl<S> Terminals<S> {
         }
     }
 
-    /// Its shell ended. A clean exit (0) removes it; any other code keeps
-    /// it, without a shell, so the reader sees how it ended.
+    /// Marks `id` to stay after a clean exit.
+    pub fn keep_on_success(&mut self, id: InstanceId) {
+        if let Some(i) = self.get_mut(id) {
+            i.keep = true;
+        }
+    }
+
+    /// Its shell ended. A clean exit (0) removes it unless it is kept; any
+    /// other code keeps it, without a shell, so the reader sees how it
+    /// ended.
     pub fn on_exit(&mut self, id: InstanceId, code: i32) {
-        if code == 0 {
+        let kept = self.get_mut(id).is_some_and(|i| i.keep);
+        if code == 0 && kept {
+            if let Some(i) = self.get_mut(id) {
+                i.exited = Some(0);
+            }
+            // Past the cap, the oldest finished kept entry goes.
+            let finished: Vec<InstanceId> = self
+                .instances
+                .iter()
+                .filter(|i| i.keep && i.exited.is_some())
+                .map(|i| i.id)
+                .collect();
+            for old in finished
+                .iter()
+                .take(finished.len().saturating_sub(KEPT_MAX))
+            {
+                self.close(*old);
+            }
+        } else if code == 0 {
             self.close(id);
         } else if let Some(i) = self.get_mut(id) {
             // The dead shell stays: it holds the last screen.
@@ -368,7 +418,7 @@ impl<S> Terminals<S> {
         Some(
             i.name
                 .as_deref()
-                .or(i.title.as_deref())
+                .or(i.title.as_deref().map(short_title))
                 .unwrap_or(&i.profile),
         )
     }
@@ -558,6 +608,38 @@ mod tests {
         assert_eq!(i.shell, "b", "the dead shell keeps the last screen");
     }
 
+    /// A command-bar order's entry stays after a clean exit: the reader
+    /// typed it to see its output (ADR 0181). A plain shell still goes.
+    #[test]
+    fn a_kept_entry_stays_after_a_clean_exit() {
+        let (mut t, [a, b, _]) = three();
+        t.keep_on_success(a);
+        t.on_exit(a, 0);
+        let i = t.iter().find(|i| i.id == a).expect("kept");
+        assert_eq!(i.exited, Some(0));
+        t.on_exit(b, 0);
+        assert!(t.iter().all(|i| i.id != b));
+    }
+
+    /// Finished kept entries are capped: past `KEPT_MAX`, the oldest goes,
+    /// so a long session of orders does not keep every screen forever.
+    #[test]
+    fn finished_kept_entries_are_capped() {
+        let mut t: Terminals<&str> = Terminals::new();
+        let ids: Vec<_> = (0..KEPT_MAX + 3)
+            .map(|_| {
+                let id = t.push("o".into(), None, None, "s");
+                t.keep_on_success(id);
+                id
+            })
+            .collect();
+        for id in &ids {
+            t.on_exit(*id, 0);
+        }
+        assert_eq!(t.iter().count(), KEPT_MAX);
+        assert!(t.iter().all(|i| i.id != ids[0]), "the oldest went first");
+    }
+
     /// A clean exit of the ACTIVE one moves the focus like a close does.
     #[test]
     fn exit_zero_of_the_active_moves_to_a_neighbour() {
@@ -587,6 +669,27 @@ mod tests {
         assert_eq!(t.display_title(a), Some("build"));
         t.rename(a, "   ");
         assert_eq!(t.display_title(a), Some("vim"), "blank name clears it");
+    }
+
+    /// bash and zsh title themselves `user@host:dir`: in an 18-column list
+    /// that is the user and host and nothing else. The DIRECTORY is what
+    /// tells two shells apart, so that is what is shown. A name the reader
+    /// gave is never shortened, nor a title of another shape.
+    #[test]
+    fn a_user_at_host_title_shows_its_directory() {
+        let (mut t, [a, ..]) = three();
+        t.set_title(a, "oscar@gp76:~/src/norte".into());
+        assert_eq!(t.display_title(a), Some("~/src/norte"));
+        t.set_title(a, "vim notes.md".into());
+        assert_eq!(t.display_title(a), Some("vim notes.md"));
+        t.set_title(a, "a@b:".into());
+        assert_eq!(t.display_title(a), Some("a@b:"), "nothing after: kept");
+        t.rename(a, "me@host:x");
+        assert_eq!(
+            t.display_title(a),
+            Some("me@host:x"),
+            "a name is the reader's"
+        );
     }
 
     /// An empty OSC title is a program clearing it: back to the profile.

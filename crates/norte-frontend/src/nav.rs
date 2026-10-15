@@ -91,6 +91,27 @@ pub fn fold_with(name: &[u8], enc: Option<norte_encoding::NameEncoding>) -> Stri
     }
 }
 
+/// [`fold_with`] for MATCHING a name against a pattern that may name bytes
+/// (`\xff` in an order, ADR 0185): every byte that is not UTF-8 folds to a
+/// sentinel of its own (plane-16 private use, `U+100000 + byte`) instead of
+/// the shared `�`, so `\xff.rs` and `\xfe.rs` are two names, not one. Valid
+/// runs fold exactly as [`fold`]; a name the pane decodes with `enc` folds
+/// over the decoded text, as [`fold_with`] does.
+#[must_use]
+pub fn fold_exact(name: &[u8], enc: Option<norte_encoding::NameEncoding>) -> String {
+    if enc.is_some() && std::str::from_utf8(name).is_err() {
+        return fold_with(name, enc);
+    }
+    let mut out = String::with_capacity(name.len());
+    for chunk in name.utf8_chunks() {
+        out.push_str(&fold(chunk.valid().as_bytes()));
+        for b in chunk.invalid() {
+            out.extend(char::from_u32(0x10_0000 + u32::from(*b)));
+        }
+    }
+    out
+}
+
 /// Precomputed folds of `entries` (index-parallel). See [`fold_with`].
 fn fold_names(entries: &[Entry], enc: Option<norte_encoding::NameEncoding>) -> Vec<String> {
     entries
@@ -1141,6 +1162,34 @@ pub fn archive_root_for(e: &norte_proto::Entry) -> Option<norte_proto::VPath> {
     // Fails (already composed with an outer `!`, etc.): not navigable —
     // Enter is a no-op.
     VPath::archive_compose(format, &e.path, &[]).ok()
+}
+
+/// Where going up from `dir` lands, and the entry there to put the cursor
+/// on: `(parent, child)`, or `None` at a root.
+///
+/// At an archive's inner root the parent is the folder holding the
+/// CONTAINER, and the child is the container file itself. The syntactic
+/// [`VPath::parent`](norte_proto::VPath::parent) only drops the `!` marker
+/// there, leaving a compound path without one, which is malformed (ADR
+/// 0018) and every provider rejects. Shared so the `..` row, the window's
+/// "go up" and the terminal's agree.
+///
+/// ```
+/// use norte_proto::VPath;
+/// use norte_frontend::nav::up_from;
+/// let zip = VPath::parse("file:///home/u/files.zip").unwrap();
+/// let root = VPath::archive_compose("zip", &zip, &[]).unwrap();
+/// assert_eq!(up_from(&root), Some((VPath::parse("file:///home/u").unwrap(), zip)));
+/// let dir = VPath::parse("file:///home/u").unwrap();
+/// assert_eq!(up_from(&dir), Some((VPath::parse("file:///home").unwrap(), dir.clone())));
+/// assert_eq!(up_from(&VPath::parse("file:///").unwrap()), None);
+/// ```
+#[must_use]
+pub fn up_from(dir: &norte_proto::VPath) -> Option<(norte_proto::VPath, norte_proto::VPath)> {
+    match dir.archive_split() {
+        Ok(Some(aref)) if aref.inner.is_empty() => Some((aref.outer.parent()?, aref.outer)),
+        _ => Some((dir.parent()?, dir.clone())),
+    }
 }
 
 /// The archive format a NAME suggests, among the ones norte knows how to

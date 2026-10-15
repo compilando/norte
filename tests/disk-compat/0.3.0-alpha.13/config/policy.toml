@@ -1,0 +1,23 @@
+[[rule]]
+op = "delete"
+actor = "agent"
+action = "deny"
+
+[[rule]]
+scheme = "sftp"
+actor = "agent"
+action = "deny"
+
+[[rule]]
+op = "copy"
+path_prefix = "file:///home/compat/projects"
+actor = "agent"
+action = "allow"
+
+[[rule]]
+op = "set-mode"
+actor = "plugin"
+action = "ask"
+
+[[rule]]
+action = "ask"

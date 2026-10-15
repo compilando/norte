@@ -31,6 +31,11 @@ use serde::{Deserialize, Serialize};
 // from the settings screen), and a float is not `Eq`. Here it is only compared
 // in tests.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent startup switches the renderer reads one by one \
+              (measure, first run, no splash, trace): no state machine"
+)]
 pub struct HostCatalog {
     /// The contract version this host speaks, for diagnostics.
     ///
@@ -52,6 +57,11 @@ pub struct HostCatalog {
     /// through the `metrics` command (which only exists with the feature of
     /// the same name, i.e. not in the published binary).
     pub measure: bool,
+    /// `NORTE_GUI_TRACE` is set: after each paint the renderer reports what
+    /// a few probes SHOW (`trace_dom`), so the end-to-end harness checks the
+    /// screen and not only the bridge.
+    #[serde(default)]
+    pub trace: bool,
     /// How long to wait before SHOWING that it is waiting, in ms.
     ///
     /// It travels instead of being written into the CSS because it is a
@@ -167,6 +177,7 @@ pub fn catalog(instance: &InstanceId, lang: Lang, theme: &Theme) -> HostCatalog 
         strings,
         theme: variables(theme),
         measure: std::env::var_os("NORTE_GUI_MEASURE").is_some_and(|v| v == "1"),
+        trace: crate::trace::enabled(),
         busy_threshold_ms: u64::try_from(norte_frontend::busy::THRESHOLD.as_millis())
             .unwrap_or(250),
         appearance: Appearance::default(),

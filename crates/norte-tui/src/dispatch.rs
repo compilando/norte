@@ -105,18 +105,7 @@ pub async fn dispatch(
             if paths.is_empty() {
                 app.message = Some(t("msg-nothing-selected"));
             } else {
-                let bytes = norte_frontend::shell::clipboard_bytes(&paths);
-                let n = paths.len().to_string();
-                app.message = Some(match norte_frontend::shell::copy_to_clipboard(&bytes) {
-                    norte_frontend::shell::ClipboardOutcome::Done(_) => {
-                        ta("msg-paths-copied", &[("n", &n)])
-                    }
-                    norte_frontend::shell::ClipboardOutcome::NoHelper => {
-                        app.pending_osc52 = Some(norte_frontend::shell::osc52(&bytes));
-                        ta("msg-paths-copied-osc52", &[("n", &n)])
-                    }
-                    norte_frontend::shell::ClipboardOutcome::Failed => t("msg-clipboard-failed"),
-                });
+                crate::gestures::copy_paths(app, &paths).await;
             }
         }
         Command::PaneSwitch => app.switch_focus(),
@@ -181,6 +170,7 @@ pub async fn dispatch(
         Command::LayoutPreview => app.toggle_preview(),
         Command::LayoutProcesses => app.toggle_processes(),
         Command::LayoutLog => app.toggle_log(),
+        Command::LayoutAssistant => app.toggle_assistant(),
         Command::LayoutDiskMap => app.toggle_disk_map(),
         Command::LayoutSearch => app.toggle_search_panel(),
         // The timeline (phase 7): opening is placing the slot, and reading
@@ -490,14 +480,7 @@ pub async fn dispatch(
             // inner root the child is NOT `dir` (that is the virtual
             // compound path, not a real entry in the parent's listing) but
             // the container file itself (`aref.outer`).
-            let (parent, child) = match dir.archive_split() {
-                Ok(Some(aref)) if aref.inner.is_empty() => {
-                    let outer = aref.outer.clone();
-                    (outer.parent(), outer)
-                }
-                _ => (dir.parent(), dir.clone()),
-            };
-            if let Some(parent) = parent {
+            if let Some((parent, child)) = norte_frontend::nav::up_from(&dir) {
                 app.focused_mut().set_pending_focus(child);
                 cd_outcome = cd(app, backend, events, parent).await;
                 // Review S, M2: a FAILED `cd` (permission denied, daemon
@@ -791,19 +774,8 @@ pub async fn dispatch(
         // mutation (there is no actor to attribute nor a reversal to
         // record), and whatever changes on disk is picked up by the watcher
         // and the refresh on return.
-        Command::AppTerminal => match shell_cwd(app) {
-            Ok(dir) => {
-                app.pending_shell = Some(crate::app::PendingShell {
-                    argv: vec![norte_frontend::shell::login_shell().into_os_string()],
-                    cwd: Some(dir),
-                    // The shell is already interactive: on leaving it,
-                    // returning to the panels is exactly what is wanted.
-                    wait_for_key: false,
-                    check_regular: None,
-                });
-            }
-            Err(msg) => app.message = Some(msg),
-        },
+        Command::AppTerminal => crate::gestures::terminal_here(app).await,
+        Command::PaneContextMenu => crate::context_menu::open_on_cursor(app),
         // Phase 9: the HANDOFF to the window. Here it only CHECKS and
         // requests; dumping the screen, releasing the session and launching
         // the window are three trips that do not fit in dispatching a key,
@@ -831,14 +803,9 @@ pub async fn dispatch(
         // shell already exists between one keypress and the next, and where
         // it goes is decided when the terminal is handed to it.
         Command::AppTogglePanels => app.pending_subshell = true,
-        // Only opens the prompt; its Enter leaves the `$SHELL -c` pending,
-        // in the run loop (which is the one that reads a free-text modal's
-        // raw keys). The locality guard repeats there — the directory may
-        // have changed between opening the prompt and confirming it.
-        Command::PaneCommandLine => match shell_cwd(app) {
-            Ok(_) => app.open_command_line(),
-            Err(msg) => app.message = Some(msg),
-        },
+        // The command bar (ADR 0181) takes the keyboard; its Enter checks
+        // the folder again, since the pane may move while it is typed.
+        Command::PaneCommandLine => crate::command_bar::focus(app),
         Command::ViewerClose => {
             // With the preview docked, `viewer.close` RELEASES the keyboard
             // and leaves the panel where it is: closing it is
@@ -1036,6 +1003,9 @@ pub async fn dispatch(
             open_omnibox(app, backend, norte_frontend::goto::PREFIX_COMMANDS).await;
         }
         Command::AppGoto => open_omnibox(app, backend, "").await,
+        Command::AppOrders => {
+            open_omnibox(app, backend, norte_frontend::goto::PREFIX_ORDER).await;
+        }
         // `F11` (S3): settings overlay — the rows are born from the CURRENT
         // `cfg` (same criterion as `help_lines`/`app.palette_rows`: rebuilt
         // on open, never a carried-over copy). Plugins section (G3c): a

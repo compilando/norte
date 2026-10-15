@@ -14,12 +14,13 @@ futures.workspace = true
 norte-proto.workspace = true
 sqlx = { workspace = true, features = ["sqlite", "runtime-tokio"] }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync", "fs"] }
+tokio = { workspace = true, features = ["sync", "fs", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

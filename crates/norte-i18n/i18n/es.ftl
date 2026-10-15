@@ -81,12 +81,7 @@ modal-transfer-to = A
 modal-transfer-dest-copy = Copiar a la dirección
 modal-transfer-dest-move = Mover a la dirección
 modal-transfer-dest-hint = dirección, por ejemplo file:///home/tu/trabajo
-# `pane.command-line` (#135): el prompt de texto libre cuyo Enter corre
-# `$SHELL -c CMD` en el directorio del pane, con la TUI suspendida. Mismo
-# molde que los prompts de mkdir/renombrado IA.
-modal-command-line = Ejecutar un comando
-modal-command-line-hint = se ejecuta en el directorio del pane activo
-modal-command-line-empty = escribe un comando primero
+# Lo muestra un prompt de texto libre que puede abrirse ya largo (la dirección de destino).
 modal-command-line-too-long = la línea de comandos está llena ({ $max } caracteres); el resto no se escribió
 # El renombrado en lote SIN IA (#310): una plantilla y el mismo plan revisable.
 # Las sumas de comprobación (#311).
@@ -374,11 +369,20 @@ cli-enqueue-copy = no se pudo encolar la copia
 cli-enqueue-move = no se pudo encolar el move
 cli-enqueue-delete = no se pudo encolar el borrado
 cli-enqueue-mkdir = no se pudo encolar el mkdir
+cli-enqueue-undo = no se pudo encolar el deshacer
+cli-run-needs-selection = esta acción necesita antes un `sel`: no hay panel del que tomar marcas
+cli-run-needs-pane = cd y los comandos del catálogo actúan sobre un panel; úsalos en la caja
+cli-run-undo-needs-yes = deshacer cambia tus ficheros: añade --yes para ejecutarlo desde un script
+cli-run-would = { $action }: { $n } casan
 # S3 (shell-integration): el vocabulario de `Shell::parse` son exactamente
 # estos tres — nombrados aquí en vez de repetir el nombre tecleado como hace
 # `cli-help-unknown-topic`, porque este es un conjunto cerrado, no un corpus
 # donde el usuario pudiera haberse equivocado de página nueva.
 cli-shell-init-unknown = shell desconocido «{ $shell }» — soportados: bash, zsh, fish
+# `norte update check` (ADR 0183).
+cli-update-available = norte { $version } está disponible (tienes la { $current }): { $url }
+cli-update-current = norte { $current } es la última versión publicada.
+cli-update-failed = no se pudo comprobar si hay una versión nueva: { $reason }
 # `norte theme import` (spec 2026-09-11, F5).
 cli-theme-imported = tema { $name } importado → { $path } (sobre { $base })
 cli-theme-ignored = aviso: { $count } entradas no son colores y se han saltado: { $ids }
@@ -549,6 +553,7 @@ degraded-reason-unknown = motivo desconocido
 # que apagó los hooks de un plugin. `$plugin` y `$text` son texto del wire, ya
 # enmascarado.
 msg-plugin-notice = ⚑ { $plugin }: { $text }
+msg-update-available = norte { $version } está disponible — `norte update check` dice dónde
 msg-plugin-hooks-disabled = ⚑ { $plugin }: sus hooks se apagaron tras tres fallos seguidos — desactívalo y vuelve a activarlo en el gestor de extensiones para reintentar
 msg-plugin-effect-denied = ⚑ { $plugin }: tu policy denegó un fichero que este plugin pidió escribir (regla para actor "plugin"); se dice una vez mientras norte corre
 status-connection-failed = ✗ no se pudo conectar
@@ -744,12 +749,14 @@ msg-terminal-none-unset = $TERMINAL no está definido y no se encontró ningún 
 help-cmd-app-terminal = abrir un shell en el directorio del pane activo
 help-cmd-app-handoff = entregar la pantalla al otro frontend y seguir allí (solo con daemon)
 help-cmd-app-toggle-panels = ocultar los paneles y enseñar la terminal
-help-cmd-pane-command-line = ejecutar un comando en el directorio del pane activo
+help-cmd-pane-command-line = abrir la barra de órdenes: cada orden se ejecuta en la carpeta del panel activo
 cli-ls-skipped = aviso: { $n } entradas del contenedor omitidas del índice (nombres hostiles/límites)
 
 # --- Ayuda (F1) — construida del keymap efectivo ---
 help-title = Ayuda
 help-toc = Secciones de esta página
+help-rail-keys-title = Teclas de esta página
+help-rail-see-title = Ver también
 help-section-browse = Navegación (panes)
 help-section-viewer = Viewer
 help-section-dialog = Diálogos y overlays
@@ -820,6 +827,7 @@ modal-undo-session-title = ¿deshacer todo lo que hizo esta sesión?
 modal-undo-session-scope = revierte TODAS sus operaciones, en orden inverso; lo que no se pueda revertir se dirá en el informe
 help-cmd-app-palette = paleta de comandos
 help-cmd-app-goto = ir a cualquier sitio
+help-cmd-app-orders = escribir una orden (sel … | cp >other)
 # Los títulos de las secciones de «ir a» (fase 6). El orden en que salen lo
 # fija `norte_frontend::goto::ORDEN`, no este fichero.
 goto-title = Ir a
@@ -833,10 +841,57 @@ goto-section-index = Encontrado por el índice
 goto-title-help = Temas de ayuda
 goto-prefix-commands = Ejecutar un comando
 goto-prefix-places = Ir a un sitio
+goto-title-order = Orden
+goto-title-ask = Preguntar al asistente
+goto-prefix-ask = Pregunta al asistente en palabras
+goto-hint-ask = copia los PDF de este mes al otro panel · ¿qué ocupa más aquí?
+assistant-title = Asistente
+assistant-busy = el asistente aún está respondiendo — vuelve a preguntar cuando termine
+assistant-apply = Aplicar…
+assistant-placeholder = Pide en palabras y pulsa Intro
+assistant-thinking = pensando…
+assistant-thinking-esc = Esc cancela
+assistant-cancelled = cancelado
+assistant-cancel = Cancelar
+assistant-unparsable = esta orden no se entiende aquí; escríbela con : para ver por qué
+assistant-empty = Pide en palabras: «copia los PDF de este mes al otro panel», «¿qué ocupa más aquí?». Cada orden que proponga te espera.
+assistant-apply-hint = Intro con la línea vacía la aplica — la confirmación de siempre sigue preguntando
+assistant-written-for = escrita para { $dir }; se ejecuta aquí
+assistant-newer-kind =el asistente respondió de una forma que este norte aún no conoce: actualiza norte
+assistant-setup-1 =El asistente está apagado. Para encenderlo, añade a norte.toml:
+assistant-setup-2 = Los nombres y tamaños van a ese proveedor; uno local (Ollama) los deja en esta máquina.
+goto-prefix-order =Ejecutar una orden (sel ext:pdf | cp >other)
+goto-hint-order = sel ext:pdf age<30d | cp >other · trash · mkdir NOMBRE · cd RUTA · log · undo N
+order-error-empty = nada que ejecutar
+order-error-unknown-verb = no es un verbo ni un comando
+order-error-not-yet = rehacer aún no está disponible
+order-error-stands-alone = log y undo no se encadenan con |
+order-error-bad-term = esta palabra no significa nada aquí
+order-error-bad-number = no es un número con unidad válida (K M G T · s m h d w)
+order-error-bad-escape = un escape es \xHH, \\, \ (espacio), \| o \'
+order-error-missing-dest = ¿adónde? (>other, >here o >RUTA)
+order-error-missing-arg = este verbo necesita un argumento
+order-error-unterminated = una comilla no se cierra
+order-error-no-other-pane = no hay otro panel
+order-error-bad-path = no es una ruta válida
+order-error-one-action = solo la última etapa puede actuar (sel … | sel … | cp >other)
+order-error-unknown-command = no existe ese comando
+order-error-unknown-command-nearest = no existe ese comando — ¿quisiste decir { $nearest }?
+msg-order-preview = { $n ->
+    [one] 1 elemento · { $size }
+   *[other] { $n } elementos · { $size }
+}
+msg-order-nothing-matched = nada casó — no se ejecutó nada
+msg-order-measuring = midiendo las filas que necesita la orden…
+msg-order-stale = la orden no se ejecutó: el panel cambió mientras medía
+msg-order-journal-failed = no se pudo leer la historia: { $err }
+msg-order-unmeasured ={ $n } sin medir aún (Intro las mide)
+msg-order-bare-key = ¿querías { $key }…? Sin el signo, esa palabra es un nombre de fichero
+msg-order-undo-too-far = eso va más atrás de una página de historia: deshaz desde la línea de tiempo (log)
 goto-empty = nada casa con eso
 goto-index-off = el índice semántico no está encendido
 goto-path-desc = ir a esta ruta
-goto-hint = > comandos · ? ayuda
+goto-hint = > comandos · : órdenes · @ asistente · ? ayuda
 goto-box-label = Buscar sitios y comandos (>)
 # La categoría bajo la que se archiva una fila de comando: el espacio de nombres de su id.
 cmd-ns-app = Aplicación
@@ -913,7 +968,8 @@ msg-palette-no-help = ninguna página de la ayuda documenta este comando todaví
 # paleta de arriba (decisión 8): la búsqueda está SIEMPRE activa, Enter
 # togglea/cicla/edita.
 settings-title = Ajustes
-settings-hint = [tab] lado · [[/]] sección · [enter] editar · [ctrl+r] restablecer · [esc] cerrar
+settings-search-placeholder = Buscar ajustes
+settings-hint = [tab] lado · [ y ] sección · [enter] editar · [ctrl+r] restablecer · [esc] cerrar
 
 settings-edit-hint = [enter] guardar · [esc] cancelar
 # obsoleta: las 33 entradas vivían aquí. Se borra en el ciclo siguiente.
@@ -1200,8 +1256,9 @@ panelbar-places = Sitios
 panelbar-tree = Árbol
 panelbar-viewer = Visor
 panelbar-processes = Tareas
-panelbar-metadata = Detalles
+panelbar-metadata = Info
 panelbar-log = Log
+panelbar-assistant = IA
 panelbar-disk-map = Mapa
 panelbar-timeline = Historial
 panelbar-search = Buscar
@@ -1262,6 +1319,10 @@ wizard-ask-theme = Elige un tema. Lo que ves mientras te mueves es lo que eliges
 wizard-ask-icons = ¿Ves aquí tres iconos: 📁 🖼 ⚙ ? Si salen como cuadros, la fuente del terminal no tiene emoji.
 wizard-icons-yes = Sí, los veo — usar iconos
 wizard-icons-no = No — insignias ASCII
+wizard-step-updates = versiones nuevas
+wizard-ask-updates = ¿Pregunta norte a GitHub, una vez al día al arrancar, si hay una versión más nueva? No instala nada, y es lo único que manda por la red sin que lo pidas. Puedes cambiarlo en Ajustes.
+wizard-updates-no = No — nunca por su cuenta
+wizard-updates-yes = Sí — una vez al día, y avisa en la barra de estado
 # Cabe ENTERO en la caja del asistente (66 celdas): recortado por la mitad se
 # perdía justo `[Esc]`, la única tecla que dice cómo no contestar.
 wizard-hint = [Intro] siguiente · [Retroceso] atrás · [Esc] no preguntar más
@@ -1277,6 +1338,7 @@ menu-item-layout-places = Sitios
 menu-item-layout-preview = Visor
 menu-item-layout-processes = Procesos
 menu-item-layout-log = Registro
+menu-item-layout-assistant = Asistente
 menu-item-layout-disk-map = Mapa de disco
 menu-item-layout-timeline = Historial
 menu-item-layout-search = Panel de búsqueda
@@ -1357,6 +1419,7 @@ menu-item-mark-extension-remove = Desmarcar por extensión
 menu-item-mark-files = Marcar los ficheros
 menu-item-mark-dirs = Marcar los directorios
 menu-item-app-goto = Ir a…
+menu-item-app-orders = Línea de órdenes…
 menu-item-nav-parent = Subir
 menu-item-nav-back = Atrás
 menu-item-nav-jump-back = Volver al punto de salto
@@ -1369,7 +1432,7 @@ menu-item-pane-history = Historial
 menu-item-pane-hotlist = Favoritos
 menu-item-pane-select-drive = Volúmenes
 menu-item-pane-refresh = Refrescar
-menu-item-pane-command-line = Línea de comandos
+menu-item-pane-command-line = Barra de órdenes
 menu-item-app-terminal = Terminal aquí
 menu-item-app-handoff = Seguir en la otra ventana
 menu-item-layout-focus-next = Panel siguiente
@@ -1411,6 +1474,7 @@ help-cmd-layout-places = enseñar u ocultar el panel de sitios
 help-cmd-layout-preview = enseñar u ocultar el visor acoplado
 help-cmd-layout-processes = muestra u oculta el panel de procesos
 help-cmd-layout-log = muestra u oculta el registro de esta sesión
+help-cmd-layout-assistant = muestra u oculta el asistente: pide en palabras, revisa la orden que propone
 help-cmd-layout-disk-map = muestra u oculta el mapa de disco
 help-cmd-layout-timeline = muestra u oculta el historial
 help-cmd-layout-search = muestra u oculta el panel de búsqueda
@@ -1700,18 +1764,21 @@ help-cmd-pane-compare-files = compara DOS ficheros con el programa de `[ui] diff
 help-cmd-pane-sync-dirs = planifica una sincronización de un sentido de este panel al otro
 help-cmd-pane-copy-path = copia la ruta de la selección al portapapeles
 search-title = Búsqueda
-search-name = nombre (glob):
-search-content = contenido:
-search-exclude = saltar carpetas:
-search-min-size = al menos:
-search-max-size = como mucho:
-search-days = cambiado hace (días):
-search-encoding = leer el texto como:
-search-regex = [F2] regex: { $on }
-search-case = [F3] mayús: { $on }
-search-whole-word = [F4] palabra entera: { $on }
-search-recursive = [F5] subcarpetas: { $on }
-search-kinds = [F6] busco: { $what }
+search-name = Nombre
+search-content = Contenido
+search-exclude = Saltar carpetas
+search-min-size = Tamaño mínimo
+search-max-size = Tamaño máximo
+search-days = Cambiado en los últimos
+search-encoding = Codificación
+search-name-hint = parte del nombre, o un glob como *.jpg
+search-content-hint = texto dentro del fichero
+search-exclude-hint = p. ej. node_modules, .git
+search-min-size-hint = p. ej. 500K, 10M, 1.5G
+search-max-size-hint = p. ej. 500K, 10M, 1.5G
+search-days-hint = días, p. ej. 7
+search-encoding-hint = automática (o latin1, cp1252…)
+search-in = Buscar en
 search-kinds-any = cualquier cosa
 search-kinds-files = ficheros
 search-kinds-dirs = carpetas
@@ -1728,10 +1795,10 @@ search-toggle-kinds = busco
 search-query-filters-only = (solo filtros)
 search-empty = introduce un nombre, un contenido o un filtro
 search-bad-field = ese campo no se entiende — arréglalo o déjalo vacío
-search-status-running = búsqueda: { $n } hits (buscando…)
-search-status-done = búsqueda: { $n } hits
-search-status-truncated = búsqueda: { $n } hits (truncada)
-search-status-cancelled = búsqueda: { $n } hits (cancelada)
+search-status-running = búsqueda: { $n } encontrados (buscando…)
+search-status-done = búsqueda: { $n } encontrados
+search-status-truncated = búsqueda: { $n } encontrados (hay más; afina la búsqueda)
+search-status-cancelled = búsqueda: { $n } encontrados (cancelada)
 search-status-failed = búsqueda fallida: { $error }
 # Resultados de búsqueda abiertos como listado (2026-10-10-search-b-listing).
 results-tab-title = 🔍 { $query } ({ $n })
@@ -2023,6 +2090,10 @@ err-overlapping-roots-source-inside = el origen está dentro del destino
 err-overlapping-roots-dest-inside = el destino está dentro del origen
 reason-needs-daemon = necesita el daemon (--daemon)
 reason-needs-desktop = necesita un escritorio: aquí no hay dónde abrir una ventana
+reason-inside-archive = dentro de un archivo comprimido: sube con .. a su carpeta
+reason-not-on-this-disk = no es una carpeta de este disco
+msg-context-stale = esa fila ha cambiado desde que abriste el menú: no hago nada
+msg-bar-cannot-quote = norte no sabe entrecomillar este nombre con seguridad para { $shell }: escríbelo
 
 on-yes = sí
 on-no = no
@@ -2306,6 +2377,8 @@ setting-ui-menu-bar-name = Barra de menú
 setting-ui-menu-bar-desc = Si la barra de menú se queda fijada en la fila de arriba. Encendida por defecto: hay comandos a los que solo se llega por el menú, y nada en pantalla decía que estaba ahí. Apagarla devuelve la fila — el menú sigue abriéndose con su tecla. La GUI lo ignora.
 setting-ui-mouse-name = Ratón
 setting-ui-mouse-desc = Si la TUI captura el ratón (click, rueda, arrastre para marcar). Mientras está capturado el terminal no puede seleccionar texto con el ratón; mantén Mayús para seleccionar igualmente, o desactiva esto. La GUI lo ignora.
+setting-updates-check-name = Buscar versiones nuevas
+setting-updates-check-desc = Una vez al día, al arrancar, pregunta a GitHub si hay un norte más nuevo y lo dice en la barra de estado. No instala nada. Apagado por defecto: es lo único que norte manda por la red sin que lo pidas. `norte update check` pregunta una vez, diga lo que diga esto. Se aplica en el siguiente arranque.
 setting-ui-alt-menu-name = Alt abre el menú
 setting-ui-alt-menu-desc = Si pulsar y soltar Alt solo abre la barra de menús en la TUI. Necesita un terminal con el protocolo de teclado de kitty (kitty, foot, WezTerm, Ghostty); tmux, xterm y GNOME Terminal no pueden avisar de un Alt suelto. Apagado por defecto: en ese modo el terminal manda teclas y no texto, así que una letra con tecla muerta (é) o un símbolo con AltGr (@, #) llega como su tecla base. La GUI lo tiene siempre.
 setting-ui-parent-entry-name = Fila para subir
@@ -2320,8 +2393,12 @@ setting-ui-diff-name = Comparar ficheros
 setting-ui-diff-desc = El programa que compara DOS ficheros, como línea de órdenes con los códigos de campo de `openers.toml`: `%F` son los dos ficheros, `%d` el directorio del panel. Ejemplo: `meld %F`. Vacío = `diff -u`, cuya salida se queda en pantalla hasta que pulsas una tecla. No se lee de la capa de proyecto: nombra un programa que se ejecuta.
 setting-ui-diff-detached-name = El comparador abre ventana
 setting-ui-diff-detached-desc = Si ese comparador abre una ventana propia (Meld, Kompare) en vez de ocupar el terminal. Mismo trato que el editor, y por lo mismo.
+setting-ui-terminal-name = Terminal externo
+setting-ui-terminal-desc = El emulador que abre «Terminal aquí», como línea de órdenes con los códigos de campo de `openers.toml`: `%d` es el directorio del panel. Ejemplos: `foot -D %d`, `open -a iTerm %d`, `wt -d .` (el terminal arranca en la carpeta del panel; Windows Terminal parte `%d` por un `;`). Vacío = `$TERMINAL`, luego el del escritorio y una lista de emuladores conocidos. Si lo pones, es el único que se intenta. No se lee de la capa de proyecto: nombra un programa que se ejecuta.
 setting-ui-confirm-quit-name = Confirmar antes de salir
 setting-ui-confirm-quit-desc = Al salir pide confirmación: solo con trabajo pendiente (auto), siempre, o nunca. Un atajo de salida de emergencia, donde esté ligado (p. ej. Ctrl+C en la TUI), siempre lo evita.
+setting-ui-command-bar-name = Barra de órdenes
+setting-ui-command-bar-desc = Si la línea de órdenes se queda bajo los paneles. Cada orden que escribes ahí se ejecuta en el panel de terminal, en la carpeta del panel con el foco, como una entrada nueva que se queda abierta con su salida. La tecla de línea de órdenes la saca aunque esto esté apagado.
 setting-ui-key-bar-name = Barra de teclas
 setting-ui-key-bar-desc = Solo en el terminal. Si la fila de teclas de función (F1–F10 y qué hace cada una en la pantalla actual) se queda fijada abajo. Se lee del keymap, así que reatar una tecla cambia su etiqueta, y pulsar una celda con el ratón ejecuta el comando. La ventana no la tiene: sus comandos están en el menú y en la paleta.
 setting-ui-panel-bar-style-name = Etiquetas de la barra de paneles
@@ -2698,6 +2775,9 @@ msg-paths-copied-osc52 = { $n } ruta(s) al portapapeles del terminal (OSC 52); c
 msg-clipboard-failed = el portapapeles no aceptó las rutas
 msg-opening-external = abriendo con la aplicación del escritorio…
 msg-opening-terminal = abriendo un terminal aquí…
+msg-terminal-opened = abierto { $program } aquí
+msg-terminal-fallback = ningún emulador de terminal arrancó: abro una shell aquí
+msg-terminal-configured-failed = { $program } (de [ui] terminal) no arrancó: { $error }; abro una shell aquí
 host-plugin-running = ejecutando el comando de la extensión…
 host-not-an-int = eso no es un número entero
 host-out-of-range = el esquema lo acota entre { $min } y { $max }

@@ -97,6 +97,50 @@ pub(crate) fn shell_init_cmd(shell: &str) -> ExitCode {
     }
 }
 
+/// `norte update check` (ADR 0183): asks now, says what it found, and
+/// leaves the answer in the cache the frontends read at start.
+///
+/// Exit 0 when it could tell (newer or not), 1 when it could not ask.
+pub(crate) async fn update_check_cmd() -> ExitCode {
+    let current = env!("CARGO_PKG_VERSION");
+    let releases = match norte_update::fetch_releases(current).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!(
+                "{}",
+                norte_i18n::ta("cli-update-failed", &[("reason", &e.to_string())])
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    let cache = norte_update::Cache::from_releases(&releases, norte_update::now_ms());
+    let newer = cache.newer_than(current);
+    if let Some(state) = norte_config::dirs::state_dir() {
+        // The answer is already in hand; a cache that cannot be written
+        // only means the next start asks again.
+        let _ =
+            tokio::task::spawn_blocking(move || norte_update::write_cache(&state, &cache)).await;
+    }
+    match newer {
+        Some(version) => println!(
+            "{}",
+            norte_i18n::ta(
+                "cli-update-available",
+                &[
+                    ("version", &version),
+                    ("current", current),
+                    ("url", &norte_update::release_url(&version)),
+                ],
+            )
+        ),
+        None => println!(
+            "{}",
+            norte_i18n::ta("cli-update-current", &[("current", current)])
+        ),
+    }
+    ExitCode::SUCCESS
+}
+
 /// `norte paths`: print where every file norte reads or writes lives.
 ///
 /// Resolution is NOT re-derived here — layers, config dir, state dir, the
@@ -203,6 +247,7 @@ pub(crate) async fn doctor_cmd(json: bool) -> anyhow::Result<ExitCode> {
         findings.extend(doctor::check_keymaps(&layers));
         findings.extend(doctor::check_plugins(&config_dir));
         findings.extend(doctor::check_connections(&config_dir, &env));
+        findings.extend(doctor::check_policy(&config_dir));
         // Roadmap item 9: where the log is. Without this row the file
         // exists and nobody knows to ask for it when needed — and it has
         // to resolve the SAME `[log] dir` the frontends resolve: pointing

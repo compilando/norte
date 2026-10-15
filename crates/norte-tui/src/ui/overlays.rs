@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
-use super::{HOSTILE_BADGE, centered, clear_themed};
+use super::{HOSTILE_BADGE, centered, clear_modal, clear_popup, clear_themed};
 use crate::app::display_name;
 use crate::theme::TuiTheme;
 use norte_frontend::display::cells;
@@ -32,7 +32,7 @@ pub(crate) fn draw_extensions(
     hint: &str,
 ) {
     let area = extensions_area(frame.area(), hint);
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", t("ext-title")))
@@ -639,7 +639,7 @@ pub(crate) fn draw_plugin_config_panel(
         width,
         frame.area().height.saturating_sub(4).max(6),
     );
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
     let lines = plugin_config_lines(panel, theme);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -908,6 +908,56 @@ fn goto_footer(goto: &norte_frontend::goto::Goto, query: &str) -> String {
     }
 }
 
+/// The `:` line: the order coloured by token, then why it does not parse, or
+/// what it would touch, or the hint.
+fn order_footer(
+    goto: &norte_frontend::goto::Goto,
+    preview: &str,
+    theme: &TuiTheme,
+) -> Line<'static> {
+    use norte_orders::TokenClass;
+    let shown = goto.query_display();
+    let mut spans = vec![Span::raw(" ❯")];
+    let mut at = 0;
+    for (r, class) in goto.order_tokens() {
+        if let Some(gap) = shown.get(at..r.start) {
+            spans.push(Span::raw(gap.to_owned()));
+        }
+        let role = match class {
+            TokenClass::Verb => Role::Title,
+            TokenClass::Key => Role::Info,
+            TokenClass::Value => Role::Regular,
+            TokenClass::Pipe => Role::Warning,
+            TokenClass::Dest => Role::Match,
+            TokenClass::Error => Role::Error,
+        };
+        if let Some(text) = shown.get(r.clone()) {
+            spans.push(Span::styled(text.to_owned(), theme.role(role)));
+        }
+        at = r.end;
+    }
+    if let Some(rest) = shown.get(at..) {
+        spans.push(Span::raw(rest.to_owned()));
+    }
+    spans.push(Span::raw("_  "));
+    match goto.order() {
+        Some(Err(e)) => spans.push(Span::styled(
+            t(norte_frontend::orders::parse_error_key(e.kind)),
+            theme.role(Role::Error),
+        )),
+        _ if !preview.is_empty() => {
+            spans.push(Span::styled(preview.to_owned(), theme.role(Role::Info)));
+        }
+        _ => {
+            if let Some(hint) = goto.hint() {
+                spans.push(Span::raw(t(hint)));
+            }
+        }
+    }
+    spans.push(Span::raw(" "));
+    Line::from(spans)
+}
+
 /// One row of the search box, laid out by CELLS: badge, recent dot, dim
 /// category, the text (matched chars marked), the dim description, and the
 /// chord against the right edge.
@@ -1000,6 +1050,7 @@ fn goto_row_line(
 pub(crate) fn draw_goto(
     frame: &mut Frame<'_>,
     goto: &norte_frontend::goto::Goto,
+    order_preview: &str,
     theme: &TuiTheme,
 ) {
     use norte_frontend::goto::{GotoLine, Mode};
@@ -1009,7 +1060,7 @@ pub(crate) fn draw_goto(
         .saturating_add(2);
     let width = frame.area().width.saturating_sub(8).clamp(40, 88);
     let area = centered(frame.area(), width, height.min(frame.area().height.max(3)));
-    clear_themed(frame, area, theme);
+    clear_popup(frame, area, theme);
     let inner = usize::from(area.width.saturating_sub(3));
     let dim = theme.role(Role::BorderUnfocused);
     // The chord column is as wide as the widest chord on screen, so every
@@ -1043,8 +1094,14 @@ pub(crate) fn draw_goto(
         Mode::Places => t("goto-title"),
         Mode::Commands => t("palette-title"),
         Mode::Help => t("goto-title-help"),
+        Mode::Order => t("goto-title-order"),
+        Mode::Ask => t("goto-title-ask"),
     };
-    let footer = goto_footer(goto, &query);
+    let footer = if goto.mode() == Mode::Order {
+        order_footer(goto, order_preview, theme)
+    } else {
+        Line::raw(goto_footer(goto, &query))
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {title} "))
@@ -1052,7 +1109,7 @@ pub(crate) fn draw_goto(
         // `❯` and not a `/`: here what is written CAN be a path, and a
         // prompt slash glued to an absolute path reads as part of it
         // (`//etc`).
-        .title_bottom(Line::raw(footer))
+        .title_bottom(footer)
         .border_style(theme.role(Role::ModalBorder));
     let list = List::new(items)
         .block(block)
@@ -1108,7 +1165,7 @@ pub(crate) fn draw_splash(
     let height = u16::try_from(art + 3 + section_rows + 2).unwrap_or(u16::MAX);
     let width = 60.min(frame.area().width.max(20));
     let area = centered(frame.area(), width, height.min(frame.area().height.max(3)));
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", t("splash-title")))
@@ -1177,7 +1234,7 @@ fn draw_splash_cover(
 ) {
     let lang = norte_i18n::active();
     let area = frame.area();
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
 
     let mut lines: Vec<Line<'_>> = splash
         .art
@@ -1232,7 +1289,7 @@ pub(crate) fn draw_wizard(
         .saturating_add(6)
         .min(frame.area().height.max(3));
     let area = centered(frame.area(), width, height);
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {} ", wizard.title(lang)))
@@ -1293,8 +1350,10 @@ pub(crate) enum SettingsLine {
     Row(usize),
 }
 
-/// What the settings overlay's section index takes up.
-const SETTINGS_INDEX_WIDTH: u16 = 20;
+/// What the settings overlay's section index takes up: a quarter of the
+/// box, between these two. Fixed at its widest, at 80 columns it left the
+/// setting names cut in the middle.
+const SETTINGS_INDEX_WIDTH: (u16, u16) = (20, 26);
 
 /// And the interior width above which it fits. Below it, the list wins: a
 /// six-cell index is not an index.
@@ -1318,24 +1377,50 @@ fn settings_list_lines<'a>(
     let covered = settings_cursor_section(settings).filter(|s| {
         plan.get(settings.viewport_offset()).copied() == Some(SettingsLine::Header(*s))
     });
+    // The value column starts where the LONGEST name ends, capped: a fixed
+    // 28 let "Theme when the desktop is light" run into its own value.
+    let name_w = settings
+        .rows()
+        .iter()
+        .map(|r| crate::ui::text::cells(&r.name))
+        .max()
+        .unwrap_or(0)
+        .min(inner_w.saturating_sub(16) / 2 + 8)
+        .min(36);
     plan.into_iter()
         .map(|item| match item {
             SettingsLine::Header(section) if covered == Some(section) => Line::raw(""),
-            SettingsLine::Header(section) => {
-                Line::styled(t(section.label_key()), theme.role(Role::Title))
-            }
+            SettingsLine::Header(section) => Line::styled(
+                format!(" {}", t(section.label_key())),
+                theme.role(Role::Title),
+            ),
             SettingsLine::Row(pos) => {
                 let row = &settings.rows()[settings.visible()[pos]];
                 let selected = pos == settings.cursor();
-                let cursor = if selected { ">" } else { " " };
+                let cursor = if selected { "›" } else { " " };
                 // The "you touched this" dot is a CHARACTER, not a color: a
                 // bare color is not information to whoever cannot tell it
                 // apart.
                 let dot = if row.modified { "•" } else { " " };
                 let text = if row.is_plugins_note() {
-                    format!("{cursor}{dot}{}", row.name)
+                    format!(" {cursor}{dot}{}", row.name)
                 } else {
-                    format!("{cursor}{dot}{:<28} {}", row.name, row.value)
+                    // A switch reads as on/off, not as Rust's `true`; an
+                    // empty value is "the factory one" and says so with a
+                    // dash instead of a gap that looks broken.
+                    let value = match row.value.as_str() {
+                        "true" => t("on-yes"),
+                        "false" => t("on-no"),
+                        "" => "—".to_owned(),
+                        v => v.to_owned(),
+                    };
+                    let name = middle_ellipsis(&row.name, name_w);
+                    let pad = " ".repeat(name_w.saturating_sub(crate::ui::text::cells(&name)));
+                    // A long value is cut at ITS end: cutting the whole line
+                    // in the middle ate the name's tail and the value's head.
+                    let value =
+                        crate::ui::text::right_ellipsis(&value, inner_w.saturating_sub(name_w + 7));
+                    format!(" {cursor}{dot}{name}{pad}   {value}")
                 };
                 let line = Line::raw(middle_ellipsis(&text, inner_w));
                 if selected {
@@ -1378,7 +1463,13 @@ fn draw_settings_index(
         .into_iter()
         .filter(|v| v.total > 0)
         .map(|v| {
-            let text = format!("{} {}", v.title, v.visible);
+            // The title cut at its END and the count right-aligned in its
+            // own column: «Panes an…isting 13» read as neither.
+            let count = v.visible.to_string();
+            let room = width.saturating_sub(count.len() + 4);
+            let title = crate::ui::text::right_ellipsis(&v.title, room);
+            let pad = " ".repeat(room.saturating_sub(crate::ui::text::cells(&title)));
+            let text = format!(" {title}{pad} {count} ");
             let style = if Some(v.section) == current {
                 // Same as the list: this side's cursor is always painted,
                 // and dimmed when the keyboard is on the other one.
@@ -1390,12 +1481,11 @@ fn draw_settings_index(
             } else if v.visible == 0 {
                 theme.role(Role::BorderUnfocused)
             } else {
-                theme.role(Role::Info)
+                theme.role(Role::Regular)
             };
-            // Two cells of air on the right: without them the longest label
-            // sticks to the first row's cursor and they read as a single
-            // word.
-            Line::styled(middle_ellipsis(&text, width.saturating_sub(2)), style)
+            // One cell of air before the separator: without it the cursor's
+            // band touches the line and reads as part of it.
+            Line::styled(text, style)
         })
         .collect();
     frame.render_widget(Paragraph::new(rows), area);
@@ -1434,23 +1524,27 @@ pub(crate) fn settings_line_plan(settings: &crate::app::Settings) -> Vec<Setting
 
 /// How many lines fit in the settings list with a `height`-row screen: the
 /// box (`height - 4`, minimum 6) minus its two borders and the description
-/// line reserved at the bottom.
+/// lines reserved at the bottom.
 ///
 /// Shared by whoever paints and whoever reconciles the window, for the same
 /// reason as [`settings_line_plan`]: a guessed height breaks scroll
 /// silently.
 pub(crate) fn settings_list_rows(height: u16) -> usize {
     let box_height = height.saturating_sub(4).max(6);
-    // Two borders, the description line reserved at the bottom, and the
-    // PINNED header on top: that one does not scroll, so it is not part of
-    // the list.
+    // Two borders, the description's lines reserved at the bottom (a rule
+    // and two of text), and the PINNED header on top: that one does not
+    // scroll, so it is not part of the list.
     usize::from(
         box_height
             .saturating_sub(2)
-            .saturating_sub(1)
+            .saturating_sub(SETTINGS_DESC_LINES + 1)
             .saturating_sub(1),
     )
 }
+
+/// Lines the selected row's description gets, wrapped: one cut it in the
+/// middle and the half that said what the setting does was lost.
+const SETTINGS_DESC_LINES: u16 = 2;
 
 pub(crate) fn draw_settings(
     frame: &mut Frame<'_>,
@@ -1465,7 +1559,7 @@ pub(crate) fn draw_settings(
         .min(frame.area().width);
     let height = frame.area().height.saturating_sub(4).max(6);
     let area = centered(frame.area(), width, height);
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
 
     let footer = if settings.is_editing() {
         let (buf, _) = display_name(settings.edit_buffer().unwrap_or_default().as_bytes());
@@ -1494,43 +1588,61 @@ pub(crate) fn draw_settings(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Three bands: the PINNED header, the scrolling list, and the
-    // description line. The header on top is the cursor's section's and
-    // does not move: it is the only label saying where you are, and one
-    // that scrolls goes off the border as soon as you go down three rows.
+    // The INDEX, on the left and full height, when there is room; a rule
+    // separates it from the rest. Below 60 cells the list wins and the index
+    // disappears: the same degradation a panel's columns do, and for the
+    // same reason — a column that does not fit does not shrink until
+    // illegible, it leaves.
+    let with_index = inner.width >= SETTINGS_INDEX_MIN_WIDTH;
+    let right = if with_index {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(
+                    (inner.width / 4).clamp(SETTINGS_INDEX_WIDTH.0, SETTINGS_INDEX_WIDTH.1),
+                ),
+                Constraint::Length(1),
+                Constraint::Min(1),
+            ])
+            .split(inner);
+        // One blank line on top, level with the pinned header beside it.
+        let idx = Rect {
+            y: cols[0].y + 1,
+            height: cols[0].height.saturating_sub(1),
+            ..cols[0]
+        };
+        draw_settings_index(frame, settings, theme, idx);
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::LEFT)
+                .border_style(theme.role(Role::BorderUnfocused)),
+            cols[1],
+        );
+        cols[2]
+    } else {
+        inner
+    };
+
+    // Three bands right of the index: the PINNED header, the scrolling
+    // list, and the description under a rule. The header on top is the
+    // cursor's section's and does not move: it is the only label saying
+    // where you are. It used to span the index too, and read as a row of it.
     let split = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(1),
+            Constraint::Length(SETTINGS_DESC_LINES),
         ])
-        .split(inner);
-
-    // The INDEX, on the left, when there is room. Below 60 cells the list
-    // wins and the index disappears: the same degradation a panel's columns
-    // do, and for the same reason — a column that does not fit does not
-    // shrink until illegible, it leaves.
-    let with_index = inner.width >= SETTINGS_INDEX_MIN_WIDTH;
-    let (index_area, body) = if with_index {
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(SETTINGS_INDEX_WIDTH), Constraint::Min(1)])
-            .split(split[1]);
-        (Some(cols[0]), cols[1])
-    } else {
-        (None, split[1])
-    };
+        .split(right);
+    let body = split[1];
     let inner_w = usize::from(body.width);
-
-    if let Some(idx_area) = index_area {
-        draw_settings_index(frame, settings, theme, idx_area);
-    }
 
     let pinned = settings_cursor_section(settings).map_or_else(String::new, |s| t(s.label_key()));
     frame.render_widget(
         Paragraph::new(Line::styled(
-            middle_ellipsis(&pinned, usize::from(inner.width)),
+            format!(" {}", middle_ellipsis(&pinned, inner_w.saturating_sub(1))),
             theme.role(Role::Title),
         )),
         split[0],
@@ -1548,15 +1660,35 @@ pub(crate) fn draw_settings(
         Paragraph::new(lines).scroll((u16::try_from(from).unwrap_or(u16::MAX), 0)),
         body,
     );
+    draw_settings_desc(frame, settings, theme, split[2], split[3]);
+}
 
-    let desc = settings.selected_desc().unwrap_or_default();
-    let desc_line = Line::raw(format!(
-        " {}",
-        middle_ellipsis(desc, inner_w.saturating_sub(1))
-    ));
+/// The selected row's description, under a rule. It WRAPS over its lines;
+/// only what does not fit in them is lost, at the end, where a reader
+/// expects a cut.
+fn draw_settings_desc(
+    frame: &mut Frame<'_>,
+    settings: &crate::app::Settings,
+    theme: &TuiTheme,
+    rule: Rect,
+    text: Rect,
+) {
     frame.render_widget(
-        Paragraph::new(desc_line).style(theme.role(Role::BorderUnfocused)),
-        split[2],
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(theme.role(Role::BorderUnfocused)),
+        rule,
+    );
+    let area = Rect {
+        x: text.x + 1,
+        width: text.width.saturating_sub(2),
+        ..text
+    };
+    frame.render_widget(
+        Paragraph::new(settings.selected_desc().unwrap_or_default())
+            .wrap(ratatui::widgets::Wrap { trim: true })
+            .style(theme.role(Role::BorderUnfocused)),
+        area,
     );
 }
 
@@ -1603,7 +1735,7 @@ pub fn draw_shortcuts(frame: &mut Frame<'_>, sc: &crate::app::Shortcuts, theme: 
         .min(frame.area().width);
     let height = frame.area().height.saturating_sub(2).max(6);
     let area = centered(frame.area(), width, height);
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
 
     let capture = sc.capture();
     let footer = match capture {

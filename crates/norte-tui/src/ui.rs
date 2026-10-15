@@ -11,10 +11,13 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 
 use crate::app::{App, display_name};
 use crate::theme::TuiTheme;
-use norte_i18n::{t, ta};
+use norte_i18n::t;
 
+mod assistant_panel;
 mod chrome;
+mod command_bar;
 mod compare;
+mod context_menu;
 mod geometry;
 mod help;
 mod modals;
@@ -60,12 +63,13 @@ pub(crate) use chrome::{TARGET_BADGE, TabStrip, draw_tab_strip};
 // comes out since #329 because `app::layout`'s tests check that the BUTTON
 // says the same thing the screen does, and that pair — the tree's state and
 // what the bar derives from it — is exactly what used to drift out of sync.
+use assistant_panel::draw_assistant;
 #[cfg(test)]
 pub(crate) use chrome::panel_buttons;
 use chrome::{draw_key_bar, draw_menu, draw_panel_bar};
 pub(crate) use geometry::{
-    body_rect, centered, chrome_body, pane_cols, placed_of_kind, resolved_frame, slot_content,
-    slot_rect, visor_split,
+    body_rect, centered, chrome_body, command_bar_area, pane_cols, placed_of_kind, resolved_frame,
+    slot_content, slot_rect, visor_split,
 };
 use modals::draw_modal;
 #[cfg(test)]
@@ -124,6 +128,31 @@ fn base_style(theme: &TuiTheme) -> ratatui::style::Style {
 fn clear_themed(frame: &mut Frame<'_>, area: Rect, theme: &TuiTheme) {
     frame.render_widget(ratatui::widgets::Clear, area);
     frame.render_widget(Block::default().style(base_style(theme)), area);
+}
+
+/// [`clear_themed`] for a box a click outside must NOT close — a question,
+/// the wizard, settings: painted over a light popup, it is the one in front
+/// now, so the popup's box is forgotten. Chrome bars use plain
+/// `clear_themed`: they are painted after the popups and cover nothing.
+fn clear_modal(frame: &mut Frame<'_>, area: Rect, theme: &TuiTheme) {
+    clear_themed(frame, area, theme);
+    POPUP_BOX.with(|b| b.set(None));
+}
+
+thread_local! {
+    /// The box of the LIGHT popup in front, while ONE [`draw`] runs: the
+    /// popup painters take a theme, not the app. `draw` hands it to
+    /// `App::painted_popup` before returning — the loop awaits between the
+    /// paint and the mouse, and a multi-thread runtime may resume it on
+    /// another thread, where this cell is someone else's.
+    static POPUP_BOX: std::cell::Cell<Option<Rect>> = const { std::cell::Cell::new(None) };
+}
+
+/// [`clear_themed`] for a light popup (a picker, the search box, help): one
+/// a click outside closes, as `Esc` does.
+fn clear_popup(frame: &mut Frame<'_>, area: Rect, theme: &TuiTheme) {
+    clear_themed(frame, area, theme);
+    POPUP_BOX.with(|b| b.set(Some(area)));
 }
 
 /// Whether panel `i` carries the DESTINATION mark.
@@ -356,6 +385,14 @@ fn draw_side_panels(
             app.key_owner() == crate::app::KeyOwner::Timeline,
         );
     }
+    if let Some((_, rect)) = placed_of_kind(res, &app.layout, crate::assistant::KIND) {
+        draw_assistant(
+            frame,
+            rect,
+            app,
+            app.key_owner() == crate::app::KeyOwner::Assistant,
+        );
+    }
     if let Some((id, rect)) = placed_of_kind(res, &app.layout, crate::searchpanel::KIND)
         && let Some(sp) = app.panes.search_panel(id)
     {
@@ -438,6 +475,12 @@ pub(crate) fn extensions_footer<'a>(
 /// Paints the whole frame: panes (or viewer) + tasks panel + status bar +
 /// modal on top.
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
+    POPUP_BOX.with(|b| b.set(None));
+    draw_frame(frame, app);
+    app.painted_popup.set(POPUP_BOX.with(std::cell::Cell::get));
+}
+
+fn draw_frame(frame: &mut Frame<'_>, app: &App) {
     // The theme's BASE background (ADR 0020): painted first; text styles
     // (fg only) keep it. No `background` in the theme = the terminal's
     // background.
@@ -476,6 +519,8 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     // as the menu: it is chrome, and the body has already been given the
     // spot left for it.
     draw_panel_bar(frame, app);
+    command_bar::draw(frame, app);
+    context_menu::draw(frame, app);
     if let Some(help) = &app.help {
         draw_help(
             frame,
@@ -529,7 +574,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     // The search box (places and commands): over the listing, under the
     // wizard and a modal.
     if let Some(goto) = &app.goto {
-        draw_goto(frame, goto, &app.theme);
+        draw_goto(frame, goto, &app.order_preview, &app.theme);
     }
     // The first-run wizard (spec 2026-09-10): over the search box and the
     // settings, under a modal, like the rest of the overlays that are not a
@@ -680,6 +725,61 @@ pub(crate) fn rail_pixels_shown(app: &App, area: Rect) -> Option<(Rect, geometry
     rail.big.then_some((bar, rail))
 }
 
+/// Whether the menu row's layout buttons are drawn in pixels this frame: a
+/// terminal that shows images, and nothing painted over the body (kitty's
+/// pixels sit above the text). ONE answer for the painter, which then
+/// leaves the glyph cells blank, and for [`chrome_icons_to_place`].
+pub(crate) fn layout_pixels_shown(app: &App) -> bool {
+    app.menu_bar
+        && !something_above_the_viewer(app)
+        && crate::rail_icons::backend(app) != crate::rail_icons::RailBackend::Glyph
+}
+
+/// The first image slot the chrome's icons use; the panel column's come
+/// before it.
+const CHROME_SLOTS: usize = 48;
+
+/// The chrome's icons to place this frame: the layout buttons' shared
+/// drawings (`layout:*`), over the three cells of each button, in the title's
+/// colour. Empty unless `layout_pixels_shown`.
+#[must_use]
+pub fn chrome_icons_to_place(
+    app: &App,
+    area: Rect,
+    cell_px: (u16, u16),
+) -> Vec<crate::rail_icons::RailIcon> {
+    if !layout_pixels_shown(app) {
+        return Vec::new();
+    }
+    let backend = crate::rail_icons::backend(app);
+    let exact = backend == crate::rail_icons::RailBackend::Sixel;
+    let canvas = crate::rail_icons::canvas_cells(cell_px, 3, 1, exact);
+    let Some(rgb) = app
+        .theme
+        .role_rgb(Role::Title)
+        .or_else(|| app.theme.role_rgb(Role::Regular))
+    else {
+        return Vec::new();
+    };
+    let bg = app
+        .theme
+        .role_bg_shown(Role::Background)
+        .unwrap_or([0, 0, 0]);
+    chrome::layout_button_cells(app, area)
+        .into_iter()
+        .enumerate()
+        .map(|(i, (x, b))| crate::rail_icons::RailIcon {
+            kind: format!("layout:{}", b.id),
+            rgb,
+            rect: Rect::new(x, area.y, 3, 1),
+            canvas,
+            backend,
+            bg,
+            slot: CHROME_SLOTS + i,
+        })
+        .collect()
+}
+
 /// The panel column's big icons to place this frame (spec 2026-10-05): one
 /// per slot `draw_rail` left blank, in the state's colour, rasterised for
 /// cells of `cell_px` pixels (`(0, 0)` if the terminal does not say). Empty
@@ -725,6 +825,7 @@ pub fn rail_icons_to_place(
         .into_iter()
         .zip(chrome::panel_buttons(app, area))
         .enumerate()
+        .take(CHROME_SLOTS)
         .filter(|(_, (_, b))| icon_svg(&b.kind).is_some())
         .filter_map(|(index, (slot, b))| {
             let rgb = match b.state {
@@ -782,8 +883,41 @@ pub fn image_to_place(app: &App, area: Rect) -> Option<crate::viewer_open::Place
     ))
 }
 
-/// Live search dialog (`Alt+F7`, liveSearch T6): two text fields
-/// (name/content) with a `_` on the active one, the two regex/case toggles
+/// The search dialog's toggles as checkboxes with their key, two per line:
+/// the state is the box, not a «sí/no» at the end of a sentence.
+fn search_toggle_lines(
+    dialog: &crate::app::SearchDialog,
+    muted: ratatui::style::Style,
+    theme: &TuiTheme,
+) -> Vec<Line<'static>> {
+    use ratatui::text::Span;
+    let check = |key: &str, on: bool, label: &str| -> Vec<Span<'static>> {
+        vec![
+            Span::styled(format!(" {key} "), muted),
+            Span::styled(
+                if on { "[x] " } else { "[ ] " }.to_owned(),
+                theme.role(if on { Role::Title } else { Role::Regular }),
+            ),
+            Span::raw(format!("{label:<26}")),
+        ]
+    };
+    let mut first = check("F2", dialog.regex, &t("search-toggle-regex"));
+    first.extend(check("F3", dialog.case, &t("search-toggle-case")));
+    let mut second = check("F4", dialog.whole_word, &t("search-toggle-whole-word"));
+    second.extend(check("F5", dialog.recursive, &t("search-toggle-recursive")));
+    vec![
+        Line::from(first),
+        Line::from(second),
+        Line::from(vec![
+            Span::styled(" F6 ".to_owned(), muted),
+            Span::raw(format!("{}: ", t("search-toggle-kinds"))),
+            Span::styled(t(dialog.kinds.key()), theme.role(Role::Title)),
+        ]),
+    ]
+}
+
+/// Live search dialog (`Alt+F7`, liveSearch T6): its text fields as boxes
+/// with an example while empty and a caret on the active one, the toggles
 /// and the walk's root (the pane's `cwd`, not editable) — all sanitized,
 /// never raw bidi/controls (the fields go through [`display_name`], the root
 /// through [`path_display`]; a hostile paste does not paint invisibles on
@@ -796,49 +930,105 @@ fn draw_search_dialog(
     theme: &TuiTheme,
 ) {
     use crate::app::SearchField;
-    let on_txt = |b: bool| if b { t("on-yes") } else { t("on-no") };
-    let field = |label: &str, value: &str, active: bool| {
-        let (masked, _) = display_name(value.as_bytes());
-        let cursor = if active { "_" } else { "" };
-        format!("{label} {masked}{cursor}")
+    use crate::ui::text::{cells, tail_window};
+    use ratatui::text::Span;
+    const WIDTH: u16 = 76;
+    let inner = usize::from(WIDTH) - 2;
+    // A field is a BOX: its own background, as wide as the others, with an
+    // example inside while it is empty. Bare `label: _` lines did not read
+    // as fields, and «al menos:» did not say of what.
+    let boxed = {
+        let s = theme.role(Role::InputBackground);
+        if s.bg.is_some() {
+            s
+        } else {
+            theme.role(Role::SelectionUnfocused)
+        }
+    };
+    // An example must never read as a typed value: `Muted` is optional in a
+    // theme, and without it the hint came out as bright as real text.
+    let muted = {
+        let s = theme.role(Role::Muted);
+        if s.fg.is_some() {
+            s
+        } else {
+            theme.role(Role::BorderUnfocused)
+        }
+    };
+    let labels: Vec<String> = SearchField::ORDEN.iter().map(|f| t(f.key())).collect();
+    let label_w = labels.iter().map(|l| cells(l)).max().unwrap_or(0);
+    let box_w = inner.saturating_sub(label_w + 4);
+    let field = |f: SearchField, label: &str| -> Line<'static> {
+        let active = dialog.field == f;
+        let (masked, _) = display_name(dialog.text(f).as_bytes());
+        let pad = " ".repeat(label_w.saturating_sub(cells(label)));
+        let mut value = tail_window(&masked, box_w.saturating_sub(2));
+        let (text, style) = if value.is_empty() && !active {
+            (t(f.hint_key()), boxed.patch(muted))
+        } else {
+            if active {
+                value.push('▏');
+            }
+            (
+                value,
+                if active {
+                    theme.role(Role::Selection)
+                } else {
+                    boxed
+                },
+            )
+        };
+        let text = tail_window(&text, box_w.saturating_sub(2));
+        let fill = " ".repeat(box_w.saturating_sub(cells(&text) + 1));
+        let label_style = if active { Role::Title } else { Role::Regular };
+        Line::from(vec![
+            Span::styled(format!(" {pad}{label}  "), theme.role(label_style)),
+            Span::styled(format!(" {text}{fill}"), style),
+        ])
     };
     // #98/F4: the walk's root is a decision surface — it follows the pane's
     // reinterpretation (the bar below paints the same dir this way).
     let (root_txt, root_hostile) = norte_frontend::path_display_with(root, enc);
-    let root_line = if root_hostile {
+    let root_txt = if root_hostile {
         format!("{HOSTILE_BADGE} {root_txt}")
     } else {
         root_txt
     };
-    // The seven fields in the order Tab walks them, then the four toggles.
-    // They are generated from the SAME `ORDEN` as Tab: two hand-written
-    // lists drift apart the moment a field is added, and then the cursor
-    // jumps to a line that is not painted.
-    let mut lines: Vec<String> = SearchField::ORDEN
-        .iter()
-        .map(|f| field(&t(f.key()), dialog.text(*f), dialog.field == *f))
-        .collect();
-    lines.push(ta("search-regex", &[("on", &on_txt(dialog.regex))]));
-    lines.push(ta("search-case", &[("on", &on_txt(dialog.case))]));
-    lines.push(ta(
-        "search-whole-word",
-        &[("on", &on_txt(dialog.whole_word))],
-    ));
-    lines.push(ta("search-recursive", &[("on", &on_txt(dialog.recursive))]));
-    lines.push(ta("search-kinds", &[("what", &t(dialog.kinds.key()))]));
-    lines.push(middle_ellipsis(&root_line, 56));
-    lines.push(t("search-hint"));
-    let body = lines.join("\n");
+    // The seven fields in the order Tab walks them, then the toggles. They
+    // are generated from the SAME `ORDEN` as Tab: two hand-written lists
+    // drift apart the moment a field is added, and then the cursor jumps to
+    // a line that is not painted.
+    let in_label = t("search-in");
+    let mut lines: Vec<Line<'static>> = vec![
+        Line::from(vec![
+            Span::styled(format!(" {in_label}  "), muted),
+            Span::raw(middle_ellipsis(
+                &root_txt,
+                inner.saturating_sub(cells(&in_label) + 3),
+            )),
+        ]),
+        Line::raw(""),
+    ];
+    lines.extend(
+        SearchField::ORDEN
+            .iter()
+            .zip(&labels)
+            .map(|(f, label)| field(*f, label)),
+    );
+    lines.push(Line::raw(""));
+    lines.extend(search_toggle_lines(dialog, muted, theme));
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(format!(" {}", t("search-hint")), muted));
     // Height = the lines plus the frame, but WITHOUT going past the screen:
-    // with eleven fields and toggles the dialog measures 18 rows, and on a
-    // 24-row terminal that ate the menu bar above and the status bar below.
-    // When trimmed, the last lines — the path and the cheat sheet — are lost
-    // before the frame, which is what keeps the dialog a dialog.
+    // on a 24-row terminal a taller dialog ate the menu bar above and the
+    // status bar below. When trimmed, the last lines — the cheat sheet — are
+    // lost before the frame, which is what keeps the dialog a dialog.
     let height = u16::try_from(lines.len().saturating_add(2))
         .unwrap_or(u16::MAX)
         .min(frame.area().height);
-    let area = centered(frame.area(), 60, height);
-    clear_themed(frame, area, theme);
+    let body = ratatui::text::Text::from(lines);
+    let area = centered(frame.area(), WIDTH, height);
+    clear_popup(frame, area, theme);
     frame.render_widget(
         Paragraph::new(body).block(
             Block::default()
@@ -920,7 +1110,7 @@ fn draw_nav_popup(
         .max(64);
     let rows = u16::try_from(popup.items().len().max(1)).unwrap_or(8) + 2;
     let area = centered(frame.area(), width, rows.min(frame.area().height.max(3)));
-    clear_themed(frame, area, theme);
+    clear_popup(frame, area, theme);
     // Long items: MIDDLE ellipsis (head + tail, like the path modals) at the
     // inner width — ratatui's right truncation would make two paths with a
     // common prefix indistinguishable (BAJA-3).

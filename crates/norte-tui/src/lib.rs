@@ -5,9 +5,12 @@
 
 pub mod alt_menu;
 pub mod app;
+pub mod assistant;
+pub mod command_bar;
 pub mod config;
 pub mod config_reload;
 pub mod console;
+pub mod context_menu;
 pub mod diskmap;
 pub mod dispatch;
 pub mod event_loop;
@@ -31,6 +34,7 @@ pub mod mouse;
 pub mod mutations;
 pub mod nav;
 pub mod navigate;
+pub mod orders;
 pub mod overlays;
 pub mod palette;
 pub mod panel;

@@ -51,6 +51,7 @@ fn apply_external_programs(app: &mut App, cfg: &config::LoadedConfig) {
             command,
             detached: cfg.common.ui_diff_detached.unwrap_or(false),
         });
+    app.ui_terminal.clone_from(&cfg.common.ui_terminal);
 }
 
 /// Hot-reload (ADR 0007): rereads ALL layers; on ANY error the current config
@@ -176,6 +177,7 @@ pub async fn reload_config(
                     norte_frontend::user_commands::undefined_bindings(&browse, &cfg.user_commands);
                 // An open box is closed (like help): its chords and facts are
                 // stale.
+                crate::orders::cancel(app);
                 app.goto = None;
                 // Overlay hints (H1 T3, #24): rebuilt from the CURRENT
                 // effective `dialog`, BEFORE it moves into the resolver

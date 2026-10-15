@@ -797,3 +797,27 @@ fn project_keymap_lua_is_discarded_with_a_warning() {
         }
     );
 }
+
+/// Every preset opens the order line from the listing with a key the
+/// terminal can deliver (ADR 0185): `:` where a bare `:` is free, `alt+:`
+/// where a printable key goes to the command line or the quick search. The
+/// event is the one a terminal sends — `alt+:` arrives with SHIFT too.
+#[test]
+fn every_preset_opens_the_order_line_with_a_deliverable_key() {
+    use crossterm::event::{KeyCode as Ct, KeyModifiers as M};
+    for name in norte_frontend::keymap::presets::NAMES {
+        let src = norte_frontend::keymap::presets::source(name).expect("preset");
+        let mut r = Resolver::new(eff(src, None).expect("preset builds"));
+        let alt = matches!(*name, "krusader" | "far" | "norton" | "total-commander");
+        let mods = if alt { M::ALT | M::SHIFT } else { M::SHIFT };
+        let chord = norte_tui::keymap::chord_from_crossterm(mods, Ct::Char(':')).expect("chord");
+        assert_eq!(
+            r.push(chord),
+            Resolution::Run {
+                command: "app.orders".into(),
+                count: Count::None
+            },
+            "{name}"
+        );
+    }
+}

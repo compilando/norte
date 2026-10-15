@@ -34,7 +34,7 @@ This budget works — the session after it went from 50 gate runs to 3. It is
 | the RED→GREEN loop | `just t <crate>` (+ `just c` if you touched lint surface) | unlimited |
 | every ~3 tasks of a plan | `just ci-fast` | ONE run |
 | merging to `main` | the push of `main` (hook: `ci-fast` + `gui-ci`) | ONE run |
-| before cutting a release | `just ci` (with `cov`) | ONE run |
+| before cutting a release | `just release-prep` (runs `just ci` + `gui-ci`) | ONE run |
 
 **Until releases are real (decided 2026-10-04), `cov` and `just ci` are
 release-time only**, and a batch is ONE branch merged ONCE: no chain of
@@ -47,8 +47,21 @@ the 50 runs:
 | step | observed |
 | --- | --- |
 | `just t <crate>` | ~78s |
-| `just ci-fast` | ~4min |
-| `just ci` | 4–10min |
+| `just ci-fast` | 4–8min |
+| `just ci` | ~16min (lint 2, test 3, docs 5, cov 6) |
+| `just gui-ci` | 1–2min |
+| a release, end to end | ~60min, most of it Windows on GitHub |
+
+**A gate that passed leaves a SEAL; the pre-push hook skips what is sealed.**
+`just ci`, `just ci-fast` and `just gui-ci` write it when they finish green
+(`target/.norte-gate-ok`, `target/.norte-gui-gate-ok`): a hash of the tracked
+files on disk. Push that same content and the hook passes instantly. Two ways
+to lose it, both measured on 2026-10-14/15 at 6–8 minutes each:
+
+- running `just ci` as its separate recipes (`lint`, `test`, `docs`, `cov`) —
+  none of them seals; only the composite does;
+- changing any tracked byte between the gate and the push — a CHANGELOG line
+  included.
 
 **Never use the gate as a debugger.** A red gate tells you WHICH test failed;
 re-running it to see whether your fix worked costs 4–10 minutes for a test that
@@ -304,10 +317,16 @@ saves a rejected push.
 - **Read `git diff --cached --stat` before every commit.** `commit-tree` will
   happily produce an empty commit, and this session produced one whose message
   claimed to close an issue and described work it did not contain.
-- **`just ci` does not fit in a background job here** — it is killed at about
-  five minutes. Run the recipes one at a time in the foreground (`lint`, `test`,
-  `docs`, `cov`), and never through `| tail`: a killed pipe leaves
-  nothing behind, so five minutes of compute reports nothing at all.
+- **Anything over ten minutes — `just ci`, `just release-prep`, `just
+  release` — runs DETACHED and is waited on by PID.** A foreground call stops
+  at ten minutes and a harness background job is killed at about five, and
+  splitting `just ci` into its recipes to fit loses the seal (above). So:
+  `setsid nohup just ci > /tmp/ci.log 2>&1 < /dev/null & echo $! > /tmp/ci.pid`,
+  then a background `p=$(cat /tmp/ci.pid); while [ -d /proc/$p ]; do sleep 30;
+  done` that notifies when it ends. **Never wait with `pgrep -f <pattern>`**:
+  it matches the waiting shell's own command line and reports "running"
+  forever — a dead release script looked alive for half an hour that way.
+  And never through `| tail`: a killed pipe leaves nothing behind.
 
 ### Tool frictions that cost round trips here
 
@@ -474,6 +493,34 @@ tag. The loop for its scripts is `just baseline-selftest` (seconds, no Docker).
 `just gui-smoke` stays for a package `gui-package` built here, and says
 nothing about old distributions. `just baseline-prune` removes its Docker
 volumes and images.
+
+**A release is four commands, and the slow ones run detached:**
+
+1. `just release-prep <version>` from a clean `main` — branch, every version
+   string, the CHANGELOG section and links, the whole `just ci` and `gui-ci`
+   (sealed), the commit. ~20 min.
+2. `git switch main && git merge --no-ff chore/release-<version> && git push
+   origin main` — instant: the seals cover it. If the hook runs the gate,
+   something changed after prep; find out what before waiting eight minutes.
+3. `git tag -a v<version> -m v<version> && git push origin v<version>` — the
+   auto-mode classifier refuses this without the person's explicit go-ahead
+   for THIS release; ask once, up front.
+4. `just release v<version> <lead.md>` — notes from the CHANGELOG, the
+   Windows runner (dependencies cached between releases), `baseline` +
+   `baseline-publish`, the Windows artefacts, and the disk-compat corpus
+   frozen with the published binary. ~40 min, Windows being the floor.
+   Then add what the release made new to `tests/disk-compat/<version>/config`
+   and commit it.
+
+It leaves the release a **draft**, and publishing it stays a person's call.
+`release.sh` is resumable — rerun it after a failure — and checks that the
+Linux build and the Windows run belong to the tag's CURRENT commit, so a tag
+moved before publishing (it has happened twice) is rebuilt, never reused.
+Its loop is `just release-selftest`, which also exercises `prep.sh`'s edits.
+
+**Before cutting, look at what the gate cannot see**: `cargo deny` fails on
+advisories published since the last push (rustls and wasmtime both did,
+mid-release, in one week). Bump in a `fix/` branch, merge, THEN prep.
 
 ## Workspace map
 

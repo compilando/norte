@@ -990,6 +990,40 @@ gui-package: gui-build
 gui-smoke imagen="debian:trixie":
     ./scripts/gui-smoke.sh {{imagen}}
 
+# The window end to end: the real `norte-gui` (the last `just link-gui`) on
+# a virtual display, in a sandbox with a throwaway home, driven by xdotool
+# and checked against what crossed the bridge (`NORTE_GUI_TRACE`). Scenarios
+# in `scripts/gui-e2e/scenarios/`; screenshots in `target/gui-e2e/`.
+# Needs Xvfb, xdotool, bwrap, jq and ImageMagick. Seconds per scenario.
+gui-e2e *scenarios:
+    ./scripts/gui-e2e/run.sh {{scenarios}}
+
+# Cuts the release of a PUSHED tag and leaves it as a draft
+# (`scripts/release/release.sh`): notes from the CHANGELOG, the Windows
+# runner, `baseline` + `baseline-publish`, the Windows artefacts, and the
+# disk-compat corpus frozen with the published binary. Resumable: run it
+# again after a failure. `lead` is a file with the notes' first paragraph.
+# In the FOREGROUND: `baseline` alone outlasts the background cap.
+release tag lead="":
+    ./scripts/release/release.sh {{tag}} "{{lead}}"
+
+# The release COMMIT, from a clean `main` (`scripts/release/prep.sh`):
+# branch, version bump everywhere, CHANGELOG section and links, the whole
+# `just ci` and `gui-ci` as ONE run each (their seals make the push of
+# `main` instant), and the commit. ~20 min: run it detached.
+release-prep version:
+    ./scripts/release/prep.sh {{version}}
+
+# The release scripts' check: syntax, shellcheck and the notes of the
+# newest CHANGELOG version. Seconds, no network.
+release-selftest:
+    ./scripts/release/selftest.sh
+
+# Freezes `tests/disk-compat/<version>` with a released `norte` binary
+# (ADR 0182). `release` calls it; by hand only to redo one.
+disk-compat-freeze version binary:
+    ./scripts/release/freeze-disk-compat.sh {{version}} {{binary}}
+
 # The baseline system's tests (`scripts/baseline/lib.sh`) and shellcheck over
 # all its scripts. Seconds, no Docker: that folder's RED→GREEN loop.
 baseline-selftest:

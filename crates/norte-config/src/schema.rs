@@ -29,6 +29,9 @@ pub struct NorteToml {
     /// Local diagnostic log (`[log]`, roadmap item 9).
     #[serde(default)]
     pub log: LogSection,
+    /// The opt-in release check (`[updates]`, ADR 0183).
+    #[serde(default)]
+    pub updates: UpdatesSection,
     /// Favourite directories shown by `Ctrl+D`.
     ///
     /// Entries accumulate across layers instead of replacing lower-layer
@@ -160,6 +163,21 @@ pub struct LogSection {
     /// whatever this says: it is read by a person in a terminal.
     #[serde(default)]
     pub format: Option<LogFormat>,
+}
+
+/// `[updates]`: whether norte may ask GitHub, once a day, if a newer release
+/// exists (ADR 0183). Off unless the reader says so: it is the one thing
+/// that leaves the machine without a request in front of it.
+///
+/// Never honoured from the project layer nor a profile: a repository does
+/// not decide that this machine talks to the network.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct UpdatesSection {
+    /// `true` = check at start, at most once a day. Absent = `false`.
+    #[serde(default)]
+    pub check: Option<bool>,
 }
 
 /// `[log] format`: one line per event, for a person or for a program.
@@ -378,6 +396,18 @@ pub struct UiSection {
     /// a graphical differ (Meld, Kompare) hands control straight back.
     #[serde(default)]
     pub diff_detached: Option<bool>,
+    /// `[ui] terminal`: the terminal emulator "terminal here" opens, as an
+    /// argv template with `openers.toml`'s field codes — `%d` is the pane's
+    /// directory: `terminal = ["open", "-a", "iTerm", "%d"]`. `%d` is
+    /// replaced only as a WHOLE element (`"--cwd=%d"` stays literal), and
+    /// `%f`/`%F` expand to nothing here. When set it is the only one tried.
+    /// Absent = `$TERMINAL`, then the desktop's own answer and a short list
+    /// of known emulators.
+    ///
+    /// **Never honoured from the PROJECT layer**, same rule as
+    /// [`Self::editor`]: it names a program to run.
+    #[serde(default)]
+    pub terminal: Option<Vec<String>>,
     /// Whether the row of function keys (F1–F10 with what each one does on
     /// the current screen) stays pinned at the bottom. Absent = `true`.
     ///
@@ -386,6 +416,11 @@ pub struct UiSection {
     /// empty cell there. Clicking a cell runs the command.
     #[serde(default)]
     pub key_bar: Option<bool>,
+    /// Whether the command bar (one line under the panels whose orders run
+    /// in the terminal panel, ADR 0181) stays on screen. Absent = `false`:
+    /// it costs a row, and the command-line key calls it up anyway.
+    #[serde(default)]
+    pub command_bar: Option<bool>,
     /// How the panel bar names its buttons: `"names"` (default) paints the
     /// localized panel name with its access letter underlined; `"letters"`
     /// paints only the letter, the row's original form. Below 60 usable

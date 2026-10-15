@@ -56,6 +56,10 @@ pub struct ViewSnapshot {
     /// Absent in an older host = none.
     #[serde(default)]
     pub context_menu: Option<ContextMenuView>,
+    /// The command bar (ADR 0181, bridge 113), when it is on screen. Absent
+    /// in an older host = hidden.
+    #[serde(default)]
+    pub command_bar: Option<CommandBarView>,
     /// The panel bar (#324): which panels exist, their state, and whether
     /// any has something to report. Bridge 51.
     pub panel_bar: PanelBarView,
@@ -249,6 +253,25 @@ pub struct MenuItemView {
     pub role: String,
 }
 
+/// The command bar (ADR 0181, bridge 113): one line under the panels whose
+/// orders run as terminal-panel entries. The host owns the line; the
+/// renderer paints it and sends keys, as with the search box.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandBarView {
+    /// The focused pane's folder, masked; the renderer cuts it from the
+    /// start.
+    pub prompt: String,
+    /// The line, masked for display.
+    pub text: String,
+    /// The cursor, in chars of `text`.
+    pub cursor: u32,
+    /// The bar has the keyboard.
+    pub focused: bool,
+    /// Why an order cannot run here (off disk), translated; empty when it
+    /// can.
+    pub reason: String,
+}
+
 /// The right-click menu (spec 2026-10-09, bridge 107).
 ///
 /// Owned by the HOST, like the menu bar: which entries a surface offers is
@@ -371,6 +394,11 @@ pub struct StatusProgressView {
     pub percent: Option<u8>,
     /// `running`, `done` or `failed`.
     pub phase: String,
+    /// The burst's throughput, drawn in front of the text (ADR 0187, bridge
+    /// 117): one value per second, oldest first, 0–100 against the series'
+    /// own maximum. Empty = no graph — nothing moved, or it did not fit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spark: Vec<u8>,
 }
 
 /// A chrome button that runs a command (ADR 0133): the layout ones.
@@ -463,6 +491,65 @@ pub struct GotoView {
     /// or empty. Bridge 108.
     #[serde(default)]
     pub hint: String,
+    /// The order line in `:` mode: colour spans, the parse error and the
+    /// preview. `None` in every other mode. Bridge 115.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<OrderLineView>,
+}
+
+/// The assistant panel (bridge 116, ADR 0186).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssistantSlotView {
+    /// Slot id.
+    pub slot_id: u32,
+    /// The turns, oldest first.
+    pub turns: Vec<AssistantTurnView>,
+    /// A turn is in flight: the input is read-only and "thinking…" shows.
+    pub pending: bool,
+    /// What an empty panel says, translated.
+    pub empty: String,
+    /// The number of `turns[0]` (bridge 118): Apply names turn
+    /// `first + index`, which stays its name when older turns are dropped.
+    #[serde(default)]
+    pub first: u32,
+}
+
+/// One turn of the assistant panel, already sanitized and translated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssistantTurnView {
+    /// `reader`, `order`, `answer` or `failed`.
+    pub kind: String,
+    /// The text: what was typed, the order's line, the answer, or why not.
+    pub text: String,
+    /// For an order, what it does in the model's words; empty otherwise.
+    /// Painted BELOW and smaller than `text`: the line is what runs.
+    pub note: String,
+    /// For an order written for another folder than the focused one, the
+    /// sentence that says so; empty otherwise.
+    pub written_for: String,
+}
+
+/// An order typed in the box (bridge 115, ADR 0185).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct OrderLineView {
+    /// Colour spans as byte ranges of `GotoView.query` — what is painted.
+    pub tokens: Vec<OrderTokenView>,
+    /// Why the line does not parse, translated; empty when it parses.
+    pub error: String,
+    /// What the line would touch (`14 items · 38 MB`), translated; empty when
+    /// it selects nothing yet.
+    pub preview: String,
+}
+
+/// One colour span of an order line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrderTokenView {
+    /// Start byte in `GotoView.query`.
+    pub start: u32,
+    /// End byte (exclusive).
+    pub end: u32,
+    /// `verb`, `key`, `value`, `pipe`, `dest` or `error`.
+    pub class: String,
 }
 
 /// What the "go to" box is listing, chosen by the query's first character
@@ -477,6 +564,10 @@ pub enum GotoModeView {
     Commands,
     /// What to read (`?`): one flat list of help rows.
     Help,
+    /// An order line (`:`); the rows complete the word being typed. Bridge 115.
+    Order,
+    /// A question for the assistant (`@`); no rows. Bridge 116.
+    Ask,
 }
 
 /// A "go to" line.
@@ -2151,6 +2242,10 @@ pub enum SlotView {
     /// The rows, how a batch is grouped and what a cut would take are
     /// decided by `norte_frontend::timeline`, the same model as the TUI.
     Timeline(Box<TimelineSlotView>),
+    /// The assistant panel (bridge 116, ADR 0186): the conversation, newest
+    /// last, already sanitized. Its input is the renderer's; sending is
+    /// `assistant_submit`, applying an order `assistant_apply`.
+    Assistant(Box<AssistantSlotView>),
     /// The search panel (spec 2026-10-09, bridge 111): searches as you type
     /// under a root and shows every matching line, by folder and file.
     Search(Box<SearchPanelSlotView>),
@@ -3027,6 +3122,10 @@ pub struct RowView {
     /// The icon is painted different from what it is. Same reason as the
     /// badge.
     pub icon_hostile: bool,
+    /// The window's own colored icon for this row when no plugin gave
+    /// [`Self::icon`] (ADR 0184): one of `norte_frontend::file_icon::IDS`,
+    /// decided by the host from the raw name.
+    pub icon_kind: String,
     /// The `#rrggbb` color the THEME paints this entry's name with, from
     /// `[files.ext]` (wins) or `[files.kind]`. Empty = the theme says
     /// nothing about it and the renderer uses the listing's normal color.
@@ -3927,6 +4026,11 @@ pub struct TaskView {
     pub detail_hostile: bool,
     /// The task belongs to ANOTHER client of the same session.
     pub foreign: bool,
+    /// Its throughput over the last seconds, like
+    /// [`StatusProgressView::spark`]; empty once it ends or before anything
+    /// moved. Bridge 117.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spark: Vec<u8>,
 }
 
 /// A task's state.
@@ -4195,6 +4299,12 @@ pub enum ViewChange {
         /// The menu, or `None` if it closed.
         context_menu: Option<ContextMenuView>,
     },
+    /// The command bar changed: shown, hidden, focused, or its line moved
+    /// (bridge 113). Whole, like [`Self::ContextMenu`].
+    CommandBar {
+        /// The bar, or `None` when it is hidden.
+        command_bar: Option<CommandBarView>,
+    },
     /// The panel bar changed: a panel opened or closed, the keyboard moved,
     /// or something started having something to report.
     ///
@@ -4461,6 +4571,9 @@ pub enum NativeEffect {
     OpenTerminal {
         /// Where it sits.
         dir: norte_proto::VPath,
+        /// `[ui] terminal`, when the reader chose one: then it is the only
+        /// program tried (`shell::terminal_candidates`).
+        configured: Option<Vec<String>>,
     },
     /// The HANDOFF to the TERMINAL (phase 9): the screen is already
     /// written and the session, released; now launches `ntc --attach` and

@@ -197,6 +197,43 @@ pub fn start_user_command(
     start_instance_in(app, &profile, &launch.cwd)
 }
 
+/// Starts a command-bar order (ADR 0181) as a NEW entry of the terminal
+/// panel, opening the panel if it is closed, kept after a clean exit so its
+/// output stays. Never typed into an existing shell (ADR 0153).
+///
+/// # Errors
+/// The panel could not open, or the shell did not start.
+pub fn start_order(
+    app: &mut crate::app::App,
+    order: &crate::command_bar::Order,
+) -> Result<(), String> {
+    if app.terminal_slot().is_none() {
+        app.toggle_terminal();
+    }
+    if app.terminal_slot().is_none() {
+        return Err(norte_i18n::t("cmd-not-here"));
+    }
+    let Some((program, args)) = order.argv.split_first() else {
+        return Ok(());
+    };
+    // The profile NAME is what gets logged: a fixed one, never the order,
+    // which can carry a password (`mysql -p…`). The order becomes the
+    // entry's title afterwards, in memory only.
+    let profile = norte_frontend::shell_profiles::ShellProfile {
+        name: "command bar".to_owned(),
+        program: std::path::PathBuf::from(program),
+        args: args.to_vec(),
+        icon: None,
+        color: None,
+    };
+    start_instance_in(app, &profile, &order.cwd)?;
+    if let Some(id) = app.terminals.active_id() {
+        app.terminals.keep_on_success(id);
+        app.terminals.rename(id, &order.title);
+    }
+    Ok(())
+}
+
 /// [`start_instance`] in `dir` rather than the focused listing's.
 ///
 /// # Errors
@@ -218,10 +255,48 @@ pub fn start_instance_in(
         "TUI opened a shell in a terminal panel (not journalled: no actor, no reversal)"
     );
     let wake = std::sync::Arc::clone(&app.term_wake);
-    t.set_waker(std::sync::Arc::new(move || wake.notify_one()));
-    app.terminals
+    let armed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let gate = std::sync::Arc::clone(&armed);
+    t.set_waker(std::sync::Arc::new(move || {
+        if gate.load(std::sync::atomic::Ordering::Relaxed) {
+            wake.notify_one();
+        }
+    }));
+    let id = app
+        .terminals
         .push(profile.name.clone(), profile.icon, profile.color, Pty(t));
+    app.term_wakes.insert(id, armed);
     Ok(())
+}
+
+/// Which shells may wake the screen when they write: the one in front, and
+/// one behind until it is marked `●` — after that its output changes
+/// nothing on screen, and a `yes` behind a tab repainted the TUI at its
+/// output rate. It is still pumped every frame (the tick), so its screen
+/// stays whole. Called after each tick.
+pub fn refresh_wakes(app: &mut crate::app::App) {
+    let front = app.terminals.active_id();
+    let live: Vec<_> = app
+        .terminals
+        .iter()
+        .map(|i| (i.id, Some(i.id) == front || !i.unseen))
+        .collect();
+    app.term_wakes
+        .retain(|id, _| live.iter().any(|(l, _)| l == id));
+    for (id, armed) in live {
+        app.term_wakes
+            .entry(id)
+            .or_insert_with(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)))
+            .store(armed, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Does this shell wake the screen when it writes? (See [`refresh_wakes`].)
+#[must_use]
+pub fn wakes(app: &crate::app::App, id: norte_frontend::terminals::InstanceId) -> bool {
+    app.term_wakes
+        .get(&id)
+        .is_some_and(|a| a.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// What a row of the terminal picker does.
@@ -311,14 +386,25 @@ pub fn cmd_new(
 
 /// `terminal.close`: the one in front, killing its shell.
 pub fn cmd_close(app: &mut crate::app::App) {
-    let Some(id) = app.terminals.active_id() else {
+    // A panel left empty by a shell that exited on its own: there is no
+    // shell to kill, so the key closes the panel — otherwise nothing could.
+    if app.terminals.is_empty() && app.terminal_visible() {
+        app.close_terminal_slot();
+        return;
+    }
+    // Not with the panel behind a tab: the reader cannot see WHICH shell
+    // that would kill, and closing one is a destruction.
+    let Some(id) = app.terminals.active_id().filter(|_| app.terminal_visible()) else {
         return not_here(app);
     };
     if let Some(gone) = app.terminals.close(id) {
         bury(vec![gone]);
     }
-    if app.terminals.is_empty() && app.key_owner() == crate::app::KeyOwner::Terminal {
-        app.release_keyboard();
+    // The last shell takes its panel with it, as in VS Code. Left open, it
+    // was an empty box that no key could close: the panel's key only moves
+    // the keyboard, and `layout.close-slot` cannot reach it from inside.
+    if app.terminals.is_empty() {
+        app.close_terminal_slot();
     }
 }
 

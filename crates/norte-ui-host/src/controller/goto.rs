@@ -29,10 +29,13 @@ impl State {
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.start_go_to(query, backend, mailbox);
+        let mut rows = self.order_after_edit();
         let change = ViewChange::Goto {
             goto: self.vista_ir_a(),
         };
-        (self.applied(), vec![self.parche(vec![change])])
+        let mut out = vec![self.parche(vec![change])];
+        out.append(&mut rows);
+        (self.applied(), out)
     }
 
     /// Opens the search box on `query`: the state and its late questions,
@@ -296,8 +299,13 @@ impl State {
         let Some(g) = self.ir_a.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
+        let typed_before = g.query().to_owned();
+        let mut rows = Vec::new();
         match k.key.as_str() {
-            "Escape" | "esc" => self.close_go_to(),
+            "Escape" | "esc" => {
+                rows = self.order_cancel();
+                self.close_go_to();
+            }
             "Enter" | "enter" => return self.enter_in_goto(backend, mailbox),
             "ArrowDown" | "down" => g.down(),
             "ArrowUp" | "up" => g.up(),
@@ -326,10 +334,10 @@ impl State {
                     return (self.applied(), self.say("msg-palette-no-help"));
                 };
                 // The close in its own patch, before help's, like a confirm.
+                let mut out = self.order_cancel();
                 self.close_go_to();
-                let closing = self.parche(vec![ViewChange::Goto { goto: None }]);
+                out.push(self.parche(vec![ViewChange::Goto { goto: None }]));
                 let (ack, mut rest) = self.open_help_on(Some(&id), backend, mailbox);
-                let mut out = vec![closing];
                 out.append(&mut rest);
                 return (ack, out);
             }
@@ -358,10 +366,20 @@ impl State {
                 }
             }
         }
+        // The live `sel` BEFORE the box's view: its preview line rides in it.
+        if self
+            .ir_a
+            .as_ref()
+            .is_some_and(|g| g.query() != typed_before)
+        {
+            rows = self.order_after_edit();
+        }
         let change = ViewChange::Goto {
             goto: self.vista_ir_a(),
         };
-        (self.applied(), vec![self.parche(vec![change])])
+        let mut out = vec![self.parche(vec![change])];
+        out.append(&mut rows);
+        (self.applied(), out)
     }
 
     /// The query a chord switches the open box to: `>` for the chord of
@@ -402,10 +420,18 @@ impl State {
         if let Some(Action::SetQuery(q)) = &act {
             g.set_query(q);
             self.request_goto_from_index(backend, mailbox);
+            let mut rows = self.order_after_edit();
             let change = ViewChange::Goto {
                 goto: self.vista_ir_a(),
             };
-            return (self.applied(), vec![self.parche(vec![change])]);
+            let mut out = vec![self.parche(vec![change])];
+            out.append(&mut rows);
+            return (self.applied(), out);
+        }
+        // An order that does not parse: the box stays open, its line
+        // already says why.
+        if let Some(Action::OrderInvalid) = &act {
+            return (self.applied(), Vec::new());
         }
         self.confirm_go_to(act, backend, mailbox)
     }
@@ -462,10 +488,13 @@ impl State {
             .collect();
         g.push_str(&line);
         self.request_goto_from_index(backend, mailbox);
+        let mut rows = self.order_after_edit();
         let change = ViewChange::Goto {
             goto: self.vista_ir_a(),
         };
-        (self.applied(), vec![self.parche(vec![change])])
+        let mut out = vec![self.parche(vec![change])];
+        out.append(&mut rows);
+        (self.applied(), out)
     }
 
     /// Confirms the chosen row: closes the screen BEFORE acting — the close
@@ -478,12 +507,22 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // An order keeps what its preview marked; anything else gives the
+        // marks from before the box back.
+        let mut restored = if matches!(act, Some(Action::Order(_))) {
+            Vec::new()
+        } else {
+            self.order_cancel()
+        };
         self.close_go_to();
         let closing = self.parche(vec![ViewChange::Goto { goto: None }]);
         let Some(act) = act else {
-            return (self.applied(), vec![closing]);
+            restored.insert(0, closing);
+            return (self.applied(), restored);
         };
         let (ack, mut rest) = match act {
+            Action::Order(order) => self.run_order(&order, false, backend, mailbox),
+            Action::Ask(text) => self.ask_assistant(&text, backend, mailbox),
             Action::Ir(dir) => (
                 self.applied(),
                 self.navigate(&dir, Trail::Record, backend, mailbox),
@@ -492,7 +531,7 @@ impl State {
             Action::Nothing(reason) => (self.applied(), self.say(reason)),
             Action::Help(id) => self.open_help_on(Some(&id), backend, mailbox),
             // Handled by the caller, before closing.
-            Action::SetQuery(_) => (self.applied(), Vec::new()),
+            Action::SetQuery(_) | Action::OrderInvalid => (self.applied(), Vec::new()),
             Action::Unavailable(why) => {
                 self.status.message = Some(clamp_display(why));
                 (
@@ -502,6 +541,7 @@ impl State {
             }
         };
         let mut outgoing = vec![closing];
+        outgoing.append(&mut restored);
         outgoing.append(&mut rest);
         (ack, outgoing)
     }
@@ -553,11 +593,41 @@ impl State {
                 Mode::Places => crate::dto::GotoModeView::Places,
                 Mode::Commands => crate::dto::GotoModeView::Commands,
                 Mode::Help => crate::dto::GotoModeView::Help,
+                Mode::Order => crate::dto::GotoModeView::Order,
+                Mode::Ask => crate::dto::GotoModeView::Ask,
             },
             hint: g
                 .hint()
                 .map(|k| norte_i18n::t_in(self.lang, k))
                 .unwrap_or_default(),
+            order: g.order().map(|parsed| crate::dto::OrderLineView {
+                tokens: g
+                    .order_tokens()
+                    .into_iter()
+                    .map(|(r, class)| crate::dto::OrderTokenView {
+                        start: u32::try_from(r.start).unwrap_or(u32::MAX),
+                        end: u32::try_from(r.end).unwrap_or(u32::MAX),
+                        class: token_class(class).to_owned(),
+                    })
+                    .collect(),
+                error: parsed.err().map_or_else(String::new, |e| {
+                    norte_i18n::t_in(self.lang, norte_frontend::orders::parse_error_key(e.kind))
+                }),
+                preview: self.order_preview.clone(),
+            }),
         })
+    }
+}
+
+/// The wire name of a token class.
+fn token_class(c: norte_orders::TokenClass) -> &'static str {
+    use norte_orders::TokenClass as T;
+    match c {
+        T::Verb => "verb",
+        T::Key => "key",
+        T::Value => "value",
+        T::Pipe => "pipe",
+        T::Dest => "dest",
+        T::Error => "error",
     }
 }

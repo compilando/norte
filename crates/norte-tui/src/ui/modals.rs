@@ -25,7 +25,7 @@ use unicode_width::UnicodeWidthStr;
 use ratatui::layout::Rect;
 
 use super::text::{badge_prefixed, clamp_chars, tail_window};
-use super::{HOSTILE_BADGE, centered, clear_themed};
+use super::{HOSTILE_BADGE, centered, clear_modal};
 use crate::app::{AI_RENAME_PAIR_LIMIT, App, SEMANTIC_HIT_LIMIT, display_name};
 use crate::theme::TuiTheme;
 use norte_frontend::middle_ellipsis;
@@ -747,14 +747,6 @@ fn modal_title_text(
         ),
         // M4-IA: same masking as mkdir — instruction and error are user
         // text (paste with bidi/invisibles included).
-        // #135: same masking as the AI instruction — the command line and
-        // its diagnostic are user text.
-        Modal::CommandLine { command, error } => free_text_modal_text(
-            "modal-command-line",
-            "modal-command-line-hint",
-            command,
-            error.as_deref(),
-        ),
         Modal::AiRenameInstruction { instruction, error } => free_text_modal_text(
             "modal-ai-rename",
             "modal-ai-rename-hint",
@@ -883,7 +875,7 @@ pub(crate) fn draw_modal(
         wraps,
         interior,
     } = modal_frame(modal, reinterpret, hints, frame.area());
-    clear_themed(frame, area, theme);
+    clear_modal(frame, area, theme);
     let text_lines: Vec<ratatui::text::Line<'_>> = body
         .iter()
         .map(|l| {
@@ -2177,7 +2169,6 @@ mod free_text_modal_text_tests {
     fn each_prompt_resolves_its_title_and_its_hint() {
         let cases = [
             ("modal-mkdir", "modal-mkdir-hint"),
-            ("modal-command-line", "modal-command-line-hint"),
             ("modal-ai-rename", "modal-ai-rename-hint"),
             ("modal-semantic", "modal-semantic-hint"),
         ];
@@ -2194,8 +2185,7 @@ mod free_text_modal_text_tests {
     #[test]
     fn a_long_value_shows_its_tail_and_marks_the_cut() {
         let long = "a".repeat(300);
-        let (_, body) =
-            free_text_modal_text("modal-command-line", "modal-command-line-hint", &long, None);
+        let (_, body) = free_text_modal_text("modal-mkdir", "modal-mkdir-hint", &long, None);
         let field = body.lines().next().expect("field");
         assert!(field.starts_with('…'), "the cut is marked: {field:?}");
         assert!(field.ends_with('_'), "and the cursor is visible: {field:?}");

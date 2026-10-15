@@ -248,6 +248,9 @@ fn rows_of(s: &norte_ui_host::dto::SlotView) -> usize {
         // count like any other: the line ceiling belongs to the protocol
         // (`PANEL_MAX_LINES`), but this message is what pays for them.
         SlotView::Panel(p) => p.lines.len(),
+        // The assistant carries its turns, capped by the conversation's own
+        // limit (40 messages sent, the panel keeps what was shown).
+        SlotView::Assistant(a) => a.turns.len(),
         // The disk map carries the treemap already laid out by the host, and
         // its lines count like a plugin panel's: the ceiling is the frame's
         // (`PANEL_MAX_LINES`), but this message is what pays for them. A

@@ -880,7 +880,10 @@ async fn f9_opens_the_listing_and_hands_over_the_live_run() {
     let epoch = work.search_panel.as_ref().expect("live").epoch;
     let shown = panel(&app).listing().expect("a tree").entries.len();
     assert!(shown > 0 && shown < total, "still streaming: {shown}");
-    assert_eq!(app.search_panel_focus, SearchFocus::Field(SearchField::Name));
+    assert_eq!(
+        app.search_panel_focus,
+        SearchFocus::Field(SearchField::Name)
+    );
     key(&mut app, &backend, &mut work, &mut resolver, KeyCode::F(9)).await;
 
     let slot = results_slot(&app).expect("a results tab");
@@ -901,13 +904,27 @@ async fn f9_opens_the_listing_and_hands_over_the_live_run() {
         app.panes.browser(slot).expect("tab").entries().len(),
         shown + batch
     );
-    assert_eq!(panel(&app).tree().iter().map(|f| f.files.len()).sum::<usize>(), shown + batch);
+    assert_eq!(
+        panel(&app)
+            .tree()
+            .iter()
+            .map(|f| f.files.len())
+            .sum::<usize>(),
+        shown + batch
+    );
 
     // The panel's next query is a NEW run, and does not cancel the tab's.
     app.open_search_panel(); // the keys back in the panel
     assert_eq!(app.key_owner(), KeyOwner::Search);
     app.search_panel_focus = SearchFocus::Field(SearchField::Name);
-    key(&mut app, &backend, &mut work, &mut resolver, KeyCode::Backspace).await;
+    key(
+        &mut app,
+        &backend,
+        &mut work,
+        &mut resolver,
+        KeyCode::Backspace,
+    )
+    .await;
     key(&mut app, &backend, &mut work, &mut resolver, KeyCode::Enter).await;
     searchpanel::tick(&mut app, &backend, &mut work).await;
     let new = work.search_panel.as_ref().expect("a new panel run");

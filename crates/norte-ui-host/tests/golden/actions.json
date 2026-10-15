@@ -18,6 +18,20 @@
     "action": "ai_rename_decide",
     "approve": true
   },
+  "assistant_apply": {
+    "action": "assistant_apply",
+    "slot_id": 16,
+    "turn": 1
+  },
+  "assistant_cancel": {
+    "action": "assistant_cancel",
+    "slot_id": 16
+  },
+  "assistant_submit": {
+    "action": "assistant_submit",
+    "slot_id": 16,
+    "text": "copia los pdf al otro panel"
+  },
   "breadcrumb_activate": {
     "action": "breadcrumb_activate",
     "depth": 1,
@@ -27,6 +41,13 @@
   "cancel_task": {
     "action": "cancel_task",
     "task_id": 42
+  },
+  "command_bar_focus": {
+    "action": "command_bar_focus"
+  },
+  "command_bar_paste": {
+    "action": "command_bar_paste",
+    "text": "make test"
   },
   "compare_activate_row": {
     "action": "compare_activate_row",
@@ -255,6 +276,9 @@
   "organize_scroll": {
     "action": "organize_scroll",
     "down": true
+  },
+  "overlay_dismiss": {
+    "action": "overlay_dismiss"
   },
   "panel_bar_activate": {
     "action": "panel_bar_activate",

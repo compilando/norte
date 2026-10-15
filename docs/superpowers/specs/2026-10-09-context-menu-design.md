@@ -408,6 +408,8 @@ Fold / Unfold
 ## Out of scope
 
 - A context menu in the TUI (the model is shared so it can come later).
+  Done 2026-10-13 (plan `2026-10-13-terminal-here-command-bar-tui-icons`,
+  part B).
 - Menus on the tab bar / terminal list beyond what exists.
 - Search results, timeline, disk map, compare, organize review surfaces.
 - Clipboard cut/copy/paste of FILES (norte has no file clipboard).

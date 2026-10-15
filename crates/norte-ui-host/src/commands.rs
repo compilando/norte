@@ -98,6 +98,7 @@ pub const IMPLEMENTED: &[&str] = &[
     "layout.places",
     "layout.processes",
     "layout.log",
+    "layout.assistant",
     "layout.disk-map",
     "layout.timeline",
     "layout.search",
@@ -130,11 +131,13 @@ pub const IMPLEMENTED: &[&str] = &[
     "pane.columns",
     "app.palette",
     "app.goto",
+    "app.orders",
     "app.help",
     "app.settings",
     "app.extensions",
     "app.agents",
     "app.terminal",
+    "pane.command-line",
     "app.handoff",
     "pane.open",
     "pane.compare-files",
@@ -468,6 +471,8 @@ pub enum Effect {
     Palette,
     /// Opens "go to anywhere" (#357).
     IrA,
+    /// Opens the same box on its order line, `:` (ADR 0185).
+    Orders,
     /// Opens settings: they are read, cycled and written.
     Settings,
     /// Opens the extension manager, read-only.
@@ -509,6 +514,8 @@ pub enum Effect {
     /// that cannot be what the same key that enters it does. To close it
     /// there is `layout.close-slot`, named for what it does.
     OpenTerminal,
+    /// The command bar takes the keyboard (ADR 0181).
+    CommandLine,
     /// Another shell in the terminal panel; `pick` = choose the shell
     /// profile first.
     TerminalNew {
@@ -923,6 +930,7 @@ pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
         "layout.places" => Effect::ToggleSlot { kind: "places" },
         "layout.processes" => Effect::ToggleSlot { kind: "processes" },
         "layout.log" => Effect::ToggleSlot { kind: "log" },
+        "layout.assistant" => Effect::ToggleSlot { kind: "assistant" },
         "layout.terminal" => Effect::OpenTerminal,
         "terminal.new" => Effect::TerminalNew { pick: false },
         "terminal.new-profile" => Effect::TerminalNew { pick: true },
@@ -964,6 +972,7 @@ pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
         "pane.columns" | "pane.sort-menu" => Effect::Columns,
         "app.palette" => Effect::Palette,
         "app.goto" => Effect::IrA,
+        "app.orders" => Effect::Orders,
         "app.help" => Effect::Help,
         "app.settings" => Effect::Settings,
         "app.quit" => Effect::Exit,
@@ -983,6 +992,7 @@ pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
         "pane.edit" => Effect::EditExternal,
         "pane.compare-files" => Effect::CompareFiles,
         "app.terminal" => Effect::Terminal,
+        "pane.command-line" => Effect::CommandLine,
         "app.handoff" => Effect::Handoff,
         "app.theme" => Effect::Theme,
         "app.menu" => Effect::Menu,
@@ -1147,6 +1157,7 @@ mod tests {
                 "pane.checksum-verify",
                 "pane.chmod",
                 "pane.combine-files",
+                "pane.command-line",
                 "pane.compare-files",
                 "pane.copy",
                 "pane.delete",

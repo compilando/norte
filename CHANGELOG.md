@@ -7,6 +7,243 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+## [0.3.0-alpha.14] - 2026-10-15
+
+### Added
+
+- **The order line has a key in every preset**: `alt+:` in krusader, far,
+  norton and total-commander, where a bare `:` goes to the quick search or
+  the command line (`:` stays in orthodox, vim and cua).
+- **Cancel the assistant**: Esc while it is thinking (or the Cancel button
+  in the window) stops waiting; a second Esc gives the keys back. In the
+  window, Enter on an empty field applies the newest proposed order.
+
+### Fixed
+
+- **The box shows the spaces you type** in the window. They were typed —
+  the order ran right — but the box drew `:sel ext:pdf` as `:selext:pdf`.
+- **A query key without its sign is pointed out**: `sel ext bin` looks for
+  files called `ext` and `bin`; the preview now asks "did you mean ext:…?".
+  It explained why the earlier marks "stayed": an order that selects
+  nothing gives them back.
+- **The box, the palette, help and settings take the keys over a focused
+  side panel** in the terminal. Opened over the terminal panel, the box
+  showed up but every key went to the shell, which ran what you typed as
+  a command.
+- **The assistant** keeps at most 200 turns, wraps CJK and emoji by their
+  width, lets Tab and the F keys reach the panel commands in the
+  terminal, says so when an order cannot be applied, and no longer loses
+  a message the window refused to send.
+- **The order line** (`:` and `norte run`): a no-break or other Unicode space
+  now separates words; `name=NAME` targets one file by its exact name (so a
+  file called `*` can be selected); a typed name finds a folder stored
+  decomposed or in the pane's name encoding; printed orders keep accents
+  and Hindi readable while still escaping invisible and bidi characters;
+  measuring unmeasured rows in the terminal no longer blocks the key and
+  Esc cancels it; `mkdir` in an order refuses on a read-only pane like F7;
+  `norte run` accepts an order that is not UTF-8, prints names with the
+  order's escapes instead of `�`, and `undo N --dry-run` says how many
+  operations it would undo (also in `--json`).
+
+### Security
+
+- **wasmtime 48.0.6** (RUSTSEC-2026-0352 to 0359 and 0361 to 0364), the
+  runtime of WASM plugins: among them, a filesystem sandbox escape when
+  renaming symlinks with trailing slashes, and several host panics a
+  plugin could trigger.
+
+## [0.3.0-alpha.13] - 2026-10-14
+
+### Added
+
+- **Throughput graphs.** While a copy, move or delete runs, the tasks item
+  of the status bar leads with a graph of the speed over the last half
+  minute (`⣀⣤⣶⣿`), and each row of the processes panel draws its own — as
+  braille in the terminal, as a line in the window. A stalled copy shows
+  as a fall to zero, not a frozen speed (ADR 0187).
+- **The assistant.** `alt+Y` (all seven presets), the AI button on the
+  panel bar, or `@` in the box opens a panel where you ask in plain words:
+  "copy this month's PDFs to the other pane", "what takes the most space
+  here?". It answers, or proposes an order you review and apply — the
+  usual confirmation still asks. It reads names, sizes, dates and your
+  recent operations under your two panes, never file contents, and
+  nothing under `[ai] denied_prefixes`. Off until you turn it on in
+  `norte.toml`. Protocol 0.87.0: `ai.chat` (ADR 0186).
+- **Panel bar labels**: "Processes" is now "Tasks" (en) and "Detalles" is
+  "Info" (es), so the names still fit 80 columns with the new button.
+- **Type what to do: the order line.** Press `:` (vim, orthodox, cua; the
+  Go menu or the palette elsewhere) and write
+  `sel ext:pdf age<30d | cp >other`. The rows it would touch are marked as
+  you type, with how many and how much; Esc gives your marks back. Enter
+  opens the same confirmation the key would. `sel` takes `ext:`, `name:` or
+  a glob, `size>10M`, `age<7d`, `type:dir` and `!`; the actions are `cp`,
+  `mv`, `trash`, `mkdir`, `cd` or any command by name. `log` opens the
+  timeline and `undo 3` undoes your last three operations, after asking.
+  `norte run '<order>' --cwd DIR` does the same from a script, with
+  `--dry-run` and `--json` (ADR 0185).
+- **vim's `:` opens the order line instead of the palette.** The line still
+  completes every command by name; `ctrl+p` keeps the palette.
+- **The window paints colored icons per file type**, as a desktop file
+  manager does: a red PDF, a blue document, a green spreadsheet, a picture
+  for an image, and more, plus a blue folder. They are on with no plugin
+  to approve. The `file-icons` plugin, when on, still wins (ADR 0184). The
+  terminal is unchanged.
+- **norte can tell you when a new release is out.** It is off unless you
+  turn it on: the first-run wizard asks, and Settings has "Check for new
+  releases". When on, it asks GitHub at most once a day, at start, and
+  says so in the status bar. It never installs anything.
+  `norte update check` asks once, whatever the setting says. The new
+  `norte.toml` key is `[updates] check` (ADR 0183).
+- **An old search index no longer breaks search.** The index now records
+  its format. One a newer norte cannot read is rebuilt empty on open; run
+  `index build` to refill it. One written by a newer norte is left alone
+  and reported.
+- **A renamed command keeps working in your `keymap.toml`.** When a
+  command is renamed, the old name still binds it, and `norte doctor`
+  suggests the new one.
+- **`norte doctor` checks `policy.toml`.** A file that does not parse
+  keeps the daemon from starting, and doctor now says so instead of
+  staying silent.
+
+### Changed
+
+- **A plugin built against an older compatible WIT version keeps
+  working.** It used to be listed as broken on any version change. From
+  now on a WIT change that only adds is a compatible bump, so
+  already-compiled plugins keep loading (ADR 0182). From the beta on, the
+  protocol and the WIT are `1.0.0`. A newer norte opens what an older one
+  left on disk. Going back to an older version is not supported.
+- **The command bar has a key in every keymap**: `Ctrl+↓` in orthodox and
+  cua (Krusader's), `!` in vim (as `:!`), `Alt+F8` in Far and Total
+  Commander (their command-line history). Norton keeps none, as its header
+  says. With the krusader keymap the bar is on screen by default, as in
+  Krusader; `[ui] command_bar = false` hides it. The Go menu calls it
+  "Command bar", as Settings does.
+
+### Fixed
+
+- **Help in the window keeps the topic list where it was** when you click
+  a topic near the bottom; it used to jump back to the top, the chosen
+  topic out of sight.
+
+### Security
+
+- **rustls 0.23.46** (RUSTSEC-2026-0346 to 0349): among them, a server
+  reply that could downgrade later TLS connections to classical key
+  exchange. Affects the AI providers, object storage and the release
+  check.
+
+## [0.3.0-alpha.12] - 2026-10-13
+
+### Added
+
+- **"Terminal here" on the right-click menu**, dimmed with its reason
+  inside an archive or on a remote folder. A new `[ui] terminal` setting
+  (Settings › Open with) picks the emulator, e.g. iTerm2 on macOS; the
+  probe also knows ptyxis, GNOME Console, foot, xfce4-terminal and
+  Debian's `x-terminal-emulator`.
+- **A command bar under the panels, in both frontends** (ADR 0181):
+  `pane.command-line` puts the keyboard there and `[ui] command_bar = true`
+  keeps it on screen. Each order runs as a new entry of the terminal panel
+  in the focused pane's folder and stays open with its output; history,
+  Tab completion and Alt+Enter to insert the cursor's name, quoted for
+  your shell. It replaces the terminal's old command-line prompt.
+- **A right-click menu in the terminal**, the window's: on a row, the empty
+  area, a column header, a Places row and a tree branch, with the same
+  entries, dimmed with the same reasons. `shift+F10` and the Menu key open
+  it on the listing's cursor row.
+- **The terminal's layout buttons draw the window's icons** where the
+  terminal shows images (kitty graphics or sixel); elsewhere they keep
+  their `[|] [-] [=] [/] [#]` glyphs.
+
+### Changed
+
+- **"Terminal here" in the terminal opens an emulator window** when there
+  is a desktop, like the window does (ADR 0180); over ssh it still opens a
+  shell in place. On macOS and Windows the terminal now also offers the
+  handoff to the window when it is not running over ssh.
+- **The key that opens the menu leads the terminal's menu bar** (`Alt+m │
+  File  Operate …`) instead of sitting at the right edge, where it read as
+  the label of the layout buttons. Narrow, it gives way to the titles.
+
+- **A plain word in the search form finds the names that contain it**
+  (ADR 0179): `bash` now finds `.bashrc`. A pattern with a wildcard
+  (`*.rs`) is still the glob it says; the CLI and agents are unaffected.
+- **The search form in the terminal reads as a form**: each field is a
+  box with an example of what it takes — sizes say `500K, 10M, 1.5G`,
+  and `10MB` or `1 KiB` are understood — the toggles are checkboxes, and
+  the folder searched is labelled. The window's fields show the same
+  examples.
+- **Help and settings in the window are one kind of window**: the same
+  size, frame, header and close button; help reads in the proportional
+  font with keys as keycaps; settings opens with the search box focused,
+  marks the chosen row with a tint instead of a solid band, and its
+  controls share one height and style.
+- **Help in the window uses its width**: each page's keys, in the reader's
+  preset, and the pages it points to sit in a column beside the prose
+  instead of at the bottom; the title is no longer repeated, so pages
+  with three sections or more show their section index; group headers,
+  section rules and tip/note/warning notices each have their own look.
+- **Settings in the terminal**: the index runs full height beside the list,
+  counts align, long names no longer run into their value, switches say
+  on/off, and the description wraps over two lines instead of being cut
+  in the middle.
+
+### Fixed
+
+- **"Terminal here" inside an archive on a remote server** now says the
+  folder is not on this disk, instead of suggesting to go up to it.
+- **The command bar keeps what you were typing** while you walk the
+  history with Up and Down, as a shell does; and with a POSIX `sh` it
+  refuses a name ending in a newline instead of inserting another name.
+- **A right-click menu taller than the terminal scrolls** with its
+  selection, so its last entries can be reached.
+- **Programs the window launches get their own process group** and are
+  reaped when they exit, so they no longer linger as zombies or die with
+  a Ctrl+C aimed at the window.
+- **Copying paths in the terminal no longer blocks the screen** while the
+  clipboard helper runs.
+- **Going up out of an archive's root lands in its folder** in the window,
+  with the cursor on the archive; it used to show "invalid path". The `..`
+  row did the same in both frontends.
+- **Closing the last shell closes the terminal panel**, in both frontends.
+  It used to leave an empty "no shell" panel that no key could close.
+- **The window no longer leaves a listing's error over its first row**
+  after the listing recovers ("permission denied — retry" stayed painted).
+- **The search status counts results, not the `..` row**, and says
+  "found" instead of "hits".
+- **Help's "What the screen shows" page has its section titles back**: they
+  were underlined with dashes, which help printed as text. Help now reads
+  a `---`/`===` underline as a heading, plugin pages included.
+- **The terminal panel left empty by a shell that exited closes** with
+  `terminal.close` or its ✕; nothing closed it before.
+- **The window's search form lines its fields up** in one column, with
+  themed checkboxes, and a single path is no longer numbered "1.".
+
+- **A click outside a popup closes it**, as `Esc` does, in both
+  frontends (ADR 0178, bridge 112): the sort menu at the foot, the search
+  box, the pickers, the search form, help and a command's output. A
+  question — a delete confirmation, the wizard, a plan waiting for
+  approval — stays open: a stray click does not answer it.
+- **The window shows the compare and sync panels and a program's
+  output**: they had no style of their own and opened below the window's
+  edge, unseen.
+
+## [0.3.0-alpha.11] - 2026-10-12
+
+### Changed
+
+- **The terminal list names a shell by its directory**: bash's and zsh's
+  `user@host:~/dir` title reads `~/dir`, which is what tells two shells
+  apart in a narrow list. A name you give is shown as you wrote it.
+- **`Ctrl+Alt+w` no longer closes a shell you cannot see**: with the
+  terminal panel behind another tab it refuses and says so. The `✕`
+  button and the list still close the shell they show.
+- **When the last shell ends, the window gives the keyboard back** to the
+  listing, as the terminal frontend already did.
+- A busy shell behind another no longer repaints the terminal frontend at
+  its output rate once it carries its `●`.
+
 ### Added
 
 - **Search panel** (protocol 0.86, bridge 111). `Alt+Shift+F`
@@ -8281,7 +8518,11 @@ and some daemon/socket tests are only available in CI environments.
 - Writes inside ZIP archives; list, restore, and purge operations for logical
   trash; and the M5 GUI.
 
-[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.10...HEAD
+[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.14...HEAD
+[0.3.0-alpha.14]: https://github.com/compilando/norte/compare/v0.3.0-alpha.13...v0.3.0-alpha.14
+[0.3.0-alpha.13]: https://github.com/compilando/norte/compare/v0.3.0-alpha.12...v0.3.0-alpha.13
+[0.3.0-alpha.12]: https://github.com/compilando/norte/compare/v0.3.0-alpha.11...v0.3.0-alpha.12
+[0.3.0-alpha.11]: https://github.com/compilando/norte/compare/v0.3.0-alpha.10...v0.3.0-alpha.11
 [0.3.0-alpha.10]: https://github.com/compilando/norte/compare/v0.3.0-alpha.9...v0.3.0-alpha.10
 [0.3.0-alpha.9]: https://github.com/compilando/norte/compare/v0.3.0-alpha.8...v0.3.0-alpha.9
 [0.3.0-alpha.8]: https://github.com/compilando/norte/compare/v0.3.0-alpha.7...v0.3.0-alpha.8
