@@ -1,0 +1,14 @@
+# Open as listing (spec 2026-10-10): F9 in the search panel turns the files
+# it found into a results tab, titled with the query and the count.
+file a/uno.txt
+file b/dos.txt
+file c/tres.md
+start
+key alt+shift+f
+type *.txt
+key Return
+wait 2
+key F9
+wait 1
+shot tab
+expect-tab 🔍 *.txt (2)

@@ -23,6 +23,7 @@
 #   expect-marked <n>      the active listing has <n> marked rows
 #   expect-shown <text>    the box SHOWS <text>, as laid out (spaces count)
 #   expect-preview <text>  the order line's preview contains <text>
+#   expect-tab <text>      some tab, in the layout last painted, is titled <text>
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -171,6 +172,19 @@ for scn in "${scenarios[@]}"; do
 				| select(. != null) | .order.preview? // empty' "$trace" | tail -1)
 			if ! grep -qF -- "$text" <<< "$got"; then
 				echo "   FAIL preview: [$text] not in [$got]"
+				status=fail
+			fi
+			;;
+		expect-tab)
+			# The titles of the last layout painted (a snapshot's, or a
+			# `layout` change's).
+			sleep 0.5
+			got=$(jq -c 'select(.kind == "update") | .value.payload
+				| if has("changes") then (.changes[] | select(.change == "layout") | .tabs)
+				  else .layout.tabs end
+				| select(. != null) | [.[].tabs[].title]' "$trace" | tail -1)
+			if ! jq -e --arg t "$text" 'any(.[]; . == $t)' <<< "${got:-[]}" > /dev/null; then
+				echo "   FAIL tab: [$text] not in ${got:-[]}"
 				status=fail
 			fi
 			;;

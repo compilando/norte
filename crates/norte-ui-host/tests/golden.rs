@@ -1292,6 +1292,16 @@ fn reference_placements() -> Vec<SlotPlacement> {
             role: None,
             focus_index: 13,
         },
+        // A results tab (bridge 119), another column.
+        SlotPlacement {
+            slot_id: 17,
+            x: 180,
+            y: 0,
+            width: 30,
+            height: 38,
+            role: None,
+            focus_index: 14,
+        },
         SlotPlacement {
             slot_id: 8,
             x: 0,

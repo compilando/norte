@@ -5327,7 +5327,8 @@ kbd.help-action-chord {
 .searchpanel-fold,
 .searchpanel-switch,
 .searchpanel-toggle,
-.searchpanel-cycle {
+.searchpanel-cycle,
+.search-open-listing {
   font: inherit;
   color: var(--fg);
   background: transparent;
@@ -5341,8 +5342,18 @@ kbd.help-action-chord {
 .searchpanel-fold:hover,
 .searchpanel-switch:hover,
 .searchpanel-toggle:hover,
-.searchpanel-cycle:hover {
+.searchpanel-cycle:hover,
+.search-open-listing:hover:enabled {
   background: var(--hover, var(--panel-focus-bg));
+}
+
+.search-open-listing {
+  align-self: flex-start;
+}
+
+.search-open-listing:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .searchpanel-switch {
@@ -6362,6 +6373,7 @@ kbd.help-action-chord {
    you are. And `text-overflow` so that, when it no longer fits even like
    this, it shows that it was cut off instead of disappearing silently. */
 .slot-filling,
+.slot-results,
 .slot-names,
 .slot-pruned,
 .slot-marked {
@@ -6384,6 +6396,7 @@ kbd.help-action-chord {
 /* Filling and marked are informational: one is temporary and the other is
    a count of something the reader just did. */
 .slot-filling,
+.slot-results,
 .slot-marked {
   color: var(--title-fg);
 }
@@ -6398,6 +6411,7 @@ kbd.help-action-chord {
 .slot-skipped,
 .slot-hidden,
 .slot-filling,
+.slot-results,
 .slot-names,
 .slot-pruned,
 .slot-marked {

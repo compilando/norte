@@ -111,6 +111,15 @@
             "y": 0
           },
           {
+            "focus_index": 14,
+            "height": 38,
+            "role": null,
+            "slot_id": 17,
+            "width": 30,
+            "x": 180,
+            "y": 0
+          },
+          {
             "focus_index": 5,
             "height": 2,
             "role": null,
@@ -742,6 +751,15 @@
           "slot_id": 15,
           "width": 30,
           "x": 150,
+          "y": 0
+        },
+        {
+          "focus_index": 14,
+          "height": 38,
+          "role": null,
+          "slot_id": 17,
+          "width": 30,
+          "x": 180,
           "y": 0
         },
         {
