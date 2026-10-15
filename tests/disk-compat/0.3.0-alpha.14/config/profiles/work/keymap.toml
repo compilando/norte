@@ -1,0 +1,4 @@
+[global]
+prepend_keymap = [
+    { on = ["ctrl+alt+b"], run = "nav.back" },
+]

@@ -1,0 +1,16 @@
+[[opener]]
+mime = "text/*"
+os = "linux"
+detached = false
+command = ["bat", "--paging=always", "%f"]
+
+[[opener]]
+mime = "application/pdf"
+detached = true
+command = ["xdg-open", "%f"]
+
+[[opener]]
+mime = "image/*"
+os = "macos"
+detached = true
+command = ["open", "%F"]
