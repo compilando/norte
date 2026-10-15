@@ -932,7 +932,7 @@ async fn f9_opens_the_listing_and_hands_over_the_live_run() {
     assert!(
         matches!(
             progress.borrow().state,
-            norte_proto::TaskState::Running | norte_proto::TaskState::Completed { .. }
+            norte_proto::TaskState::Running | norte_proto::TaskState::Completed
         ),
         "the tab's run goes on: {:?}",
         progress.borrow().state
