@@ -13,6 +13,7 @@ key alt+colon
 type sel ext:pdf
 shot alt-colon
 expect-query :sel ext:pdf
+expect-shown :sel ext:pdf
 key Escape
 wait 0.5
 # And from the title bar's search button (native title bar: it sits here).
@@ -20,3 +21,4 @@ click 775 10
 type :sel ext:pdf
 shot button
 expect-query :sel ext:pdf
+expect-shown :sel ext:pdf

@@ -17,6 +17,7 @@ const FIXTURE: &str = r##"{
   "strings": { "hostile-name": "nombre alterado" },
   "theme": { "bg": "#101216" },
   "measure": false,
+  "trace": false,
   "busy_threshold_ms": 250,
   "appearance": {
     "font": "Inter",

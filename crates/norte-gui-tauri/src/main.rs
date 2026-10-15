@@ -56,6 +56,18 @@ async fn dispatch(
     state.bridge()?.dispatch(action).await
 }
 
+/// What the renderer's probes SHOW after a paint (`NORTE_GUI_TRACE` only):
+/// into the trace, for the end-to-end harness. Without tracing it does
+/// nothing.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "`tauri::command` takes its arguments by value"
+)]
+#[tauri::command]
+fn trace_dom(probes: std::collections::BTreeMap<String, String>) {
+    norte_gui_tauri::trace::record("dom", &probes);
+}
+
 #[tauri::command]
 async fn request_snapshot(
     state: tauri::State<'_, AppState>,
@@ -165,7 +177,8 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         request_snapshot,
         catalog,
         image_bytes,
-        window_control
+        window_control,
+        trace_dom
     ]
 }
 
@@ -178,11 +191,14 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
         catalog,
         image_bytes,
         window_control,
+        trace_dom,
         metrics
     ]
 }
 
 fn main() -> ExitCode {
+    // Before any runtime: opening the trace is blocking I/O.
+    norte_gui_tauri::trace::init();
     let cli = match startup::parse(std::env::args_os().skip(1)) {
         Ok(c) => c,
         Err(e) => {

@@ -5,7 +5,8 @@
 # Screenshots are kept for a person to look at.
 #
 # usage: scripts/gui-e2e/run.sh [scenario.scn…]   (default: every scenario)
-# env:   BIN=<dir with norte-gui and norte>  (default: target/debug)
+# env:   BIN=<dir with norte-gui and norte>  (default: target/debug — the
+#        trace exists only in debug builds, so a release binary cannot run it)
 #        KEEP=1 keeps the run directory; OUT=<dir> for the screenshots.
 # needs: Xvfb, xdotool, bwrap, jq, import (ImageMagick).
 #
@@ -20,6 +21,8 @@
 #   shot <name>            <OUT>/<scenario>-<name>.png
 #   expect-query <text>    the box's query, last painted, is exactly <text>
 #   expect-marked <n>      the active listing has <n> marked rows
+#   expect-shown <text>    the box SHOWS <text>, as laid out (spaces count)
+#   expect-preview <text>  the order line's preview contains <text>
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -81,7 +84,8 @@ for scn in "${scenarios[@]}"; do
 	mkdir -p "$home/.config/norte" "$home/data" "$work/run"
 	chmod 0700 "$work/run"
 	printf '[ui]\nsplash = "off"\n' > "$home/.config/norte/norte.toml"
-	: > "$trace"
+	# Not created here: the window opens it itself, new and owner-only, and
+	# refuses one that exists.
 	status=ok
 	echo "== $name"
 	while IFS= read -r line || [ -n "$line" ]; do
@@ -143,6 +147,30 @@ for scn in "${scenarios[@]}"; do
 			got=$(last_query "$trace")
 			if [ "$got" != "$text" ]; then
 				echo "   FAIL query: expected [$text], got [$got]"
+				status=fail
+			fi
+			;;
+		expect-shown)
+			# What a person SEES: the bridge can be right while the paint is
+			# wrong (spaces collapsed by a flex row, 2026-10-15). The
+			# renderer reports the box's `innerText` after each paint, which
+			# follows the layout; OCR could not tell a space from none.
+			sleep 0.5
+			got=$(jq -r 'select(.kind == "dom") | .value.goto' "$trace" | tail -1)
+			if [ "$got" != "$text" ]; then
+				echo "   FAIL shown: expected [$text], got [$got]"
+				status=fail
+			fi
+			;;
+		expect-preview)
+			# The order line's preview, last painted, contains <text>.
+			sleep 0.5
+			got=$(jq -r 'select(.kind == "update") | .value.payload
+				| if has("changes") then (.changes[] | select(.change == "goto") | .goto)
+				  else .goto end
+				| select(. != null) | .order.preview? // empty' "$trace" | tail -1)
+			if ! grep -qF -- "$text" <<< "$got"; then
+				echo "   FAIL preview: [$text] not in [$got]"
 				status=fail
 			fi
 			;;

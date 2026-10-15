@@ -8,4 +8,5 @@ click 700 10
 type :sel ext:pdf
 shot box
 expect-query :sel ext:pdf
+expect-shown :sel ext:pdf
 expect-marked 1

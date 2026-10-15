@@ -8,7 +8,10 @@ start a
 # krusader has no ctrl+g; `alt+:` opens the box with `:` typed.
 key alt+colon
 type sel ext:pdf
+wait 2
 shot box
 expect-query :sel ext:pdf
+# And on screen: the query was right while the paint collapsed its spaces.
+expect-shown :sel ext:pdf
 expect-marked 1
 key Escape

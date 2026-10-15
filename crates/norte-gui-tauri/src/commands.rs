@@ -196,6 +196,9 @@ pub const COMMANDS: &[&str] = &[
     "catalog",
     "image_bytes",
     "window_control",
+    // What the probes show, into `NORTE_GUI_TRACE` (the end-to-end harness).
+    // A no-op without that variable: it writes nowhere and reads nothing.
+    "trace_dom",
 ];
 
 /// What the window's own title bar can ask of ITS window (ADR 0136).

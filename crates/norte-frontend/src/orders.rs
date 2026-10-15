@@ -332,6 +332,19 @@ pub fn restore(pane: &mut crate::PaneState, before: &[VPath]) {
     pane.replace_marks(before);
 }
 
+/// A bare word that is a query key without its sign — `sel ext bin` looks
+/// for files called `ext` and `bin` — so the preview can ask whether the
+/// reader meant `ext:`. The key, with its sign.
+fn bare_key(q: &norte_orders::Query) -> Option<&'static str> {
+    q.terms.iter().find_map(|t| match &t.pred {
+        norte_orders::Pred::Name(word) => norte_orders::QUERY_KEYS
+            .iter()
+            .copied()
+            .find(|k| k.as_bytes().get(..k.len() - 1) == Some(word.as_slice())),
+        _ => None,
+    })
+}
+
 /// The live preview of the box's `query`: starts again from `before`, and
 /// when the line parses and opens with `sel`, marks what it matches.
 /// Returns what to show under the line (`1 item · 2 KiB`), or empty.
@@ -369,6 +382,14 @@ pub fn preview(
                     lang,
                     "msg-order-unmeasured",
                     &[("n", &missing.to_string())],
+                ));
+            }
+            if let Some(key) = bare_key(q) {
+                text.push_str(" · ");
+                text.push_str(&norte_i18n::ta_in(
+                    lang,
+                    "msg-order-bare-key",
+                    &[("key", key)],
                 ));
             }
             text
@@ -1002,6 +1023,21 @@ mod tests {
         let text = preview(&mut p, ":sel ext:pdf", &[], NOW, norte_i18n::Lang::En);
         assert_eq!(names(&p), ["a.pdf"]);
         assert!(text.contains('1') && text.contains("KiB"), "{text}");
+    }
+
+    /// `sel ext bin` looks for files called `ext` and `bin` and finds none;
+    /// the preview asks whether `ext:` was meant (reported 2026-10-15: the
+    /// pdf marks "stayed", since an order that selects nothing gives the
+    /// earlier marks back).
+    #[test]
+    fn a_key_without_its_sign_is_pointed_out() {
+        let mut p = pane(vec![file("a.pdf", 1, 1), file("b.bin", 1, 1)]);
+        let text = preview(&mut p, ":sel ext bin", &[], NOW, norte_i18n::Lang::En);
+        assert!(text.contains("ext:"), "{text}");
+        let text = preview(&mut p, ":sel ext:bin", &[], NOW, norte_i18n::Lang::En);
+        assert!(!text.contains("did you mean"), "{text}");
+        let text = preview(&mut p, ":sel size 1M", &[], NOW, norte_i18n::Lang::En);
+        assert!(text.contains("size>"), "{text}");
     }
 
     #[test]

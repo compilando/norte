@@ -717,11 +717,17 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
 
   const query = document.createElement("div");
   query.className = "palette-query";
+  // ONE flex item holding the whole line: the row is a flex box, and a
+  // whitespace-only text node between two spans is no item at all — the
+  // spaces of `:sel ext:pdf` vanished from the screen while they were typed.
+  const text = document.createElement("span");
+  text.className = "palette-query-text";
   if (goto.order !== undefined) {
-    query.append(...orderSpans(goto.query, goto.order.tokens));
+    text.append(...orderSpans(goto.query, goto.order.tokens));
   } else {
-    query.textContent = goto.query;
+    text.textContent = goto.query;
   }
+  query.append(text);
   box.append(query);
   // The order line (bridge 115): why it does not parse, or what it would
   // touch. The error wins: a preview of a line that cannot run is a promise.

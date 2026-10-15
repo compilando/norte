@@ -1,0 +1,19 @@
+# The reporter's sequence (2026-10-15): `sel ext:pdf`, then `sel ext bin`
+# "kept the pdfs". `ext bin` names files `ext` and `bin`, selects nothing,
+# and an empty order gives the earlier marks back; the preview now asks
+# whether `ext:` was meant.
+config [keymap]
+config preset = "krusader"
+file a/informe.pdf
+file a/programa.bin
+start a
+key alt+colon
+type sel ext:pdf
+key Return
+wait 0.5
+expect-marked 1
+key alt+colon
+type sel ext bin
+expect-shown :sel ext bin
+expect-preview ext:
+key Escape

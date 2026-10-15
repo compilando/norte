@@ -885,6 +885,7 @@ msg-order-measuring = midiendo las filas que necesita la orden…
 msg-order-stale = la orden no se ejecutó: el panel cambió mientras medía
 msg-order-journal-failed = no se pudo leer la historia: { $err }
 msg-order-unmeasured ={ $n } sin medir aún (Intro las mide)
+msg-order-bare-key = ¿querías { $key }…? Sin el signo, esa palabra es un nombre de fichero
 msg-order-undo-too-far = eso va más atrás de una página de historia: deshaz desde la línea de tiempo (log)
 goto-empty = nada casa con eso
 goto-index-off = el índice semántico no está encendido
