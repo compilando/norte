@@ -49,6 +49,21 @@ jobs:
           rustup show
           rustup target add x86_64-pc-windows-msvc
 
+      # Dependencies are most of a cold build — wasmtime alone takes minutes —
+      # and they change far less often than our crates. Kept between releases,
+      # keyed on the lockfile and the toolchain; a new dependency set starts
+      # from the nearest earlier cache. First-party action, no third party in
+      # the release path.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: windows-release-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: windows-release-
+
       - name: Package
         shell: pwsh
         run: ./scripts/platform/windows/package.ps1

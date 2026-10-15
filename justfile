@@ -1007,6 +1007,13 @@ gui-e2e *scenarios:
 release tag lead="":
     ./scripts/release/release.sh {{tag}} "{{lead}}"
 
+# The release COMMIT, from a clean `main` (`scripts/release/prep.sh`):
+# branch, version bump everywhere, CHANGELOG section and links, the whole
+# `just ci` and `gui-ci` as ONE run each (their seals make the push of
+# `main` instant), and the commit. ~20 min: run it detached.
+release-prep version:
+    ./scripts/release/prep.sh {{version}}
+
 # The release scripts' check: syntax, shellcheck and the notes of the
 # newest CHANGELOG version. Seconds, no network.
 release-selftest:
