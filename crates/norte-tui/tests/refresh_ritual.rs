@@ -37,7 +37,7 @@ fn an_esc_halfway_through_keeps_the_fill_of_the_unrefreshed_pane() {
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     f.insert(norte_tui::panel::SLOT_RIGHT, fill());
     let mut lp = Probed::from([(1, VPath::parse("file:///d/x").unwrap())]);
-    let mut sr: Option<SearchRun> = None;
+    let mut sr = norte_frontend::layout::BySlot::<SearchRun>::new();
     after_panes_refresh(
         &mut app,
         &backend(),
@@ -88,7 +88,7 @@ fn a_refresh_under_open_help_refreezes_the_facts() {
     app.panes[0].refresh_listing(Vec::new());
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     let mut lp = Probed::new();
-    let mut sr: Option<SearchRun> = None;
+    let mut sr = norte_frontend::layout::BySlot::<SearchRun>::new();
     after_panes_refresh(
         &mut app,
         &backend(),

@@ -1311,6 +1311,7 @@ export class Screen {
       slot.path_hostile,
       slot.generation,
       slot.filling_note ?? "",
+      slot.results_note ?? "",
       slot.skipped_note,
       slot.names_note ?? "",
       slot.pruned_note ?? "",
@@ -1419,6 +1420,9 @@ export class Screen {
     // inside the noise.
     const notes: [string, string, boolean][] = [
       ["slot-filling", slot.filling_note ?? "", false],
+      // A results tab's search, going or ended (bridge 119): a counter that
+      // moves with every batch, so not a live region.
+      ["slot-results", slot.results_note ?? "", false],
       ["slot-skipped", slot.skipped_note, true],
       ["slot-names", slot.names_note ?? "", true],
       ["slot-pruned", slot.pruned_note ?? "", true],

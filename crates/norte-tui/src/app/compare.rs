@@ -38,7 +38,7 @@ impl App {
         if self.viewer.is_some() {
             return;
         }
-        if self.panes[0].virtual_search || self.panes[1].virtual_search {
+        if self.panes[0].is_results() || self.panes[1].is_results() {
             self.message = Some(t("msg-pane-not-a-location"));
             return;
         }
@@ -134,8 +134,7 @@ impl App {
             self.message = Some(t("msg-sync-needs-daemon"));
             return None;
         }
-        if self.compare.is_none() && (self.panes[0].virtual_search || self.panes[1].virtual_search)
-        {
+        if self.compare.is_none() && (self.panes[0].is_results() || self.panes[1].is_results()) {
             self.message = Some(t("msg-pane-not-a-location"));
             return None;
         }

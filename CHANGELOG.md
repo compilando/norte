@@ -7,6 +7,27 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **Open search results as a tab**: `F9` in the search panel, or its Open
+  as listing button in the window, turns the files it found into a tab
+  `🔍 <query> (N)` you can mark, copy, move and delete in. A search still
+  running goes on in the tab. The tab has a sortable **Folder** column,
+  `pane.refresh` runs the search again, and a saved session brings the tab
+  back by running its search again.
+
+### Changed
+
+- **Alt+F7 in the terminal opens a results tab** next to the folder instead
+  of taking over the pane. Enter on a hit opens its folder in a new tab and
+  leaves the results where they were; Esc stops a running search.
+- **A results tab is not a folder**: creating a folder or a file there,
+  organizing, packing, a terminal, sync, compare and sending its location
+  are refused with the reason, and copying INTO a results tab asks for a
+  folder instead of writing into the search's root. Copying hits into the
+  folder the search started from works; only a file already there is
+  refused.
+
 ### Fixed
 
 - **An order with an invisible character glued to a keyword is refused**:

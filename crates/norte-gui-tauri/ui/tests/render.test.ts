@@ -7216,6 +7216,74 @@ describe("the search panel", () => {
     expect(input.value).toBe("hilo");
   });
 
+  it("Open as listing sends its action, and is disabled with no rows", () => {
+    const { screen, sent } = mount();
+    const label = "Abrir como listado";
+    screen.paint(
+      withPanel(
+        panelSlot({ total_rows: 0, rows: [], cursor: null, open_listing_label: label }),
+      ),
+    );
+    const btn = document.querySelector<HTMLButtonElement>("button.search-open-listing");
+    expect(btn?.textContent).toBe(label);
+    expect(btn?.disabled).toBe(true);
+    screen.paint(withPanel(panelSlot({ open_listing_label: label })));
+    expect(btn?.disabled).toBe(false);
+    btn?.click();
+    expect(sent.at(-1)).toEqual({ action: "search_panel_open_listing", slot_id: 9 });
+  });
+
+  it("F9 in an input is Open as listing, as in the terminal's panel", () => {
+    const { screen, sent } = mount();
+    screen.paint(withPanel(panelSlot()));
+    const input = document.querySelector<HTMLInputElement>(
+      ".searchpanel-input[data-field='content']",
+    )!;
+    const before = sent.length;
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "F9", bubbles: true }));
+    expect(sent.slice(before)).toEqual([
+      { action: "search_panel_open_listing", slot_id: 9 },
+    ]);
+  });
+
+  it("paints a results tab: the Folder column, the results note, no breadcrumbs", () => {
+    const { screen, root } = mount();
+    screen.paint(
+      view({
+        path_display: "búsqueda «aguja» en /casa",
+        path_segments: [],
+        results_note: "búsqueda: 2 encontrados",
+        columns: [
+          {
+            id: "name",
+            label: "Nombre",
+            sort: "asc",
+            sortable: true,
+            width: null,
+            align: "left",
+          },
+          {
+            id: "folder",
+            label: "Carpeta",
+            sort: null,
+            sortable: true,
+            width: null,
+            align: "left",
+          },
+        ],
+        rows: [
+          row(0, "x.txt", { cells: [{ column: "folder", text: "a" }] }),
+          row(1, "y.txt", { cells: [{ column: "folder", text: "b" }] }),
+        ],
+      }),
+    );
+    expect(root.querySelector(".slot-results")?.textContent).toBe(
+      "búsqueda: 2 encontrados",
+    );
+    expect(root.querySelector(".crumb")).toBeNull();
+    expect(root.textContent).toContain("Carpeta");
+  });
+
   it("Enter in an input searches now", () => {
     const { screen, sent } = mount();
     screen.paint(withPanel(panelSlot()));

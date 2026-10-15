@@ -44,6 +44,7 @@
 #   expect-clip <text>     the CLIPBOARD contains <text>
 #   expect-jq <filter>     `jq -s -e <filter>` over the trace holds
 #   expect-file <path>     ~/data/<path> exists (expect-no-file: does not)
+#   expect-tab <text>      some tab, in the layout last painted, is titled <text>
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -158,6 +159,15 @@ last_preview() {
 		| if has("changes") then (.changes[] | select(.change == "goto") | .goto)
 		  else .goto end
 		| select(. != null) | .order.preview? // empty' "$trace" | tail -1
+}
+
+# The tab titles of the last layout painted (a snapshot's, or a `layout`
+# change's), one per line.
+last_tabs() {
+	jq -c 'select(.kind == "update") | .value.payload
+		| if has("changes") then (.changes[] | select(.change == "layout") | .tabs)
+		  else .layout.tabs end
+		| select(. != null) | [.[].tabs[].title]' "$trace" | tail -1 | jq -r '.[]?'
 }
 
 # A probe's value in the last `dom` report.
@@ -279,6 +289,7 @@ for scn in "${scenarios[@]}"; do
 		expect-jq) expect "jq $text" exact yes jq_holds "$text" ;;
 		expect-file) expect "file $rest" exact yes file_exists "$rest" ;;
 		expect-no-file) expect "no file $rest" exact no file_exists "$rest" ;;
+		expect-tab) expect tab has "$text" last_tabs ;;
 		*) echo "   unknown step: $verb" >&2; status=fail ;;
 		esac
 	done < "$scn"

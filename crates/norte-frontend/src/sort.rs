@@ -86,6 +86,11 @@ pub enum SortColumn {
     /// missing value —the provider does not know it, or does not emit it for
     /// that entry— goes at the END in both directions, like an unknown size.
     Attr(String),
+    /// The entry's parent folder, segment by segment (bytes). Only a
+    /// results tab offers it (its Folder column); a real listing resets it
+    /// (`PaneState::set_listing`). A root has no parent: at the end in both
+    /// directions.
+    Folder,
 }
 
 /// A sort column that a COMMAND or the config can name: the built-ins, which
@@ -214,6 +219,7 @@ pub(crate) fn cmp_keyed_with(
         SortColumn::Size => cmp_missing_last(a.1.size, b.1.size, spec.dir),
         SortColumn::Mtime => cmp_missing_last(a.1.mtime_ms, b.1.mtime_ms, spec.dir),
         SortColumn::Extension => cmp_ext(a.1, b.1, spec.dir),
+        SortColumn::Folder => cmp_folder(a.1, b.1, spec.dir),
         SortColumn::Attr(id) => cmp_attr(a.1.attrs.get(id), b.1.attrs.get(id), spec.dir),
     };
     let col = match (&spec.column, spec.dir) {
@@ -388,6 +394,33 @@ fn cmp_missing_last<T: Ord>(lhs: Option<T>, rhs: Option<T>, dir: SortDir) -> std
     }
 }
 
+/// An entry's parent folder as its segments (BYTES, hard rule 1), with no
+/// allocation. `None` for a root, which has no parent.
+fn parent_segments(e: &Entry) -> Option<impl Iterator<Item = &[u8]>> {
+    let depth = e.path.segments().count();
+    let keep = depth.checked_sub(1)?;
+    Some(e.path.segments().take(keep))
+}
+
+/// The FOLDER column (results tabs): parents compared segment by segment,
+/// so `a` < `a.d` < `b` (a prefix sorts first). A root has no parent and
+/// goes at the end in both directions, like any missing value.
+fn cmp_folder(left: &Entry, right: &Entry, dir: SortDir) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (parent_segments(left), parent_segments(right)) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(one), Some(other)) => {
+            let order = one.cmp(other);
+            match dir {
+                SortDir::Asc => order,
+                SortDir::Desc => order.reverse(),
+            }
+        }
+    }
+}
+
 /// Sorts `entries`, computing their keys ONCE, and returns both
 /// (index-parallel). Stable, same order as [`sort_entries`].
 /// `sort_with_keys_spec` under a [`SortSpec`] (#108 L7).
@@ -471,6 +504,46 @@ mod tests {
             size: None,
             mtime_ms: None,
         }
+    }
+
+    /// By folder: parents compared segment by segment (bytes); ties by name;
+    /// `Desc` reverses the folders, never the name tie-break.
+    #[test]
+    fn sorting_by_folder_groups_by_parent() {
+        let file = |w: &str| e(w, EntryKind::File);
+        let mut v = vec![
+            file("mem:///r/b/z"),
+            file("mem:///r/a/y"),
+            file("mem:///r/b/a"),
+            file("mem:///r/a.d/x"),
+        ];
+        let by_folder = |dir| SortSpec {
+            column: SortColumn::Folder,
+            dir,
+            dirs_first: false,
+        };
+        sort_entries_with(&mut v, &by_folder(SortDir::Asc));
+        let names: Vec<_> = v.iter().map(|e| e.path.to_wire()).collect();
+        assert_eq!(
+            names,
+            [
+                "mem:///r/a/y",
+                "mem:///r/a.d/x",
+                "mem:///r/b/a",
+                "mem:///r/b/z"
+            ]
+        );
+        sort_entries_with(&mut v, &by_folder(SortDir::Desc));
+        let names: Vec<_> = v.iter().map(|e| e.path.to_wire()).collect();
+        assert_eq!(
+            names,
+            [
+                "mem:///r/b/a",
+                "mem:///r/b/z",
+                "mem:///r/a.d/x",
+                "mem:///r/a/y"
+            ]
+        );
     }
 
     /// Pins `SortKey.nfc`'s contract (#94): `None` in the common case

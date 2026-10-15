@@ -18,8 +18,8 @@ use crate::dispatch::dispatch;
 use crate::event_loop::{launch_pending, run_command};
 use crate::gestures::keyboard_owner;
 use crate::jobs::{
-    AiRenameRun, InFlight, RenameBatchRun, SemanticRun, launch_search, on_compare_key,
-    on_search_dialog_key, on_search_enter, on_search_escape, on_sync_key,
+    AiRenameRun, InFlight, RenameBatchRun, SemanticRun, launch_results, on_compare_key,
+    on_search_dialog_key, on_sync_key, open_hit_folder,
 };
 use crate::keymap::{
     Command, Count, Resolution, Resolver, chord_from_crossterm, count_ignored_message,
@@ -30,7 +30,7 @@ use crate::mutations::{on_dialog_key, submit_transfer};
 use crate::nav;
 use crate::navigate::{cd, settle_cd};
 use crate::overlays::{close_stale_overlays, goto_help, help_owns_keys, modal_wins};
-use crate::refresh::{after_panes_refresh, reap_search_run, refresh_panes};
+use crate::refresh::{after_panes_refresh, reap_search_runs, refresh_panes};
 use crate::screens::{
     HelpDispatch, on_columns_key, on_connections_picker_key, on_disk_map_key, on_extensions_key,
     on_help_key, on_layout_picker_key, on_nav_popup_key, on_panel_key, on_places_key,
@@ -504,10 +504,10 @@ pub async fn on_key(
     } else if app.search_dialog.is_some() && !modal_wins(app) {
         // Alt+F7 dialog (liveSearch T6): captures printables
         // like the other overlays; Enter with a criterion
-        // launches the search (opens the virtual pane) — the
+        // launches the search into a NEW results tab — the
         // rest of the keys do not navigate.
-        if let Some(params) = on_search_dialog_key(app, key.modifiers, key.code) {
-            launch_search(app, backend, &mut work.fill, &mut work.search, params).await;
+        if let Some(search) = on_search_dialog_key(app, key.modifiers, key.code) {
+            let _slot = launch_results(app, backend, &mut work.search, search, None).await;
         }
     } else if app.splash.is_some() && !modal_wins(app) {
         // The splash screen (spec 2026-09-15): any key dismisses it, and
@@ -1066,6 +1066,7 @@ pub async fn on_key(
                     }
                     PromptKind::TransferName => {
                         if let Some((kind, from, dest)) = app.transfer_name_confirm() {
+                            let source = from.clone();
                             // Closes ONLY if it was queued
                             // (MINOR-1 discipline from #104): a
                             // failed submit keeps the name; the
@@ -1080,6 +1081,12 @@ pub async fn on_key(
                             )
                             .await
                             {
+                                // A rename (or a one-item move) from a
+                                // results tab: the SOURCE leaves the tab
+                                // once it is gone (C11).
+                                if kind == crate::app::TransferKind::Move {
+                                    crate::mutations::expect_gone_from_results(app, source);
+                                }
                                 app.transfer_name_submitted();
                             } else {
                                 app.transfer_name_set_error(t("msg-transfer-name-failed"));
@@ -1170,41 +1177,34 @@ pub async fn on_key(
             app.abandon_pending(resolver);
             return;
         }
-        // Search virtual pane (liveSearch T6): with a
-        // work.search on the focused pane (and no live quick
-        // search), Esc and Enter have their own semantics
+        // Results tab (search phase B): with no live quick
+        // search, Esc and Enter have their own semantics
         // BEFORE the resolver. The REST of the keys (cursor,
         // F5/F8/F3…) fall through to the resolver and operate
         // on the hit under the cursor.
         if app.viewer.is_none()
             && key.modifiers.is_empty()
             && app.focused().quick().is_none()
-            && app.focused().virtual_search
-            && work.search.as_ref().is_some_and(|s| s.pane == app.focus())
+            && app.focused().is_results()
         {
             match key.code {
+                // A live run → cancels it and does nothing more
+                // (hits kept; it moves to Cancelled when the
+                // channel closes). With no live run Esc falls
+                // through to the resolver like anywhere else.
                 KeyCode::Esc => {
-                    // Task alive → cancels (hits kept, will
-                    // move to Cancelled when the channel
-                    // closes). Already finished → leaves
-                    // virtual mode, restoring the previous
-                    // dir.
-                    on_search_escape(
-                        app,
-                        backend,
-                        events,
-                        &mut work.fill,
-                        &mut work.decorate,
-                        &mut work.probed,
-                        &mut work.search,
-                    )
-                    .await;
-                    return;
+                    if let Some(s) = work.search.get(app.focused_slot())
+                        && s.outcome == norte_frontend::search_status::Outcome::Running
+                    {
+                        s.task.cancel();
+                        return;
+                    }
                 }
                 KeyCode::Enter => {
-                    // Enter over a hit: cd to the hit's PARENT
-                    // and cursor over it (leaves virtual mode).
-                    on_search_enter(
+                    // C10: Enter over a hit opens its FOLDER in a
+                    // new tab with the cursor on it; the results
+                    // tab stays.
+                    open_hit_folder(
                         app,
                         backend,
                         events,
@@ -1449,10 +1449,10 @@ pub async fn on_key(
                             &mut work.search,
                             outcome,
                         );
-                        // A cd (nav.parent…) turned off the
-                        // search pane's virtual mode: releases
-                        // the run and cancels.
-                        reap_search_run(app, &mut work.search);
+                        // A cd (nav.parent…) turned a results
+                        // tab into a folder, or a tab closed:
+                        // releases its run and cancels.
+                        reap_search_runs(app, &mut work.search);
                         // #28: `pane.open` left an external
                         // command resolved — the run loop (which
                         // owns the terminal) probes the binary

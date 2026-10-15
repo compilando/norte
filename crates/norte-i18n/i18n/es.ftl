@@ -576,6 +576,7 @@ col-header-name = Nombre
 col-header-size = Tamaño
 col-header-mtime = Fecha
 col-header-kind = Tipo
+col-header-folder = Carpeta
 col-kind-dir = dir
 col-kind-file = fichero
 col-kind-symlink = enlace
@@ -1800,6 +1801,11 @@ search-status-done = búsqueda: { $n } encontrados
 search-status-truncated = búsqueda: { $n } encontrados (hay más; afina la búsqueda)
 search-status-cancelled = búsqueda: { $n } encontrados (cancelada)
 search-status-failed = búsqueda fallida: { $error }
+# Resultados de búsqueda abiertos como listado (2026-10-10-search-b-listing).
+results-tab-title = 🔍 { $query } ({ $n })
+results-location = búsqueda «{ $query }» en { $root }
+results-already-there = algunos de estos ficheros ya están en esa carpeta
+results-not-a-location = los resultados de una búsqueda no son una carpeta: elige una carpeta como destino
 # El panel de búsqueda (2026-10-09-search-panel): busca mientras escribes y
 # agrupa los resultados por carpeta y fichero, con sus líneas coincidentes.
 search-panel-title = Buscar
@@ -1820,6 +1826,10 @@ search-panel-more = +{ $n } más
 search-panel-filters = filtros ({ $n })
 search-panel-root = en { $root }
 search-panel-reroot = Buscar aquí
+# Abrir como listado (F9 en el panel, un botón en la ventana): los ficheros
+# del panel pasan a una pestaña de resultados.
+search-panel-open-listing = Abrir como listado
+search-panel-nothing-to-list = nada que abrir como listado: la búsqueda no muestra ficheros
 # El visor abierto en la línea de un resultado de búsqueda.
 viewer-lines-from = líneas desde { $n }
 viewer-target-past-cap = la línea está más allá de lo que lee el visor
@@ -2746,6 +2756,7 @@ task-batch-half = lote a medias: { $applied } aplicados, { $back } devueltos
 task-batch-unverified = terminado, sin informe
 host-plan-unseen = recorre el plan entero antes de aplicarlo
 host-same-directory = el origen y el destino son el mismo directorio
+host-results-not-a-location = los resultados de una búsqueda no son una carpeta: hazlo desde una carpeta
 host-batch-too-large = demasiadas entradas para una sola transferencia
 host-batch-folds-to-one = dos de las marcas son el mismo nombre en el destino
 host-task-board-full = el tablero de tareas está lleno

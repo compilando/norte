@@ -806,7 +806,11 @@ pub(crate) fn pane_rects(app: &App, area: Rect) -> Vec<Rect> {
 ///
 /// Each one's title is its slot's directory name, sanitized by
 /// `display_name`: a directory with a hostile name inside a tab is as
-/// hostile as inside a listing (rule 1).
+/// hostile as inside a listing (rule 1). A results tab is titled
+/// `🔍 <query> (N)` instead ([`norte_frontend::results::tab_title`], the
+/// query masked and clamped), with the hostile badge in front when masking
+/// changed it. The 🔍 is two cells wide: the zones measure the painted
+/// width (`tab_zones`), never the char count.
 #[must_use]
 pub fn tab_strip_for(app: &App, side: usize) -> Option<TabStrip> {
     let slot = app.panes.slot_of(side);
@@ -817,6 +821,18 @@ pub fn tab_strip_for(app: &App, side: usize) -> Option<TabStrip> {
             app.panes
                 .browser(*id)
                 .map(|p| {
+                    if let Some(set) = p.results() {
+                        let (title, hostile) = norte_frontend::results::tab_title(
+                            set,
+                            p.real_entries().len(),
+                            norte_i18n::active(),
+                        );
+                        return if hostile {
+                            format!("{} {title}", crate::ui::HOSTILE_BADGE)
+                        } else {
+                            title
+                        };
+                    }
                     let bytes = p
                         .dir()
                         .file_name()

@@ -576,6 +576,7 @@ col-header-name = Name
 col-header-size = Size
 col-header-mtime = Modified
 col-header-kind = Kind
+col-header-folder = Folder
 col-kind-dir = dir
 col-kind-file = file
 col-kind-symlink = symlink
@@ -1864,6 +1865,11 @@ search-status-done = search: { $n } found
 search-status-truncated = search: { $n } found (there are more; narrow it down)
 search-status-cancelled = search: { $n } found (cancelled)
 search-status-failed = search failed: { $error }
+# Search results opened as a listing (2026-10-10-search-b-listing).
+results-tab-title = 🔍 { $query } ({ $n })
+results-location = search “{ $query }” in { $root }
+results-already-there = some of these files are already in that folder
+results-not-a-location = search results are not a folder: choose a folder as the destination
 # The search panel (2026-10-09-search-panel): searches as you type, results
 # grouped by folder and file with their matching lines.
 search-panel-title = Search
@@ -1884,6 +1890,10 @@ search-panel-more = +{ $n } more
 search-panel-filters = filters ({ $n })
 search-panel-root = in { $root }
 search-panel-reroot = Search here
+# Open as listing (F9 in the panel, a button in the window): the panel's
+# files become a results tab.
+search-panel-open-listing = Open as listing
+search-panel-nothing-to-list = nothing to open as a listing: the search shows no files
 # The viewer opened at a search result's line.
 viewer-lines-from = lines from { $n }
 viewer-target-past-cap = the line is past what the viewer reads
@@ -2723,6 +2733,7 @@ task-batch-half = batch left half done: { $applied } applied, { $back } rolled b
 task-batch-unverified = finished, report unavailable
 host-plan-unseen = scroll through the whole plan before applying it
 host-same-directory = source and destination are the same directory
+host-results-not-a-location = search results are not a folder: do this from a folder
 host-batch-too-large = too many entries for a single transfer
 host-batch-folds-to-one = two of the marks are one name on the destination
 host-task-board-full = the task board is full

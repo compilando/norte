@@ -482,16 +482,25 @@ fn snapshot_search_dialog() {
     insta::assert_snapshot!(render(&app));
 }
 
-/// Live-search virtual pane (`Alt+F7`, liveSearch T6): the pane with focus
-/// lists the HITS as they arrive (plain name, full `VPath` under the hood)
-/// and the bar paints `search-status-running` ("searching…"); the other pane
-/// stays normal.
+/// A results tab (`Alt+F7`, search phase B): a NEW tab next to the focused
+/// folder, titled `🔍 <query> (N)` in the tab strip, whose border says what
+/// was searched where; it lists the HITS with a Folder column (relative to
+/// the search root) and the bar paints `search-status-running`. The folder
+/// tab it came from and the other pane stay as they were.
 #[test]
-fn snapshot_search_pane_virtual() {
+fn snapshot_results_tab() {
     let mut app = app_base();
     let root = vp("file:///casa");
+    let mut saved = norte_frontend::results::SavedSearch::from_form(
+        &norte_frontend::search::SearchForm::new(),
+        root.clone(),
+    );
+    saved.name = "*.rs".to_owned();
+    let _slot = app.open_results_tab(
+        norte_frontend::results::ResultSet::new(saved, norte_frontend::results::MAX_HITS),
+        vec![],
+    );
     let pane = app.focused_mut();
-    pane.begin_search(root.clone());
     pane.extend_listing(vec![
         entry(
             &vp("file:///casa/src"),

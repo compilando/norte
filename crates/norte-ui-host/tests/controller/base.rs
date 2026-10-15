@@ -897,6 +897,7 @@ pub(super) fn session_saved(
             show_hidden: false,
             touched_ms: 0,
             marks: Vec::new(),
+            results: None,
         },
     );
     norte_proto::methods::Session {
@@ -1399,6 +1400,7 @@ async fn closing_the_window_does_not_touch_the_tuis_layout_or_slots() {
             )
             .unwrap_or(0),
             marks: Vec::new(),
+            results: None,
         },
     );
 

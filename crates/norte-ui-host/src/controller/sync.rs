@@ -834,6 +834,17 @@ impl State {
         // cheapest bug to write and the most expensive to find, because both
         // produce a perfectly plausible plan.
         let focused = self.slot().pane.dir().clone();
+        // A results tab on the other side is not a tree to sync (C5): its
+        // `dir()` is only the search's root.
+        if self.slots[&dest_slot].pane.is_results() {
+            let key = "results-not-a-location";
+            return (
+                ActionAck::Unavailable {
+                    reason_key: key.to_owned(),
+                },
+                self.say(key),
+            );
+        }
         let other = self.slots[&dest_slot].pane.dir().clone();
         // With the differences panel open the ACTIVE SIDE rules; without it,
         // the focused pane is the source. Both branches live in the shared

@@ -12,16 +12,18 @@ use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::backend::{Backend, TaskRef};
+use norte_frontend::results::ResultSet;
 use norte_frontend::search::{
     ID_CASE, ID_KINDS, ID_RECURSIVE, ID_REGEX, ID_WHOLE_WORD, SearchField,
 };
-use norte_frontend::search_panel::{Activation, Due, SearchPanel};
+use norte_frontend::search_panel::{self, Activation, Due, SearchPanel};
 use norte_frontend::search_status::{Outcome, outcome_of};
+use norte_i18n::t;
 use norte_proto::methods::SearchHits;
 
 use crate::app::{App, KeyOwner, detail_for_bar, error_category};
 use crate::console::Console;
-use crate::jobs::InFlight;
+use crate::jobs::{InFlight, SearchRun};
 use crate::keymap::{Resolution, Resolver, chord_from_crossterm};
 use crate::navigate::{Cd, cd, settle_cd};
 use crate::viewer_open::open_viewer_at;
@@ -178,6 +180,12 @@ pub async fn on_key(
 ) {
     if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
         app.quit = true;
+        return;
+    }
+    // F9 is a FIXED key like F2–F8, from an input and from the results.
+    if mods.is_empty() && code == KeyCode::F(9) {
+        open_listing(app, work);
+        app.needs_frame = true;
         return;
     }
     let mut activation = None;
@@ -349,13 +357,92 @@ fn on_tree_key(
     None
 }
 
+/// Open as listing (F9): the panel's files become a results tab next to
+/// the focused listing, and the keys go back to the panes.
+///
+/// C9: a LIVE run is HANDED to the tab — it leaves `work.search_panel` and
+/// is filed under the tab's slot with `panel_epoch`, so the panel's next
+/// query launches a new run without cancelling it, and the tab keeps
+/// receiving to the end. Meanwhile the tab's drain forwards each batch to
+/// the panel, which takes it while it still shows that epoch
+/// ([`crate::jobs::drain_search`]). The tab opened from the panel keeps the
+/// panel's cap ([`search_panel::MAX_FILES`]) until its first refresh.
+///
+/// With nothing shown — an empty tree, or a new query launched whose first
+/// answer has not replaced the old one — it says so and opens nothing.
+pub fn open_listing(app: &mut App, work: &mut InFlight) {
+    let Some(l) = panel_mut(app).and_then(|p| p.listing()) else {
+        app.message = Some(t("search-panel-nothing-to-list"));
+        return;
+    };
+    let mut set = ResultSet::new(l.search, search_panel::MAX_FILES);
+    // The hits the panel already received count toward the cap, as if the
+    // tab had received them: a run stopped at the cap still reads so.
+    set.note_hits(&SearchHits {
+        task_id: norte_proto::TaskId::new(0),
+        entries: l.entries.clone(),
+        matches: None,
+        all_matches: None,
+        more: None,
+    });
+    set.seed_matches(l.matches);
+    let adopt = l
+        .live
+        .filter(|e| work.search_panel.as_ref().is_some_and(|r| r.epoch == *e));
+    match (adopt, l.live) {
+        (Some(_), _) => {}
+        (None, None) => set.set_outcome(l.outcome),
+        // Live in the panel but its run is not the panel's to hand over
+        // (a second F9: the first tab has it). This tab is a snapshot that
+        // receives nothing more, so it reads as stopped, not as running
+        // forever; a refresh runs it again.
+        (None, Some(_)) => set.set_outcome(Outcome::Cancelled),
+    }
+    let slot = app.open_results_tab(set, l.entries);
+    if let Some(e) = adopt
+        && let Some(PanelRun { task, rx, .. }) = work.search_panel.take()
+        && let Some(old) = work.search.insert(
+            slot,
+            SearchRun {
+                task,
+                rx,
+                outcome: Outcome::Running,
+                panel_epoch: Some(e),
+            },
+        )
+    {
+        old.task.cancel();
+    }
+    app.return_keys_to_panes();
+}
+
 /// Once per loop turn: when the pause is over, cancels what runs and
 /// launches the new search; a run whose panel is gone is cancelled.
+///
+/// A run the panel handed to a results tab (C9) is not the panel's to
+/// cancel. When that tab's run ends without telling the panel — the tab
+/// closed, turned into a folder, refreshed or Esc'd — the panel stops
+/// saying it is searching: nobody feeds it any more.
 pub async fn tick(app: &mut App, backend: &Backend, work: &mut InFlight) {
     let Some(p) = panel_mut(app) else {
         // Closed by any path — its command, closing the slot, a layout —
         // the run it left goes with it.
         cancel(&mut work.search_panel);
+        return;
+    };
+    if p.is_running() {
+        let e = p.epoch();
+        let fed = work.search_panel.as_ref().is_some_and(|r| r.epoch == e)
+            || work
+                .search
+                .iter()
+                .any(|(_, s)| s.panel_epoch == Some(e) && s.outcome == Outcome::Running);
+        if !fed {
+            p.stop();
+            app.needs_frame = true;
+        }
+    }
+    let Some(p) = panel_mut(app) else {
         return;
     };
     let Some(due) = p.due(now(), now_ms()) else {

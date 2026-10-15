@@ -9,41 +9,17 @@ use norte_proto::{Entry, VPath};
 /// search — live ONCE in [`norte_frontend::PaneState`], shared with the GUI
 /// (#82): the TUI's `Pane` EMBEDS it in its (private) `state` field and
 /// delegates to it (`dir`/`entries`/`cursor`/`selected`/`move_*`/`quick_*`…).
-/// What's specific to the TUI — the live search (`virtual_search`,
-/// `search_state`, `search_error`) and the paginated fill (ADR 0017,
+/// What's specific to the TUI — the paginated fill (ADR 0017,
 /// [`Pane::extend_listing`] and friends) — stays here, on top of that state.
+/// A live search's hits (`Alt+F7`) are the shared state's result set
+/// ([`Pane::results`]): the status bar, the refusals and the cd that ends it
+/// all read it from there.
 #[derive(Debug)]
 pub struct Pane {
-    /// Shared non-render state (cursor + quick + listing). Private: accessed
-    /// through the delegates ([`Pane::dir`], [`Pane::entries`], …) so
-    /// `PaneState` guards the cursor's invariant.
+    /// Shared non-render state (cursor + quick + listing + result set).
+    /// Private: accessed through the delegates ([`Pane::dir`],
+    /// [`Pane::entries`], …) so `PaneState` guards the cursor's invariant.
     state: norte_frontend::PaneState,
-    /// The pane shows the HITS of a live search (`Alt+F7`, liveSearch), not
-    /// a real directory listing: `dir` is the walk's ROOT and `entries` are
-    /// the results arriving by streaming ([`Pane::extend_listing`], reusing
-    /// the pagination mold). With this on, the status bar paints
-    /// `search-status-*` instead of the normal `pos/total`; any normal
-    /// `cd`/refresh turns it off (real listings set it to `false`).
-    /// `F5`/`F8`/`F3` operate ONLY on the hit under the cursor
-    /// ([`Pane::selected`] gives the `Entry` with its full `VPath`).
-    pub virtual_search: bool,
-    /// A live search's presentation state (only meaningful with
-    /// [`Pane::virtual_search`]): decides which `search-status-*` variant
-    /// the status bar paints. The run loop updates it on the terminal state
-    /// arriving.
-    pub search_state: SearchState,
-    /// Category of a search that FAILED (`SearchState::Failed`), already
-    /// localized and sanitized: the status bar paints it PERSISTENTLY
-    /// (`search-status-failed`) after [`crate::app::App::message`] clears —
-    /// a failure can't degrade into "done" on the next key (review
-    /// MINOR-2).
-    pub search_error: Option<String>,
-    /// Content match context per live-search hit (#81):
-    /// `path → (line, preview ALREADY sanitized at the source)`. Only
-    /// meaningful with [`Pane::virtual_search`]; the status bar paints it
-    /// for the hit under the cursor. Cleared on leaving virtual mode
-    /// (cd/real listing).
-    pub search_matches: std::collections::HashMap<VPath, norte_proto::methods::MatchInfo>,
     /// This pane's listing could NOT be done on restoring the session, and
     /// what's shown isn't "this directory is empty" (#235).
     ///
@@ -53,34 +29,6 @@ pub struct Pane {
     /// the bug #232 fixes two hunks up. Any real listing
     /// ([`Pane::set_listing`], [`Pane::begin_listing`]) turns it off.
     pub unlisted: bool,
-    /// The USER's hidden-files preference (#107): the virtual search pane
-    /// SUSPENDS the filter (a hit is an EXPLICIT request — a searched-for
-    /// `.env` silently disappearing under `[ui] show_hidden = false` was the
-    /// review's MAJOR-1), and this gets restored on returning to a real
-    /// listing. A Ctrl+H INSIDE the virtual pane acts on the results but
-    /// doesn't touch the preference.
-    show_hidden_pref: bool,
-}
-
-/// A live search's presentation state (`Alt+F7`, liveSearch T6): the run
-/// loop reflects it in [`Pane::search_state`] so the status bar picks the
-/// `search-status-*` variant. `Failed` isn't painted on the pane's status
-/// bar (the concrete error travels via [`crate::app::App::message`] through
-/// `error_message`); the variant is kept for completeness of the run's
-/// state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SearchState {
-    /// The walker keeps emitting hits.
-    #[default]
-    Running,
-    /// Finished and the hit cap wasn't reached.
-    Done,
-    /// Finished by reaching `max_hits` (results possibly incomplete).
-    Truncated,
-    /// The user cancelled (hits already received are kept).
-    Cancelled,
-    /// The search Task failed (the error travels via the message bar).
-    Failed,
 }
 
 impl Pane {
@@ -92,11 +40,6 @@ impl Pane {
     pub fn new(dir: VPath, entries: Vec<Entry>) -> Self {
         Self {
             state: norte_frontend::PaneState::new(dir, entries),
-            virtual_search: false,
-            search_state: SearchState::Running,
-            search_error: None,
-            search_matches: std::collections::HashMap::new(),
-            show_hidden_pref: true,
             unlisted: false,
         }
     }
@@ -371,36 +314,54 @@ impl Pane {
         self.state.set_loading(loading);
     }
 
-    /// Starts a live search's virtual pane (`Alt+F7`, liveSearch T6): `root`
-    /// is the walk's root, entries start empty and hits come in through
-    /// [`Pane::extend_listing`] like a paginated listing. Marks the pane as
-    /// virtual (the status bar paints `search-status-running`) and kills any
-    /// live quick search (it was filtering something ELSE).
-    pub fn begin_search(&mut self, root: VPath) {
-        // #107: hits are EXPLICIT — the hidden-files filter is suspended in
-        // the virtual pane (the preference stays in `show_hidden_pref`).
-        self.state.set_show_hidden(true);
-        self.state.set_listing(root, Vec::new());
-        self.virtual_search = true;
-        self.search_state = SearchState::Running;
-        self.search_error = None;
-        // #81 (review MAJOR-4): relaunching Alt+F7 with no cd in between
-        // must not drag along the PREVIOUS search's previews (a hit from
-        // name-only query B would paint query A's :line) nor grow the map
-        // without bound between searches.
-        self.search_matches.clear();
+    /// Starts a live search's results pane (`Alt+F7`): the set's root is the
+    /// walk's root, entries start empty and hits come in through
+    /// [`Pane::extend_listing`] like a paginated listing. A pure delegate to
+    /// [`norte_frontend::PaneState::begin_results`], which also suspends the
+    /// hidden-files filter (a hit is an EXPLICIT request), drops a previous
+    /// set's previews (#81, review MAJOR-4) and kills any live quick search.
+    pub fn begin_results(&mut self, set: norte_frontend::results::ResultSet) {
+        self.state.begin_results(set, Vec::new());
+    }
+
+    /// Like [`Self::begin_results`], with the hits that already arrived
+    /// (a tab opened over a run that was already delivering).
+    pub fn begin_results_with(
+        &mut self,
+        set: norte_frontend::results::ResultSet,
+        entries: Vec<Entry>,
+    ) {
+        self.state.begin_results(set, entries);
+    }
+
+    /// The result set, if this pane shows a search's hits.
+    #[must_use]
+    pub fn results(&self) -> Option<&norte_frontend::results::ResultSet> {
+        self.state.results()
+    }
+
+    /// The result set, mutably.
+    pub fn results_mut(&mut self) -> Option<&mut norte_frontend::results::ResultSet> {
+        self.state.results_mut()
+    }
+
+    /// Does this pane show a search's hits instead of a directory?
+    #[must_use]
+    pub fn is_results(&self) -> bool {
+        self.state.is_results()
+    }
+
+    /// Takes `paths` out of the results (see
+    /// [`norte_frontend::PaneState::forget`]); how many left.
+    pub fn forget(&mut self, paths: &[VPath]) -> usize {
+        self.state.forget(paths)
     }
 
     /// Replaces the content after a cd/refresh, resetting the cursor. A
-    /// live quick search dies: it was filtering a DIFFERENT listing.
+    /// live quick search dies: it was filtering a DIFFERENT listing. A real
+    /// listing ends the result set (and gives the hidden preference back).
     pub fn set_listing(&mut self, dir: VPath, entries: Vec<Entry>) {
-        // #107: on returning to a real listing, the user's hidden-files
-        // preference takes over again BEFORE ingesting (the filter applies
-        // as the listing comes in).
-        self.state.set_show_hidden(self.show_hidden_pref);
         self.state.set_listing(dir, entries);
-        self.virtual_search = false;
-        self.search_matches.clear();
         self.state.set_skipped(None);
         self.unlisted = false;
     }
@@ -425,14 +386,12 @@ impl Pane {
         more: bool,
         skipped: Option<u64>,
     ) {
-        self.state.remember_cursor();
-        // #107: the same reset as `set_listing` — this is the TUI's real
-        // paginated cd.
-        self.state.set_show_hidden(self.show_hidden_pref);
+        // A results pane's cursor is a row among hits, not a place in `dir`.
+        if !self.state.is_results() {
+            self.state.remember_cursor();
+        }
         self.state.set_listing(dir, first_page);
         self.state.set_loading(more);
-        self.virtual_search = false;
-        self.search_matches.clear();
         self.state.set_skipped(skipped);
         self.unlisted = false;
     }
@@ -480,8 +439,6 @@ impl Pane {
     pub fn refresh_listing(&mut self, entries: Vec<Entry>) {
         self.state.refill(entries);
         self.state.set_loading(false);
-        self.virtual_search = false;
-        self.search_matches.clear();
     }
 
     /// Omitted by the current listing's container (#93/#96) — pure delegate
@@ -721,21 +678,17 @@ impl Pane {
         self.state.marked_entries()
     }
 
-    /// Hidden-files toggle (#107); returns the new state. In the virtual
-    /// pane it acts on the RESULTS without touching the preference — on
-    /// returning to a real listing, `show_hidden_pref` takes over again.
+    /// Hidden-files toggle (#107); returns the new state. In a results pane
+    /// it acts on the hits without touching the preference, which
+    /// [`norte_frontend::PaneState`] keeps and gives back on the first real
+    /// listing.
     pub fn toggle_hidden(&mut self) -> bool {
-        let now = self.state.toggle_hidden();
-        if !self.virtual_search {
-            self.show_hidden_pref = now;
-        }
-        now
+        self.state.toggle_hidden()
     }
 
-    /// Seeds hidden-files visibility from `[ui] show_hidden` (#107): sets
-    /// both the preference AND the current state.
+    /// Seeds hidden-files visibility from `[ui] show_hidden` (#107): a
+    /// pure delegate.
     pub fn set_show_hidden(&mut self, show: bool) {
-        self.show_hidden_pref = show;
         self.state.set_show_hidden(show);
     }
 
@@ -1092,7 +1045,14 @@ mod tests {
         p.set_show_hidden(false); // config seed: hide
         assert_eq!(p.entries().len(), 1, "the real listing filters");
 
-        p.begin_search(VPath::parse("mem:///").unwrap());
+        let saved = norte_frontend::results::SavedSearch::from_form(
+            &norte_frontend::search::SearchForm::new(),
+            VPath::parse("mem:///").unwrap(),
+        );
+        p.begin_results(norte_frontend::results::ResultSet::new(
+            saved,
+            norte_frontend::results::MAX_HITS,
+        ));
         p.extend_listing(vec![e("mem:///sub/.env", EntryKind::File)]);
         assert_eq!(
             p.entries().len(),

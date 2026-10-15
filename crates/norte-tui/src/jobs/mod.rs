@@ -6,9 +6,9 @@
 //! keyboard with a key table of its own — and all three used to live in the
 //! `ntc` binary's root, a crate DIFFERENT from this lib.
 //!
-//! There is a cycle between this module and [`crate::navigate`] — `cd` has to
-//! drop a live search when leaving the virtual pane, and launching a search
-//! needs the `cd`. A cycle between modules of the SAME crate is legal in
+//! There is a cycle between this module and [`crate::navigate`] — a `cd`'s
+//! settlement carries the results runs (a swap moves them), and opening a
+//! hit's folder needs the `cd`. A cycle between modules of the SAME crate is legal in
 //! Rust, so the exit order doesn't matter; what could not be done was leaving
 //! half of it in the binary, which IS another crate.
 //!
@@ -46,8 +46,8 @@ pub use inflight::{
     OrderStats, OrganizeRun, PendingAiPlan, Published, RenameBatchRun, SemanticRun,
 };
 pub use search::{
-    SEARCH_MAX_HITS, SearchRun, drain_search, finalize_search_state, launch_search,
-    on_search_dialog_key, on_search_enter, on_search_escape, search_params,
+    SearchRun, drain_search, finalize_outcome, launch_results, on_search_dialog_key,
+    open_hit_folder, rerun_restored, rerun_results,
 };
 pub use sync::{
     SyncKey, SyncRun, SyncTick, approve_sync, drain_sync_plan, harvest_sync_apply,

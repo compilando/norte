@@ -155,6 +155,11 @@ impl State {
                 said,
             );
         }
+        // The shell's cwd would be a results tab's search root (C6), which
+        // is why a terminal there is refused too.
+        if let Some(refused) = self.refuse_in_results_tab() {
+            return refused;
+        }
         let Some(cwd) = norte_frontend::shell::shell_dir(self.slot().pane.dir()) else {
             let said = self.say("reason-not-on-this-disk");
             return (

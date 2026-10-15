@@ -145,6 +145,9 @@ impl App {
                     } else {
                         Vec::new()
                     },
+                    // A results tab is saved as its QUERY, never as its
+                    // hits: restoring it re-runs the search (C7).
+                    results: pane.results().map(|r| r.search().clone()),
                 },
             );
         }
@@ -182,6 +185,10 @@ impl App {
     /// 12 to put it on.
     ///
     /// What the layout doesn't have is kept aside instead of dropped.
+    ///
+    /// A slot saved as a results tab is NOT in the returned list: it comes
+    /// back as an empty, running results tab and waits in
+    /// [`super::SessionUi::rerun`] for the run loop to re-run its query.
     pub fn apply_session(
         &mut self,
         body: &norte_frontend::session::SessionBody,
@@ -221,6 +228,7 @@ impl App {
             .collect();
         let mut ask = Vec::new();
         self.session.orphans.clear();
+        self.session.rerun.clear();
         for (raw, state) in &body.slots {
             let id = norte_frontend::layout::SlotId(*raw);
             self.session.touched.insert(*raw, state.touched_ms);
@@ -247,6 +255,24 @@ impl App {
                 Some(state.sort.clone()),
                 Some(state.show_hidden),
             );
+            let history = self.history.for_slot_mut(id);
+            history.seed(state.back.clone(), state.forward.clone());
+            history.seed_jump(state.jump.clone());
+            // A results tab comes back as its QUERY (C7): already a results
+            // tab, empty and running, so nothing lists its root as a folder,
+            // and queued for the run loop to re-run — visible or not. Not
+            // in `ask`: it has no directory to list, and no cursor or marks
+            // to place over hits that have not arrived.
+            if let Some(search) = &state.results {
+                if let Some(pane) = self.panes.browser_mut(id) {
+                    pane.begin_results(norte_frontend::results::ResultSet::new(
+                        search.clone(),
+                        norte_frontend::results::MAX_HITS,
+                    ));
+                }
+                self.session.rerun.push(id);
+                continue;
+            }
             self.session.cursors.insert(*raw, state.cursor);
             // A HANDOFF's marks, and only then: `attach` sets `--attach`.
             // Without that condition, a body that carried them — because the
@@ -264,9 +290,6 @@ impl App {
             if self.session.attach && !state.marks.is_empty() {
                 self.session.marks.insert(*raw, state.marks.clone());
             }
-            let history = self.history.for_slot_mut(id);
-            history.seed(state.back.clone(), state.forward.clone());
-            history.seed_jump(state.jump.clone());
             ask.push(id);
         }
         ask

@@ -68,6 +68,17 @@ impl State {
                 } else {
                     (active, other)
                 };
+                // The location read FROM a results tab is only its search's
+                // root (C6); the active one is refused before this.
+                if self.slots.get(&source).is_some_and(|h| h.pane.is_results()) {
+                    let key = "host-results-not-a-location";
+                    return (
+                        ActionAck::Unavailable {
+                            reason_key: key.to_owned(),
+                        },
+                        self.say(key),
+                    );
+                }
                 let Some(target) = self.gesture_destination(effect, source) else {
                     return (Self::stale(StaleAction::Generation), Vec::new());
                 };
@@ -206,6 +217,14 @@ impl State {
         std::mem::swap(&mut slot_a.visible, &mut slot_b.visible);
         self.slots.insert(a, slot_b);
         self.slots.insert(b, slot_a);
+        // A results tab's run follows its pane.
+        let (run_a, run_b) = (self.results_runs.remove(&a), self.results_runs.remove(&b));
+        if let Some(r) = run_a {
+            self.results_runs.insert(b, r);
+        }
+        if let Some(r) = run_b {
+            self.results_runs.insert(a, r);
+        }
         for slot in [a, b] {
             if let Some(h) = self.slots.get_mut(&slot) {
                 h.cancel_probe

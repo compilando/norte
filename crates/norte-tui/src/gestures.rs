@@ -693,7 +693,7 @@ pub struct PaneMove {
 /// already there — a redundant `cd` would re-list the other pane and slide
 /// its listing out from under the reader's cursor for nothing.
 ///
-/// "Already there" reads `virtual_search` as well as the directory: a results
+/// "Already there" reads `is_results()` as well as the directory: a results
 /// pane's `dir()` is the ROOT the search walked, which is usually the very
 /// directory the other pane is sitting in, and it is NOT what the reader is
 /// looking at. Comparing the two alone refused the gesture in silence
@@ -709,11 +709,11 @@ pub fn mirror_plan(app: &App) -> Option<PaneMove> {
     // compare itself with itself and do nothing, silently — "pull only works
     // left to right".
     let to = app.target_index()?;
-    if app.panes[from].virtual_search {
+    if app.panes[from].is_results() {
         return None;
     }
     let dir = app.panes[from].dir().clone();
-    (app.panes[to].dir() != &dir || app.panes[to].virtual_search)
+    (app.panes[to].dir() != &dir || app.panes[to].is_results())
         .then_some(PaneMove { pane: to, dir })
 }
 
@@ -800,11 +800,11 @@ pub fn enter_action(app: &App) -> EnterAction {
 pub fn mirror_target_plan(app: &App) -> Option<PaneMove> {
     let from = app.focus();
     let to = app.target_index()?;
-    if app.panes[from].virtual_search {
+    if app.panes[from].is_results() {
         return None;
     }
     let dir = app.panes[from].target_dir().clone();
-    (app.panes[to].dir() != &dir || app.panes[to].virtual_search)
+    (app.panes[to].dir() != &dir || app.panes[to].is_results())
         .then_some(PaneMove { pane: to, dir })
 }
 
@@ -838,14 +838,12 @@ pub fn send_plan(
     let (Some(from), Some(to)) = (index(travel.from), index(travel.to)) else {
         return Err(NOTHING);
     };
-    if app.panes[from].virtual_search {
+    if app.panes[from].is_results() {
         return Err("msg-pane-not-a-location");
     }
     let dir = app.panes[from].dir().clone();
-    Ok(
-        (app.panes[to].dir() != &dir || app.panes[to].virtual_search)
-            .then_some(PaneMove { pane: to, dir }),
-    )
+    Ok((app.panes[to].dir() != &dir || app.panes[to].is_results())
+        .then_some(PaneMove { pane: to, dir }))
 }
 
 /// `pane.pull`: the FOCUSED pane goes where the other one is — the same
@@ -855,11 +853,11 @@ pub fn send_plan(
 pub fn pull_plan(app: &App) -> Option<PaneMove> {
     let to = app.focus();
     let from = app.target_index()?;
-    if app.panes[from].virtual_search {
+    if app.panes[from].is_results() {
         return None;
     }
     let dir = app.panes[from].dir().clone();
-    (app.panes[to].dir() != &dir || app.panes[to].virtual_search)
+    (app.panes[to].dir() != &dir || app.panes[to].is_results())
         .then_some(PaneMove { pane: to, dir })
 }
 
@@ -882,7 +880,7 @@ pub async fn run_pane_gesture(
     origin: usize,
 ) -> Cd {
     let Some(m) = plan else {
-        if app.panes[origin].virtual_search {
+        if app.panes[origin].is_results() {
             app.message = Some(t("msg-pane-not-a-location"));
         } else if app.target_index().is_none() {
             // With three or more panels and none designated, the gesture
@@ -971,6 +969,21 @@ mod pane_gestures_tests {
 
     fn vp(wire: &str) -> VPath {
         VPath::parse(wire).expect("test wire")
+    }
+
+    /// A result set over `root`, as the Alt+F7 dialog would start one.
+    fn results_over(root: &VPath) -> norte_frontend::results::ResultSet {
+        let saved = norte_frontend::results::SavedSearch::from_form(
+            &norte_frontend::search::SearchForm::new(),
+            root.clone(),
+        );
+        norte_frontend::results::ResultSet::new(saved, norte_frontend::results::MAX_HITS)
+    }
+
+    /// Turns `pane` into a results pane over its own dir.
+    fn into_results(pane: &mut Pane) {
+        let root = pane.dir().clone();
+        pane.begin_results(results_over(&root));
     }
 
     /// `App` with each pane on its dir. The panes are built WHOLE
@@ -1214,7 +1227,7 @@ mod pane_gestures_tests {
     #[test]
     fn a_virtual_pane_is_not_a_location() {
         let mut app = app_en("mem:///a", "mem:///b");
-        app.panes[0].virtual_search = true;
+        into_results(&mut app.panes[0]);
         app.set_focus(0);
         assert!(mirror_plan(&app).is_none(), "there is no origin to send");
         app.set_focus(1);
@@ -1227,7 +1240,7 @@ mod pane_gestures_tests {
     #[test]
     fn a_virtual_pane_can_be_a_destination() {
         let mut app = app_en("mem:///a", "mem:///b");
-        app.panes[1].virtual_search = true;
+        into_results(&mut app.panes[1]);
         app.set_focus(0);
         let plan = mirror_plan(&app).expect("a virtual destination does not veto");
         assert_eq!(plan.pane, 1);
@@ -1243,7 +1256,7 @@ mod pane_gestures_tests {
     #[test]
     fn a_virtual_destination_in_the_same_dir_still_has_something_to_do() {
         let mut app = app_en("mem:///a", "mem:///a");
-        app.panes[1].virtual_search = true;
+        into_results(&mut app.panes[1]);
 
         app.set_focus(0);
         let plan = mirror_plan(&app).expect("the virtual destination is not \"already there\"");
@@ -1330,8 +1343,8 @@ mod pane_gestures_tests {
         let mut app = app_en("mem:///b", "mem:///otro");
         app.set_focus(0);
         app.history[0].record(vp("mem:///a")); // the reader reached B from A
-        app.panes[0].begin_search(vp("mem:///b")); // Alt+F7 on B
-        assert!(app.panes[0].virtual_search, "results pane");
+        app.panes[0].begin_results(results_over(&vp("mem:///b"))); // Alt+F7 on B
+        assert!(app.panes[0].is_results(), "results pane");
 
         assert_eq!(
             back_target(&mut app),
@@ -1349,8 +1362,7 @@ mod pane_gestures_tests {
     /// What makes the test above honest, poked at the seam that could break
     /// it: the search's root IS the `dir()` of the pane that launches it. If
     /// the dialog let you type another root, `back_target` would start
-    /// pointing at a place the reader has never been and would have to read
-    /// `SearchRun::prev_dir` instead.
+    /// pointing at a place the reader has never been.
     #[test]
     fn the_search_root_is_the_dir_of_the_pane_that_launches_it() {
         use crossterm::event::{KeyCode, KeyModifiers};
@@ -1361,13 +1373,31 @@ mod pane_gestures_tests {
         dialog.push_char('x'); // with no criteria, Enter does not launch
         app.search_dialog = Some(dialog);
 
-        let params = on_search_dialog_key(&mut app, KeyModifiers::NONE, KeyCode::Enter)
+        let search = on_search_dialog_key(&mut app, KeyModifiers::NONE, KeyCode::Enter)
             .expect("Enter with criteria launches the search");
         assert_eq!(
-            params.root,
+            search.root,
             *app.panes[0].dir(),
             "the walk's root is the focused pane's dir"
         );
+    }
+
+    /// From a results tab, a new `Alt+F7` searches the SAME root again: the
+    /// tab's set says where, not a folder of its own (it has none).
+    #[test]
+    fn from_a_results_tab_the_search_root_is_its_root() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = app_en("mem:///raiz", "mem:///otro");
+        app.set_focus(0);
+        app.panes[0].begin_results(results_over(&vp("mem:///buscado")));
+        let mut dialog = crate::app::SearchDialog::new();
+        dialog.push_char('x');
+        app.search_dialog = Some(dialog);
+
+        let search = on_search_dialog_key(&mut app, KeyModifiers::NONE, KeyCode::Enter)
+            .expect("Enter with criteria launches the search");
+        assert_eq!(search.root, vp("mem:///buscado"));
     }
 
     /// The trail is PER PANE: `back_target` follows focus, not pane 0.
@@ -2528,7 +2558,15 @@ mod send_tests {
             Pane::new(vp("mem:///a"), Vec::new()),
         ));
         assert_eq!(send_plan(&app, Side::Right), Ok(None));
-        app.panes[0].virtual_search = true;
+        let root = vp("mem:///a");
+        let saved = norte_frontend::results::SavedSearch::from_form(
+            &norte_frontend::search::SearchForm::new(),
+            root,
+        );
+        app.panes[0].begin_results(norte_frontend::results::ResultSet::new(
+            saved,
+            norte_frontend::results::MAX_HITS,
+        ));
         assert_eq!(send_plan(&app, Side::Right), Err("msg-pane-not-a-location"));
     }
 }

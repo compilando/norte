@@ -44,6 +44,8 @@ interface Controls {
   inputs: Map<string, HTMLInputElement>;
   buttons: Map<string, HTMLButtonElement>;
   status: HTMLElement;
+  /** "Open as listing": the shown files become a results tab (bridge 119). */
+  openListing: HTMLButtonElement;
   scroll: HTMLElement;
   tree: HTMLUListElement;
   /** The row elements of the window, in order; `first` is the first one's index. */
@@ -181,6 +183,9 @@ function createControls(
         if (e.ctrlKey || e.altKey || e.metaKey) {
           return;
         }
+        if (openListingKey(screen, e, current)) {
+          return;
+        }
         if (e.key === "Enter") {
           // The host searches NOW; the document's handler must not also send
           // the Enter as a key for the listing.
@@ -257,6 +262,13 @@ function createControls(
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
 
+  const openListing = document.createElement("button");
+  openListing.type = "button";
+  openListing.className = "search-open-listing";
+  openListing.addEventListener("click", () => {
+    screen.send({ action: "search_panel_open_listing", slot_id: current().slotId });
+  });
+
   const scroll = document.createElement("div");
   scroll.className = "searchpanel-scroll";
   const tree = document.createElement("ul");
@@ -293,6 +305,9 @@ function createControls(
     if (e.ctrlKey || e.altKey || e.metaKey) {
       return;
     }
+    if (openListingKey(screen, e, current)) {
+      return;
+    }
     if (e.key === "Tab") {
       e.preventDefault();
       e.stopPropagation();
@@ -311,7 +326,7 @@ function createControls(
     screen.send({ action: "search_panel_reroot", slot_id: current().slotId });
   });
 
-  body.append(rootLine, form, fold, filters, status, scroll);
+  body.append(rootLine, form, fold, filters, status, openListing, scroll);
   const c: Controls = {
     ids,
     slotId: slot.slot_id,
@@ -322,6 +337,7 @@ function createControls(
     inputs,
     buttons,
     status,
+    openListing,
     scroll,
     tree,
     rows: [],
@@ -334,6 +350,27 @@ function createControls(
   };
   self.c = c;
   return c;
+}
+
+/**
+ * F9 inside the panel is "Open as listing", the terminal panel's fixed key
+ * (like its F2–F8): kept from the document's handler, which would send it
+ * to the host as the preset's F9. True when it was that key.
+ */
+function openListingKey(
+  screen: Screen,
+  e: KeyboardEvent,
+  current: () => Controls,
+): boolean {
+  if (e.key !== "F9" || e.shiftKey) {
+    return false;
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  if (!current().openListing.disabled) {
+    screen.send({ action: "search_panel_open_listing", slot_id: current().slotId });
+  }
+  return true;
 }
 
 /**
@@ -403,6 +440,11 @@ function paintControls(screen: Screen, c: Controls, slot: SearchPanelSlotView): 
   }
   c.status.dataset["dimmed"] = String(slot.dimmed);
   c.status.dataset["running"] = String(slot.running);
+  const label = slot.open_listing_label ?? "";
+  if (c.openListing.textContent !== label) {
+    c.openListing.textContent = label;
+  }
+  c.openListing.disabled = slot.total_rows === 0;
 }
 
 function paintField(

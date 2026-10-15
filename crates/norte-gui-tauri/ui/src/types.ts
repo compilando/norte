@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 118;
+export const BRIDGE_VERSION = 119;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -265,6 +265,8 @@ export interface BrowserSlotView {
   names_note?: string;
   /** The listing is STILL FILLING, and how many so far. Empty = complete. */
   filling_note?: string;
+  /** A results tab's status sentence (bridge 119). Empty = not a results tab. */
+  results_note?: string;
   /** Marks the last refresh dropped because their entry is no longer there. */
   pruned_note?: string;
   /** How many are marked and how much they weigh, already said. Empty = no marks. */
@@ -479,6 +481,8 @@ export interface SearchPanelSlotView {
   rows: SearchPanelRowView[];
   /** In the numbering of `total_rows`; null with no rows. */
   cursor: number | null;
+  /** The "Open as listing" button's text, translated (bridge 119). */
+  open_listing_label?: string;
 }
 
 /** A row of the search panel's results. `ranges` are `[start, end)` in
@@ -1878,6 +1882,7 @@ export type ViewChange =
       hidden_note: string;
       names_note?: string;
       filling_note?: string;
+      results_note?: string;
       pruned_note?: string;
       marked_note?: string;
       footer?: string;
@@ -2084,6 +2089,7 @@ export type UiAction =
     }
   /** Enter in one of its inputs: searches now. */
   | { action: "search_panel_go"; slot_id: number }
+  | { action: "search_panel_open_listing"; slot_id: number }
   /** The assistant panel (bridge 116). */
   | { action: "assistant_submit"; slot_id: number; text: string }
   | { action: "assistant_apply"; slot_id: number; turn: number }

@@ -581,6 +581,17 @@ impl State {
             .map(|SlotId(id)| id)
             .filter(|id| es_listing(&self.tree, SlotId(*id), &self.kinds))
             .collect();
+        // A results tab that leaves the tree takes its run with it (Review
+        // Focus 1).
+        let gone: Vec<u32> = self
+            .results_runs
+            .keys()
+            .copied()
+            .filter(|id| !new_ids.contains(id))
+            .collect();
+        for id in gone {
+            self.abandon_results(id);
+        }
         self.slots.retain(|id, _| new_ids.contains(id));
         for id in new_ids {
             if let std::collections::btree_map::Entry::Vacant(slot) = self.slots.entry(id) {
@@ -861,7 +872,13 @@ impl State {
     /// from another.
     pub(super) fn tab(&self, slot: SlotId) -> crate::dto::TabView {
         let SlotId(id) = slot;
-        let (title, hostile) = if let Some(h) = self.slots.get(&id) {
+        let (title, hostile) = if let Some(set) = self.slots.get(&id).and_then(|h| {
+            h.pane
+                .results()
+                .map(|set| (set, h.pane.real_entries().len()))
+        }) {
+            norte_frontend::results::tab_title(set.0, set.1, self.lang)
+        } else if let Some(h) = self.slots.get(&id) {
             let dir = h.pane.dir();
             match dir.file_name() {
                 Some(seg) => norte_frontend::display_name(seg.as_bytes()),

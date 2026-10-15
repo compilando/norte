@@ -689,6 +689,11 @@ impl State {
             .map(|f| {
                 let col = &f.id;
                 let text = match col {
+                    // The hit's folder lives in the pane's result set, not
+                    // in the `Entry`: blank outside a results tab.
+                    ColumnId::Builtin(norte_frontend::columns::Builtin::Folder) => {
+                        target_slot.pane.folder_text(e)
+                    }
                     // Plugin ones do not live in the `Entry` but in the
                     // pane's side-map: they are resolved that way.
                     ColumnId::Plugin { plugin, column } => target_slot.pane.plugin_cell(

@@ -518,6 +518,12 @@ pub struct SessionUi {
     /// directory every time they entered and left it, which is ADR 0098's
     /// decision 2 turned backwards.
     seeded: std::collections::BTreeSet<u32>,
+    /// The results tabs a session just restored, waiting for the run loop
+    /// to re-run their query (C7): every one of them, visible or not. A
+    /// results tab has no other content, and left cold it would read as a
+    /// search that found nothing. Drained by
+    /// [`crate::jobs::rerun_restored`] in the turn header.
+    pub rerun: Vec<norte_frontend::layout::SlotId>,
 }
 
 /// Rows `cursor.page-up/down` jumps (fixed until the pane's real height
@@ -1092,6 +1098,11 @@ pub struct App {
     /// operand is the focused directory, whole. The PLUGIN path does not go
     /// through here — the palette already dispatches with `work` in hand.
     pub pending_organize: bool,
+    /// The results tab `pane.refresh` asked to re-run (C2), not launched
+    /// yet. Same split as [`Self::pending_organize`]: dispatch decides WHICH
+    /// tab, the run loop — owner of the per-slot runs — launches the query
+    /// again.
+    pub pending_results_rerun: Option<norte_frontend::layout::SlotId>,
     /// Open sync panel (`Ctrl+Y`, or `s`/`m` inside the compare panel):
     /// `None` = closed. Painted OVER the compare one, which stays alive
     /// behind it with its marks.
@@ -1537,6 +1548,7 @@ impl App {
             pending_compare: None,
             pending_checksum: None,
             pending_organize: false,
+            pending_results_rerun: None,
             pending_dest_check: None,
             sync: None,
             pending_sync: None,
@@ -2028,36 +2040,48 @@ mod tests {
         assert!(d.has_criteria(), "content alone is enough");
     }
 
-    /// `begin_search` marks the pane as virtual, empties the entries and
-    /// resets the state to `Running`; `extend_listing` feeds the hits
-    /// WITHOUT turning off virtual mode (the hits are still from a search).
+    /// A result set over [`root`], as the Alt+F7 dialog starts one.
+    fn results_over_root() -> norte_frontend::results::ResultSet {
+        let saved = norte_frontend::results::SavedSearch::from_form(
+            &norte_frontend::search::SearchForm::new(),
+            root(),
+        );
+        norte_frontend::results::ResultSet::new(saved, norte_frontend::results::MAX_HITS)
+    }
+
+    /// `begin_results` makes the pane a results pane, empties the entries
+    /// and starts the outcome at `Running`; `extend_listing` feeds the hits
+    /// WITHOUT ending the set (the hits are still from a search).
     #[test]
-    fn begin_search_marks_virtual_and_extend_keeps_it() {
+    fn begin_results_marks_results_and_extend_keeps_it() {
         let mut p = pane_con(&["basura"]);
-        p.begin_search(root());
-        assert!(p.virtual_search);
-        assert_eq!(p.search_state, SearchState::Running);
+        p.begin_results(results_over_root());
+        assert!(p.is_results());
+        assert_eq!(
+            p.results().map(norte_frontend::results::ResultSet::outcome),
+            Some(&norte_frontend::search_status::Outcome::Running)
+        );
         assert!(p.entries().is_empty(), "the hits start empty");
         p.extend_listing(vec![file("hit1"), file("hit2")]);
-        assert!(p.virtual_search, "extend does not turn off virtual mode");
+        assert!(p.is_results(), "extend does not end the result set");
         assert_eq!(names(&p), vec!["hit1", "hit2"]);
     }
 
-    /// A NORMAL listing (cd/refresh) turns off search's virtual mode.
+    /// A NORMAL listing (cd/refresh) ends the result set.
     #[test]
-    fn normal_listings_turn_off_virtual_mode() {
+    fn normal_listings_end_the_result_set() {
         let mut p = pane_con(&[]);
-        p.begin_search(root());
-        assert!(p.virtual_search);
+        p.begin_results(results_over_root());
+        assert!(p.is_results());
         p.begin_listing(root(), vec![file("a")], false, None);
-        assert!(!p.virtual_search, "begin_listing turns off virtual");
+        assert!(!p.is_results(), "begin_listing ends the results");
 
-        p.begin_search(root());
+        p.begin_results(results_over_root());
         p.set_listing(root(), vec![file("a")]);
-        assert!(!p.virtual_search, "set_listing turns off virtual");
+        assert!(!p.is_results(), "set_listing ends the results");
 
-        p.begin_search(root());
+        p.begin_results(results_over_root());
         p.refresh_listing(vec![file("a")]);
-        assert!(!p.virtual_search, "refresh_listing turns off virtual");
+        assert!(!p.is_results(), "refresh_listing ends the results");
     }
 }

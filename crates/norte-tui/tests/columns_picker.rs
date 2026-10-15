@@ -53,7 +53,7 @@ fn persistir(dir: &std::path::Path, picked: &norte_frontend::columns_picker::Pic
             SortColumn::Size => Some("size"),
             SortColumn::Mtime => Some("mtime"),
             SortColumn::Extension => Some("extension"),
-            SortColumn::Attr(_) => None,
+            SortColumn::Attr(_) | SortColumn::Folder => None,
         }
         .map(|column| PersistSort {
             column,

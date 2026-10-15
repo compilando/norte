@@ -25,20 +25,18 @@ use crate::navigate::{Cd, cd_in};
 /// over and moves the current directory to the forward branch in one
 /// operation, so a caller cannot peek and then forget to walk.
 ///
-/// Reads `dir()` with NO `virtual_search` veto, unlike the mirror and pull
+/// Reads `dir()` with NO results-tab veto, unlike the mirror and pull
 /// gestures, and on purpose. Those need a location to HAND OVER, and a list
 /// of hits is not one. This one needs the directory to leave BEHIND on the
-/// forward branch, and a results pane has a perfectly good one: its `dir()`
-/// is the root the search walked, which is the pane's own directory at the
-/// moment the reader pressed the search key — `launch_search` stores the very
-/// same value as `SearchRun::prev_dir` to restore on `Esc`, and
-/// `pane_gestures_tests::la_raiz_de_la_busqueda_es_el_dir_del_pane_que_la_lanza`
-/// pins the equivalence at the seam that could break it. So a step back out
-/// of a results pane goes where the reader really was, and the forward branch
-/// keeps the directory they really searched from — as a listing, because the
-/// hits died with the run this step reaps. Vetoing instead would strand the
-/// reader in a results pane, taking away the one key that reads as "get me
-/// out of here and back where I came from".
+/// forward branch, and a results tab has a perfectly good one: its `dir()`
+/// is the root the search walked ([`App::open_results_tab`] builds the tab
+/// over the set's root), which is the folder the reader searched from —
+/// `the_search_root_is_the_dir_of_the_pane_that_launches_it` pins that at
+/// the dialog. So a step back out of a results tab with a trail goes where
+/// that tab really was, and the forward branch keeps the directory searched
+/// from — as a listing, because the hits died with the run this step reaps.
+/// Vetoing instead would take away the one key that reads as "get me out of
+/// here and back where I came from".
 pub fn back_target(app: &mut App) -> Option<VPath> {
     let pane = app.focus();
     let current = app.panes[pane].dir().clone();
