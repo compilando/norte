@@ -164,10 +164,10 @@ impl Role {
     /// It is what preset completeness iterates, and not [`Self::ALL`], for
     /// a concrete reason: the ten CHROME roles are derived in the window's
     /// stylesheet from colors the theme already has, so
-    /// requiring them from every preset would mean eighty invented values — and the
+    /// requiring them from every preset would mean a hundred invented values (ten roles in each of the ten
+    /// presets) — and the
     /// monochrome [`Self::fallback`] is a bad default for them (a
     /// colorless `hover` is not a cautious hover, it is an invisible one).
-    // TODO(translation): review — "eighty" assumes eight presets; there are ten.
     pub const CORE: &'static [Role] = &[
         Role::Background,
         Role::Regular,
@@ -568,9 +568,8 @@ mod tests {
     /// The ten chrome roles are NOT in CORE: they are DERIVED in the window's
     /// stylesheet from colors the theme already has (spec
     /// 2026-09-11, F2), and that is why a preset does not have to define them. Requiring them
-    /// would mean eighty invented values spread across the eight presets that
+    /// would mean a hundred invented values spread across the ten presets that
     /// already exist.
-    // TODO(translation): review — there are ten presets now, not eight.
     #[test]
     fn chrome_roles_stay_out_of_core() {
         for r in [

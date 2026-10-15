@@ -89,8 +89,8 @@ fn ask_secret() -> Modal {
 }
 
 /// Safety pin H1 T2: Enter (`dialog.confirm`) is INERT on an agent
-/// approval — approving an agent mutation is not a
-// TODO(translation): review — source comment was cut off mid-sentence before translation; restore the missing rationale from history if available.
+/// approval — approving an agent mutation is not a reflex action, so only
+/// `dialog.approve` approves (`ALLOW_APPROVAL` excludes confirm).
 #[test]
 fn approval_ignores_confirm() {
     assert_eq!(dialog_action(&approval(), "dialog.confirm"), None);

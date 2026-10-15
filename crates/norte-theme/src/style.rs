@@ -10,10 +10,9 @@ use crate::color::Color;
 // The five attributes are independent terminal flags (bold/dim/
 // italic/underline/reverse): a struct of bools IS the natural representation,
 // not an enum or packed flags.
-// TODO(translation): review — the reason says four attributes; there are five.
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "four independent style attributes, not an enum or packed flags"
+    reason = "five independent style attributes, not an enum or packed flags"
 )]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
