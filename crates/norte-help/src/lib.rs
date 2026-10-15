@@ -49,24 +49,22 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-// Each module is uncommented by ITS OWN task of this phase (see the H3a plan):
-mod check; // task 8
-mod corpus; // task 7
-mod front_matter; // task 3
-mod model; // task 2
-mod parse; // tasks 4 and 5
-mod resolve; // task 9
+mod check; // integrity checks over the corpus, returned as data
+mod corpus; // the embedded pages and their lookups
+mod front_matter; // the TOML header between `+++` fences
+mod model; // topics and blocks, free of any UI type
+mod parse; // markdown-lite parser, trusted and untrusted
+mod resolve; // live command marks, resolved at draw time
 
-// Public re-exports, in the same order; each one uncommented by its task:
 pub use check::{
     Inert, Issue, Mark, Stale, check_commands, check_commands_in, check_contexts,
     check_contexts_in, check_corpus, check_locales,
-}; // task 8
-pub use corpus::{topic, topic_for_command, topic_for_context, topic_ids, topics}; // task 7
-pub use model::{Availability, Block, Callout, CommandRow, Origin, Reason, Span, Topic, TopicId}; // task 2
+};
+pub use corpus::{topic, topic_for_command, topic_for_context, topic_ids, topics};
+pub use model::{Availability, Block, Callout, CommandRow, Origin, Reason, Span, Topic, TopicId};
 pub use norte_i18n::Lang;
 pub use parse::{
     CutAndDecoded, Limits, ParseError, Parsed, cut_and_decode_untrusted, foreign_commands,
     has_broken_front_matter, is_blank_id, parse_trusted, parse_untrusted,
-}; // tasks 4, 5 and 6; H3e adds the wire seam and `is_blank_id`
-pub use resolve::{ChordResolver, CommandText, ResolvedRow, render_command, render_span, rows_of}; // task 9
+};
+pub use resolve::{ChordResolver, CommandText, ResolvedRow, render_command, render_span, rows_of};
