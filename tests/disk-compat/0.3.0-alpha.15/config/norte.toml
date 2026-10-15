@@ -1,0 +1,123 @@
+[[hotlist]]
+name = "Projects"
+path = "file:///home/compat/projects"
+
+[[hotlist]]
+name = "Server"
+path = "sftp://example.invalid/srv/data"
+
+[keymap]
+preset = "vim"
+
+[daemon]
+mode = "embedded"
+socket = "/run/user/1000/norte-compat.sock"
+
+[log]
+dir = "/tmp/norte-compat-logs"
+format = "json"
+retain = 7
+
+[updates]
+check = true
+
+[archive]
+max_decompressed_bytes = 1073741824
+max_entries = 100000
+max_nesting = 2
+rar_delegate = "/usr/bin/7z"
+
+[ai]
+enabled = true
+local_only = false
+rename_provider = "local"
+embed_provider = "local"
+denied_prefixes = ["file:///home/compat/private"]
+
+[ai.providers.local]
+kind = "ollama"
+model = "llama3.2"
+base_url = "http://localhost:11434"
+
+[ai.providers.cloud]
+kind = "anthropic"
+model = "claude-sonnet-4-5"
+
+[ai.providers.compat]
+kind = "openai-compat"
+model = "gpt-compat"
+base_url = "https://llm.example.invalid/v1"
+
+[ui]
+alt_menu = true
+command_bar = true
+confirm_quit = "always"
+date_format = "iso"
+dialog_buttons = false
+diff = ["meld", "%F"]
+diff_detached = true
+dir_indicator = "slash"
+editor = ["zed", "%f"]
+editor_detached = true
+font = "Inter"
+font_size = 14.5
+history_size = 40
+images = "blocks"
+key_bar = false
+lang = "en"
+layout = "compat-wide"
+menu_bar = false
+mono_font = "JetBrains Mono"
+mouse = false
+notice_seconds = 12
+pane_footer = false
+panel_bar = false
+panel_bar_position = "top"
+panel_bar_style = "letters"
+parent_entry = false
+processes_panel = "manual"
+quick_search = "jump"
+reduce_motion = true
+row_stripes = true
+show_hidden = false
+splash = "brief"
+splash_ms = 1500
+status_items = ["tasks", "position", "sort"]
+status_plugins = ["plugin:org.norte.syntect/language"]
+terminal = ["xterm", "-e", "%d"]
+theme = "compat-dusk"
+theme_dark = "nord"
+theme_light = "vscode-light"
+titlebar = "native"
+
+[ui.columns]
+default = ["name", "size", "mtime", "kind", "attr:posix.mode"]
+sort = { column = "mtime", dir = "desc", dirs_first = false }
+
+[[ui.columns.spec]]
+id = "size"
+align = "left"
+format = "si"
+header = "Bytes"
+width = { fixed = 10 }
+
+[[ui.columns.spec]]
+id = "mtime"
+format = "relative"
+width = { min = 8, weight = 2 }
+
+[[ui.columns.spec]]
+id = "name"
+width = "auto"
+
+[ui.columns.scheme.sftp]
+columns = ["name", "size", "mtime"]
+sort = { column = "size", dir = "desc", dirs_first = true }
+
+[[ui.columns.scheme.sftp.spec]]
+id = "size"
+format = "iec"
+align = "right"
+
+[ui.columns.scheme.s3]
+columns = ["name", "size"]

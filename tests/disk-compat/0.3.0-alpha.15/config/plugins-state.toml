@@ -1,0 +1,2 @@
+[plugins]
+"org.norte.syntect" = { approved = true, enabled = true, digest = "99bb372c5f53203815287afaebad369dfd2c39c9b13b7dda35175c7599449cae" }
