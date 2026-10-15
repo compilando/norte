@@ -606,6 +606,10 @@ pub struct Fake {
     /// lives. A `sleep` would work by coincidence; this does not depend on
     /// the clock.
     pub gate_log: Option<Arc<Gate>>,
+    /// Holds every `stat` answer until opened: "the measurements are still
+    /// out" as a fact. `delay_ms` made it a race with the test's own typing,
+    /// which a loaded machine lost (2026-10-15).
+    pub gate_stat: Option<Arc<Gate>>,
 }
 
 impl Fake {
@@ -1629,7 +1633,11 @@ impl HostBackend for Fake {
         });
         let served = Arc::clone(&self.served);
         let pulse = Arc::clone(&self.pulse);
+        let gate = self.gate_stat.clone();
         Box::pin(async move {
+            if let Some(g) = gate {
+                g.wait().await;
+            }
             if delay > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }

@@ -183,9 +183,13 @@ async fn a_read_only_window_refuses_orders_that_write() {
 /// order does not select nor open a dialog over what they are doing now.
 #[tokio::test]
 async fn measurements_that_land_late_run_nothing() {
+    // A gate, not a delay: with `delay_ms` the stats raced the test's own
+    // typing, and on a loaded machine they landed BEFORE the box reopened —
+    // the order ran and the expected sentence never came.
+    let gate = Arc::new(backend_fake::Gate::default());
     let mut f = Fake {
         lazy: true,
-        delay_ms: 300,
+        gate_stat: Some(Arc::clone(&gate)),
         ..Fake::default()
     };
     f.put(
@@ -198,6 +202,8 @@ async fn measurements_that_land_late_run_nothing() {
     typed(&h, ":sel size=1 | trash").await;
     h.dispatch(press("Enter")).await.expect("host alive");
     h.dispatch(ctrl_g()).await.expect("host alive");
+    // The box is open again; only now do the measurements land.
+    gate.open();
     let snap = wait_snapshot(&h, &mut sub, "the stale order is reported", |s| {
         s.status
             .message
