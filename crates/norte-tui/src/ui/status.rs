@@ -9,7 +9,7 @@ use ratatui::widgets::Paragraph;
 use super::HOSTILE_BADGE;
 use super::text::cells;
 use crate::app::{App, Pane};
-use norte_i18n::{t, ta};
+use norte_i18n::t;
 
 /// The status bar's pruned-marks notice (#103), with its indent. The
 /// marking itself no longer lives here: it is the `marks` element of the
@@ -320,49 +320,36 @@ fn compose_line(app: &App, area: Rect) -> Composed {
         format!(" {drag}")
     } else if let Some(msg) = &app.message {
         format!(" {msg}")
-    } else if pane.virtual_search {
-        use crate::app::SearchState;
-        // `Failed` is PERSISTENT (review MINOR-2): after `app.message` is
-        // cleared, the pane keeps painting `search-status-failed` with the
-        // error's category (kept in `search_error`) — a failure never
-        // degrades to "done" on the next key.
-        if pane.search_state == SearchState::Failed {
-            format!(
-                " {}{seq}",
-                ta(
-                    "search-status-failed",
-                    &[("error", pane.search_error.as_deref().unwrap_or(""))],
-                )
-            )
-        } else {
-            let key = match pane.search_state {
-                SearchState::Running => "search-status-running",
-                SearchState::Truncated => "search-status-truncated",
-                SearchState::Cancelled => "search-status-cancelled",
-                // `Failed` was already handled above; `Done` is the rest.
-                SearchState::Done | SearchState::Failed => "search-status-done",
-            };
-            // #81: context for the content match of the hit UNDER THE
-            // CURSOR (line + preview — sanitized at the source by the core;
-            // passed through detail_for_bar as a belt, same criterion as
-            // errors).
-            let hit = pane
-                .entries()
-                .get(pane.cursor())
-                .and_then(|e| pane.search_matches.get(&e.path))
-                .map_or_else(String::new, |m| {
-                    let line = m.line.map_or_else(String::new, |l| format!(":{l}"));
-                    let preview = m.preview.as_deref().map_or_else(String::new, |p| {
-                        format!(" {}", crate::app::detail_for_bar(p))
-                    });
-                    format!("  [{line}{preview}]")
+    } else if let Some(set) = pane.results() {
+        // The shared sentence: `Failed` is PERSISTENT (review MINOR-2), the
+        // outcome keeps the error's category, so a failure never degrades to
+        // "done" on the next key once `app.message` is cleared.
+        // REAL entries: the `..` row is not a hit, and counted it made an
+        // empty search say "1".
+        let sentence =
+            norte_frontend::results::status(set, pane.real_entries().len(), norte_i18n::active());
+        // #81: context for the content match of the hit UNDER THE
+        // CURSOR (line + preview — sanitized at the source by the core;
+        // passed through detail_for_bar as a belt, same criterion as
+        // errors).
+        let hit = pane
+            .entries()
+            .get(pane.cursor())
+            .and_then(|e| set.match_of(&e.path))
+            .map_or_else(String::new, |m| {
+                let line = m.line.map_or_else(String::new, |l| format!(":{l}"));
+                let preview = m.preview.as_deref().map_or_else(String::new, |p| {
+                    format!(" {}", crate::app::detail_for_bar(p))
                 });
-            format!(
-                " {}{hit}{seq}",
-                // REAL entries: the `..` row is not a hit, and counted it
-                // made an empty search say "1".
-                ta(key, &[("n", &pane.real_entries().len().to_string())])
-            )
+                format!("  [{line}{preview}]")
+            });
+        if matches!(
+            set.outcome(),
+            norte_frontend::search_status::Outcome::Failed(_)
+        ) {
+            format!(" {sentence}{seq}")
+        } else {
+            format!(" {sentence}{hit}{seq}")
         }
     } else if let Some(lua) = &app.lua_status {
         format!(" {lua}{seq}")

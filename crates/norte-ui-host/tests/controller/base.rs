@@ -897,6 +897,7 @@ pub(super) fn session_saved(
             show_hidden: false,
             touched_ms: 0,
             marks: Vec::new(),
+            results: None,
         },
     );
     norte_proto::methods::Session {
@@ -904,6 +905,42 @@ pub(super) fn session_saved(
         revision,
         body: serde_json::to_value(&body).expect("json"),
     }
+}
+
+/// A LOOSE window asks for the session again on its own and writes once it
+/// is free (#234), as the terminal does. The window never asked: after a
+/// daemon handover — the new daemon's session belongs to nobody — it kept
+/// "session not saved" forever, and a restart reopened the folders from
+/// before (found by the #261 harness, 2026-10-15).
+#[tokio::test(start_paused = true)]
+async fn a_loose_window_claims_the_session_once_it_is_free() {
+    let mut fake = Fake::default();
+    fake.put("mem:///casa", vec![(b"a".to_vec(), false)]);
+    *fake.session.lock().expect("session") = (session_saved(1, 7, 1, "mem:///casa"), false);
+    let fake = Arc::new(fake);
+    let (_h, _snap) = host_tree(Arc::clone(&fake)).await;
+    for _ in 0..5 {
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        fake.placed.lock().expect("puestas").is_empty(),
+        "loose: it does not write"
+    );
+    // The owner went away: the session is free for whoever asks.
+    fake.session.lock().expect("session").1 = true;
+    let mut wrote = false;
+    for _ in 0..40 {
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+        if !fake.placed.lock().expect("puestas").is_empty() {
+            wrote = true;
+            break;
+        }
+    }
+    assert!(wrote, "it asked again, got the session and wrote");
 }
 
 /// The session says where each slot was, and the host starts there.
@@ -1363,6 +1400,7 @@ async fn closing_the_window_does_not_touch_the_tuis_layout_or_slots() {
             )
             .unwrap_or(0),
             marks: Vec::new(),
+            results: None,
         },
     );
 

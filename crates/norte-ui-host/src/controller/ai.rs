@@ -271,6 +271,11 @@ impl State {
             // request it.
             return Self::no_mutates();
         }
+        // A results tab's names live in many folders and its `dir()` is the
+        // root: a plan over bare names would rename the root's namesakes.
+        if let Some(refused) = self.refuse_in_results_tab() {
+            return refused;
+        }
         let names: Vec<String> = self
             .slot()
             .pane

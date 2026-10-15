@@ -100,6 +100,14 @@ impl State {
             return self.activate_place_at_cursor(backend, mailbox);
         }
         let slot = self.active();
+        if let Some(key) = self.refuses_in_results(&effect) {
+            return (
+                ActionAck::Unavailable {
+                    reason_key: key.to_owned(),
+                },
+                self.say(key),
+            );
+        }
         match effect {
             Effect::Cursor(_)
             | Effect::Page(_)

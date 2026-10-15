@@ -322,7 +322,16 @@ pub(crate) fn pane_columns(
     let wants = pane
         .name_width_p80()
         .saturating_add(u16::try_from(ahead).unwrap_or(u16::MAX));
-    norte_frontend::columns::fitted_columns(settings, pane.dir().scheme(), inner_w, wants, catalog)
+    norte_frontend::columns::fitted_columns(
+        settings,
+        pane.dir().scheme(),
+        // A results tab lists hits from many folders: the Folder column
+        // says which one, relative to the search root.
+        pane.is_results(),
+        inner_w,
+        wants,
+        catalog,
+    )
 }
 
 /// The pane's border title: where it is, what is happening to it and where
@@ -347,7 +356,12 @@ fn pane_title(
     busy: Option<&norte_frontend::busy::Busy>,
     width: u16,
 ) -> String {
-    let (path, title_hostile) = norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
+    // A results tab has no folder of its own (C1): its location is what was
+    // searched where, masked like a path and marked the same way.
+    let (path, title_hostile) = match pane.results() {
+        Some(set) => norte_frontend::results::location(set, norte_i18n::active()),
+        None => norte_frontend::path_display_with(pane.dir(), pane.name_encoding()),
+    };
     // The marks around the path are collected apart so that the PATH is
     // what gets cut — from the left, keeping the folder you are in.
     let mut marks = String::new();
@@ -848,6 +862,13 @@ pub(crate) fn entry_item<'a>(
             let cell = match col {
                 norte_frontend::columns::ColumnId::Plugin { .. } => plugin_cells
                     .and_then(|p| p.plugin_cell(&col.to_string(), &entry.path))
+                    .unwrap_or_default(),
+                // The hit's folder lives in the pane's result set, and is
+                // blank outside a results tab.
+                norte_frontend::columns::ColumnId::Builtin(
+                    norte_frontend::columns::Builtin::Folder,
+                ) => plugin_cells
+                    .and_then(|p| p.state().folder_text(entry))
                     .unwrap_or_default(),
                 _ => norte_frontend::columns::styled_cell(entry, col, now_ms, style)
                     .unwrap_or_default(),

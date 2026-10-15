@@ -548,14 +548,20 @@ pub async fn dispatch(
         }
         // #106: Ctrl+R — manual reload. Reuses the post-mutation refresh
         // (cancelable rule 3; marks survive via refill with VISIBLE pruning,
-        // cursor by index; the virtual search pane is skipped — its hits do
-        // not live in a dir). Both panes, as after one of our own tasks: an
+        // cursor by index). Both panes, as after one of our own tasks: an
         // external change rarely respects focus.
+        // C2: on a results tab, refreshing re-runs the SAME query — its hits
+        // do not live in a dir. The run loop owns the runs, so it is left
+        // requested (`pending_results_rerun`) and launched in the turn
+        // header; the other panes still refresh as usual.
         // #118: the outcome TRAVELS to the run loop (`Cd::Refreshed`) —
         // dispatch does not see `fill`/`last_probed`, and without the ritual
         // a live paginated drainer would duplicate rows over the freshly
         // completed listing.
         Command::PaneRefresh => {
+            if app.focused().is_results() {
+                app.pending_results_rerun = Some(app.focused_slot());
+            }
             cd_outcome = Cd::Refreshed(refresh_panes(app, backend, events).await);
         }
         // Insert/Ctrl+A/Ctrl+Shift+A/`*` (#103): mc/Total Commander —
@@ -616,7 +622,7 @@ pub async fn dispatch(
         // VIRTUAL pane there is no visible destination directory (review
         // MINOR-2: `dir()` is the walk's root, not what is painted).
         Command::PaneMkdir => {
-            if app.focused().virtual_search {
+            if app.focused().is_results() {
                 app.message = Some(t("msg-mkdir-in-search"));
             } else {
                 app.open_mkdir();
@@ -627,7 +633,7 @@ pub async fn dispatch(
         // as `PaneMkdir`). The prompt's keys and the request live in the
         // run loop (Tier-A interception + `AiRenameRun`).
         Command::PaneAiRename => {
-            if app.focused().virtual_search {
+            if app.focused().is_results() {
                 app.message = Some(t("msg-ai-rename-in-search"));
             } else {
                 app.open_ai_rename();
@@ -640,7 +646,7 @@ pub async fn dispatch(
         // same place as an `organizer` plugin's, and is reviewed the same
         // way.
         Command::PaneOrganize => {
-            if app.focused().virtual_search {
+            if app.focused().is_results() {
                 app.message = Some(t("msg-ai-rename-in-search"));
             } else {
                 app.pending_organize = true;
@@ -652,7 +658,7 @@ pub async fn dispatch(
         // prompt's keys and the request live in the run loop (Tier-A
         // interception + `SemanticRun`).
         Command::PaneSemanticSearch => {
-            if app.focused().virtual_search {
+            if app.focused().is_results() {
                 app.message = Some(t("msg-semantic-in-search"));
             } else {
                 app.open_semantic_search();

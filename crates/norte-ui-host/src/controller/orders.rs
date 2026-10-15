@@ -161,6 +161,17 @@ impl State {
             Step::Copy { to } => self.confirm_transfer(to, false, backend, mailbox),
             Step::Move { to } => self.confirm_transfer(to, true, backend, mailbox),
             Step::Trash => self.request_deleted(false),
+            // Resolved against `here`, which in a results tab is only the
+            // search's root (C6): refused like F7 there.
+            Step::Mkdir { .. } if self.slot().pane.is_results() => {
+                let key = "host-results-not-a-location";
+                (
+                    ActionAck::Unavailable {
+                        reason_key: key.to_owned(),
+                    },
+                    self.say(key),
+                )
+            }
             Step::Mkdir { path } => {
                 Self::order_mkdir(path, backend, mailbox);
                 (self.applied(), Vec::new())

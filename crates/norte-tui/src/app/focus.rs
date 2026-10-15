@@ -147,6 +147,53 @@ impl App {
         self.prune_by_tree();
     }
 
+    /// A new tab next to the focused listing showing `set`, focused.
+    ///
+    /// The tab's `dir()` is the search root (C1: the hits are its entries,
+    /// and it has no folder of its own); the run that feeds it is filed
+    /// under the returned slot by the caller
+    /// ([`crate::jobs::launch_results`]).
+    pub fn open_results_tab(
+        &mut self,
+        set: norte_frontend::results::ResultSet,
+        entries: Vec<norte_proto::Entry>,
+    ) -> norte_frontend::layout::SlotId {
+        let mut pane = self.new_pane(set.root().clone(), vec![]);
+        pane.begin_results_with(set, entries);
+        self.insert_focused_tab(pane)
+    }
+
+    /// A new, EMPTY folder tab at `dir` next to the focused listing,
+    /// focused. Its listing arrives through the caller's ordinary `cd` of
+    /// the focused pane (C10: Enter on a hit opens its folder here).
+    pub fn tab_new_at(&mut self, dir: VPath) -> norte_frontend::layout::SlotId {
+        let pane = self.new_pane(dir, vec![]);
+        self.insert_focused_tab(pane)
+    }
+
+    /// Files `pane` under a fresh slot as a tab right after the focused
+    /// one, makes it the active tab and hands it the keyboard.
+    fn insert_focused_tab(&mut self, pane: Pane) -> norte_frontend::layout::SlotId {
+        let focus = self.focused_slot();
+        let id = self.mint_slot();
+        self.panes.insert_browser(id, pane);
+        self.layout = self.layout.add_tab(
+            focus,
+            &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),
+        );
+        // `add_tab` already leaves it active; said again so the focus does
+        // not depend on that detail of the tree.
+        if let Some((tabs, _)) = self.layout.tabs_of(id)
+            && let Some(i) = tabs.iter().position(|s| *s == id)
+        {
+            self.layout = self.layout.set_active_for(id, i);
+        }
+        self.panes.refresh_visible(&self.layout);
+        self.prune_by_tree();
+        self.settle_key_owner();
+        id
+    }
+
     /// Closes the focused tab. No effect if the pane isn't in a group.
     pub fn tab_close(&mut self) {
         let focus = self.focused_slot();

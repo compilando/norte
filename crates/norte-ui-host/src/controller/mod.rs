@@ -67,6 +67,7 @@ mod patches;
 mod places;
 mod preview;
 mod profiles;
+mod results;
 mod search;
 mod searchpanel;
 mod selectors;
@@ -1227,19 +1228,26 @@ enum Background {
     /// about a search that does not exist, while the error passed through
     /// the status bar and the next key swept it away.
     SearchBroken(u64, Box<Error>),
-    /// A batch of the search panel's run `run` — the HOST-WIDE run id
-    /// (`searchpanel::PanelRunHost::run`), not the model's epoch, which
-    /// starts over with every panel.
-    SearchPanelHits(u64, Box<norte_proto::methods::SearchHits>),
-    /// The search panel's run `run` has a Task: this is its id. Arrives
-    /// right after its `TaskNew`, so the row is on the board by then.
-    SearchPanelLive(u64, norte_proto::TaskId),
-    /// The search panel's run `run` never got queued, and why.
-    SearchPanelBroken(u64, Box<Error>),
-    /// The search panel's run `run` sent its last batch: how its Task
-    /// stood when the channel closed. Through the forwarder and not the
-    /// board's progress, so it lands AFTER the run's last batch.
-    SearchPanelEnded(u64, Box<norte_proto::TaskState>),
+    /// A batch of the run `run` — the HOST-WIDE run id
+    /// (`searchpanel::next_run_id`), not the panel model's epoch, which
+    /// starts over with every panel. A run belongs to the search panel or,
+    /// once handed over or launched for one, to a results tab
+    /// (`results::ResultsRun`): one forwarder, one identity, so a run
+    /// handed over keeps its messages.
+    SearchRunHits(u64, Box<norte_proto::methods::SearchHits>),
+    /// The run `run` has a Task: this is its id. Arrives right after its
+    /// `TaskNew`, so the row is on the board by then.
+    SearchRunLive(u64, norte_proto::TaskId),
+    /// The run `run` never got queued, and why.
+    SearchRunBroken(u64, Box<Error>),
+    /// The run `run` sent its last batch: how its Task stood when the
+    /// channel closed. Through the forwarder and not the board's progress,
+    /// so it lands AFTER the run's last batch.
+    SearchRunEnded(u64, Box<norte_proto::TaskState>),
+    /// The hits of results tab `slot` that a mutation removed, found by the
+    /// stats it asked for after the mutation ended
+    /// (`results::recheck_results`).
+    ResultsGone(u32, Vec<VPath>),
     /// The volumes, requested by the SIDE PANEL.
     ///
     /// Separate from the selector's for the same reason as the two plugin
@@ -1698,6 +1706,7 @@ async fn actor(
                 }
             }
             Message::SessionTic => {
+                state.ask_session_if_loose(&backend, &mailbox);
                 state.push_session(&backend, &mailbox);
                 // And one more second for the status bar's notice (spec
                 // 2026-09-10).
@@ -2966,6 +2975,8 @@ struct State {
     /// The search panel's slot and state, while one is open: the SAME model
     /// as the terminal's, and the run in flight.
     search_panel: Option<(u32, searchpanel::PanelState)>,
+    /// The runs feeding results tabs, by slot (spec 2026-10-10).
+    results_runs: std::collections::BTreeMap<u32, results::ResultsRun>,
     /// The ring the lines come from. `None` = this process did not mount it,
     /// and then the panel SAYS so instead of showing itself empty as if
     /// nothing had happened.
@@ -3518,6 +3529,7 @@ impl State {
             cursor_processes: norte_frontend::processes::Processes::default(),
             log_panel: norte_frontend::logpanel::LogPanel::default(),
             search_panel: None,
+            results_runs: std::collections::BTreeMap::new(),
             log_ring,
             // One until the first frame tells the truth: never zero, so a
             // page keypress before painting moves something instead of
@@ -3851,11 +3863,23 @@ impl State {
         mailbox: &mpsc::Sender<Message>,
     ) {
         let backend = backend_arc.as_ref();
+        // A restored results tab re-runs its search, visible or not (C7): it
+        // has no other content, and one left cold would read as a search
+        // that found nothing. It is never listed.
+        let results: Vec<u32> = self
+            .slots
+            .iter()
+            .filter(|(_, h)| h.pane.is_results())
+            .map(|(id, _)| *id)
+            .collect();
+        for id in results {
+            self.launch_results(id, backend_arc, mailbox);
+        }
         let visible: Vec<u32> = self
             .slots
-            .keys()
-            .copied()
-            .filter(|id| !self.hidden(*id))
+            .iter()
+            .filter(|(id, h)| !self.hidden(**id) && !h.pane.is_results())
+            .map(|(id, _)| *id)
             .collect();
         for id in visible {
             let dir = self.slots[&id].pane.dir().clone();
@@ -4354,6 +4378,7 @@ impl State {
             | UiAction::AssistantCancel { .. } => self.assistant_action(action, backend, mailbox),
             UiAction::SearchPanelEdit { .. }
             | UiAction::SearchPanelGo { .. }
+            | UiAction::SearchPanelOpenListing { .. }
             | UiAction::SearchPanelReroot { .. }
             | UiAction::SearchPanelFilters { .. }
             | UiAction::SearchPanelActivate { .. }

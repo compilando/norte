@@ -3,11 +3,11 @@ source: crates/norte-tui/tests/snapshots_ui.rs
 expression: render(&app)
 ---
 " Archivo Operar Marcar Ir Paneles Pestañas Buscar Ver Herramientas Ayuda        "
-" ★ ┌/casa───────────────────────────────┐┌/otro────────────────────────────────┐"
-" ◉ │Nombre▲           Tamaño       Fecha││Nombre▲            Tamaño       Fecha│"
-" ∿ │   año.txt          88 B            ││   cosa               1 B            │"
-" ⓘ │   main.rs         120 B            ││                                     │"
-" ⋔ │                                    ││                                     │"
+" ★ ┌búsqueda «*.rs» en /casa────────────┐┌/otro────────────────────────────────┐"
+" ◉ │ casa  🔍 *.rs (2) [+][x]           ││Nombre▲            Tamaño       Fecha│" Hidden by multi-width symbols: [(12, " ")]
+" ∿ │Nombre▲       Carpeta         Tamaño││   cosa               1 B            │"
+" ⓘ │   año.txt    docs              88 B││                                     │"
+" ⋔ │   main.rs    src              120 B││                                     │"
 " ≡ │                                    ││                                     │"
 " ◔ │                                    ││                                     │"
 " ◷ │                                    ││                                     │"

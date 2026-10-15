@@ -118,7 +118,15 @@ pub async fn on_dialog_key(
                     on_collision: policy,
                     ..retry.opts
                 };
-                submit_transfer(app, backend, retry.kind, retry.from, retry.to, opts).await;
+                let (kind, from) = (retry.kind, retry.from.clone());
+                if submit_transfer(app, backend, kind, retry.from, retry.to, opts).await
+                    && kind == TransferKind::Move
+                {
+                    // The first attempt's expectation may have settled
+                    // already (its path was still there): an overwrite or
+                    // rename retry does move it now (C11).
+                    expect_gone_from_results(app, from);
+                }
             }
             app.open_next_pending();
         }
@@ -379,9 +387,27 @@ pub async fn submit_transfers(
     opts: TransferOptions,
 ) {
     for (from, dest) in transfer_dests(items, to) {
-        let _submitted = submit_transfer(app, backend, kind, from, dest, opts).await;
+        let submitted = submit_transfer(app, backend, kind, from.clone(), dest, opts).await;
+        if submitted && kind == TransferKind::Move {
+            expect_gone_from_results(app, from);
+        }
     }
     app.consume_marks();
+}
+
+/// C11: a move, delete or rename SUBMITTED from a results tab records its
+/// source there ([`norte_frontend::results::ResultSet::expect`]), so the
+/// refresh that fires when the task finishes checks it and takes the hit
+/// out if it left ([`crate::refresh::recheck_results`]). Only the source,
+/// also for a rename: the renamed file may no longer match the query, so it
+/// leaves the tab like a moved one.
+///
+/// The source pane is the FOCUSED one — the one whose marks the submit
+/// consumes. A focused folder tab records nothing.
+pub fn expect_gone_from_results(app: &mut App, path: VPath) {
+    if let Some(set) = app.focused_mut().results_mut() {
+        set.expect([path]);
+    }
 }
 
 /// Sends the delete batch: ONE task PER ITEM, same criterion as
@@ -399,6 +425,7 @@ pub async fn submit_deletes(app: &mut App, backend: &Backend, items: &[VPath], p
             Ok(task) => {
                 app.board
                     .push_full(&task, None, (!permanent).then(|| target.clone()));
+                expect_gone_from_results(app, target.clone());
             }
             Err(e) => app.message = Some(error_message(&e)),
         }
@@ -464,6 +491,12 @@ pub async fn unpack(app: &mut App, backend: &Backend) {
     // gate was left inert exactly where there are more spots to point at by
     // mistake.
     let other = app.split_dest_pane();
+    // A results tab is not a location (C5): unpacking "into" it would write
+    // into its search root.
+    if app.panes[other].is_results() {
+        app.message = Some(t("msg-pane-not-a-location"));
+        return;
+    }
     if app.pane_read_only(other) {
         app.message = Some(t("msg-pack-read-only"));
         return;
@@ -684,7 +717,14 @@ pub async fn combine_pieces(app: &mut App, backend: &Backend) {
         app.message = Some(t("msg-combine-needs-first"));
         return;
     };
-    let dest = app.focused().dir().join(seg);
+    // Next to the pieces: in a folder that is the pane's directory, in a
+    // results tab the hit's own folder (the tab's `dir()` is only the
+    // search root).
+    let dest = entry
+        .path
+        .parent()
+        .unwrap_or_else(|| app.focused().dir().clone())
+        .join(seg);
     match backend
         .combine_files(norte_proto::methods::FileCombineParams {
             first: entry.path,

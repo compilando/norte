@@ -196,7 +196,7 @@ pub fn settle_cd(
     fill: &mut BySlot<Fill>,
     decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,
-    search_run: &mut Option<SearchRun>,
+    search_runs: &mut BySlot<SearchRun>,
     outcome: Cd,
 ) {
     // A mirror is TWO navigations that landed: each settles fully — sort,
@@ -214,7 +214,7 @@ pub fn settle_cd(
             fill,
             decorate_fetch,
             last_probed,
-            search_run,
+            search_runs,
             *reader,
         );
         settle_cd(
@@ -223,7 +223,7 @@ pub fn settle_cd(
             fill,
             decorate_fetch,
             last_probed,
-            search_run,
+            search_runs,
             *the_mirror,
         );
         return;
@@ -253,7 +253,7 @@ pub fn settle_cd(
         fill,
         decorate_fetch,
         last_probed,
-        search_run,
+        search_runs,
         outcome,
     );
 }
@@ -270,16 +270,16 @@ pub fn settle_cd(
 /// The slot is PER PANE ([`Fill`]): a cd on one pane never strangles the
 /// other's fill.
 ///
-/// `search_run` travels all the way here ONLY for the `Swapped` arm
-/// ([`reconcile_swap`]): it is also indexed by pane, and crossing it has to
-/// happen before the `reap_search_run` these same call sites do right
+/// `search_runs` travels all the way here ONLY for the `Swapped` arm
+/// ([`reconcile_swap`]): it is also filed by slot, and crossing it has to
+/// happen before the `reap_search_runs` these same call sites do right
 /// after.
 pub fn apply_cd(
     panes: &crate::panel::PaneSlots,
     fill: &mut BySlot<Fill>,
     decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,
-    search_run: &mut Option<SearchRun>,
+    search_runs: &mut BySlot<SearchRun>,
     outcome: Cd,
 ) {
     match outcome {
@@ -301,8 +301,8 @@ pub fn apply_cd(
         Cd::Failed(..) | Cd::Cancelled | Cd::Suspended => {}
         // #118: Ctrl+R from `dispatch` — same semantics as the other
         // triggers' ritual (`after_panes_refresh`), a single body.
-        // `reap_search_run` is not needed here: `refresh_panes` SKIPS
-        // virtual panes (never pulls them out of the mode), so there is no
+        // `reap_search_runs` is not needed here: `refresh_panes` SKIPS
+        // results panes (never turns them into folders), so there is no
         // search run to harvest through this path.
         Cd::Refreshed(refreshed) => release_refreshed_fill(panes, &refreshed, fill, last_probed),
         // `pane.swap`: `App::swap_panes` already crossed the panes and their
@@ -313,7 +313,7 @@ pub fn apply_cd(
             fill,
             decorate_fetch,
             last_probed,
-            search_run,
+            search_runs,
         ),
         // Both, each against ITS OWN pane. The order does not matter: they
         // are different panes, and the fill slots are indexed by pane.
@@ -326,7 +326,7 @@ pub fn apply_cd(
                 fill,
                 decorate_fetch,
                 last_probed,
-                search_run,
+                search_runs,
                 *reader,
             );
             apply_cd(
@@ -334,7 +334,7 @@ pub fn apply_cd(
                 fill,
                 decorate_fetch,
                 last_probed,
-                search_run,
+                search_runs,
                 *the_mirror,
             );
         }
@@ -368,24 +368,20 @@ pub fn reconcile_swap(
     fill: &mut BySlot<Fill>,
     decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,
-    search_run: &mut Option<SearchRun>,
+    search_runs: &mut BySlot<SearchRun>,
 ) {
     // Swapping panels moves the CONTENT between slots and leaves the ids
     // where they were, so the work in flight has to travel with its
     // listing. Crossing the ids IN THE TREE instead of the content would
     // make this whole reconciliation unnecessary — noted in P6's plan.
     fill.swap(slot_a, slot_b);
-    // The LIVE search stores its virtual pane the way the fill stored its
-    // own, and this is where it HAS to flip: the same call site harvests
-    // with `reap_search_run` right after `apply_cd`, and that harvest looks
-    // at `panes[s.pane].virtual_search` — with the index not flipped it sees
-    // the ordinary listing that just arrived from the other side and
-    // silently cancels the Task, leaving the other pane with half-done hits
-    // stuck in `Running` forever. There is at most ONE run (there is one
-    // virtual pane), so flipping its index is the whole crossing it needs.
-    if let Some(s) = search_run.as_mut() {
-        s.pane ^= 1;
-    }
+    // A results tab's run is filed by slot like the fill, so it crosses the
+    // same way. It HAS to cross here: the same call site harvests with
+    // `reap_search_runs` right after `apply_cd`, and with the run left
+    // behind that harvest finds the folder that just arrived from the other
+    // side under the run's slot and cancels a search the reader is still
+    // watching.
+    search_runs.swap(slot_a, slot_b);
     // Each slot carries its `dir` as an anti-stale guard, so crossing them
     // is enough: the fetch still corresponds to the listing that is now on
     // the other side.
@@ -642,7 +638,7 @@ pub async fn cd_in(
         && let Some(dest) = norte_frontend::nav::mirrored_destination(
             app.panes[pane].dir(),
             app.panes[other].dir(),
-            app.panes[other].virtual_search,
+            app.panes[other].is_results(),
         )
     {
         // `Box::pin` because it is recursion in an `async fn`. A single
@@ -878,9 +874,8 @@ pub async fn provide_secret_retry(
 }
 
 /// Enter over a semantic modal hit (M4-IA-2): cd to the hit's PARENT and
-/// leaves the cursor over it by path (a mold of
-/// [`crate::jobs::on_search_enter`]; if it landed on a page not yet
-/// drained, the cursor stays at the top, v1). Returns the `Cd` for the
+/// leaves the cursor over it by path (the old `Alt+F7` Enter's mold; if it
+/// landed on a page not yet drained, the cursor stays at the top, v1). Returns the `Cd` for the
 /// caller to apply (`apply_cd` + decorate); `Cd::Cancelled` = nothing to
 /// navigate (defensively empty hits or a root hit with no parent).
 pub async fn semantic_hit_cd(

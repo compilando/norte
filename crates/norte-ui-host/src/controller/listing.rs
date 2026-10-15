@@ -506,6 +506,10 @@ impl State {
         if remains_work {
             return Vec::new();
         }
+        // A results tab is not re-listed: it stats the hits a mutation was
+        // expected to remove (C11), when the folder stops moving, like the
+        // re-list below.
+        self.recheck_results(&affected, backend, mailbox);
         // Consumed: neither this one nor its already-finished siblings ask
         // for it again.
         for t in self.tasks.values_mut() {
@@ -517,7 +521,8 @@ impl State {
             .slots
             .iter()
             .filter(|(_, h)| {
-                affected.contains(h.dir_requested.as_ref().unwrap_or_else(|| h.pane.dir()))
+                !h.pane.is_results()
+                    && affected.contains(h.dir_requested.as_ref().unwrap_or_else(|| h.pane.dir()))
             })
             .map(|(id, _)| (*id, self.hidden(*id)))
             .collect();
@@ -578,7 +583,10 @@ impl State {
         let Some(target_slot) = self.slots.get_mut(&slot) else {
             return Vec::new();
         };
-        if target_slot.in_flight.is_some() {
+        // A results tab has no directory to re-list: its `dir()` is the
+        // search's root, and listing it would turn the tab into that folder.
+        // `pane.refresh` re-runs its search instead (`rerun_visible_results`).
+        if target_slot.in_flight.is_some() || target_slot.pane.is_results() {
             return Vec::new();
         }
         if let Some(sel) = target_slot.pane.selected().map(|e| e.path.clone()) {
@@ -626,12 +634,14 @@ impl State {
         for slot in slots {
             changes.extend(self.refresh(slot, backend, mailbox));
         }
-        if changes.is_empty() {
-            // Everyone had something in flight: what is about to land is
-            // newer than this key, so there is nothing to say or to paint.
-            return (self.applied(), Vec::new());
+        // A results tab re-runs its search (C2).
+        let mut outgoing = self.rerun_visible_results(backend, mailbox);
+        if !changes.is_empty() {
+            outgoing.insert(0, self.parche(changes));
         }
-        (self.applied(), vec![self.parche(changes)])
+        // Empty: everyone had something in flight, and what is about to
+        // land is newer than this key, so there is nothing to say or paint.
+        (self.applied(), outgoing)
     }
 
     /// Sets aside — or brings back — the active pane's hidden entries (#107).

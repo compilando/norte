@@ -89,12 +89,13 @@ pub fn release_refreshed_fill(
 }
 
 /// Applies a pagination drainer's message (ADR 0017) to the pane. If the pane
-/// switched to virtual search mode (Alt+F7 over a dir still paginating,
-/// review MAJOR T6), the fill became STALE — `begin_search` emptied the
-/// entries — and its drainer would feed the REAL listing as if they were hits
-/// (the search's own root sneaking in among the results): the fill is
-/// released and the batch is DISCARDED. A belt symmetric to `drain_search`'s
-/// drain-guard; the suspender is releasing the fill in `launch_search`.
+/// became a results listing (a re-run into a slot that was still
+/// paginating, review MAJOR T6), the fill became STALE — `begin_results`
+/// emptied the entries — and its drainer would feed the REAL listing as if
+/// they were hits (the search's own root sneaking in among the results): the
+/// fill is released and the batch is DISCARDED. A belt symmetric to
+/// `drain_search`'s drain-guard (a results tab opened by `Alt+F7` is a new
+/// slot, so it never had a fill of its own).
 pub fn apply_fill_msg(app: &mut App, fill: &mut BySlot<Fill>, slot: SlotId, msg: Option<FillMsg>) {
     // The batch goes to ITS slot, not to a position. If that slot no longer
     // exists — the pane was closed, the tab was closed — the batch is
@@ -104,7 +105,7 @@ pub fn apply_fill_msg(app: &mut App, fill: &mut BySlot<Fill>, slot: SlotId, msg:
         fill.remove(slot);
         return;
     };
-    if pane.virtual_search {
+    if pane.is_results() {
         fill.remove(slot);
         return;
     }
@@ -201,7 +202,7 @@ mod search_fill_tests {
     }
 
     /// review MAJOR T6: a large dir still PAGINATING (live fill) + `Alt+F7`
-    /// on that pane → `begin_search` marks it virtual and empties it; a LATER
+    /// on that pane → `begin_results` marks it virtual and empties it; a LATER
     /// batch from the REAL listing's drainer must never enter the virtual
     /// pane (it would sneak in as a hit — the search's own root among the
     /// results).
@@ -217,7 +218,14 @@ mod search_fill_tests {
         let mut fill: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
         fill.insert(crate::panel::SLOT_LEFT, Fill { rx });
         // Alt+F7 on pane 0: switches to virtual and empties it.
-        app.panes[0].begin_search(root.clone());
+        let saved = norte_frontend::results::SavedSearch::from_form(
+            &norte_frontend::search::SearchForm::new(),
+            root.clone(),
+        );
+        app.panes[0].begin_results(norte_frontend::results::ResultSet::new(
+            saved,
+            norte_frontend::results::MAX_HITS,
+        ));
         // A batch from the REAL listing's drainer arrives.
         apply_fill_msg(
             &mut app,
@@ -236,7 +244,7 @@ mod search_fill_tests {
             fill.get(crate::panel::SLOT_LEFT).is_none(),
             "the stale fill is released"
         );
-        assert!(app.panes[0].virtual_search, "the pane stays in search mode");
+        assert!(app.panes[0].is_results(), "the pane stays in search mode");
     }
 
     /// A batch that arrives for a slot that NO LONGER EXISTS is dropped.

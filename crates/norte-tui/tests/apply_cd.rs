@@ -49,7 +49,7 @@ fn a_mirror_archives_both_fills() {
     let mut f = BySlot::new();
     let mut lp = Probed::new();
     let mut df: BySlot<DecorateFetch> = BySlot::new();
-    let mut sr: Option<SearchRun> = None;
+    let mut sr = BySlot::<SearchRun>::new();
     apply_cd(
         &panes(),
         &mut f,
@@ -84,7 +84,7 @@ fn in_a_mirror_each_half_archives_on_its_own() {
     let mut f = en_el_pane_0();
     let mut lp = Probed::new();
     let mut df: BySlot<DecorateFetch> = BySlot::new();
-    let mut sr: Option<SearchRun> = None;
+    let mut sr = BySlot::<SearchRun>::new();
     apply_cd(
         &panes(),
         &mut f,
@@ -111,7 +111,7 @@ fn replaced_releases_the_fill_of_the_pane() {
     let mut f = en_el_pane_0();
     let mut lp = Probed::new();
     let mut df: BySlot<DecorateFetch> = BySlot::new();
-    let mut sr: Option<SearchRun> = None;
+    let mut sr = BySlot::<SearchRun>::new();
     apply_cd(&panes(), &mut f, &mut df, &mut lp, &mut sr, Cd::Replaced(0));
     assert!(
         f.get(slot(0)).is_none(),
@@ -125,7 +125,7 @@ fn a_replaced_from_another_pane_does_not_touch_it() {
     let mut f = en_el_pane_0();
     let mut lp = Probed::new();
     let mut df: BySlot<DecorateFetch> = BySlot::new();
-    let mut sr: Option<SearchRun> = None;
+    let mut sr = BySlot::<SearchRun>::new();
     apply_cd(&panes(), &mut f, &mut df, &mut lp, &mut sr, Cd::Replaced(1));
     assert!(f.get(slot(0)).is_some(), "pane 0's fill survives");
 }
@@ -137,7 +137,7 @@ fn failed_keeps_the_fill() {
     let mut f = en_el_pane_0();
     let mut lp = Probed::new();
     let mut df: BySlot<DecorateFetch> = BySlot::new();
-    let mut sr: Option<SearchRun> = None;
+    let mut sr = BySlot::<SearchRun>::new();
     apply_cd(
         &panes(),
         &mut f,
@@ -158,7 +158,7 @@ fn cancelled_keeps_the_fill() {
     let mut f = en_el_pane_0();
     let mut lp = Probed::new();
     let mut df: BySlot<DecorateFetch> = BySlot::new();
-    let mut sr: Option<SearchRun> = None;
+    let mut sr = BySlot::<SearchRun>::new();
     apply_cd(&panes(), &mut f, &mut df, &mut lp, &mut sr, Cd::Cancelled);
     assert!(f.get(slot(0)).is_some());
 }
@@ -172,7 +172,7 @@ fn filling_of_one_pane_does_not_touch_the_others_slot() {
     let mut f = en_el_pane_0();
     let mut lp = Probed::new();
     let mut df: BySlot<DecorateFetch> = BySlot::new();
-    let mut sr: Option<SearchRun> = None;
+    let mut sr = BySlot::<SearchRun>::new();
     apply_cd(
         &panes(),
         &mut f,
@@ -196,7 +196,7 @@ fn refreshed_releases_the_fill_of_the_relisted_pane() {
     let mut f = en_el_pane_0();
     let mut lp = Probed::from([(0, norte_proto::VPath::parse("file:///d/x").unwrap())]);
     let mut df: BySlot<DecorateFetch> = BySlot::new();
-    let mut sr: Option<SearchRun> = None;
+    let mut sr = BySlot::<SearchRun>::new();
     apply_cd(
         &panes(),
         &mut f,
@@ -220,7 +220,7 @@ fn a_partial_refresh_preserves_the_unrelisted_panes_fill() {
     f.insert(norte_tui::panel::SLOT_RIGHT, fill());
     let mut lp = Probed::new();
     let mut df: BySlot<DecorateFetch> = BySlot::new();
-    let mut sr: Option<SearchRun> = None;
+    let mut sr = BySlot::<SearchRun>::new();
     apply_cd(
         &panes(),
         &mut f,
@@ -243,7 +243,7 @@ fn a_refresh_of_both_panes_releases_both_slots() {
     f.insert(SLOT_RIGHT, fill());
     let mut lp = Probed::new();
     let mut df: BySlot<DecorateFetch> = BySlot::new();
-    let mut sr: Option<SearchRun> = None;
+    let mut sr = BySlot::<SearchRun>::new();
     apply_cd(
         &panes(),
         &mut f,
@@ -262,7 +262,7 @@ fn an_empty_refresh_touches_nothing() {
     let mut f = en_el_pane_0();
     let mut lp = Probed::from([(0, norte_proto::VPath::parse("file:///d/x").unwrap())]);
     let mut df: BySlot<DecorateFetch> = BySlot::new();
-    let mut sr: Option<SearchRun> = None;
+    let mut sr = BySlot::<SearchRun>::new();
     apply_cd(
         &panes(),
         &mut f,

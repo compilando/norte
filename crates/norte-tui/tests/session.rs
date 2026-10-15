@@ -692,6 +692,7 @@ fn the_session_wins_over_profile_start() {
             show_hidden: false,
             touched_ms: 0,
             marks: Vec::new(),
+            results: None,
         },
     );
     app.apply_session_value(norte_frontend::session::SCHEMA_VERSION, &body.to_value());
@@ -776,4 +777,86 @@ fn an_unknown_kind_travels_in_the_layout() {
     )
     .expect("parses");
     assert_eq!(return_.layouts["default"], app.layout);
+}
+
+/// Review Focus 5 / C7: a results tab behind another tab, whose root is
+/// gone, is restored as its QUERY: it re-runs at start-up although nobody
+/// looks at it, fails visibly (`search-status-failed`), and stays a results
+/// tab instead of turning into a listing of something else. A body without
+/// `results` restores a folder exactly as before, with nothing re-run.
+#[tokio::test]
+async fn a_restored_results_tab_re_runs_even_when_hidden() {
+    use norte_frontend::results::{MAX_HITS, ResultSet, SavedSearch};
+    use norte_frontend::search_status::Outcome;
+
+    let engine = norte_core::Engine::new();
+    let mem = std::sync::Arc::new(norte_testkit::MemProvider::new());
+    engine
+        .register_provider(std::sync::Arc::clone(&mem) as std::sync::Arc<dyn norte_vfs::Provider>);
+    let backend = norte_core::backend::Backend::Embedded(std::sync::Arc::new(engine));
+    let root = vp("mem:///");
+    let gone = vp("mem:///gone");
+    let new_app = || {
+        App::new(
+            Pane::new(root.clone(), vec![]),
+            Pane::new(root.clone(), vec![]),
+        )
+    };
+
+    // The screen that was saved: a folder tab in front, the results tab
+    // behind it.
+    let mut app = new_app();
+    let mut saved =
+        SavedSearch::from_form(&norte_frontend::search::SearchForm::new(), gone.clone());
+    "*.txt".clone_into(&mut saved.name);
+    let hidden = app.open_results_tab(ResultSet::new(saved.clone(), MAX_HITS), Vec::new());
+    app.tab_goto(1);
+    assert_ne!(app.focused_slot(), hidden, "the results tab is behind");
+    let body = app.session_body();
+    assert_eq!(
+        body.slots[&hidden.0].results.as_ref(),
+        Some(&saved),
+        "the tab is saved as its query"
+    );
+
+    let mut restored = new_app();
+    restored.apply_session(&body);
+    assert_ne!(restored.focused_slot(), hidden, "still behind");
+    let mut work = norte_tui::jobs::InFlight::default();
+    norte_tui::jobs::rerun_restored(&mut restored, &backend, &mut work.search).await;
+    // The engine may refuse the walk up front, or accept it and fail it
+    // afterwards: either way the run is drained to its end.
+    while let Some(run) = work.search.get_mut(hidden) {
+        let hits = run.rx.recv().await;
+        let end = hits.is_none();
+        norte_tui::jobs::drain_search(&mut restored, &mut work.search, hidden, hits);
+        if end {
+            break;
+        }
+    }
+    let tab = restored.panes.browser(hidden).expect("the slot");
+    let set = tab.results().expect("still a results tab");
+    assert!(
+        matches!(set.outcome(), Outcome::Failed(_)),
+        "failed, not \"found nothing\": {:?}",
+        set.outcome()
+    );
+    assert!(tab.entries().is_empty(), "not a listing of something else");
+    let line = norte_frontend::results::status(set, tab.entries().len(), norte_i18n::Lang::Es);
+    assert!(
+        line.starts_with("búsqueda fallida"),
+        "the failed sentence: {line}"
+    );
+
+    // Without `results`, the same slot is a folder, as before.
+    let mut folder_body = body.clone();
+    folder_body.slots.get_mut(&hidden.0).expect("slot").results = None;
+    let mut plain = new_app();
+    plain.apply_session(&folder_body);
+    let pane = plain.panes.browser(hidden).expect("the slot");
+    assert!(!pane.is_results());
+    assert_eq!(pane.dir(), &gone);
+    let mut work = norte_tui::jobs::InFlight::default();
+    norte_tui::jobs::rerun_restored(&mut plain, &backend, &mut work.search).await;
+    assert!(work.search.is_empty(), "nothing re-runs");
 }

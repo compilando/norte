@@ -72,10 +72,12 @@ results read in the wrong alphabet.
 
 > ⚠ A field that cannot be read STOPS the search and takes you to it. That is not fussiness: running it while ignoring a mistyped `1 gigabyte` returns the whole tree, and a whole tree reads exactly like a result.
 
-Results arrive in the pane as they are found, so the first hits are usable
-while the walk is still going. A hit that lives somewhere else is still a real
-entry: put the cursor on it and every command on this page's neighbours works
-on it, including opening it in the viewer.
+In the terminal the results open as a new tab of the pane (see *Results as a
+tab* below); the window shows them in its own results view. Either way they
+arrive as they are found, so the first hits are usable while the walk is still
+going. A hit that lives somewhere else is still a real entry: put the cursor on
+it and every command on this page's neighbours works on it, including opening
+it in the viewer.
 
 A search is a **task**, exactly like a copy. It reports progress, it does not
 freeze the screen, you can navigate the other pane while it runs, and it can be
@@ -125,8 +127,40 @@ starts — UTF-16 and some other encodings — it opens at the top instead and s
 so. In the terminal, closing the viewer puts you back in the panel. Enter on a
 file takes the pane to its folder with the cursor on it.
 
-The {{cmd:pane.search}} dialog is still there, and it fills the pane with the
-hits as before.
+The {{cmd:pane.search}} dialog is still there for a one-off question.
+
+# Results as a tab
+
+**Open as listing** turns what the panel found into a tab of the listing you
+can work in: `F9` in the panel, or the button above the results in the
+window. In the terminal, {{cmd:pane.search}} opens such a tab too, instead of
+taking over the pane. The tab is called `🔍 <query> (N)` and sits next to the
+folder you were in; the line where the path usually goes says what was searched
+and where.
+
+The files keep their names and gain a **Folder** column: where each one lives,
+relative to the folder the search started from (`.` for that folder itself).
+Click its header to sort by it. Mark, copy, move, delete and rename work as in
+any folder, and each file goes as its own job, so two hits with the same name
+copied to one folder go through the usual collision handling for the second
+one — the terminal asks, the window shows it failed — instead of one silently
+replacing the other. Copying hits into the folder the search
+started from works; only a file that is already there is refused.
+
+If the search was still running when you opened the tab, it goes on in the
+tab, and the panel is free for the next question. A moved, deleted or renamed
+file leaves the tab once the operation ends. {{cmd:pane.refresh}} runs the
+same search again, from now, and a tab saved with the session comes back by
+running its search again, not as an old list.
+
+In the terminal, Enter on a hit opens its folder in a new tab with the cursor
+on it, and the results tab stays; Esc stops a search that is still running.
+Going anywhere else from the tab turns it into an ordinary folder tab.
+
+A results tab is not a folder, so what needs one is refused there, with the
+reason: creating a folder or a file, organizing, packing, a terminal, sync or
+compare "here", and sending this location to the other pane. Copying INTO a
+results tab is refused too — choose a folder as the destination.
 
 # Hidden entries
 

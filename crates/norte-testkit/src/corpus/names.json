@@ -453,5 +453,10 @@
     "id": "control_crlf",
     "hex": "610d0a62",
     "why": "'a\\r\\nb' — CR+LF dentro del nombre. Legal en unix (roundtrip intacto en mem/local), pero en FTP es el TERMINADOR del canal de control: un cliente que interpole el nombre en `RETR`/`DELE` sin filtrar ejecuta dos comandos (RUSTSEC-2026-0271, suppaftp <10.0.2). El guest ftp-provider lo rechaza LIMPIO como InvalidPath antes de tocar el socket (`ftp_provider_contract.rs`, probe `x\\r\\nDELE victima`); el corpus lo lleva para que TODO provider y TODA superficie que pinte nombres se enfrente a los dos controles juntos, no solo al LF de `control_newline`."
+  },
+  {
+    "id": "keyword_twin_zwsp",
+    "hex": "6f74686572e2808b",
+    "why": "'other' + U+200B ZERO WIDTH SPACE: se pinta EXACTAMENTE como la palabra clave `other` de la gramática de órdenes (ADR 0185). Tecleado tal cual tras `>` la gramática lo rechaza (`InvisibleChar`) en vez de copiar a una carpeta gemela invisible; como nombre real tiene que poder escribirse escapado (`\\xe2\\x80\\x8b`) y sobrevivir byte a byte en todo provider."
   }
 ]

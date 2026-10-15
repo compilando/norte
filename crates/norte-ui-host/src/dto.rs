@@ -2482,6 +2482,10 @@ pub struct SearchPanelSlotView {
     /// The cursor's row, in the numbering of `total_rows`; `None` with no
     /// rows.
     pub cursor: Option<u64>,
+    /// The "Open as listing" button's text, already translated (bridge
+    /// 119): a renderer does not translate.
+    #[serde(default)]
+    pub open_listing_label: String,
 }
 
 /// A row of the search panel's results.
@@ -2963,6 +2967,10 @@ pub struct BrowserSlotView {
     /// The listing is STILL FILLING, and how many so far. Empty = whole.
     #[serde(default)]
     pub filling_note: String,
+    /// A results tab's status sentence (bridge 119): how its search is
+    /// going or ended. Empty outside a results tab.
+    #[serde(default)]
+    pub results_note: String,
     /// Marks the last refresh dropped because their entry is no longer
     /// there. Empty = none dropped.
     #[serde(default)]
@@ -4143,6 +4151,10 @@ pub enum ViewChange {
         /// asserts that is all there is, which is precisely what is not yet
         /// known.
         filling_note: String,
+        /// A results tab's status sentence (bridge 119): how its search is
+        /// going or ended. Empty outside a results tab.
+        #[serde(default)]
+        results_note: String,
         /// Marks the last refresh dropped because their entry is no longer
         /// there. Empty if none dropped.
         ///

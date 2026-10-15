@@ -1,0 +1,12 @@
+# #261: the clipboard INTO the window: an order pasted into the box arrives
+# whole, spaces included, and runs.
+file a/informe.pdf
+file a/notas.txt
+start a
+clip-set :sel ext:pdf
+key ctrl+g
+key ctrl+v
+expect-query :sel ext:pdf
+expect-shown :sel ext:pdf
+key Return
+expect-marked 1

@@ -74,10 +74,12 @@ alfabeto.
 
 > ⚠ Un campo que no se entiende PARA la búsqueda y te lleva a él. No es celo: lanzarla ignorando un `1 gigabyte` mal escrito devuelve el árbol entero, y un árbol entero se lee exactamente igual que un resultado.
 
-Los resultados aparecen en el panel según se encuentran, así que los primeros
-sirven mientras el recorrido sigue. Un hit que vive en otro sitio es una
-entrada de verdad: pon el cursor encima y funcionan los comandos de las páginas
-vecinas, incluido abrirlo en el visor.
+En el terminal los resultados se abren en una pestaña nueva del panel (mira
+*Resultados en una pestaña* más abajo); la ventana los enseña en su propia
+vista de resultados. En los dos casos aparecen según se encuentran, así que los
+primeros sirven mientras el recorrido sigue. Un hit que vive en otro sitio es
+una entrada de verdad: pon el cursor encima y funcionan los comandos de las
+páginas vecinas, incluido abrirlo en el visor.
 
 Una búsqueda es una **tarea**, igual que una copia: informa del progreso, no
 congela la pantalla, puedes navegar por el otro panel mientras corre y se puede
@@ -129,8 +131,43 @@ codificaciones— se abre por el principio y lo dice. En el terminal, cerrar el
 visor te devuelve al panel. Intro sobre un fichero lleva el panel de listado a
 su carpeta, con el cursor sobre él.
 
-El diálogo de {{cmd:pane.search}} sigue ahí, y rellena el panel con los
-resultados como antes.
+El diálogo de {{cmd:pane.search}} sigue ahí para una pregunta suelta.
+
+# Resultados en una pestaña
+
+**Abrir como listado** convierte lo que encontró el panel en una pestaña del
+listado en la que se puede trabajar: `F9` en el panel, o el botón encima de
+los resultados en la ventana. En el terminal, {{cmd:pane.search}} también
+abre una pestaña así, en vez de quedarse con el panel. La pestaña se llama
+`🔍 <búsqueda> (N)` y aparece junto a la carpeta en la que estabas; donde suele
+ir la ruta pone qué se buscó y dónde.
+
+Los ficheros conservan su nombre y ganan una columna **Carpeta**: dónde vive
+cada uno, relativo a la carpeta desde la que empezó la búsqueda (`.` para esa
+misma carpeta). Un clic en su cabecera ordena por ella. Marcar, copiar, mover,
+borrar y renombrar funcionan como en cualquier carpeta, y cada fichero va en su
+propio trabajo: dos resultados con el mismo nombre copiados a una carpeta pasan
+por la gestión de colisiones de siempre con el segundo —el terminal pregunta,
+la ventana lo enseña fallido— en vez de que uno pise al otro sin decir nada.
+Copiar resultados a la carpeta desde la que empezó la búsqueda funciona; solo
+se rechaza un fichero que ya está ahí.
+
+Si la búsqueda seguía en marcha al abrir la pestaña, continúa en la pestaña, y
+el panel queda libre para la siguiente pregunta. Un fichero movido, borrado o
+renombrado sale de la pestaña cuando acaba la operación. {{cmd:pane.refresh}}
+repite la misma búsqueda, contando desde ahora, y una pestaña guardada con la
+sesión vuelve repitiendo su búsqueda, no como una lista vieja.
+
+En el terminal, Intro sobre un resultado abre su carpeta en una pestaña nueva
+con el cursor encima, y la pestaña de resultados se queda; Esc para una
+búsqueda que sigue en marcha. Ir a cualquier otro sitio desde la pestaña la
+convierte en una pestaña de carpeta normal.
+
+Una pestaña de resultados no es una carpeta, así que lo que necesita una se
+rechaza ahí, diciendo por qué: crear una carpeta o un fichero, organizar,
+empaquetar, una terminal, sincronizar o comparar «aquí», y mandar esta
+ubicación al otro panel. Copiar A una pestaña de resultados también se rechaza:
+elige una carpeta como destino.
 
 # Entradas ocultas
 

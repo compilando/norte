@@ -227,6 +227,7 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::SearchActivateRow { .. } => "search_activate_row",
         UiAction::SearchPanelEdit { .. } => "search_panel_edit",
         UiAction::SearchPanelGo { .. } => "search_panel_go",
+        UiAction::SearchPanelOpenListing { .. } => "search_panel_open_listing",
         UiAction::AssistantSubmit { .. } => "assistant_submit",
         UiAction::AssistantApply { .. } => "assistant_apply",
         UiAction::AssistantCancel { .. } => "assistant_cancel",
@@ -593,6 +594,10 @@ fn overlay_actions() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("search_panel_go", UiAction::SearchPanelGo { slot_id: 15 }),
+        (
+            "search_panel_open_listing",
+            UiAction::SearchPanelOpenListing { slot_id: 15 },
+        ),
         (
             "assistant_submit",
             UiAction::AssistantSubmit {
@@ -1287,6 +1292,16 @@ fn reference_placements() -> Vec<SlotPlacement> {
             role: None,
             focus_index: 13,
         },
+        // A results tab (bridge 119), another column.
+        SlotPlacement {
+            slot_id: 17,
+            x: 180,
+            y: 0,
+            width: 30,
+            height: 38,
+            role: None,
+            focus_index: 14,
+        },
         SlotPlacement {
             slot_id: 8,
             x: 0,
@@ -1442,6 +1457,7 @@ fn reference_slots() -> Vec<SlotView> {
             // that fixes their ORDER — notices before the marks counter.
             names_note: "nombres: cp866".to_owned(),
             filling_note: "cargando… (3)".to_owned(),
+            results_note: String::new(),
             pruned_note: "2 marcas caídas, sus entradas ya no están".to_owned(),
             marked_note: "2 marcadas, 4,0 kB".to_owned(),
             footer: "1 dirs · 2 ficheros · 4,0 kB · 2 marcadas, 4,0 kB · 120 GiB libres".to_owned(),
@@ -1471,6 +1487,59 @@ fn reference_slots() -> Vec<SlotView> {
                 mode: "filter".to_owned(),
                 matches: 1,
             }),
+        })),
+        // A results tab (bridge 119): the location line instead of
+        // breadcrumbs, the Folder column after the name, and the status
+        // note.
+        SlotView::Browser(Box::new(BrowserSlotView {
+            slot_id: 17,
+            generation: 2,
+            progress: None,
+            path_display: "búsqueda «aguja» en ⟨mem⟩/casa".to_owned(),
+            path_hostile: false,
+            total_rows: Some(1),
+            first_visible: 0,
+            rows: vec![RowView {
+                cells: vec![norte_ui_host::dto::CellView {
+                    column: "folder".to_owned(),
+                    text: Some("src/a".to_owned()),
+                }],
+                ..row(1, "x.txt", false)
+            }],
+            icon_column: false,
+            cursor: Some(RowKey(1)),
+            marks: 0,
+            mark_ruler: Vec::new(),
+            skipped_note: String::new(),
+            hidden_note: String::new(),
+            names_note: String::new(),
+            filling_note: String::new(),
+            results_note: "búsqueda: 1 encontrados (buscando…)".to_owned(),
+            pruned_note: String::new(),
+            marked_note: String::new(),
+            footer: String::new(),
+            path_segments: Vec::new(),
+            used_ratio: None,
+            columns: vec![
+                ColumnHeader {
+                    id: "name".to_owned(),
+                    label: "Nombre".to_owned(),
+                    sort: Some("asc".to_owned()),
+                    sortable: true,
+                    width: None,
+                    align: "left".to_owned(),
+                },
+                ColumnHeader {
+                    id: "folder".to_owned(),
+                    label: "Carpeta".to_owned(),
+                    sort: None,
+                    sortable: true,
+                    width: None,
+                    align: "left".to_owned(),
+                },
+            ],
+            state: SlotState::Ready,
+            quick: None,
         })),
         SlotView::Metadata(Box::new(norte_ui_host::dto::MetadataSlotView {
             slot_id: 5,
@@ -1717,6 +1786,7 @@ fn reference_slots() -> Vec<SlotView> {
                 },
             ],
             cursor: Some(3),
+            open_listing_label: "Abrir como listado".to_owned(),
         })),
         // A PLUGIN's panel (phase 3): styled spans and zones WITHOUT their
         // command — the renderer says where it was clicked and the host
@@ -3058,6 +3128,7 @@ fn listing_row_changes() -> Vec<(&'static str, ViewChange)> {
                 hidden_note: "3 ocultas".to_owned(),
                 names_note: "nombres: cp866".to_owned(),
                 filling_note: "cargando… (3)".to_owned(),
+                results_note: String::new(),
                 pruned_note: "2 marcas caídas, sus entradas ya no están".to_owned(),
                 marked_note: "2 marcadas, 4,0 kB".to_owned(),
                 footer: "1 dirs · 2 ficheros · 4,0 kB · 2 marcadas, 4,0 kB · 120 GiB libres"
@@ -3405,7 +3476,9 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // change go; `app.palette` opens the go-to box with `>`.
     // 111 (spec 2026-10-09): `ViewerView.highlight`/`.lines_from`, and
     // `SlotView::Search` with its rows, the search panel.
-    const SHAPE: u64 = 16_236_444_142_181_902_142;
+    // 119 (spec 2026-10-10): `results_note` on the listing and its header,
+    // and `SearchPanelSlotView.open_listing_label`.
+    const SHAPE: u64 = 15_589_609_717_164_586_289;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

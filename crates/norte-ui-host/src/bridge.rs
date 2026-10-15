@@ -637,7 +637,11 @@ use serde::{Deserialize, Serialize};
 ///   and `TaskView.spark`.
 /// - **118**: `assistant_cancel`, stop waiting for the assistant's turn, and
 ///   `AssistantSlotView.first`, so `assistant_apply` names a turn by number.
-pub const BRIDGE_VERSION: u32 = 118;
+/// - **119**: results tabs (spec 2026-10-10): `BrowserSlotView.results_note`
+///   and `BrowserHeader.results_note`, the column id `"folder"`,
+///   `SearchPanelSlotView.open_listing_label` and the action
+///   `search_panel_open_listing`.
+pub const BRIDGE_VERSION: u32 = 119;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

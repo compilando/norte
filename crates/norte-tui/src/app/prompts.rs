@@ -366,17 +366,32 @@ impl App {
             self.pack_set_error(t("msg-pack-bad-name"));
             return None;
         };
-        let dir = self.focused().dir().clone();
+        let base = self.focused().dir().clone();
+        let sources = self.focused().marked_paths();
+        // A results tab is not a location (C5): its `dir()` is the search
+        // root, and writing the archive there is writing somewhere the
+        // reader never pointed at. It goes next to the FIRST marked hit, as
+        // combine-files writes next to its first piece.
+        let dir = if self.focused().is_results() {
+            sources
+                .first()
+                .and_then(VPath::parent)
+                .unwrap_or_else(|| base.clone())
+        } else {
+            base.clone()
+        };
         let dest = dir.join(seg);
         Some(norte_proto::methods::ArchivePackParams {
-            sources: self.focused().marked_paths(),
+            sources,
             dest,
             format,
             level: None,
             // The base is the panel's directory: the saved names are the
             // ones seen on screen, which is what whoever unpacks it later
-            // expects.
-            base: dir,
+            // expects. In a results tab, the search root: the names inside
+            // are the hits' paths relative to it, as the Folder column
+            // shows them.
+            base,
         })
     }
 
@@ -418,6 +433,12 @@ impl App {
         // read-only place — inside an archive, in an SFTP export — and it
         // accepted splitting INTO one, which then failed with a raw error.
         let dest = self.split_dest_pane();
+        // A results tab is not a location (C5): the pieces would land in
+        // its search root. Same refusal as a transfer into one.
+        if self.panes[dest].is_results() {
+            self.message = Some(t("msg-pane-not-a-location"));
+            return;
+        }
         if self.pane_read_only(dest) {
             self.message = Some(t("msg-pack-read-only"));
             return;
@@ -470,7 +491,14 @@ impl App {
         // panel there was no "other", the whole function returned `None`,
         // and Enter did absolutely nothing — no task, no error, no closing
         // the dialog.
-        let dest_dir = self.panes[self.split_dest_pane()].dir().clone();
+        let dest_pane = &self.panes[self.split_dest_pane()];
+        // Asked again on confirm: the other side may have become a results
+        // tab while the dialog was open (C5).
+        if dest_pane.is_results() {
+            self.split_set_error(t("msg-pane-not-a-location"));
+            return None;
+        }
+        let dest_dir = dest_pane.dir().clone();
         Some(norte_proto::methods::FileSplitParams {
             path,
             part_bytes: bytes,
@@ -760,8 +788,25 @@ impl App {
         // Only the WIRE form gets read: a text that looks like a local path
         // (`/home/…`) isn't a norte address, and guessing a scheme for it is
         // how a copy ends up in another backend than the reader thought.
+        // From a results tab the prefilled root is NOT the hits' folder
+        // (C4): it is a fine destination unless some hit already lives in
+        // the typed one, and that refusal stays in the dialog too.
+        let from_results = self.focused().is_results();
+        let refusal = VPath::parse(&input).ok().and_then(|dir| {
+            from_results
+                .then(|| {
+                    norte_frontend::results::transfer_refusal(&self.focused().marked_paths(), &dir)
+                })
+                .flatten()
+        });
+        if let Some(key) = refusal {
+            if let Some(Modal::TransferDest { error, .. }) = &mut self.modal {
+                *error = Some(t(key));
+            }
+            return false;
+        }
         match VPath::parse(&input) {
-            Ok(dir) if dir == *self.focused().dir() => {
+            Ok(dir) if dir == *self.focused().dir() && !from_results => {
                 // The prompt is PRE-FILLED with the source directory, so an
                 // unedited `Enter` asked to copy every mark onto itself:
                 // `ops::copy_task` rejects it, but one at a time, and the

@@ -1,62 +1,60 @@
-//! Search under a directory, and the VIRTUAL pane that shows the hits.
+//! Search under a directory (`Alt+F7`), and the RESULTS TAB that shows the
+//! hits.
 //!
-//! Hits arrive in batches and accumulate in a pane that isn't a directory:
-//! leaving it (a `cd`) drops the search and cancels the Task, which is why
-//! [`super::super::navigate`] has to know about [`SearchRun`].
+//! Enter in the dialog opens a new tab next to the focused listing
+//! ([`App::open_results_tab`]); the run that feeds it is filed under that
+//! tab's SLOT ([`SearchRun`], in a `BySlot`), so it follows the tab through a
+//! swap, keeps streaming while the tab is hidden behind another one, and
+//! dies with it: closing the tab, or turning it into a folder, cancels the
+//! Task on the next harvest ([`crate::refresh::reap_search_runs`]).
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::backend::{Backend, TaskRef};
-use norte_frontend::layout::BySlot;
+use norte_frontend::layout::{BySlot, SlotId};
 use norte_i18n::{t, ta};
-use norte_proto::VPath;
-use norte_proto::methods::{FsSearchParams, SearchHits};
+use norte_proto::methods::SearchHits;
 
-use crate::app::{App, SearchDialog, SearchState, detail_for_bar, error_category, error_message};
+use norte_frontend::results::{MAX_HITS, ResultSet, SavedSearch};
+use norte_frontend::search_status::{Outcome, outcome_of};
+
+use crate::app::{App, detail_for_bar, error_category, error_message};
 use crate::fill::Fill;
-use crate::navigate::{cd, settle_cd};
+use crate::navigate::{Cd, cd, settle_cd};
 use crate::probes::{DecorateFetch, Probed};
 
-/// A live search IN PROGRESS (`Alt+F7`, liveSearch T6): the cancelable Task,
-/// the channel of hit batches and the virtual pane that shows them. `Fill`
-/// mold: it lives in the run loop, gets drained in the `select!` and gets
-/// dropped on leaving virtual mode (a `cd`), cancelling the Task (rule 3).
+/// A results run (`Alt+F7`, or a refresh/restore of a results tab): the
+/// cancelable Task and the channel of hit batches. Filed under the slot of
+/// the tab it feeds (`InFlight::search`), in the `Fill` mold: drained in the
+/// `select!`, and dropped — cancelling the Task, rule 3 — when that slot no
+/// longer shows results.
 pub struct SearchRun {
     /// `fs.search` Task (cancelable with `TaskRef::cancel`).
     pub task: TaskRef,
     /// Channel of hit batches (embedded: closed by the walker; remote: the
     /// `RemoteBackend`'s pump closes it at the end).
     pub rx: tokio::sync::mpsc::Receiver<SearchHits>,
-    /// Pane showing the hits (index into `App::panes`).
-    pub pane: usize,
-    /// The pane's PREVIOUS directory, to restore it on leaving virtual mode
-    /// (Esc after finishing).
-    pub prev_dir: VPath,
-    /// Accumulated hits (== `panes[pane].entries().len()`, its own counter so
-    /// it doesn't depend on the pane's re-sort).
-    pub hits: usize,
-    /// The run's state: `Running` while the walker emits; terminal once the
-    /// channel closes (read from `TaskProgress`).
-    pub state: SearchState,
+    /// `Running` while the channel is open (the event loop polls only
+    /// those); terminal once it closed ([`finalize_outcome`]).
+    pub outcome: Outcome,
+    /// The search panel's run this one came from (Task 6): its batches
+    /// also go to the panel while the panel shows that epoch.
+    pub panel_epoch: Option<u64>,
 }
-
-/// Default cap of hits for a live search (`Alt+F7`, liveSearch T6): the v1
-/// dialog doesn't expose the field, so a reasonable cap is fixed — it bounds
-/// the virtual pane's memory (hits accumulate in `entries`) and makes the
-/// `Truncated` state reachable. On reaching it, the Task completes and the
-/// status bar shows "truncated".
-pub const SEARCH_MAX_HITS: u32 = 10_000;
 
 /// Translates a search dialog key (`Alt+F7`, liveSearch T6) into an effect
 /// on `App::search_dialog`. Fixed keys like the rest of the overlays (#24);
-/// `ctrl+c` keeps its global quit. Returns `Some(params)` ONLY when Enter
-/// with some non-empty criterion must LAUNCH the search (the caller closes
-/// the dialog and opens the virtual pane); Enter with no criterion warns and
-/// continues.
+/// `ctrl+c` keeps its global quit. Returns `Some(search)` ONLY when Enter
+/// with some non-empty criterion must LAUNCH the search (the caller opens
+/// the results tab); Enter with no criterion warns and continues.
+///
+/// The root is the focused listing's folder; from a results tab it is that
+/// tab's search root (a results tab's `dir()` is that root too, said
+/// through the set so the rule does not lean on it).
 pub fn on_search_dialog_key(
     app: &mut App,
     mods: KeyModifiers,
     code: KeyCode,
-) -> Option<FsSearchParams> {
+) -> Option<SavedSearch> {
     if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
         app.quit = true;
         return None;
@@ -89,8 +87,11 @@ pub fn on_search_dialog_key(
                 return None;
             }
             if dialog.has_criteria() {
-                let root = app.focused().dir().clone();
-                return Some(search_params(app.search_dialog.as_ref()?, root));
+                let focused = app.focused();
+                let root = focused
+                    .results()
+                    .map_or_else(|| focused.dir().clone(), |r| r.search().root.clone());
+                return Some(SavedSearch::from_form(app.search_dialog.as_ref()?, root));
             }
             // No criterion at all: no-op with a warning (a search with no
             // criterion makes no sense). The dialog stays open.
@@ -101,220 +102,302 @@ pub fn on_search_dialog_key(
     None
 }
 
-/// Builds the dialog's [`FsSearchParams`].
-///
-/// The mapping itself belongs to the SHARED crate
-/// ([`norte_frontend::search::params`]): the window asks for the same
-/// search, and two mappings would drift apart silently. What's done here is
-/// the only thing that belongs to this frontend — reading the CLOCK, because
-/// "changed seven days ago" is counted from the instant Enter is pressed,
-/// and a mapping that asked for the time on its own couldn't be tested
-/// without waiting.
-///
-/// `max_hits` is fixed to the default cap ([`SEARCH_MAX_HITS`]) — the v1
-/// dialog doesn't expose it.
-#[must_use]
-pub fn search_params(dialog: &SearchDialog, root: VPath) -> FsSearchParams {
-    let now_ms = std::time::SystemTime::now()
+/// The wall clock in Unix milliseconds: "changed seven days ago" is counted
+/// from the instant the search is launched ([`SavedSearch::params`]).
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0_i64, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-    norte_frontend::search::params(dialog, root, now_ms, SEARCH_MAX_HITS)
+        .map_or(0_i64, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// Launches the search: `backend.search` → Err leaves the dialog open and
-/// warns via the status bar (`search-status-failed`); Ok closes the dialog,
-/// saves the previous dir, starts the virtual pane and registers the
-/// [`SearchRun`] (cancelling a previous one — the virtual pane is one).
-pub async fn launch_search(
+/// Launches `search` into a results tab and files its [`SearchRun`] under
+/// that tab's slot, which it returns.
+///
+/// - `into: None` opens a NEW tab next to the focused listing, focused, and
+///   closes the dialog. On error it opens nothing, leaves the dialog open
+///   and says `search-status-failed` in the bar.
+/// - `into: Some(slot)` re-runs that tab (refresh, restore): it starts over
+///   empty under a fresh set capped at [`MAX_HITS`]. Any run already filed
+///   for the slot is cancelled first. On error the tab's outcome becomes
+///   `Failed`, so it never reads as "found nothing"; the hits it had stay,
+///   the way a folder whose refresh fails keeps its listing (a restored tab
+///   has none yet, so it shows the failure over an empty list).
+pub async fn launch_results(
     app: &mut App,
     backend: &Backend,
-    fill: &mut BySlot<Fill>,
-    search_run: &mut Option<SearchRun>,
-    params: FsSearchParams,
-) {
-    let pane = app.focus();
-    let root = params.root.clone();
-    match backend.search(params).await {
+    runs: &mut BySlot<SearchRun>,
+    search: SavedSearch,
+    into: Option<SlotId>,
+) -> Option<SlotId> {
+    if let Some(slot) = into
+        && let Some(old) = runs.remove(slot)
+    {
+        old.task.cancel();
+    }
+    match backend.search(search.params(now_ms())).await {
         Ok((task, rx)) => {
-            // `prev_dir` and `root` are the SAME directory: the root comes
-            // from `app.focused().dir()` on the dialog's Enter. `back_target`
-            // leans on that equality — a virtual pane's `dir()` is what it
-            // leaves in the forward branch, and it's only honest because
-            // it's the place the reader was. If the root can ever be typed
-            // in, the trail needs `prev_dir`, not `dir()`.
-            let prev_dir = app.panes[pane].dir().clone();
-            app.search_dialog = None;
-            app.message = None;
-            app.panes[pane].begin_search(root);
-            // The pane becomes virtual: a paginated fill in flight for THIS
-            // pane (dir still loading) would feed the real listing as hits
-            // (review MAJOR T6) — it's dropped right away (belt-and-braces;
-            // `apply_fill_msg` is the belt in case a batch arrives first).
-            fill.remove(app.panes.slot_of(pane));
-            // A previous run (rare: the dialog closes on launch) gets
-            // cancelled.
-            if let Some(old) = search_run.replace(SearchRun {
-                task,
-                rx,
-                pane,
-                prev_dir,
-                hits: 0,
-                state: SearchState::Running,
-            }) {
+            let set = ResultSet::new(search, MAX_HITS);
+            let slot = match into {
+                None => {
+                    app.search_dialog = None;
+                    app.message = None;
+                    app.open_results_tab(set, Vec::new())
+                }
+                Some(slot) => {
+                    let Some(pane) = app.panes.browser_mut(slot) else {
+                        // The tab went away while the request was in
+                        // flight: nobody to feed.
+                        task.cancel();
+                        return None;
+                    };
+                    pane.begin_results(set);
+                    slot
+                }
+            };
+            if let Some(old) = runs.insert(
+                slot,
+                SearchRun {
+                    task,
+                    rx,
+                    outcome: Outcome::Running,
+                    panel_epoch: None,
+                },
+            ) {
                 old.task.cancel();
             }
+            Some(slot)
         }
-        // Invalid criteria or another daemon/engine failure: the dialog
-        // STAYS open (the user fixes it) and the detail goes sanitized to
-        // the status bar (the error's category — never the raw pattern).
+        // Invalid criteria or another daemon/engine failure: the detail goes
+        // sanitized to the status bar (the error's category — never the raw
+        // pattern).
         Err(e) => {
-            app.message = Some(ta(
-                "search-status-failed",
-                &[("error", &detail_for_bar(&error_category(&e)))],
-            ));
+            fail_results(app, into, &e);
+            None
         }
     }
 }
 
-/// Applies a batch of hits (or the channel closing) to the virtual pane. A
-/// batch arrives as long as the pane stays in virtual mode; if a `cd` turned
-/// it off, the run is dropped (its drainer would feed a real listing),
-/// cancelling the Task. `None` = end of stream: the terminal state is read
-/// and reflected on the pane.
-pub fn drain_search(app: &mut App, search_run: &mut Option<SearchRun>, hits: Option<SearchHits>) {
-    let Some(s) = search_run else {
+/// A results run that could not start: `search-status-failed` in the bar
+/// and, for a re-run, on the tab itself (its outcome keeps the category).
+fn fail_results(app: &mut App, into: Option<SlotId>, e: &norte_proto::Error) {
+    let category = error_category(e);
+    app.message = Some(ta(
+        "search-status-failed",
+        &[("error", &detail_for_bar(&category))],
+    ));
+    if let Some(slot) = into
+        && let Some(set) = app
+            .panes
+            .browser_mut(slot)
+            .and_then(crate::app::Pane::results_mut)
+    {
+        set.set_outcome(Outcome::Failed(category));
+    }
+}
+
+/// Re-runs the query of the results tab in `slot` (C2: `pane.refresh` on a
+/// results tab), through [`launch_results`] with `into: Some(slot)`.
+///
+/// Only while the slot is still a results tab in the layout: between the
+/// request and this call the tab may have been closed or turned into a
+/// folder, and re-running then would turn a folder back into results.
+///
+/// The ROOT is stat'ed first, and a root that cannot be reached fails the
+/// tab with `search-status-failed` (Review Focus 5): the core's walk counts
+/// an unreadable root as one more skipped entry and ends `Completed` with no
+/// hits, which on a tab restored over a folder that is gone would read as
+/// "the search found nothing". Any run already filed for the slot is
+/// cancelled, as [`launch_results`] would have.
+pub async fn rerun_results(
+    app: &mut App,
+    backend: &Backend,
+    runs: &mut BySlot<SearchRun>,
+    slot: SlotId,
+) {
+    if app.layout.kind_of(slot).is_none() {
+        return;
+    }
+    let Some(search) = app
+        .panes
+        .browser(slot)
+        .and_then(crate::app::Pane::results)
+        .map(|r| r.search().clone())
+    else {
+        return;
+    };
+    if let Err(e) = backend.stat(&search.root).await {
+        if let Some(old) = runs.remove(slot) {
+            old.task.cancel();
+        }
+        fail_results(app, Some(slot), &e);
+        return;
+    }
+    let _ = launch_results(app, backend, runs, search, Some(slot)).await;
+}
+
+/// Re-runs every results tab a session just restored
+/// ([`crate::app::SessionUi::rerun`]), visible or not (C7): a results tab
+/// has no other content, so one left cold would read as a search that found
+/// nothing. Drained in the turn header, so start-up, a profile switch and a
+/// handoff all go through it.
+pub async fn rerun_restored(app: &mut App, backend: &Backend, runs: &mut BySlot<SearchRun>) {
+    for slot in std::mem::take(&mut app.session.rerun) {
+        rerun_results(app, backend, runs, slot).await;
+    }
+}
+
+/// Applies a batch of hits (or the channel closing) to `slot`'s results
+/// tab, visible or not. If the slot no longer shows results (closed, or
+/// turned into a folder) before the harvest saw it, the run is dropped and
+/// its Task cancelled: a late batch never lands in a folder listing. `None`
+/// = end of stream: the terminal state is read and kept on the run and on
+/// the tab.
+pub fn drain_search(
+    app: &mut App,
+    runs: &mut BySlot<SearchRun>,
+    slot: SlotId,
+    hits: Option<SearchHits>,
+) {
+    let Some(s) = runs.get_mut(slot) else {
         return;
     };
     if let Some(batch) = hits {
-        if app.panes[s.pane].virtual_search {
-            // #81: the match's context (line + preview, sanitized AT THE
-            // SOURCE by the core) is saved by path — the status bar paints
-            // it for the hit under the cursor. The pane's view stays flat
-            // (v1).
-            if let Some(infos) = batch.matches {
-                // Wire contract: aligned 1:1. A server bug sending fewer
-                // matches would truncate the zip SILENTLY — noisy in dev.
-                debug_assert_eq!(batch.entries.len(), infos.len(), "matches out of alignment");
-                for (e, info) in batch.entries.iter().zip(infos) {
-                    app.panes[s.pane]
-                        .search_matches
-                        .insert(e.path.clone(), info);
-                }
-            }
-            let n = batch.entries.len();
-            app.panes[s.pane].extend_listing(batch.entries);
-            s.hits += n;
-        } else {
+        // In the tree AND results: a closed tab's listing may linger in the
+        // store as an orphan, and feeding it would keep a dead run going.
+        let in_tree = app.layout.kind_of(slot).is_some();
+        let Some(pane) = app
+            .panes
+            .browser_mut(slot)
+            .filter(|p| in_tree && p.is_results())
+        else {
             s.task.cancel();
-            *search_run = None;
+            runs.remove(slot);
+            return;
+        };
+        let panel_epoch = s.panel_epoch;
+        if let Some(results) = pane.results_mut() {
+            // #81: the match's context (line + preview, sanitized AT THE
+            // SOURCE by the core) is saved by path in the result set — the
+            // status bar paints it for the hit under the cursor.
+            // Wire contract: aligned 1:1. A server bug sending fewer
+            // matches would truncate the zip SILENTLY — noisy in dev.
+            debug_assert!(
+                batch
+                    .matches
+                    .as_ref()
+                    .is_none_or(|m| m.len() == batch.entries.len()),
+                "matches out of alignment"
+            );
+            results.note_hits(&batch);
         }
-    } else {
-        // Channel closed: the walker finished. Non-blocking terminal state.
-        let state = finalize_search_state(s);
-        s.state = state;
-        app.panes[s.pane].search_state = state;
-        // The concrete detail goes to the status bar ONCE (error_message);
-        // the pane keeps the CATEGORY to paint `search-status-failed`
-        // persistently after the message clears (review MINOR-2).
-        if state == SearchState::Failed {
-            let mut rx = s.task.progress();
-            if let norte_proto::TaskState::Failed { error } = rx.borrow_and_update().state.clone() {
-                app.panes[s.pane].search_error = Some(error_category(&error));
-                app.message = Some(error_message(&error));
-            }
+        if let Some(e) = panel_epoch
+            && let Some(p) = watching_panel(app, e)
+        {
+            p.apply_hits(e, &batch);
+        }
+        if let Some(pane) = app.panes.browser_mut(slot) {
+            pane.extend_listing(batch.entries);
+        }
+        return;
+    }
+    // Channel closed: the walker finished. Non-blocking terminal state.
+    let outcome = finalize_outcome(s);
+    s.outcome = outcome.clone();
+    if let Some(e) = s.panel_epoch
+        && let Some(p) = watching_panel(app, e)
+    {
+        // The panel words a failure as its own drain does: masked for the bar.
+        let said = match &outcome {
+            Outcome::Failed(category) => Outcome::Failed(detail_for_bar(category)),
+            other => other.clone(),
+        };
+        p.finished(e, said);
+    }
+    // The concrete detail goes to the status bar ONCE (error_message); the
+    // result set keeps the CATEGORY (inside `Outcome::Failed`) to paint
+    // `search-status-failed` persistently after the message clears (review
+    // MINOR-2).
+    if matches!(outcome, Outcome::Failed(_)) {
+        let mut rx = s.task.progress();
+        if let norte_proto::TaskState::Failed { error } = rx.borrow_and_update().state.clone() {
+            app.message = Some(error_message(&error));
         }
     }
+    if let Some(results) = app
+        .panes
+        .browser_mut(slot)
+        .and_then(crate::app::Pane::results_mut)
+    {
+        results.set_outcome(outcome);
+    }
+}
+
+/// The search panel, while it still watches the run of `epoch` that it
+/// handed to a results tab (C9): it still shows that query and has not
+/// been stopped ("search here"). Once its epoch moved on, the model would
+/// ignore the batch anyway.
+fn watching_panel(
+    app: &mut App,
+    epoch: u64,
+) -> Option<&mut norte_frontend::search_panel::SearchPanel> {
+    let slot = app.search_panel_slot()?;
+    app.panes
+        .search_panel_mut(slot)
+        .filter(|p| p.epoch() == epoch && p.is_running())
 }
 
 /// Reads a [`SearchRun`]'s terminal state from `TaskProgress` (non-blocking)
-/// and maps it to [`SearchState`]. `Completed` with hits at the cap =
-/// `Truncated`; without the cap = `Done`. A channel closed without a
-/// terminal state published yet (a race) is treated as `Done` (the walker no
-/// longer emits).
-pub fn finalize_search_state(s: &SearchRun) -> SearchState {
+/// and maps it to an [`Outcome`] (the cap, `Truncated` in the old terms, is
+/// the result set's `at_cap`, read when the status is painted). A channel
+/// closed without a terminal state published yet (a race) is treated as
+/// `Done` (the walker no longer emits).
+pub fn finalize_outcome(s: &SearchRun) -> Outcome {
     let mut rx = s.task.progress();
-    match rx.borrow_and_update().state.clone() {
-        norte_proto::TaskState::Cancelled => SearchState::Cancelled,
-        norte_proto::TaskState::Failed { .. } => SearchState::Failed,
-        norte_proto::TaskState::Completed if s.hits >= SEARCH_MAX_HITS as usize => {
-            SearchState::Truncated
-        }
-        _ => SearchState::Done,
-    }
+    outcome_of(&rx.borrow_and_update().state, error_category).unwrap_or(Outcome::Done)
 }
 
-/// Esc in the search virtual pane (liveSearch T6): with the Task alive, asks
-/// for cancellation (hits already received stay; the state will move to
-/// `Cancelled` when the channel closes); once finished, leaves virtual mode
-/// restoring the previous dir with a normal `cd`.
-pub async fn on_search_escape(
+/// Enter over a hit in a results tab (C10): opens the hit's FOLDER in a
+/// NEW tab next to it, with the cursor on the hit; the results tab stays,
+/// and so does its run.
+///
+/// The cursor lands through the pane's pending focus, resolved when the
+/// listing arrives — not an index set afterwards, which would miss a hit on
+/// a page still filling. A folder that cannot be listed closes the empty
+/// tab again (the error is already in the bar), and so does Esc during a
+/// slow listing: an empty tab at the folder would read as an empty folder.
+pub async fn open_hit_folder(
     app: &mut App,
     backend: &Backend,
     events: &mut crate::console::Console<'_>,
     fill: &mut BySlot<Fill>,
     decorate_fetch: &mut BySlot<DecorateFetch>,
     last_probed: &mut Probed,
-    search_run: &mut Option<SearchRun>,
+    runs: &mut BySlot<SearchRun>,
 ) {
-    let Some(s) = search_run.as_ref() else {
-        return;
-    };
-    if s.state == SearchState::Running {
-        s.task.cancel();
+    if !app.focused().is_results() {
         return;
     }
-    let prev = s.prev_dir.clone();
-    *search_run = None;
-    let outcome = cd(app, backend, events, prev).await;
-    settle_cd(
-        app,
-        backend,
-        fill,
-        decorate_fetch,
-        last_probed,
-        search_run,
-        outcome,
-    );
-}
-
-/// Enter over a hit in the virtual pane (liveSearch T6): cd to the hit's
-/// PARENT and leaves the cursor on it (by path, if it's already on the first
-/// page). Cancels the Task if still alive and leaves virtual mode.
-pub async fn on_search_enter(
-    app: &mut App,
-    backend: &Backend,
-    events: &mut crate::console::Console<'_>,
-    fill: &mut BySlot<Fill>,
-    decorate_fetch: &mut BySlot<DecorateFetch>,
-    last_probed: &mut Probed,
-    search_run: &mut Option<SearchRun>,
-) {
     let Some(hit) = app.focused().selected().map(|e| e.path.clone()) else {
         return;
     };
     let Some(parent) = hit.parent() else {
         return;
     };
-    if let Some(s) = search_run.as_ref()
-        && s.state == SearchState::Running
-    {
-        s.task.cancel();
-    }
-    *search_run = None;
-    let pane = app.focus();
+    let _slot = app.tab_new_at(parent.clone());
+    app.focused_mut().set_pending_focus(hit);
     let outcome = cd(app, backend, events, parent).await;
+    let failed = matches!(outcome, Cd::Failed(_) | Cd::Cancelled);
     settle_cd(
         app,
         backend,
         fill,
         decorate_fetch,
         last_probed,
-        search_run,
+        runs,
         outcome,
     );
-    // Re-anchors the cursor on the hit by path (the cd resets it to 0); if it
-    // landed on a page not yet drained, the cursor stays at the top (v1).
-    if let Some(i) = app.panes[pane].entries().iter().position(|e| e.path == hit) {
-        app.panes[pane].set_cursor(i);
+    if failed {
+        app.focused_mut().clear_pending_focus();
+        app.tab_close();
     }
 }

@@ -307,6 +307,7 @@ fn sort_text(s: &SortSpec, lang: Lang) -> String {
         SortColumn::Size => t_in(lang, "status-item-sort-size"),
         SortColumn::Mtime => t_in(lang, "status-item-sort-mtime"),
         SortColumn::Extension => t_in(lang, "status-item-sort-ext"),
+        SortColumn::Folder => t_in(lang, "col-header-folder"),
         // An attribute is named by its id (`posix.mode`): its readable
         // label lives in the provider's catalogue, which this bar does not
         // have. And the id is emitted by a THIRD PARTY, so it is masked

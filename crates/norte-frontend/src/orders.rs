@@ -413,6 +413,7 @@ pub fn parse_error_key(kind: norte_orders::ParseErrorKind) -> &'static str {
         K::MissingDest => "order-error-missing-dest",
         K::MissingArg => "order-error-missing-arg",
         K::Unterminated => "order-error-unterminated",
+        K::InvisibleChar => "order-error-invisible-char",
     }
 }
 
@@ -1085,6 +1086,7 @@ mod tests {
                 K::MissingDest,
                 K::MissingArg,
                 K::Unterminated,
+                K::InvisibleChar,
             ] {
                 assert!(
                     ids.iter().any(|i| i == parse_error_key(k)),

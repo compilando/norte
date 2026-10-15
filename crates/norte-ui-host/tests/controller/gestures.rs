@@ -1029,6 +1029,7 @@ async fn the_session_returns_the_sort_and_the_hidden_ones() {
             show_hidden: false,
             touched_ms: 0,
             marks: Vec::new(),
+            results: None,
         },
     );
     *fake.session.lock().expect("session") = (

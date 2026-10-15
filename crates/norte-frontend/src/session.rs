@@ -181,6 +181,12 @@ pub struct SlotState {
     /// produces the SAME bytes as before.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub marks: Vec<VPath>,
+    /// The query of a RESULTS tab. Such a slot has no listing of its own:
+    /// restoring it re-runs this search (`path` is the search root). Additive
+    /// like `marks`: an old body reads `None`, a folder slot produces the
+    /// same bytes as before, and [`SCHEMA_VERSION`] does not change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub results: Option<crate::results::SavedSearch>,
 }
 
 /// The saved screen: layouts by name and state by slot.
@@ -1055,7 +1061,23 @@ mod tests {
             show_hidden: false,
             touched_ms: 0,
             marks: Vec::new(),
+            results: None,
         }
+    }
+
+    /// A results slot saves its query; an old body without the field still
+    /// reads.
+    #[test]
+    fn a_slot_carries_its_saved_search() {
+        let mut s = slot("mem:///casa");
+        s.results = Some(crate::results::SavedSearch::from_form(
+            &crate::search::SearchForm::new(),
+            vp("mem:///casa"),
+        ));
+        let v = serde_json::to_value(&s).expect("ser");
+        assert_eq!(serde_json::from_value::<SlotState>(v).expect("de"), s);
+        let old: SlotState = serde_json::from_str(r#"{"path":"mem:///casa"}"#).expect("old body");
+        assert!(old.results.is_none());
     }
 
     /// A body with a profile per name, each with two of its own slots and

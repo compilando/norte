@@ -342,6 +342,10 @@ pub enum Builtin {
     Mtime,
     /// `Entry.kind`, as localized text.
     Kind,
+    /// Where a hit lives, relative to the search root. Only a results tab
+    /// paints it (the pane's `folder_text`), so it is an id that crosses the
+    /// bridge but is not configurable and not on the picker.
+    Folder,
 }
 
 /// A column's identity (#108): built-in, provider attribute
@@ -383,6 +387,7 @@ impl std::str::FromStr for ColumnId {
             "size" => return Ok(Self::Builtin(Builtin::Size)),
             "mtime" => return Ok(Self::Builtin(Builtin::Mtime)),
             "kind" => return Ok(Self::Builtin(Builtin::Kind)),
+            "folder" => return Ok(Self::Builtin(Builtin::Folder)),
             _ => {}
         }
         if let Some(attr) = s.strip_prefix("attr:") {
@@ -422,6 +427,7 @@ impl std::fmt::Display for ColumnId {
             Self::Builtin(Builtin::Size) => f.write_str("size"),
             Self::Builtin(Builtin::Mtime) => f.write_str("mtime"),
             Self::Builtin(Builtin::Kind) => f.write_str("kind"),
+            Self::Builtin(Builtin::Folder) => f.write_str("folder"),
             Self::Attr(id) => write!(f, "attr:{id}"),
             Self::Plugin { plugin, column } => write!(f, "plugin:{plugin}/{column}"),
         }
@@ -914,7 +920,7 @@ mod settings_tests {
         // With no catalog there is no permissions column: the listing sets
         // it, and the listing does not show it until it knows the backend
         // answers it.
-        let w = column_widths(&s, "file", 80, None);
+        let w = column_widths(&s, "file", false, 80, None);
         let cols: Vec<ColumnId> = w.iter().map(|(id, _)| id.clone()).collect();
         assert_eq!(
             cols,
@@ -931,7 +937,7 @@ mod settings_tests {
     #[test]
     fn column_widths_narrow_only_name() {
         let s = ColumnsSettings::default();
-        let w = column_widths(&s, "file", 12, None);
+        let w = column_widths(&s, "file", false, 12, None);
         assert_eq!(
             w.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
             vec![ColumnId::Builtin(Builtin::Name)]
@@ -1444,7 +1450,8 @@ impl ColumnStyle {
             time_format: TimeFormat::Relative,
             mode_format: ModeFormat::Rwx,
             hint: norte_proto::attrs::AttrHint::Opaque,
-            align: if b == Builtin::Name {
+            // The folder is a path: it reads from the left, like the name.
+            align: if matches!(b, Builtin::Name | Builtin::Folder) {
                 Align::Left
             } else {
                 Align::Right
@@ -1529,7 +1536,7 @@ fn format_fits(b: Builtin, fmt: &str) -> bool {
     match b {
         Builtin::Size => SIZE_FORMATS.iter().any(|(s, _)| *s == fmt),
         Builtin::Mtime => TIME_FORMATS.iter().any(|(s, _)| *s == fmt),
-        Builtin::Name | Builtin::Kind => false,
+        Builtin::Name | Builtin::Kind | Builtin::Folder => false,
     }
 }
 
@@ -1545,7 +1552,7 @@ pub fn next_format(b: Builtin, current: &str) -> Option<&'static str> {
     match b {
         Builtin::Size => advance(SIZE_FORMATS, current),
         Builtin::Mtime => advance(TIME_FORMATS, current),
-        Builtin::Name | Builtin::Kind => None,
+        Builtin::Name | Builtin::Kind | Builtin::Folder => None,
     }
 }
 
@@ -1615,7 +1622,7 @@ pub fn format_name(b: Builtin, style: &ColumnStyle) -> Option<&'static str> {
             .iter()
             .find(|(_, f)| *f == style.time_format)
             .map(|(s, _)| *s),
-        Builtin::Name | Builtin::Kind => None,
+        Builtin::Name | Builtin::Kind | Builtin::Folder => None,
     }
 }
 
@@ -2075,6 +2082,9 @@ impl ColumnsSettings {
                                 out.push((id.clone(), plugin_layout_item()));
                             }
                         }
+                        // Not configurable: only a results tab paints it, and
+                        // `paintable_items` puts it there.
+                        ColumnId::Builtin(Builtin::Folder) => {}
                         ColumnId::Builtin(b) => out.push((id.clone(), builtin_layout_item(*b))),
                         // #117 review: at most ATTRS_MAX_REQUEST attrs —
                         // painted == requested (`attr_ids_for`); the rest is
@@ -2302,6 +2312,13 @@ pub fn builtin_layout_item(b: Builtin) -> LayoutItem {
             measured: 0,
             is_name: false,
         },
+        // The hit's folder: it shares what the name leaves, never less
+        // than 8 cells.
+        Builtin::Folder => LayoutItem {
+            policy: WidthPolicy::Flex { min: 8, weight: 1 },
+            measured: 0,
+            is_name: false,
+        },
     }
 }
 
@@ -2390,12 +2407,30 @@ pub fn sets_permission_column(
 ///
 /// A single place where this is decided, because two functions ask it and
 /// the answer has to be the same in both (spec 2026-09-20).
+///
+/// `folder` is a results tab: its Folder column goes right after the name.
+/// It is not configurable ([`ColumnsSettings::layout_items_for`] skips it),
+/// and it is not on the ladder, so nothing ever hides it.
 fn paintable_items(
     settings: &ColumnsSettings,
     scheme: &str,
+    folder: bool,
     catalog: Option<&norte_proto::AttrCatalog>,
 ) -> Vec<(ColumnId, LayoutItem)> {
     let mut set = settings.layout_items_for(scheme);
+    if folder {
+        let at = set
+            .iter()
+            .position(|(_, it)| it.is_name)
+            .map_or(0, |i| i + 1);
+        set.insert(
+            at,
+            (
+                ColumnId::Builtin(Builtin::Folder),
+                builtin_layout_item(Builtin::Folder),
+            ),
+        );
+    }
     // A column the user requested stays even if it comes out empty: it is
     // their choice, and erasing it would be answering them with a no.
     if !settings.has_user_columns(scheme) && !sets_permission_column(settings, scheme, catalog) {
@@ -2412,13 +2447,15 @@ fn paintable_items(
 pub fn column_widths(
     settings: &ColumnsSettings,
     scheme: &str,
+    // A results tab: it paints the Folder column too.
+    folder: bool,
     inner_width: u16,
     // Same as in [`fitted_columns`], and for the same reason: two different
     // answers to "what columns are there?" would leave the edge the mouse
     // drags gripping the neighbouring column.
     catalog: Option<&norte_proto::AttrCatalog>,
 ) -> Vec<(ColumnId, u16)> {
-    let set = paintable_items(settings, scheme, catalog);
+    let set = paintable_items(settings, scheme, folder, catalog);
     let items: Vec<_> = set.iter().map(|(_, it)| *it).collect();
     let placed = layout(inner_width, &items);
     set.into_iter()
@@ -2509,6 +2546,8 @@ const LADDER: [(Yields, Rung); 6] = [
 pub fn fitted_columns(
     settings: &ColumnsSettings,
     scheme: &str,
+    // A results tab: it paints the Folder column too.
+    folder: bool,
     inner_width: u16,
     name_wanted: u16,
     // The connected provider's attribute catalog, if already known (spec
@@ -2529,7 +2568,7 @@ pub fn fitted_columns(
     let ceiling = u16::try_from(u32::from(inner_width) * 3 / 5).unwrap_or(u16::MAX);
     let target = name_wanted.min(ceiling).max(NAME_MIN);
     let free = !settings.width_pinned(scheme, &name);
-    let mut set = paintable_items(settings, scheme, catalog);
+    let mut set = paintable_items(settings, scheme, folder, catalog);
     let mut alive = vec![true; set.len()];
     let mut short = vec![false; set.len()];
     let mut ladder = LADDER.iter();
@@ -2623,6 +2662,7 @@ pub fn sort_column(b: Builtin) -> Option<crate::sort::SortColumn> {
         Builtin::Size => Some(SortColumn::Size),
         Builtin::Mtime => Some(SortColumn::Mtime),
         Builtin::Kind => None,
+        Builtin::Folder => Some(SortColumn::Folder),
     }
 }
 
@@ -2676,7 +2716,9 @@ pub fn styled_cell_in(
 ) -> Option<String> {
     match col {
         ColumnId::Builtin(b) => match b {
-            Builtin::Name => None, // the frontend paints the name
+            // The frontend paints the name; the folder comes from the
+            // pane's result set (`PaneState::folder_text`), not the entry.
+            Builtin::Name | Builtin::Folder => None,
             Builtin::Kind => Some(norte_i18n::t_in(
                 lang,
                 match entry.kind {
@@ -2809,6 +2851,7 @@ pub fn header_label_in(
                 Builtin::Size => "col-header-size",
                 Builtin::Mtime => "col-header-mtime",
                 Builtin::Kind => "col-header-kind",
+                Builtin::Folder => "col-header-folder",
             },
         ),
         ColumnId::Attr(aid) => {
@@ -3255,9 +3298,9 @@ mod attr_funnel_tests {
         let cat = catalog_with_mode();
         // By default: present in a wide pane, and gone in a narrow one.
         let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
-        let wide = fitted_columns(&st, "file", 100, 30, Some(&cat));
+        let wide = fitted_columns(&st, "file", false, 100, 30, Some(&cat));
         assert!(wide.iter().any(|f| f.id == mode), "it fits: shown");
-        let narrow = fitted_columns(&st, "file", 40, 30, Some(&cat));
+        let narrow = fitted_columns(&st, "file", false, 40, 30, Some(&cat));
         assert!(
             !narrow.iter().any(|f| f.id == mode),
             "does not fit: the first to yield is the one nobody requested"
@@ -3273,7 +3316,7 @@ mod attr_funnel_tests {
             ..Default::default()
         };
         let theirs = ColumnsSettings::resolve(&cfg);
-        let narrow = fitted_columns(&theirs, "file", 40, 30, Some(&cat));
+        let narrow = fitted_columns(&theirs, "file", false, 40, 30, Some(&cat));
         assert!(
             narrow.iter().any(|f| f.id == mode),
             "someone requested it on purpose (ADR 0124)"
@@ -3290,11 +3333,11 @@ mod attr_funnel_tests {
         let mode = ColumnId::Attr(POSIX_MODE_ATTR.to_owned());
         let st = ColumnsSettings::resolve(&norte_config::ColumnsConfig::default());
         // Has not answered yet.
-        let f = fitted_columns(&st, "file", 100, 30, None);
+        let f = fitted_columns(&st, "file", false, 100, 30, None);
         assert!(!f.iter().any(|x| x.id == mode));
         // Answered, and has no POSIX permissions.
         let empty = norte_proto::AttrCatalog::new(vec![]);
-        let f = fitted_columns(&st, "file", 100, 30, Some(&empty));
+        let f = fitted_columns(&st, "file", false, 100, 30, Some(&empty));
         assert!(!f.iter().any(|x| x.id == mode));
         // But if the user requested it, it stays: empty is THEIR answer.
         let cfg = norte_config::ColumnsConfig {
@@ -3302,7 +3345,7 @@ mod attr_funnel_tests {
             ..Default::default()
         };
         let theirs = ColumnsSettings::resolve(&cfg);
-        let f = fitted_columns(&theirs, "file", 100, 30, Some(&empty));
+        let f = fitted_columns(&theirs, "file", false, 100, 30, Some(&empty));
         assert!(f.iter().any(|x| x.id == mode));
     }
 
@@ -3743,7 +3786,7 @@ mod fit_tests {
     /// —already said by the icon and the `/`— and nothing else.
     #[test]
     fn the_class_yields_first_and_that_is_enough() {
-        let f = fitted_columns(&with_kind(), "file", 46, 20, None);
+        let f = fitted_columns(&with_kind(), "file", false, 46, 20, None);
         assert_eq!(summary(&f), ["name", "size", "mtime"]);
         assert!(name_width(&f) >= 20, "{f:?}");
     }
@@ -3752,7 +3795,7 @@ mod fit_tests {
     /// stops as soon as the name reaches its capped target.
     #[test]
     fn long_names_compact_the_date() {
-        let f = fitted_columns(&with_kind(), "file", 46, 40, None);
+        let f = fitted_columns(&with_kind(), "file", false, 46, 40, None);
         assert_eq!(summary(&f), ["name", "size", "mtime~"]);
         // Target capped at 3/5 of 46 = 27.
         assert!(name_width(&f) >= 27, "{f:?}");
@@ -3761,7 +3804,7 @@ mod fit_tests {
     /// A wide pane loses nothing: the ladder is only climbed when needed.
     #[test]
     fn plenty_of_width_touches_nothing() {
-        let f = fitted_columns(&with_kind(), "file", 120, 30, None);
+        let f = fitted_columns(&with_kind(), "file", false, 120, 30, None);
         assert_eq!(summary(&f), ["name", "size", "mtime", "kind"]);
     }
 
@@ -3776,7 +3819,7 @@ mod fit_tests {
                 ..Default::default()
             },
         );
-        let f = fitted_columns(&s, "file", 46, 20, None);
+        let f = fitted_columns(&s, "file", false, 46, 20, None);
         assert_eq!(summary(&f), ["name", "size", "mtime~", "kind"]);
     }
 
@@ -3790,7 +3833,7 @@ mod fit_tests {
                 ..Default::default()
             },
         );
-        let f = fitted_columns(&s, "file", 46, 40, None);
+        let f = fitted_columns(&s, "file", false, 46, 40, None);
         assert_eq!(summary(&f), ["name", "size~", "mtime"]);
     }
 
@@ -3805,8 +3848,8 @@ mod fit_tests {
                 ..Default::default()
             },
         );
-        let f = fitted_columns(&s, "file", 46, 40, None);
-        let before: Vec<_> = column_widths(&s, "file", 46, None)
+        let f = fitted_columns(&s, "file", false, 46, 40, None);
+        let before: Vec<_> = column_widths(&s, "file", false, 46, None)
             .into_iter()
             .map(|(id, width)| Fitted {
                 id,
@@ -3855,5 +3898,51 @@ mod fit_tests {
         assert_eq!(today, "00:25");
         assert_eq!(this_year, "08-01");
         assert_eq!(earlier, "2025");
+    }
+
+    /// In a results tab the Folder column goes right after the name, and the
+    /// ladder never hides it: it is the one column that says where a hit is.
+    #[test]
+    fn folder_goes_after_the_name_and_never_yields() {
+        let s = ColumnsSettings::default();
+        let wide = fitted_columns(&s, "file", true, 120, 20, None);
+        assert_eq!(wide[1].id, ColumnId::Builtin(Builtin::Folder));
+        let narrow = fitted_columns(&s, "file", true, 40, 30, None);
+        assert!(
+            narrow
+                .iter()
+                .any(|f| f.id == ColumnId::Builtin(Builtin::Folder))
+        );
+        let folder_tab = fitted_columns(&s, "file", false, 120, 20, None);
+        assert!(
+            folder_tab
+                .iter()
+                .all(|f| f.id != ColumnId::Builtin(Builtin::Folder))
+        );
+    }
+
+    /// `"folder"` round-trips as an id (it crosses the bridge as one) but a
+    /// configured `"folder"` paints nothing in a folder tab.
+    #[test]
+    fn folder_is_an_id_but_not_configurable() {
+        assert_eq!(
+            "folder".parse::<ColumnId>(),
+            Ok(ColumnId::Builtin(Builtin::Folder))
+        );
+        assert_eq!(ColumnId::Builtin(Builtin::Folder).to_string(), "folder");
+        let cfg = norte_config::ColumnsConfig {
+            default_columns: Some(vec!["name".into(), "folder".into()]),
+            ..Default::default()
+        };
+        let s = ColumnsSettings::resolve(&cfg);
+        assert!(
+            s.layout_items_for("file")
+                .iter()
+                .all(|(id, _)| *id != ColumnId::Builtin(Builtin::Folder))
+        );
+        assert_eq!(
+            sort_column(Builtin::Folder),
+            Some(crate::sort::SortColumn::Folder)
+        );
     }
 }

@@ -342,6 +342,35 @@ impl State {
         (self.applied(), self.say(key))
     }
 
+    /// A LOOSE window asks for the session again, every `retry_every` ticks
+    /// (#234): the owner can close at any moment, and after a daemon
+    /// handover the new daemon's session belongs to nobody. The answer
+    /// comes back as a reread, which takes ownership if it was free and
+    /// does NOT apply the body to the screen — this window's own goes on top
+    /// on the next tick. The terminal always did this; the window never
+    /// asked, and stayed "not saved" for good after a handover.
+    pub(super) fn ask_session_if_loose(
+        &mut self,
+        backend: &Arc<dyn HostBackend>,
+        mailbox: &mpsc::Sender<Message>,
+    ) {
+        if self.session.owner || self.session.future || self.session.in_flight.is_some() {
+            return;
+        }
+        if !matches!(
+            self.session.policy.tick(true, false),
+            norte_frontend::session::PushStep::Ask
+        ) {
+            return;
+        }
+        let backend = Arc::clone(backend);
+        let mailbox = mailbox.clone();
+        tokio::spawn(async move {
+            let res = backend.session_get().await;
+            let _ = mailbox.send(Message::SessionReread(res)).await;
+        });
+    }
+
     /// The tick's `session.put` answered.
     ///
     /// Four answers, and each says something different: it went in, and what
@@ -419,6 +448,12 @@ impl State {
         };
         let was_owner = self.session.owner;
         self.session.owner = owner;
+        // Just became the owner (it was free): the next tick writes this
+        // screen even if it did not change since the last body sent — what
+        // the session holds now is someone else's, or the old daemon's.
+        if owner && !was_owner {
+            self.session.policy.resend();
+        }
         match norte_frontend::session::SessionBody::from_value(session.version, &session.body) {
             Ok(body) => {
                 self.session.revision = session.revision;
@@ -521,6 +556,24 @@ impl State {
             let Some(slot_state) = body.slots.get(id) else {
                 continue;
             };
+            // A results tab comes back as its query, empty and at rest:
+            // `list_initial` re-runs it, visible or not (C7), and never lists
+            // its root into it.
+            if let Some(saved) = &slot_state.results {
+                slot.pane.begin_results(
+                    norte_frontend::results::ResultSet::new(
+                        saved.clone(),
+                        norte_frontend::results::MAX_HITS,
+                    ),
+                    Vec::new(),
+                );
+                slot.pane.set_sort(slot_state.sort.clone());
+                slot.state = SlotState::Ready;
+                slot.history
+                    .seed(slot_state.back.clone(), slot_state.forward.clone());
+                slot.history.seed_jump(slot_state.jump.clone());
+                continue;
+            }
             slot.pane.begin_loading(slot_state.path.clone());
             // Order and hidden state USED TO BE written to the session and
             // nobody read them: the window remembered where you were and
@@ -651,6 +704,9 @@ impl State {
                     } else {
                         Vec::new()
                     },
+                    // A results tab saves its QUERY, not its hits: it comes
+                    // back by running it again.
+                    results: slot.pane.results().map(|r| r.search().clone()),
                 },
             );
         }

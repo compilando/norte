@@ -177,6 +177,7 @@ fn edge_of_the_second_column(app: &App) -> (u16, u16, norte_frontend::columns::C
     let cols = norte_frontend::columns::column_widths(
         &app.columns,
         scheme,
+        false,
         interior,
         app.attr_catalog(scheme),
     );
@@ -194,6 +195,7 @@ fn width_of(app: &App, id: &norte_frontend::columns::ColumnId) -> u16 {
     norte_frontend::columns::column_widths(
         &app.columns,
         scheme,
+        false,
         g.width - 2,
         app.attr_catalog(scheme),
     )

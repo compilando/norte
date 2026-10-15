@@ -1,0 +1,21 @@
+# #261: the daemon hands over (an upgrade, ADR 0055) while the window stays
+# open. The window must see the connection drop, start the replacement
+# itself, come back connected and keep working on the same screen.
+file a/informe.pdf
+file a/b/x.txt
+start a
+key Down
+expect-dom-has cursor b
+norte daemon stop --handover
+expect-jq any(.[]; .kind == "update" and (.value | tostring | test("reconnecting"; "i")))
+wait 3
+shot after
+# Still on the same folder and cursor, and it answers.
+expect-dom active /›home›ada›data›a
+key Return
+expect-dom active /›home›ada›data›a›b
+expect-jq [.[] | select(.kind == "update") | .value | tostring | select(test("\"connection\""))] | last | test("connected") and (test("reconnecting") | not)
+# Found here (2026-10-15): after the handover the window was no longer the
+# session's owner and never asked again, so "session not saved" stayed up.
+# A loose window now re-asks on the next tick after reconnecting.
+expect-jq [.[] | select(.kind == "update") | .value | tostring] | last(.[] | select(test("\"banners\""))) | test("session not saved") | not

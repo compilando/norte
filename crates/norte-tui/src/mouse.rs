@@ -22,7 +22,7 @@ use crate::app::Trail;
 use crate::dispatch::dispatch;
 use crate::keymap::Command;
 use crate::navigate::{cd_in, settle_cd};
-use crate::refresh::reap_search_run;
+use crate::refresh::reap_search_runs;
 use crate::screens::drain_places_drives;
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -2368,7 +2368,7 @@ async fn dispatch_click(
         &mut work.search,
         outcome,
     );
-    reap_search_run(app, &mut work.search);
+    reap_search_runs(app, &mut work.search);
     crate::event_loop::launch_pending(app, events, capture).await;
 }
 

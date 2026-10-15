@@ -10,6 +10,7 @@ use norte_core::backend::Backend;
 use norte_frontend::keymap::{CATALOGUE, Effective, Resolver, Screen, presets};
 use norte_frontend::search::SearchField;
 use norte_frontend::search_panel::{DEBOUNCE, Due, SearchPanel};
+use norte_frontend::search_status::Outcome;
 use norte_proto::methods::{MatchInfo, SearchHits};
 use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_testkit::MemProvider;
@@ -820,6 +821,209 @@ async fn snapshot_viewer_lights_the_match() {
         .draw(|f| norte_tui::ui::draw(f, &app))
         .expect("draw");
     insta::assert_snapshot!(terminal.backend().to_string());
+}
+
+// ── Open as listing (phase B, Task 6) ───────────────────────────────────
+
+/// `n` files over ten folders: a walk still streaming after its first
+/// batch (nobody drains its channel, so it stalls on the full buffer).
+async fn harness_with_big_tree(n: usize) -> (App, Backend, InFlight, Resolver) {
+    let (app, backend, work, resolver, mem) = harness_with_tree(&[]).await;
+    for i in 0..n {
+        let dir = vp(&format!("mem:///d{}", i % 10));
+        let _ = mem.mkdir(&dir).await;
+        let mut sink = mem
+            .write(&vp(&format!("mem:///d{}/f{i:05}.txt", i % 10)))
+            .await
+            .expect("write opens");
+        sink.write(Bytes::from_static(b"x")).await.expect("chunk");
+        sink.commit().await.expect("commit");
+    }
+    (app, backend, work, resolver)
+}
+
+/// Types a name query, searches now and drains the panel's FIRST batch.
+async fn search_one_batch(
+    app: &mut App,
+    backend: &Backend,
+    work: &mut InFlight,
+    resolver: &mut Resolver,
+    name: &str,
+) {
+    app.toggle_search_panel();
+    type_in(app, backend, work, resolver, name).await;
+    key(app, backend, work, resolver, KeyCode::Enter).await;
+    searchpanel::tick(app, backend, work).await;
+    let hits = work.search_panel.as_mut().expect("run").rx.recv().await;
+    assert!(hits.is_some(), "a first batch");
+    searchpanel::drain(app, &mut work.search_panel, hits);
+}
+
+/// The results slot the panel opened, if any.
+fn results_slot(app: &App) -> Option<norte_frontend::layout::SlotId> {
+    let slot = app.focused_slot();
+    app.panes
+        .browser(slot)
+        .is_some_and(Pane::is_results)
+        .then_some(slot)
+}
+
+/// F9 in the panel opens a results tab with the panel's files; a live run
+/// MOVES to the tab (C9): the panel watches along while it shows that
+/// query, its next query does not cancel the tab's run, and the tab keeps
+/// receiving to the end.
+#[tokio::test]
+async fn f9_opens_the_listing_and_hands_over_the_live_run() {
+    let total = 1_000;
+    let (mut app, backend, mut work, mut resolver) = harness_with_big_tree(total).await;
+    search_one_batch(&mut app, &backend, &mut work, &mut resolver, "*.txt").await;
+    let epoch = work.search_panel.as_ref().expect("live").epoch;
+    let shown = panel(&app).listing().expect("a tree").entries.len();
+    assert!(shown > 0 && shown < total, "still streaming: {shown}");
+    assert_eq!(
+        app.search_panel_focus,
+        SearchFocus::Field(SearchField::Name)
+    );
+    key(&mut app, &backend, &mut work, &mut resolver, KeyCode::F(9)).await;
+
+    let slot = results_slot(&app).expect("a results tab");
+    let tab = app.panes.browser(slot).expect("tab");
+    assert_eq!(tab.entries().len(), shown);
+    assert_eq!(tab.results().expect("set").search().name, "*.txt");
+    assert_eq!(app.key_owner(), KeyOwner::Panes, "focus back to the panes");
+    assert!(work.search_panel.is_none(), "the run left the panel");
+    let run = work.search.get(slot).expect("the tab adopted the run");
+    assert_eq!(run.panel_epoch, Some(epoch));
+    let progress = run.task.progress();
+
+    // The panel watches along: a batch of the tab's run lands in both.
+    let hits = work.search.get_mut(slot).expect("run").rx.recv().await;
+    let batch = hits.as_ref().map_or(0, |h| h.entries.len());
+    norte_tui::jobs::drain_search(&mut app, &mut work.search, slot, hits);
+    assert_eq!(
+        app.panes.browser(slot).expect("tab").entries().len(),
+        shown + batch
+    );
+    assert_eq!(
+        panel(&app)
+            .tree()
+            .iter()
+            .map(|f| f.files.len())
+            .sum::<usize>(),
+        shown + batch
+    );
+
+    // The panel's next query is a NEW run, and does not cancel the tab's.
+    app.open_search_panel(); // the keys back in the panel
+    assert_eq!(app.key_owner(), KeyOwner::Search);
+    app.search_panel_focus = SearchFocus::Field(SearchField::Name);
+    key(
+        &mut app,
+        &backend,
+        &mut work,
+        &mut resolver,
+        KeyCode::Backspace,
+    )
+    .await;
+    key(&mut app, &backend, &mut work, &mut resolver, KeyCode::Enter).await;
+    searchpanel::tick(&mut app, &backend, &mut work).await;
+    let new = work.search_panel.as_ref().expect("a new panel run");
+    assert_ne!(new.epoch, epoch);
+    assert!(
+        matches!(
+            progress.borrow().state,
+            norte_proto::TaskState::Running | norte_proto::TaskState::Completed
+        ),
+        "the tab's run goes on: {:?}",
+        progress.borrow().state
+    );
+    loop {
+        let hits = work.search.get_mut(slot).expect("run").rx.recv().await;
+        let end = hits.is_none();
+        norte_tui::jobs::drain_search(&mut app, &mut work.search, slot, hits);
+        if end {
+            break;
+        }
+    }
+    let tab = app.panes.browser(slot).expect("tab");
+    assert_eq!(tab.entries().len(), total);
+    assert_eq!(tab.results().expect("set").outcome(), &Outcome::Done);
+}
+
+/// F9 works from the tree focus as well as from an input, through the
+/// whole key chain (the shared-chord branch must not take it).
+#[tokio::test]
+async fn f9_works_from_the_tree() {
+    let (mut app, backend, mut work, mut resolver, _mem) =
+        harness_with_tree(&[("d/a.txt", "aguja\n"), ("d/b.txt", "nada\n")]).await;
+    search_for(
+        &mut app,
+        &backend,
+        &mut work,
+        &mut resolver,
+        SearchField::Content,
+        "aguja",
+    )
+    .await;
+    assert_eq!(app.search_panel_focus, SearchFocus::Tree);
+    let src = presets::source("orthodox").expect("the preset exists");
+    let kf = norte_frontend::keymap::parse_keymap(src).expect("the preset parses");
+    let known: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
+    let build = |s| Resolver::new(Effective::build_for(&kf, &[], &known, s).expect("merges"));
+    let mut resolvers = [
+        build(Screen::Browse),
+        build(Screen::Viewer),
+        build(Screen::Dialog),
+    ];
+    chain_key(&mut app, &backend, &mut work, &mut resolvers, KeyCode::F(9)).await;
+    assert!(app.menu.is_none(), "not the menu");
+    let slot = results_slot(&app).expect("a results tab");
+    let tab = app.panes.browser(slot).expect("tab");
+    assert_eq!(tab.entries().len(), 1);
+    let set = tab.results().expect("set");
+    assert_eq!(set.outcome(), &Outcome::Done, "the finished run's outcome");
+    assert_eq!(
+        set.match_of(&vp("mem:///d/a.txt")).and_then(|m| m.line),
+        Some(1),
+        "the panel's match context came along"
+    );
+    assert!(work.search.get(slot).is_none(), "no run to adopt");
+}
+
+/// With nothing shown, F9 says so and opens nothing.
+#[tokio::test]
+async fn f9_with_nothing_to_list_says_so() {
+    let (mut app, backend, mut work, mut resolver) = harness().await;
+    app.toggle_search_panel();
+    let before = app.focused_slot();
+    key(&mut app, &backend, &mut work, &mut resolver, KeyCode::F(9)).await;
+    assert_eq!(
+        app.message.as_deref(),
+        Some(norte_i18n::t("search-panel-nothing-to-list").as_str())
+    );
+    assert_eq!(app.focused_slot(), before, "no tab");
+    assert_eq!(app.key_owner(), KeyOwner::Search, "the keys stay");
+}
+
+/// The tab that adopted the run is closed: its run is cancelled, and the
+/// panel that handed it over stops saying it is searching instead of
+/// waiting forever on a run nobody drains.
+#[tokio::test]
+async fn closing_the_adopting_tab_stops_the_panel_watching() {
+    let (mut app, backend, mut work, mut resolver) = harness_with_big_tree(1_000).await;
+    search_one_batch(&mut app, &backend, &mut work, &mut resolver, "*.txt").await;
+    key(&mut app, &backend, &mut work, &mut resolver, KeyCode::F(9)).await;
+    let slot = results_slot(&app).expect("a results tab");
+    let progress = work.search.get(slot).expect("adopted").task.progress();
+    assert!(panel(&app).is_running(), "watching along");
+    app.tab_close();
+    norte_tui::refresh::reap_search_runs(&app, &mut work.search);
+    assert!(work.search.get(slot).is_none(), "the run left with its tab");
+    // Cancelled, or already done filling its channel: either way it ends.
+    assert!(wait_terminal(progress).await.is_terminal());
+    searchpanel::tick(&mut app, &backend, &mut work).await;
+    assert!(!panel(&app).is_running(), "the panel let go of it");
+    assert!(panel(&app).listing().is_some(), "what it found stays");
 }
 
 /// The status sentence is chosen per count: Fluent never matches a plural

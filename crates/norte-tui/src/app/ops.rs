@@ -4,6 +4,7 @@
 
 use super::App;
 use super::modal::{Modal, PromptKind, TransferKind};
+use norte_i18n::t;
 use norte_proto::VPath;
 
 impl App {
@@ -102,6 +103,10 @@ impl App {
     /// multi-item batch stays on the list confirm (there's no single name to
     /// edit). No-op if there's nothing to transfer: never a dialog over an
     /// empty batch.
+    ///
+    /// A results tab is not a location (C5): as the DESTINATION it refuses
+    /// with `msg-pane-not-a-location` instead of writing into its search
+    /// root.
     pub fn open_transfer(
         &mut self,
         kind: TransferKind,
@@ -109,6 +114,10 @@ impl App {
         to: usize,
         promoted: Option<usize>,
     ) {
+        if self.panes[to].is_results() {
+            self.message = Some(t("msg-pane-not-a-location"));
+            return;
+        }
         let to_dir = self.panes[to].dir().clone();
         self.open_transfer_to_dir(kind, from, to_dir, promoted);
     }
@@ -120,6 +129,10 @@ impl App {
     /// ([`Self::open_transfer_dest`]), and that transfer has to go through
     /// the SAME door as F5, or it's left without confirmation, without
     /// collision handling and without undo.
+    ///
+    /// From a results tab the hits come from many folders, so the search
+    /// root is a fine destination (C4): it refuses only when some of them
+    /// already lives in `to_dir` ([`norte_frontend::results::transfer_refusal`]).
     pub fn open_transfer_to_dir(
         &mut self,
         kind: TransferKind,
@@ -135,6 +148,12 @@ impl App {
                 .unwrap_or_default(),
             None => self.panes[from].marked_paths(),
         };
+        if self.panes[from].is_results()
+            && let Some(key) = norte_frontend::results::transfer_refusal(&items, &to_dir)
+        {
+            self.message = Some(t(key));
+            return;
+        }
         match items.as_slice() {
             [] => {}
             [one] => {

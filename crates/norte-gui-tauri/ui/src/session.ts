@@ -140,6 +140,7 @@ export class Session {
         // is the bug this patch exists to not repeat.
         slot.names_note = c.names_note ?? "";
         slot.filling_note = c.filling_note ?? "";
+        slot.results_note = c.results_note ?? "";
         slot.pruned_note = c.pruned_note ?? "";
         slot.marked_note = c.marked_note ?? "";
         slot.footer = c.footer ?? "";
