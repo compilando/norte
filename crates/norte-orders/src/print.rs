@@ -178,14 +178,14 @@ fn age(n: u64) -> String {
 }
 
 /// Hangul fillers: letters to Unicode, invisible to the reader.
-const INVISIBLE_LETTERS: &[char] = &['\u{115F}', '\u{1160}', '\u{3164}', '\u{FFA0}'];
+pub(crate) const INVISIBLE_LETTERS: &[char] = &['\u{115F}', '\u{1160}', '\u{3164}', '\u{FFA0}'];
 
 /// Combining marks that are `Default_Ignorable` — invisible, so a twin maker
 /// (`norte_encoding::is_terminal_hazard`'s table; this crate may not link it,
 /// and `every_terminal_hazard_is_escaped_even_after_a_letter` checks the two
 /// agree). The variation selectors are here too: after a letter they select
 /// nothing a reader can see.
-const INVISIBLE_MARKS: &[(char, char)] = &[
+pub(crate) const INVISIBLE_MARKS: &[(char, char)] = &[
     ('\u{034F}', '\u{034F}'),
     ('\u{17B4}', '\u{17B5}'),
     ('\u{180B}', '\u{180F}'),

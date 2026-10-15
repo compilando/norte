@@ -153,6 +153,26 @@ fn every_terminal_hazard_is_escaped_even_after_a_letter() {
     assert_eq!(escape_name("a\u{202e}b".as_bytes()), r"a\xe2\x80\xaeb");
 }
 
+/// The corpus's twin of `other` (a trailing ZWSP) cannot be typed raw after
+/// `>` — it would read as the keyword — but the printer's escape names it.
+#[test]
+fn the_keyword_twin_of_the_corpus_is_refused_raw_and_named_escaped() {
+    let twin = norte_testkit::corpus::hostile_names()
+        .into_iter()
+        .find(|n| n.id == "keyword_twin_zwsp")
+        .expect("corpus fixture")
+        .bytes;
+    let raw = String::from_utf8(twin.clone()).expect("utf-8");
+    assert_eq!(
+        parse(&format!("cp >{raw}")).map_err(|e| e.kind),
+        Err(ParseErrorKind::InvisibleChar)
+    );
+    let o = Order {
+        stages: vec![Stage::Cp(Dest::Path(twin))],
+    };
+    assert_eq!(parse(&print(&o)), Ok(o));
+}
+
 /// What the lexer splits on, the printer escapes: a name with a no-break
 /// space prints so it reads back whole.
 #[test]

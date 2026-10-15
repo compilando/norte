@@ -216,6 +216,119 @@ fn unicode_whitespace_splits_words_outside_quotes() {
     );
 }
 
+/// Characters a terminal draws as nothing: Unicode `Cf` (ZWSP, ZWJ, word
+/// joiner, BOM, soft hyphen, bidi marks, a tag) plus the invisible letters
+/// and marks the printer escapes (VS16, CGJ, a Hangul filler).
+const INVISIBLE: &[char] = &[
+    '\u{200B}',
+    '\u{200C}',
+    '\u{200D}',
+    '\u{2060}',
+    '\u{FEFF}',
+    '\u{AD}',
+    '\u{200E}',
+    '\u{202E}',
+    '\u{E0041}',
+    '\u{FE0F}',
+    '\u{34F}',
+    '\u{3164}',
+];
+
+/// A keyword with an invisible character anywhere in it is refused, not
+/// read as a name that looks exactly like the keyword: `cp >other` plus
+/// ZWSP used to copy into a new `other<ZWSP>`. So is a negated `sel` value
+/// with one (`!*.rs<ZWSP>` matches nothing, so it selects everything), and
+/// a destination or argument made of nothing else.
+#[test]
+fn an_invisible_char_glued_to_a_keyword_is_refused() {
+    for c in INVISIBLE {
+        for line in [
+            format!("cp >other{c}"),
+            format!("mv >{c}other"),
+            format!("cp >ot{c}her"),
+            format!("cp > {c}here"),
+            format!("cp >h{c}ere"),
+            format!("cp {c}>other"),
+            format!("sel{c} *.rs"),
+            format!("s{c}el *.rs"),
+            format!("{c}trash"),
+            format!("pane.swap{c}"),
+            format!("sel {c}ext:pdf"),
+            format!("sel e{c}xt:pdf"),
+            format!("sel {c}!*.rs"),
+            format!("sel !{c}name:x"),
+            format!("sel {c}size>1M"),
+            format!("sel type:file{c}"),
+            format!("sel !*.rs{c} | trash"),
+            format!("sel !ext:p{c}df"),
+            format!("cp >{c}"),
+            format!("mkdir {c}"),
+        ] {
+            let e = parse(&line).expect_err(&line);
+            assert_eq!(e.kind, ParseErrorKind::InvisibleChar, "{line:?}");
+            assert!(
+                line.is_char_boundary(e.offset) && line[e.offset..].starts_with(*c),
+                "the offset points at the invisible char: {line:?} {e:?}"
+            );
+        }
+    }
+}
+
+/// A name that merely CONTAINS an invisible character, without it hiding a
+/// keyword, is a real file name and stays valid; so does a positive `sel`
+/// pattern for one, and one typed escaped or quoted, which says it is a
+/// name on purpose.
+#[test]
+fn an_invisible_char_inside_a_name_stays_valid() {
+    let zw = "\u{200B}";
+    assert_eq!(
+        q(&format!("cp >ot{zw}hers")).stages,
+        vec![Stage::Cp(Dest::Path(format!("ot{zw}hers").into_bytes()))]
+    );
+    assert_eq!(
+        q(&format!("sel ext:p{zw}df")).stages,
+        vec![sel(vec![yes(Pred::Ext(vec![
+            format!("p{zw}df").into_bytes()
+        ]))])]
+    );
+    assert_eq!(
+        q(r"sel !*.rs\xe2\x80\x8b").stages,
+        vec![sel(vec![Term {
+            negated: true,
+            pred: Pred::Name(format!("*.rs{zw}").into_bytes())
+        }])]
+    );
+    assert_eq!(
+        q(&format!("mkdir report{zw}")).stages,
+        vec![Stage::Mkdir(format!("report{zw}").into_bytes())]
+    );
+    assert_eq!(
+        q(&format!("cp >/tmp/other{zw}")).stages,
+        vec![Stage::Cp(Dest::Path(
+            format!("/tmp/other{zw}").into_bytes()
+        ))]
+    );
+    assert_eq!(
+        q(&format!("sel *.rs{zw}")).stages,
+        vec![sel(vec![yes(Pred::Name(format!("*.rs{zw}").into_bytes()))])]
+    );
+    assert_eq!(
+        q(&format!("cp >'other{zw}'")).stages,
+        vec![Stage::Cp(Dest::Path(format!("other{zw}").into_bytes()))]
+    );
+    assert_eq!(
+        q(r"cp >other\xe2\x80\x8b").stages,
+        vec![Stage::Cp(Dest::Path(format!("other{zw}").into_bytes()))]
+    );
+    // A ZWJ inside an emoji is not at an edge of a keyword either.
+    assert_eq!(
+        q("mkdir \u{1F469}\u{200D}\u{1F4BB}").stages,
+        vec![Stage::Mkdir(
+            "\u{1F469}\u{200D}\u{1F4BB}".as_bytes().to_vec()
+        )]
+    );
+}
+
 /// The colour spans of a line split on a Unicode space stay on char
 /// boundaries: the box slices the line with them.
 #[test]

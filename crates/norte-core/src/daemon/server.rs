@@ -2574,7 +2574,8 @@ fn is_cancelable(method: &str) -> bool {
             | methods::FS_SET_MODE
             | methods::AI_RENAME_PLAN
             // 0.87.0: the assistant's turn can take a minute of model calls;
-            // withdrawing it drops the loop between calls.
+            // withdrawing it drops the dispatch, an in-flight model call and
+            // any `sizes` walk included (`aborting_ai_chat_stops_…`).
             | methods::AI_CHAT
             | methods::INDEX_SEARCH_SEMANTIC
             // 0.36.0: `fs.rename_batch` gates the WHOLE batch before reserving

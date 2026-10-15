@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 use crate::ast::{Cmp, Dest, KindSel, Order, Pred, Query, Stage, Term};
-use crate::lex::{Piece, Tok, bytes, lex, plain_eq, plain_prefix, plain_text};
+use crate::lex::{Piece, Tok, bytes, lex, plain_eq, plain_prefix, plain_text, strip_format};
 
 /// Why a line is not an order, and where.
 ///
@@ -58,6 +58,13 @@ pub enum ParseErrorKind {
     /// A `'` never closed.
     #[error("unterminated quote")]
     Unterminated,
+    /// A character drawn as nothing (Unicode `Cf` — ZWSP, ZWJ, word joiner,
+    /// BOM… — or an invisible letter or mark) typed plain where it would
+    /// disguise the order: inside a verb, key, `!`, `>other` or `>here`; in
+    /// a negated `sel` term; or as a whole destination or argument. Inside
+    /// a name, escaped or quoted, such a character is fine.
+    #[error("invisible character")]
+    InvisibleChar,
 }
 
 /// What a span of the line is, for colouring.
@@ -211,6 +218,17 @@ fn stage(
 ) -> Result<Stage, ParseError> {
     let (vspan, vpieces) = &seg[0];
     let args = &seg[1..];
+    let is_verb = |v: &str| {
+        matches!(
+            v,
+            "sel" | "cp" | "mv" | "trash" | "mkdir" | "cd" | "log" | "undo"
+        ) || is_catalogue_id(v)
+    };
+    if let Some((bare, at)) = strip_format(vpieces)
+        && plain_text(&bare).is_some_and(|v| is_verb(&v) || v == "redo")
+    {
+        return fail(at, ParseErrorKind::InvisibleChar);
+    }
     let Some(verb) = plain_text(vpieces) else {
         return fail(vspan.start, ParseErrorKind::UnknownVerb);
     };
@@ -218,10 +236,7 @@ fn stage(
         Some((r, _)) => fail(r.start, ParseErrorKind::BadTerm),
         None => Ok(()),
     };
-    let known = matches!(
-        verb.as_str(),
-        "sel" | "cp" | "mv" | "trash" | "mkdir" | "cd" | "log" | "undo"
-    ) || is_catalogue_id(&verb);
+    let known = is_verb(&verb);
     if known {
         spans.push((vspan.clone(), TokenClass::Verb));
     }
@@ -270,6 +285,11 @@ fn one_arg(
     if p.is_empty() {
         return fail(r.start, ParseErrorKind::MissingArg);
     }
+    if let Some((bare, at)) = strip_format(p)
+        && bare.is_empty()
+    {
+        return fail(at, ParseErrorKind::InvisibleChar);
+    }
     spans.push((r.clone(), TokenClass::Value));
     if let Some((r, _)) = args.get(1) {
         return fail(r.start, ParseErrorKind::BadTerm);
@@ -306,6 +326,11 @@ fn dest(
         return fail(end, ParseErrorKind::MissingDest);
     };
     if !plain_prefix(p, b">") {
+        if let Some((bare, at)) = strip_format(p)
+            && plain_prefix(&bare, b">")
+        {
+            return fail(at, ParseErrorKind::InvisibleChar);
+        }
         return fail(r.start, ParseErrorKind::MissingDest);
     }
     // `> here`: a lone `>` takes the next word.
@@ -319,6 +344,13 @@ fn dest(
     };
     if body.is_empty() {
         return fail(span.start, ParseErrorKind::MissingDest);
+    }
+    // A keyword with an invisible char anywhere in it, or a destination of
+    // nothing but invisible chars: either would paint as something it is not.
+    if let Some((bare, at)) = strip_format(body)
+        && (bare.is_empty() || plain_eq(&bare, b"other") || plain_eq(&bare, b"here"))
+    {
+        return fail(at, ParseErrorKind::InvisibleChar);
     }
     spans.push((span, TokenClass::Dest));
     if let Some((r, _)) = rest.first() {
@@ -353,6 +385,24 @@ fn term(r: &Range<usize>, p: &[Piece], spans: &mut Spans) -> Result<Term, ParseE
     let body = if negated { &p[1..] } else { p };
     if body.is_empty() {
         return bad(ParseErrorKind::BadTerm);
+    }
+    let keyed = |b: &[Piece]| {
+        [&b"ext:"[..], b"name:", b"name=", b"type:"]
+            .iter()
+            .any(|k| plain_prefix(b, k))
+            || keyed_cmp(b, b"size").is_some()
+            || keyed_cmp(b, b"age").is_some()
+    };
+    // Refused: an invisible char that HIDES a key or `!` (the term reads as
+    // keyed and is not), and any in a negated term, where a value that
+    // matches nothing inverts into "everything" — `!*.rs<ZWSP>` paints as
+    // `!*.rs`. Elsewhere it is a pattern for a real name and stays.
+    if let Some((bare, at)) = strip_format(body)
+        && (negated
+            || (keyed(&bare) && !keyed(body))
+            || (plain_prefix(&bare, b"!") && !plain_prefix(body, b"!")))
+    {
+        return fail(at, ParseErrorKind::InvisibleChar);
     }
     let lead = usize::from(negated);
     // The key span: the leading `!` plus the key's plain bytes.
@@ -391,6 +441,12 @@ fn term(r: &Range<usize>, p: &[Piece], spans: &mut Spans) -> Result<Term, ParseE
             KindSel::Dir
         } else if plain_eq(rest, b"link") {
             KindSel::Link
+        } else if let Some((bare, at)) = strip_format(rest)
+            && [&b"file"[..], b"dir", b"link"]
+                .iter()
+                .any(|k| plain_eq(&bare, k))
+        {
+            return fail(at, ParseErrorKind::InvisibleChar);
         } else {
             return bad(ParseErrorKind::BadTerm);
         };

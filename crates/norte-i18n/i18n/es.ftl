@@ -871,6 +871,7 @@ order-error-bad-escape = un escape es \xHH, \\, \ (espacio), \| o \'
 order-error-missing-dest = ¿adónde? (>other, >here o >RUTA)
 order-error-missing-arg = este verbo necesita un argumento
 order-error-unterminated = una comilla no se cierra
+order-error-invisible-char = esta palabra lleva pegado un carácter invisible; bórralo, o escríbelo como \xHH si de verdad es parte de un nombre
 order-error-no-other-pane = no hay otro panel
 order-error-bad-path = no es una ruta válida
 order-error-one-action = solo la última etapa puede actuar (sel … | sel … | cp >other)
