@@ -1,0 +1,11 @@
+# The box opened from the title bar's search button types spaces (reported
+# 2026-10-15: `:sel ext` arrived as `:selext`). The button keeps the focus
+# after the click, and a focused button is pressed by the space bar.
+file a/informe.pdf
+file a/notas.txt
+start a
+click 700 10
+type :sel ext:pdf
+shot box
+expect-query :sel ext:pdf
+expect-marked 1

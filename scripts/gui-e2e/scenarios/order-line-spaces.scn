@@ -1,0 +1,14 @@
+# The `:` box types spaces in the window, in krusader (reported 2026-10-15:
+# `:sel ext` arrived as `:selext`).
+config [keymap]
+config preset = "krusader"
+file a/informe.pdf
+file a/notas.txt
+start a
+# krusader has no ctrl+g; `alt+:` opens the box with `:` typed.
+key alt+colon
+type sel ext:pdf
+shot box
+expect-query :sel ext:pdf
+expect-marked 1
+key Escape

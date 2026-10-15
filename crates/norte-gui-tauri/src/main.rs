@@ -22,6 +22,7 @@ struct WindowSink {
 
 impl UpdateSink for WindowSink {
     fn update(&self, env: &BridgeEnvelope<UiUpdate>) -> Result<(), SinkError> {
+        norte_gui_tauri::trace::record("update", env);
         self.app
             .emit(EVENT_UPDATE, env)
             .map_err(|e| SinkError(e.to_string()))

@@ -112,7 +112,12 @@ impl Bridge {
     /// If the host is no longer there, and says so: a renderer that does not
     /// find out the host died is left painting a frozen screen.
     pub async fn dispatch(&self, action: UiAction) -> Result<ActionAck, String> {
-        self.host.dispatch(action).await.map_err(|e| e.to_string())
+        crate::trace::record("action", &action);
+        let ack = self.host.dispatch(action).await.map_err(|e| e.to_string());
+        if let Ok(a) = &ack {
+            crate::trace::record("ack", a);
+        }
+        ack
     }
 
     /// Asks for a new frame: the renderer lost track of the sequence.
