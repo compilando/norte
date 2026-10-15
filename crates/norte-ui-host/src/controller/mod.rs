@@ -67,6 +67,7 @@ mod patches;
 mod places;
 mod preview;
 mod profiles;
+mod results;
 mod search;
 mod searchpanel;
 mod selectors;
@@ -1227,19 +1228,22 @@ enum Background {
     /// about a search that does not exist, while the error passed through
     /// the status bar and the next key swept it away.
     SearchBroken(u64, Box<Error>),
-    /// A batch of the search panel's run `run` — the HOST-WIDE run id
-    /// (`searchpanel::PanelRunHost::run`), not the model's epoch, which
-    /// starts over with every panel.
-    SearchPanelHits(u64, Box<norte_proto::methods::SearchHits>),
-    /// The search panel's run `run` has a Task: this is its id. Arrives
-    /// right after its `TaskNew`, so the row is on the board by then.
-    SearchPanelLive(u64, norte_proto::TaskId),
-    /// The search panel's run `run` never got queued, and why.
-    SearchPanelBroken(u64, Box<Error>),
-    /// The search panel's run `run` sent its last batch: how its Task
-    /// stood when the channel closed. Through the forwarder and not the
-    /// board's progress, so it lands AFTER the run's last batch.
-    SearchPanelEnded(u64, Box<norte_proto::TaskState>),
+    /// A batch of the run `run` — the HOST-WIDE run id
+    /// (`searchpanel::next_run_id`), not the panel model's epoch, which
+    /// starts over with every panel. A run belongs to the search panel or,
+    /// once handed over or launched for one, to a results tab
+    /// (`results::ResultsRun`): one forwarder, one identity, so a run
+    /// handed over keeps its messages.
+    SearchRunHits(u64, Box<norte_proto::methods::SearchHits>),
+    /// The run `run` has a Task: this is its id. Arrives right after its
+    /// `TaskNew`, so the row is on the board by then.
+    SearchRunLive(u64, norte_proto::TaskId),
+    /// The run `run` never got queued, and why.
+    SearchRunBroken(u64, Box<Error>),
+    /// The run `run` sent its last batch: how its Task stood when the
+    /// channel closed. Through the forwarder and not the board's progress,
+    /// so it lands AFTER the run's last batch.
+    SearchRunEnded(u64, Box<norte_proto::TaskState>),
     /// The volumes, requested by the SIDE PANEL.
     ///
     /// Separate from the selector's for the same reason as the two plugin
@@ -2966,6 +2970,8 @@ struct State {
     /// The search panel's slot and state, while one is open: the SAME model
     /// as the terminal's, and the run in flight.
     search_panel: Option<(u32, searchpanel::PanelState)>,
+    /// The runs feeding results tabs, by slot (spec 2026-10-10).
+    results_runs: std::collections::BTreeMap<u32, results::ResultsRun>,
     /// The ring the lines come from. `None` = this process did not mount it,
     /// and then the panel SAYS so instead of showing itself empty as if
     /// nothing had happened.
@@ -3518,6 +3524,7 @@ impl State {
             cursor_processes: norte_frontend::processes::Processes::default(),
             log_panel: norte_frontend::logpanel::LogPanel::default(),
             search_panel: None,
+            results_runs: std::collections::BTreeMap::new(),
             log_ring,
             // One until the first frame tells the truth: never zero, so a
             // page keypress before painting moves something instead of
@@ -4354,6 +4361,7 @@ impl State {
             | UiAction::AssistantCancel { .. } => self.assistant_action(action, backend, mailbox),
             UiAction::SearchPanelEdit { .. }
             | UiAction::SearchPanelGo { .. }
+            | UiAction::SearchPanelOpenListing { .. }
             | UiAction::SearchPanelReroot { .. }
             | UiAction::SearchPanelFilters { .. }
             | UiAction::SearchPanelActivate { .. }

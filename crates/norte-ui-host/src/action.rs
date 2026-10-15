@@ -781,6 +781,14 @@ pub enum UiAction {
         /// The panel's slot.
         slot_id: u32,
     },
+    /// "Open as listing" (bridge 119): the files the panel shows become a
+    /// results TAB next to the active listing, and a run still streaming
+    /// moves to it. Refused with `search-panel-nothing-to-list` when the
+    /// panel shows no files.
+    SearchPanelOpenListing {
+        /// The PANEL's slot.
+        slot_id: u32,
+    },
     /// Enter in one of the panel's inputs: searches now, without the pause.
     SearchPanelGo {
         /// The panel's slot.

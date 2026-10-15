@@ -1190,6 +1190,7 @@
           "mode": "filter",
           "query": "no"
         },
+        "results_note": "",
         "rows": [
           {
             "badge": "",
@@ -1277,6 +1278,79 @@
         },
         "total_rows": 3,
         "used_ratio": 0.3499999940395355
+      },
+      {
+        "columns": [
+          {
+            "align": "left",
+            "id": "name",
+            "label": "Nombre",
+            "sort": "asc",
+            "sortable": true,
+            "width": null
+          },
+          {
+            "align": "left",
+            "id": "folder",
+            "label": "Carpeta",
+            "sort": null,
+            "sortable": true,
+            "width": null
+          }
+        ],
+        "cursor": 1,
+        "filling_note": "",
+        "first_visible": 0,
+        "footer": "",
+        "generation": 2,
+        "hidden_note": "",
+        "icon_column": false,
+        "kind": "browser",
+        "mark_ruler": [],
+        "marked_note": "",
+        "marks": 0,
+        "names_note": "",
+        "path_display": "búsqueda «aguja» en ⟨mem⟩/casa",
+        "path_hostile": false,
+        "path_segments": [],
+        "pruned_note": "",
+        "quick": null,
+        "results_note": "búsqueda: 1 encontrados (buscando…)",
+        "rows": [
+          {
+            "badge": "",
+            "badge_hostile": false,
+            "badge_role": "",
+            "cells": [
+              {
+                "column": "folder",
+                "text": "src/a"
+              }
+            ],
+            "display_name": "x.txt",
+            "hostile": false,
+            "icon": "",
+            "icon_hostile": false,
+            "icon_kind": "file",
+            "key": 1,
+            "kind": "file",
+            "marked": false,
+            "name_bold": false,
+            "name_color": "",
+            "name_dim": false,
+            "name_italic": false,
+            "name_underline": false,
+            "progress": null,
+            "selected": false
+          }
+        ],
+        "skipped_note": "",
+        "slot_id": 17,
+        "state": {
+          "state": "ready"
+        },
+        "total_rows": 1,
+        "used_ratio": null
       },
       {
         "fields": [
@@ -1532,6 +1606,7 @@
         "first_row": 1,
         "generation": 7,
         "kind": "search",
+        "open_listing_label": "Abrir como listado",
         "root": "/casa",
         "root_hostile": false,
         "rows": [

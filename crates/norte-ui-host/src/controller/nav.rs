@@ -171,6 +171,9 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
+        // A results tab navigated to a folder becomes that folder (C10):
+        // its run stops now, before a late batch can reach the listing.
+        self.abandon_results(slot);
         self.token += 1;
         let token = RequestToken(self.token);
         let target = target.clone();

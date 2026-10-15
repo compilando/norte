@@ -206,6 +206,14 @@ impl State {
         std::mem::swap(&mut slot_a.visible, &mut slot_b.visible);
         self.slots.insert(a, slot_b);
         self.slots.insert(b, slot_a);
+        // A results tab's run follows its pane.
+        let (run_a, run_b) = (self.results_runs.remove(&a), self.results_runs.remove(&b));
+        if let Some(r) = run_a {
+            self.results_runs.insert(b, r);
+        }
+        if let Some(r) = run_b {
+            self.results_runs.insert(a, r);
+        }
         for slot in [a, b] {
             if let Some(h) = self.slots.get_mut(&slot) {
                 h.cancel_probe

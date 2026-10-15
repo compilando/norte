@@ -412,6 +412,13 @@ pub struct Fake {
     /// and the batch channel open until then, the way a daemon walks a big
     /// tree. Off = it completes at once.
     pub search_runs_until_cancelled: bool,
+    /// Every later search keeps its batch channel OPEN after its walk
+    /// ended, until the test pushes more ([`Fake::push_batch`]) or closes it
+    /// ([`Fake::close_search`]): a daemon still streaming a big tree.
+    pub search_hold: std::sync::atomic::AtomicBool,
+    /// The held channels, by launch order (0 = the first search).
+    pub held_searches:
+        std::sync::Mutex<Vec<Option<tokio::sync::mpsc::Sender<norte_proto::methods::SearchHits>>>>,
     /// The byte ranges `read` was asked for, in order.
     pub reads: std::sync::Mutex<Vec<(VPath, Option<norte_proto::ByteRange>)>>,
     /// How many times the volumes have been enumerated.
@@ -642,6 +649,31 @@ impl Fake {
     /// How many searches have been launched against this double.
     pub fn searches_launched(&self) -> usize {
         self.params_search.lock().expect("params mutex").len()
+    }
+
+    /// Later searches keep streaming until [`Fake::close_search`].
+    pub fn hold_search_stream(&self) {
+        self.search_hold.store(true, Ordering::SeqCst);
+    }
+
+    /// One more batch on the held search `n` (launch order, from 0).
+    pub async fn push_batch(&self, n: usize, hits: norte_proto::methods::SearchHits) {
+        let tx = self
+            .held_searches
+            .lock()
+            .expect("held mutex")
+            .get(n)
+            .cloned()
+            .flatten()
+            .expect("a held search");
+        tx.send(hits).await.expect("the forwarder listens");
+    }
+
+    /// Ends the held search `n`: its channel closes.
+    pub fn close_search(&self, n: usize) {
+        if let Some(slot) = self.held_searches.lock().expect("held mutex").get_mut(n) {
+            *slot = None;
+        }
     }
 
     /// Arms the NEXT `log.tail` response (#328).
@@ -1114,11 +1146,18 @@ impl HostBackend for Fake {
             .search_runs_until_cancelled
             .then(|| Arc::new(tokio::sync::Notify::new()));
         let stop_walk = stop.clone();
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        {
+            // Every launch takes its place, held or not, so `n` is the
+            // launch order.
+            let mut held = self.held_searches.lock().expect("held mutex");
+            held.resize(launched.saturating_sub(1), None);
+            held.push(self.search_hold.load(Ordering::SeqCst).then(|| tx.clone()));
+        }
         Box::pin(async move {
             if let Some(gate) = gate {
                 gate.notified().await;
             }
-            let (tx, rx) = tokio::sync::mpsc::channel(8);
             let (ptx, prx) = tokio::sync::watch::channel(norte_proto::TaskProgress {
                 task_id: id,
                 kind: norte_proto::TaskKind::Search,

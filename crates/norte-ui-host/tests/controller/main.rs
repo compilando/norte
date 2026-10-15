@@ -42,6 +42,7 @@ mod overlay_dismiss;
 mod panels;
 mod plugin_panes;
 mod rename;
+mod results;
 mod reviews;
 mod search;
 mod search_panel;

@@ -613,10 +613,19 @@ impl State {
         // with the raw bytes while the rows go transcoded leaves
         // `pane.names-encoding` half-done — the mojibake stays up top and the
         // reader cannot tell whether the command did anything (#57, #293).
-        let (path, hostile) = norte_frontend::path_display_with(
-            target_slot.pane.dir(),
-            target_slot.pane.name_encoding(),
-        );
+        // A results tab has no directory: its location line says the query
+        // and the root instead.
+        let results = target_slot.pane.results();
+        let (path, hostile) = match results {
+            Some(set) => norte_frontend::results::location(set, self.lang),
+            None => norte_frontend::path_display_with(
+                target_slot.pane.dir(),
+                target_slot.pane.name_encoding(),
+            ),
+        };
+        let results_note = results.map_or_else(String::new, |set| {
+            norte_frontend::results::status(set, target_slot.pane.real_entries().len(), self.lang)
+        });
         // One pass over the marks for the three things that count them.
         let marks = target_slot.pane.marks_summary(crate::dto::MARK_RULER_SPANS);
         crate::dto::ViewChange::BrowserHeader {
@@ -647,6 +656,7 @@ impl State {
                 target_slot.pane.entries().len(),
                 self.lang,
             )),
+            results_note: clamp_display(results_note),
             pruned_note: clamp_display(norte_frontend::notes::pruned_marks(
                 target_slot.pane.pruned_marks(),
                 self.lang,
@@ -673,7 +683,13 @@ impl State {
     /// treated as such. The root carries the scheme and, if there is one, the
     /// authority, in the same shape as `path_display` (`⟨file⟩`,
     /// `⟨sftp⟩host`).
+    ///
+    /// None for a results tab: it is not a location, and a crumb would
+    /// navigate the root's ancestors as if it were.
     fn crumbs_of(target_slot: &Slot) -> Vec<String> {
+        if target_slot.pane.is_results() {
+            return Vec::new();
+        }
         let dir = target_slot.pane.dir();
         let root = match dir.authority() {
             Some(a) => format!("⟨{}⟩{}", dir.scheme(), a),
@@ -787,6 +803,7 @@ impl State {
             skipped_note,
             names_note,
             filling_note,
+            results_note,
             pruned_note,
             marked_note,
             footer,
@@ -816,6 +833,7 @@ impl State {
             skipped_note,
             names_note,
             filling_note,
+            results_note,
             pruned_note,
             marked_note,
             footer,
