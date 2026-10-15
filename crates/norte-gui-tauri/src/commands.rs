@@ -112,7 +112,12 @@ impl Bridge {
     /// If the host is no longer there, and says so: a renderer that does not
     /// find out the host died is left painting a frozen screen.
     pub async fn dispatch(&self, action: UiAction) -> Result<ActionAck, String> {
-        self.host.dispatch(action).await.map_err(|e| e.to_string())
+        crate::trace::record("action", &action);
+        let ack = self.host.dispatch(action).await.map_err(|e| e.to_string());
+        if let Ok(a) = &ack {
+            crate::trace::record("ack", a);
+        }
+        ack
     }
 
     /// Asks for a new frame: the renderer lost track of the sequence.
@@ -191,6 +196,9 @@ pub const COMMANDS: &[&str] = &[
     "catalog",
     "image_bytes",
     "window_control",
+    // What the probes show, into `NORTE_GUI_TRACE` (the end-to-end harness).
+    // A no-op without that variable: it writes nowhere and reads nothing.
+    "trace_dom",
 ];
 
 /// What the window's own title bar can ask of ITS window (ADR 0136).

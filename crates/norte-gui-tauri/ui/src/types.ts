@@ -2208,6 +2208,8 @@ export interface HostCatalog {
   theme: Record<string, string>;
   /** Task 3.6's measurement pass (`NORTE_GUI_MEASURE=1`). */
   measure: boolean;
+  /** `NORTE_GUI_TRACE` is set: report what the probes show after a paint. */
+  trace?: boolean;
   /** How long to wait before SHOWING that it is waiting, in ms. Travels
    *  instead of being written in the CSS because it is a decision shared
    *  with the terminal (`norte_frontend::busy::THRESHOLD`), and a number

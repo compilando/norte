@@ -1,0 +1,24 @@
+# The reporter's own settings (2026-10-15): krusader, the quick search as a
+# filter, the native title bar. The box must type spaces however it opened.
+config quick_search = "filter"
+config titlebar = "native"
+config menu_bar = true
+config panel_bar_position = "left"
+config [keymap]
+config preset = "krusader"
+file a/informe.pdf
+file a/notas.txt
+start a
+key alt+colon
+type sel ext:pdf
+shot alt-colon
+expect-query :sel ext:pdf
+expect-shown :sel ext:pdf
+key Escape
+wait 0.5
+# And from the title bar's search button (native title bar: it sits here).
+click 775 10
+type :sel ext:pdf
+shot button
+expect-query :sel ext:pdf
+expect-shown :sel ext:pdf

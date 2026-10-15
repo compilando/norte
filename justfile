@@ -990,6 +990,14 @@ gui-package: gui-build
 gui-smoke imagen="debian:trixie":
     ./scripts/gui-smoke.sh {{imagen}}
 
+# The window end to end: the real `norte-gui` (the last `just link-gui`) on
+# a virtual display, in a sandbox with a throwaway home, driven by xdotool
+# and checked against what crossed the bridge (`NORTE_GUI_TRACE`). Scenarios
+# in `scripts/gui-e2e/scenarios/`; screenshots in `target/gui-e2e/`.
+# Needs Xvfb, xdotool, bwrap, jq and ImageMagick. Seconds per scenario.
+gui-e2e *scenarios:
+    ./scripts/gui-e2e/run.sh {{scenarios}}
+
 # Cuts the release of a PUSHED tag and leaves it as a draft
 # (`scripts/release/release.sh`): notes from the CHANGELOG, the Windows
 # runner, `baseline` + `baseline-publish`, the Windows artefacts, and the

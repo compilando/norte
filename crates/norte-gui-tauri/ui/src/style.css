@@ -1930,6 +1930,14 @@ button.status-item:hover {
   unicode-bidi: isolate;
 }
 
+/* `pre`: a typed space is shown, trailing ones included — the reader is
+   writing a line whose words the spaces separate. */
+.palette-query-text {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .palette-query::before {
   content: "›";
   margin-right: 8px;

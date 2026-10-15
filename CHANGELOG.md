@@ -18,6 +18,12 @@ independently through `PROTOCOL_VERSION`.
 
 ### Fixed
 
+- **The box shows the spaces you type** in the window. They were typed —
+  the order ran right — but the box drew `:sel ext:pdf` as `:selext:pdf`.
+- **A query key without its sign is pointed out**: `sel ext bin` looks for
+  files called `ext` and `bin`; the preview now asks "did you mean ext:…?".
+  It explained why the earlier marks "stayed": an order that selects
+  nothing gives them back.
 - **The box, the palette, help and settings take the keys over a focused
   side panel** in the terminal. Opened over the terminal panel, the box
   showed up but every key went to the shell, which ran what you typed as

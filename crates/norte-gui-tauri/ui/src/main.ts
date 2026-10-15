@@ -13,7 +13,7 @@ import "@fontsource/inter/latin-400.css";
 import "@fontsource/inter/latin-ext-400.css";
 import "@fontsource/inter/latin-600.css";
 
-import { invokeMetrics, tauriPort } from "./bridge";
+import { invokeMetrics, invokeTraceDom, tauriPort } from "./bridge";
 import type { HostPort } from "./bridge";
 import { AltSolo, isForTheField, isPasteIntoTheBox, keyAction, keyInputOf } from "./keys";
 import { Screen } from "./render";
@@ -229,6 +229,13 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     requestAnimationFrame(() => {
       frameQueued = false;
       repaint();
+      if (catalog.trace === true) {
+        // What the probes SHOW, as laid out (`innerText` follows the
+        // rendering): the harness checks the screen, not only the bridge.
+        const shown = (sel: string): string =>
+          doc.querySelector<HTMLElement>(sel)?.innerText ?? "";
+        void invokeTraceDom({ goto: shown(".palette-query") });
+      }
     });
   };
 
