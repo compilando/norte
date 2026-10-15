@@ -278,9 +278,14 @@ prune days="2":
         [ -d "$d" ] && dirs+=("$d")
     done
     barridos=0
+    # `-mtime +0` is "more than 24 h", not "any age": `prune 0` used to sweep
+    # nothing of today's — 60 GiB of a day's test exes stayed. With 0 it is
+    # anything untouched for ten minutes (a link in flight is left alone).
+    edad=(-mtime +{{days}})
+    [ "{{days}}" = 0 ] && edad=(-mmin +10)
     if [ ${#dirs[@]} -gt 0 ]; then
         barridos=$(find "${dirs[@]}" -maxdepth 1 -type f -executable \
-            ! -name '*.*' -mtime +{{days}} -print -delete 2>/dev/null | wc -l)
+            ! -name '*.*' "${edad[@]}" -print -delete 2>/dev/null | wc -l)
     fi
     despues=$(du -sk target 2>/dev/null | cut -f1 || echo 0)
     echo "test exes swept (>{{days}} days): $barridos"
