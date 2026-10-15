@@ -1,0 +1,3 @@
+d	-	⟨file⟩/srv/norte/w/copia
+-	-	⟨file⟩/srv/norte/w/copia/a.txt
+-	-	⟨file⟩/srv/norte/w/copia/b.txt

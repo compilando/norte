@@ -1,0 +1,19 @@
+default = "sh-login"
+
+[[shell]]
+name = "sh-login"
+program = "/bin/sh"
+args = ["-l"]
+icon = "code"
+color = 3
+
+[[shell]]
+name = "bash-plain"
+program = "/bin/bash"
+args = ["--norc", "--noprofile"]
+icon = "server"
+color = 5
+
+[[shell]]
+name = "dash"
+program = "/bin/dash"
