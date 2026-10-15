@@ -1154,14 +1154,21 @@ impl Daemon {
                         Ok(v) => v,
                         Err(e) => { failure = Some(e); break }
                     };
-                    // The idleness keepalive does NOT count unauthenticated
-                    // connections (serve resets it after auth); the
-                    // anti-exhaustion cap cuts here, before spending
-                    // anything.
+                    // The anti-exhaustion cap cuts here, before spending
+                    // anything. An unauthenticated connection counts only
+                    // until its admission (a syscall away) refuses it.
                     if shared.connections.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
                         tracing::warn!("connection limit reached; rejected");
                         drop(stream);
                     } else {
+                        // Counted HERE, before the task exists: counted inside
+                        // it, a connection accepted just before the shutdown
+                        // was not yet in the count when the drain below read
+                        // 0, so `run()` returned with it open and its task
+                        // died with the runtime (the 30-round
+                        // `run_returns_with_the_connections_already_closed`
+                        // caught it once, 2026-10-15).
+                        shared.connections.fetch_add(1, Ordering::SeqCst);
                         spawn_connection(stream, Arc::clone(&shared));
                     }
                 }
@@ -1828,23 +1835,35 @@ pub(super) fn peer_allowed(peer_uid: u32, daemon_uid: u32) -> bool {
     peer_uid == daemon_uid
 }
 
+/// One connection in `Shared::connections`, given back on drop — whichever
+/// way the task ends, a rejected admission included.
+struct Counted(Arc<Shared>);
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        // With the last connection gone there is nobody left to serve, and
+        // what it just left set should not wait for the next tick.
+        if self.0.connections.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.0.session_flush.notify_one();
+        }
+    }
+}
+
+/// Serves an accepted stream. The caller has ALREADY counted it in
+/// `Shared::connections`; this gives it back when the task ends.
 fn spawn_connection(stream: transport::Stream, shared: Arc<Shared>) {
+    let counted = Counted(Arc::clone(&shared));
     // ROOT: each `rpc` of this connection is a root (ADR 0127). Inheriting,
     // they would all hang off `run`, the span of the daemon's whole life.
     crate::blocking::spawn_root(async move {
+        let _counted = counted;
         // Auth BEFORE reading a single byte (ADR 0011).
         if let Err(reason) = transport::admit(&stream, &shared.owner) {
             tracing::warn!(%reason, "connection rejected");
             return;
         }
-        shared.connections.fetch_add(1, Ordering::SeqCst);
         if let Err(e) = serve_connection(stream, &shared).await {
             tracing::debug!(error = %e, "connection ended with an error");
-        }
-        // With the last connection gone there is nobody left to serve, and
-        // what it just left set should not wait for the next tick.
-        if shared.connections.fetch_sub(1, Ordering::SeqCst) == 1 {
-            shared.session_flush.notify_one();
         }
     });
 }
