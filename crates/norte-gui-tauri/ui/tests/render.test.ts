@@ -5142,7 +5142,7 @@ describe("the theme and the selector", () => {
     // jsdom has no layout: the spy records WHO was revealed and whether it
     // was already attached — scrolling a detached node does nothing.
     const revealed: { text: string | null; attached: boolean }[] = [];
-    const saved = Element.prototype.scrollIntoView;
+    const saved = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
     Element.prototype.scrollIntoView = function (this: Element) {
       revealed.push({ text: this.textContent, attached: this.isConnected });
     };
@@ -5159,7 +5159,9 @@ describe("the theme and the selector", () => {
       screen.paint(v);
       expect(revealed).toContainEqual({ text: "nord", attached: true });
     } finally {
-      Element.prototype.scrollIntoView = saved;
+      if (saved !== undefined) {
+        Object.defineProperty(Element.prototype, "scrollIntoView", saved);
+      }
     }
   });
 
