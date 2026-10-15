@@ -592,6 +592,10 @@ export function paintTheme(this: Screen, theme: ThemeView | null): void {
   }
   box.append(list);
   this.themeRoot.replaceChildren(box);
+  // The chosen theme in view, once in the document: the list is capped at
+  // 30vh and was rebuilt on every move, so six of the ten presets were
+  // previewed off-screen (#261 harness, 2026-10-15).
+  revealInView(box.querySelector(`#theme-choice-${String(theme.cursor)}`) ?? undefined);
 }
 
 /**
@@ -930,10 +934,13 @@ export function paintPicker(this: Screen, picker: PickerView | null): void {
   }
   if (picker.cursor !== null) {
     list.setAttribute("aria-activedescendant", `picker-row-${String(picker.cursor)}`);
-    revealInView(list.querySelector(`#picker-row-${String(picker.cursor)}`) ?? undefined);
   }
   box.append(list);
   this.pickerRoot.replaceChildren(box);
+  // AFTER it is in the document: scrolling a detached node does nothing.
+  if (picker.cursor !== null) {
+    revealInView(list.querySelector(`#picker-row-${String(picker.cursor)}`) ?? undefined);
+  }
 }
 
 /**

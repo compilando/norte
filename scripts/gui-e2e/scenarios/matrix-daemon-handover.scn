@@ -15,8 +15,7 @@ expect-dom active /›home›ada›data›a
 key Return
 expect-dom active /›home›ada›data›a›b
 expect-jq [.[] | select(.kind == "update") | .value | tostring | select(test("\"connection\""))] | last | test("connected") and (test("reconnecting") | not)
-# BUG (found here, 2026-10-15): after the handover the window is no longer
-# the session's owner — `session.put` is refused and nothing re-claims it on
-# reconnecting — so "session not saved" stays up and session.json keeps the
-# pre-handover folders. Uncomment when fixed:
-# expect-jq [.[] | select(.kind == "update") | .value | tostring] | last(.[] | select(test("\"banners\""))) | test("session not saved") | not
+# Found here (2026-10-15): after the handover the window was no longer the
+# session's owner and never asked again, so "session not saved" stayed up.
+# A loose window now re-asks on the next tick after reconnecting.
+expect-jq [.[] | select(.kind == "update") | .value | tostring] | last(.[] | select(test("\"banners\""))) | test("session not saved") | not

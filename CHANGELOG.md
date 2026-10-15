@@ -13,7 +13,15 @@ independently through `PROTOCOL_VERSION`.
   `cp >other` followed by a zero-width space used to copy into a new folder
   that looked exactly like `other`, and `sel !*.rs` with one at the end
   selected every file. The box now points at the character; write it as
-  `\xHH` if it really belongs to a name.
+  `\xHH` if it really belongs to a name. An emoji's own invisible parts
+  (`❤️`, a family) are not caught.
+- **The window keeps saving its session after a daemon handover.** It
+  lost ownership and never asked again, so the bar said "session not
+  saved" and a restart reopened the folders from before. A window that
+  does not own the session now asks again on its own, at once after
+  reconnecting.
+- **The theme and volume pickers scroll to the chosen row** in the window;
+  most themes were previewed off-screen.
 
 ## [0.3.0-alpha.14] - 2026-10-15
 

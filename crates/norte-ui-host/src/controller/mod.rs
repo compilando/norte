@@ -1698,6 +1698,7 @@ async fn actor(
                 }
             }
             Message::SessionTic => {
+                state.ask_session_if_loose(&backend, &mailbox);
                 state.push_session(&backend, &mailbox);
                 // And one more second for the status bar's notice (spec
                 // 2026-09-10).

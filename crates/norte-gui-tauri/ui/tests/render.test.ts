@@ -5138,6 +5138,31 @@ describe("the theme and the selector", () => {
     expect(marked[0]?.textContent).toBe("retro");
   });
 
+  it("the theme list scrolls the chosen one into view, once it is in the page", () => {
+    // jsdom has no layout: the spy records WHO was revealed and whether it
+    // was already attached — scrolling a detached node does nothing.
+    const revealed: { text: string | null; attached: boolean }[] = [];
+    const saved = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      revealed.push({ text: this.textContent, attached: this.isConnected });
+    };
+    try {
+      const { screen } = mount();
+      const v = view({});
+      v.theme = {
+        name: "nord",
+        roles: [{ role: "fg", color: "#d4d8de" }],
+        unsupported_effects: [],
+        choices: ["default", "retro", "nord"],
+        cursor: 2,
+      };
+      screen.paint(v);
+      expect(revealed).toContainEqual({ text: "nord", attached: true });
+    } finally {
+      Element.prototype.scrollIntoView = saved;
+    }
+  });
+
   it("the picker marks a hostile mount and says why it's empty", () => {
     const { screen, sent } = mount();
     const v = view({});

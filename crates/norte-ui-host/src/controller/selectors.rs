@@ -1156,6 +1156,9 @@ impl State {
         if matches!(ev, norte_client::ConnEvent::Restored) {
             self.daemon_notice = None;
             self.epoch_connection = self.epoch_connection.saturating_add(1);
+            // A new daemon may hold a session nobody owns: ask on the very
+            // next tick, not thirty seconds from now.
+            self.session.policy.ask_soon();
             // The light bar stops counting the previous daemon's work
             // (ADR 0146): without this its burst would never close.
             self.annotate_strip(mailbox);
