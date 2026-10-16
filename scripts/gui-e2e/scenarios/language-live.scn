@@ -1,0 +1,18 @@
+# ADR 0188: `[ui] lang` switches the window live. Written from the settings
+# screen, the host follows it, the catalogue is rebuilt and the page reloads
+# into the new language — menu bar and `<html lang>` — with no restart; and
+# it is saved, so the next start keeps it.
+config lang = "en"
+start
+expect-dom lang en
+expect-dom-has menubar File
+key F11
+expect-dom-has open settings
+type language
+key Return
+expect-dom lang es
+expect-dom-has menubar Archivo
+shot spanish
+restart
+expect-dom lang es
+expect-dom-has menubar Archivo

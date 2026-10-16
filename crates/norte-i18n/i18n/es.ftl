@@ -1317,7 +1317,7 @@ msg-timeline-undo-running = deshaciendo hasta el punto elegido…
 # preguntar».
 wizard-title = Bienvenido a norte
 wizard-step-language = idioma
-wizard-ask-language = ¿En qué idioma te habla norte? Puedes cambiarlo luego en Ajustes.
+wizard-ask-language = ¿En qué idioma te habla norte? Se cambia luego en Ajustes.
 wizard-step-preset = teclas
 wizard-step-theme = tema
 wizard-step-icons = iconos

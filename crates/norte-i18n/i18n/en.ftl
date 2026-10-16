@@ -1386,7 +1386,7 @@ msg-timeline-undo-running = undoing back to the chosen point…
 # user norte.toml yet. Esc at any step means "do not ask again".
 wizard-title = Welcome to norte
 wizard-step-language = language
-wizard-ask-language = Which language should norte speak? You can change it later in Settings.
+wizard-ask-language = Which language should norte use? Settings can change it later.
 wizard-step-preset = keys
 wizard-step-theme = theme
 wizard-step-icons = icons

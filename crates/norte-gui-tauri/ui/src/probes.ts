@@ -24,6 +24,10 @@ export function traceProbes(doc: Document): Record<string, string> {
     slots,
     // The open menu's items: `.menu` is the bar AND the drop-down.
     menu: flat(q(".menu-items")),
+    // The bar's titles, and the document's language (ADR 0188): what a live
+    // language switch has to change.
+    menubar: flat(q(".menubar")),
+    lang: doc.documentElement.lang,
     context: flat(q(".context-menu")),
     dialog: flat(q(".dialog")),
     // The overlays that are up (help, settings, theme, menu…), by id.
