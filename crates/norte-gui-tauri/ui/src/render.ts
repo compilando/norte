@@ -1263,18 +1263,35 @@ export class Screen {
       // The right-side elements (ADR 0132) come back by ID: the host
       // resolves the command against its current list and runs it through
       // the same dispatch as the key.
-      dom.scroller.replaceChildren(
-        ...statusNodes(
-          view.status,
-          view.connection.state,
-          (k) => this.t(k),
-          this.rejection,
-          view.status_items ?? [],
-          (id) => {
-            this.send({ action: "status_item_activate", id });
-          },
-        ),
+      const nodes = statusNodes(
+        view.status,
+        view.connection.state,
+        (k) => this.t(k),
+        this.rejection,
+        view.status_items ?? [],
+        (id) => {
+          this.send({ action: "status_item_activate", id });
+        },
       );
+      // The toast survives a rebuild that does not change its text: the
+      // cursor's size changes the bar on every move, and a new node replays
+      // `toast-in` — the notice popped up again on each arrow. Detaching it
+      // restarts the animation too, so its siblings move, not it.
+      const toast = dom.scroller.querySelector(":scope > .status-message");
+      const at = nodes.findIndex(
+        (n) => n instanceof HTMLElement && n.classList.contains("status-message"),
+      );
+      if (toast !== null && at >= 0 && toast.textContent === nodes[at]?.textContent) {
+        for (const c of [...dom.scroller.childNodes]) {
+          if (c !== toast) {
+            c.remove();
+          }
+        }
+        toast.before(...nodes.slice(0, at));
+        toast.after(...nodes.slice(at + 1));
+      } else {
+        dom.scroller.replaceChildren(...nodes);
+      }
       if (remote !== "") {
         dom.scroller.prepend(remoteIndicator(remote));
       }

@@ -4,6 +4,9 @@
 :root {
   --cell-w: 8px;
   --cell-h: 22px;
+  /* The menu bar's row: a cell and a little air, or the titles sat flush
+     against the panels under them. */
+  --menubar-row: calc(var(--cell-h) + 4px);
   /* The activity bar's width (bridge 84), VS Code's. What it RESERVES is
      `--activity-w`, which the renderer sets to this or to zero. */
   --activity-size: 48px;
@@ -446,7 +449,7 @@ body {
   left: 0;
   right: 0;
   display: flex;
-  height: var(--cell-h);
+  height: var(--menubar-row);
   align-items: center;
   background: var(--panel-bg);
   border-bottom: 1px solid var(--separator, var(--border));

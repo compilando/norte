@@ -7,6 +7,19 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The window's notice no longer pops up again on every cursor move.**
+  After opening a file with the desktop, "opening with the desktop
+  application…" replayed its entrance on each arrow press while it lasted.
+- **The window's go-to box no longer flickers while you type.** Every
+  letter rebuilt the box and replayed its entrance; it now enters once,
+  when it opens.
+
+### Changed
+
+- **The window's menu bar has a little more air** above the panels.
+
 ## [0.3.0-alpha.15] - 2026-10-15
 
 ### Added

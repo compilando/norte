@@ -396,6 +396,26 @@ describe("go to anywhere (#357)", () => {
     screen.paint(v);
     expect(document.querySelector(".goto")).toBeNull();
   });
+
+  // The box carries `norte-emerge`: a new one per keystroke replayed the
+  // entrance on every letter typed. It enters once, on opening.
+  it("typing keeps the box and repaints its contents; reopening enters anew", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.goto = { query: ":c", lines: [], cursor: null, empty: "nada casa con eso" };
+    screen.paint(v);
+    const box = () => document.querySelector(".goto");
+    const first = box();
+    v.goto = { ...v.goto, query: ":cp" };
+    screen.paint(v);
+    expect(box()).toBe(first);
+    expect(document.querySelector(".goto .palette-query-text")?.textContent).toBe(":cp");
+    v.goto = null;
+    screen.paint(v);
+    v.goto = { query: ":cp", lines: [], cursor: null, empty: "nada casa con eso" };
+    screen.paint(v);
+    expect(box()).not.toBe(first);
+  });
 });
 
 describe("the splash screen", () => {
@@ -1220,6 +1240,29 @@ describe("Screen", () => {
     screen.paint(v);
     expect(msg()).toBe(before);
     screen.paint({ ...v, status: { ...v.status, message: "otra" } });
+    expect(msg()?.textContent).toBe("otra");
+  });
+
+  // The toast lives inside the bar, and the bar is rebuilt whenever ANY of
+  // its inputs changes — the cursor's size on the right does on every move.
+  // A new node replays `toast-in`, so "opening with the desktop…" popped up
+  // again on each arrow for as long as it lived.
+  it("the toast keeps its node while its text holds and the bar changes around it", () => {
+    const { screen, root } = mount();
+    const v = view({});
+    v.status = { ...v.status, message: "abriendo" };
+    screen.paint(v);
+    const msg = () => root.querySelector(".statusbar .status-message");
+    const before = msg();
+    expect(before?.textContent).toBe("abriendo");
+    screen.paint({
+      ...v,
+      status_items: [{ id: "size", text: "1.1 MiB", tooltip: "", clickable: false }],
+    });
+    expect(msg()).toBe(before);
+    expect(root.querySelector(".statusbar")?.textContent).toContain("1.1 MiB");
+    screen.paint({ ...v, status: { ...v.status, message: "otra" } });
+    expect(msg()).not.toBe(before);
     expect(msg()?.textContent).toBe("otra");
   });
 
@@ -3088,7 +3131,7 @@ describe("the menu bar", () => {
     // The row is RESERVED: the host's layout is computed over the height
     // this renderer declares, and a floating bar would cover the first row.
     expect(document.documentElement.style.getPropertyValue("--menubar-h")).toBe(
-      "var(--cell-h)",
+      "var(--menubar-row)",
     );
     expect(document.querySelector(".menu-items")).toBeNull();
   });
@@ -3207,7 +3250,7 @@ describe("the menu bar", () => {
       v.menu.bar = false;
       screen.paint(v);
       expect(document.documentElement.style.getPropertyValue("--menubar-h")).toBe(
-        "var(--cell-h)",
+        "var(--menubar-row)",
       );
       expect(document.querySelectorAll(".menubar-title")).toHaveLength(0);
       expect(document.querySelectorAll(".window-control")).toHaveLength(3);
