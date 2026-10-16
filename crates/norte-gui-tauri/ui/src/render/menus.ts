@@ -697,7 +697,14 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
   const painted: PaintedGoto = { list: null, rows: [], pointed: cursor, doc, onPaste };
   paintedGotos.set(this.gotoRoot, painted);
   const mode = goto.mode ?? "places";
-  const box = document.createElement("section");
+  // The SAME box while it stays open, its contents rebuilt: it carries
+  // `norte-emerge`, and a new one per keystroke replayed the entrance on
+  // every letter typed.
+  const open = this.gotoRoot.firstElementChild;
+  const box =
+    before !== undefined && open instanceof HTMLElement && open.tagName === "SECTION"
+      ? open
+      : document.createElement("section");
   // The `.palette*` classes: the box is the command palette too (`>`), and
   // two stylesheets for the same thing drift apart.
   box.className = "palette goto";
@@ -728,7 +735,7 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
     text.textContent = goto.query;
   }
   query.append(text);
-  box.append(query);
+  box.replaceChildren(query);
   // The order line (bridge 115): why it does not parse, or what it would
   // touch. The error wins: a preview of a line that cannot run is a promise.
   const orderNote =
@@ -823,7 +830,9 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
     list.append(empty);
   }
   box.append(list);
-  this.gotoRoot.replaceChildren(box);
+  if (box.parentNode !== this.gotoRoot) {
+    this.gotoRoot.replaceChildren(box);
+  }
   markGotoCursor(painted, cursor);
 }
 

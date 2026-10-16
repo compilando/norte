@@ -396,6 +396,26 @@ describe("go to anywhere (#357)", () => {
     screen.paint(v);
     expect(document.querySelector(".goto")).toBeNull();
   });
+
+  // The box carries `norte-emerge`: a new one per keystroke replayed the
+  // entrance on every letter typed. It enters once, on opening.
+  it("typing keeps the box and repaints its contents; reopening enters anew", () => {
+    const { screen } = mount();
+    const v = view({});
+    v.goto = { query: ":c", lines: [], cursor: null, empty: "nada casa con eso" };
+    screen.paint(v);
+    const box = () => document.querySelector(".goto");
+    const first = box();
+    v.goto = { ...v.goto, query: ":cp" };
+    screen.paint(v);
+    expect(box()).toBe(first);
+    expect(document.querySelector(".goto .palette-query-text")?.textContent).toBe(":cp");
+    v.goto = null;
+    screen.paint(v);
+    v.goto = { query: ":cp", lines: [], cursor: null, empty: "nada casa con eso" };
+    screen.paint(v);
+    expect(box()).not.toBe(first);
+  });
 });
 
 describe("the splash screen", () => {
