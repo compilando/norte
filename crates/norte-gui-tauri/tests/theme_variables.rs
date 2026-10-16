@@ -27,6 +27,7 @@ const NO_SON_COLOR: &[&str] = &[
     "cell-w",
     "cell-h",
     "menubar-h",
+    "menubar-row",
     "panelbar-h",
     "commandbar-h",
     "activity-w",

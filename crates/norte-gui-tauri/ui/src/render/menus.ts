@@ -355,7 +355,7 @@ export function paintMenu(
   // mouse.
   const custom = document.documentElement.dataset["titlebar"] === "custom";
   const hasBar = menu.bar || custom;
-  const height = hasBar ? "var(--cell-h)" : "0px";
+  const height = hasBar ? "var(--menubar-row)" : "0px";
   if (this.menuBarHeight !== height) {
     document.documentElement.style.setProperty("--menubar-h", height);
     this.menuBarHeight = height;

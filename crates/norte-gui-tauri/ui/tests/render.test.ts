@@ -3131,7 +3131,7 @@ describe("the menu bar", () => {
     // The row is RESERVED: the host's layout is computed over the height
     // this renderer declares, and a floating bar would cover the first row.
     expect(document.documentElement.style.getPropertyValue("--menubar-h")).toBe(
-      "var(--cell-h)",
+      "var(--menubar-row)",
     );
     expect(document.querySelector(".menu-items")).toBeNull();
   });
@@ -3250,7 +3250,7 @@ describe("the menu bar", () => {
       v.menu.bar = false;
       screen.paint(v);
       expect(document.documentElement.style.getPropertyValue("--menubar-h")).toBe(
-        "var(--cell-h)",
+        "var(--menubar-row)",
       );
       expect(document.querySelectorAll(".menubar-title")).toHaveLength(0);
       expect(document.querySelectorAll(".window-control")).toHaveLength(3);

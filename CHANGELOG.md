@@ -16,6 +16,10 @@ independently through `PROTOCOL_VERSION`.
   letter rebuilt the box and replayed its entrance; it now enters once,
   when it opens.
 
+### Changed
+
+- **The window's menu bar has a little more air** above the panels.
+
 ## [0.3.0-alpha.15] - 2026-10-15
 
 ### Added
