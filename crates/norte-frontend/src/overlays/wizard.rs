@@ -1,17 +1,20 @@
-//! The first-run wizard (spec 2026-09-10): four questions —the key preset,
-//! the theme, the icons, and whether to check for new releases (ADR 0183)—
-//! when there is no user `norte.toml`. Pure: which
-//! step, which rows, what was chosen. Each frontend paints it and writes what
-//! was chosen through its own settings path.
+//! The first-run wizard (spec 2026-09-10): the language (ADR 0188), the key
+//! preset, the theme, the icons, and whether to check for new releases (ADR
+//! 0183), when there is no user `norte.toml`. Pure: which step, which rows,
+//! what was chosen. Each frontend paints it and writes what was chosen
+//! through its own settings path.
 //!
 //! Esc at any step means "do not ask again": the frontend writes a file with
 //! what it already had, and the file's existence is the mark.
 
 use norte_i18n::{Lang, t_in};
 
-/// The four steps, in order.
+/// The steps, in order. `Language` only when the frontend offers it
+/// ([`Wizard::with_languages`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
+    /// Which language: FIRST, so every question after it is read in it.
+    Language,
     /// Which key preset.
     Preset,
     /// Which theme.
@@ -22,29 +25,25 @@ pub enum Step {
     Updates,
 }
 
-/// How many steps there are, for the title.
-const STEPS: u8 = 4;
-
 impl Step {
-    /// `1`..=`4`, for the title.
-    #[must_use]
-    pub fn number(self) -> u8 {
+    /// Its slot in the per-step cursor array: fixed, whether or not
+    /// `Language` is shown.
+    fn index(self) -> usize {
         match self {
+            Self::Language => 0,
             Self::Preset => 1,
             Self::Theme => 2,
             Self::Icons => 3,
             Self::Updates => 4,
         }
     }
-
-    fn index(self) -> usize {
-        usize::from(self.number() - 1)
-    }
 }
 
 /// What was chosen. `None` = the reader did not get to that step.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Choices {
+    /// The language's tag.
+    pub lang: Option<String>,
     /// The key preset.
     pub preset: Option<String>,
     /// The theme.
@@ -60,6 +59,10 @@ pub struct Choices {
 pub enum Outcome {
     /// Another step ahead.
     Continue,
+    /// The language was chosen and the wizard goes on: write `[ui] lang` =
+    /// this tag NOW, so the questions after it are read in it (ADR 0188).
+    /// The frontend's configuration reload is what switches the language.
+    Language(String),
     /// The last step answered: write this.
     Done(Choices),
     /// The reader left: do not ask again, without changing anything. Carries
@@ -76,9 +79,10 @@ pub enum Outcome {
 #[derive(Debug, Clone)]
 pub struct Wizard {
     step: Step,
+    languages: Vec<Lang>,
     presets: Vec<String>,
     themes: Vec<String>,
-    cursor: [usize; STEPS as usize],
+    cursor: [usize; 5],
     choices: Choices,
     /// The theme it was opened with: what is kept on leaving with Esc.
     current_theme: String,
@@ -104,13 +108,45 @@ impl Wizard {
         let t = themes.iter().position(|s| s == current_theme).unwrap_or(0);
         Self {
             step: Step::Preset,
+            languages: Vec::new(),
             presets,
             themes,
             // Updates starts on "no": Enter without reading keeps norte off
             // the network, which is the default it is asking about.
-            cursor: [p, t, 0, 0],
+            cursor: [0, p, t, 0, 0],
             choices: Choices::default(),
             current_theme: current_theme.to_owned(),
+        }
+    }
+
+    /// Asks the language FIRST (ADR 0188), among `languages`, starting on
+    /// `current` — the one the locale already chose, so Enter without
+    /// reading keeps it.
+    #[must_use]
+    pub fn with_languages(mut self, languages: &[Lang], current: Lang) -> Self {
+        if languages.is_empty() {
+            return self;
+        }
+        self.cursor[Step::Language.index()] =
+            languages.iter().position(|l| *l == current).unwrap_or(0);
+        self.languages = languages.to_vec();
+        self.step = Step::Language;
+        self
+    }
+
+    /// The steps this wizard asks, in order.
+    fn steps(&self) -> &'static [Step] {
+        const ALL: [Step; 5] = [
+            Step::Language,
+            Step::Preset,
+            Step::Theme,
+            Step::Icons,
+            Step::Updates,
+        ];
+        if self.languages.is_empty() {
+            &ALL[1..]
+        } else {
+            &ALL
         }
     }
 
@@ -120,19 +156,22 @@ impl Wizard {
         self.step
     }
 
-    /// The step's title, in the given language: `norte · 1/4 · Keys`.
+    /// The step's title, in the given language: `norte · 1/5 · Language`.
     #[must_use]
     pub fn title(&self, lang: Lang) -> String {
         let key = match self.step {
+            Step::Language => "wizard-step-language",
             Step::Preset => "wizard-step-preset",
             Step::Theme => "wizard-step-theme",
             Step::Icons => "wizard-step-icons",
             Step::Updates => "wizard-step-updates",
         };
+        let steps = self.steps();
+        let number = steps.iter().position(|s| *s == self.step).unwrap_or(0) + 1;
         format!(
-            "{} · {}/{STEPS} · {}",
+            "{} · {number}/{} · {}",
             t_in(lang, "wizard-title"),
-            self.step.number(),
+            steps.len(),
             t_in(lang, key)
         )
     }
@@ -141,6 +180,7 @@ impl Wizard {
     #[must_use]
     pub fn question(&self, lang: Lang) -> String {
         let key = match self.step {
+            Step::Language => "wizard-ask-language",
             Step::Preset => "wizard-ask-preset",
             Step::Theme => "wizard-ask-theme",
             Step::Icons => "wizard-ask-icons",
@@ -149,11 +189,19 @@ impl Wizard {
         t_in(lang, key)
     }
 
-    /// The step's rows, in the given language: each preset with its line,
-    /// the themes by name, and yes/no for the icons.
+    /// The step's rows, in the given language: each language by its OWN
+    /// name, each preset with its line, the themes by name, and yes/no for
+    /// the icons.
     #[must_use]
     pub fn rows(&self, lang: Lang) -> Vec<String> {
         match self.step {
+            // In itself, not in `lang`: whoever cannot read the current
+            // language is exactly who is looking for theirs.
+            Step::Language => self
+                .languages
+                .iter()
+                .map(|l| format!("{} ({})", l.native_name(), l.tag()))
+                .collect(),
             Step::Preset => self
                 .presets
                 .iter()
@@ -187,6 +235,7 @@ impl Wizard {
 
     fn len(&self) -> usize {
         match self.step {
+            Step::Language => self.languages.len(),
             Step::Preset => self.presets.len(),
             Step::Theme => self.themes.len(),
             Step::Icons | Step::Updates => 2,
@@ -226,6 +275,20 @@ impl Wizard {
     /// Enter: saves the row and moves to the next step, or finishes.
     pub fn confirm(&mut self) -> Outcome {
         match self.step {
+            Step::Language => {
+                let chosen = self
+                    .languages
+                    .get(self.cursor())
+                    .map(|l| l.tag().to_owned());
+                self.step = Step::Preset;
+                match chosen {
+                    Some(tag) => {
+                        self.choices.lang = Some(tag.clone());
+                        Outcome::Language(tag)
+                    }
+                    None => Outcome::Continue,
+                }
+            }
             Step::Preset => {
                 self.choices.preset = self.presets.get(self.cursor()).cloned();
                 self.step = Step::Theme;
@@ -250,11 +313,9 @@ impl Wizard {
 
     /// Backspace: the previous step, if there is one.
     pub fn back(&mut self) {
-        self.step = match self.step {
-            Step::Preset | Step::Theme => Step::Preset,
-            Step::Icons => Step::Theme,
-            Step::Updates => Step::Icons,
-        };
+        let steps = self.steps();
+        let i = steps.iter().position(|s| *s == self.step).unwrap_or(0);
+        self.step = steps[i.saturating_sub(1)];
     }
 
     /// Esc: leave without changing anything and do not ask again. Carries the
@@ -300,6 +361,8 @@ mod tests {
             (Step::Preset, 0),
             "each step keeps its own cursor"
         );
+        w.back();
+        assert_eq!(w.step(), Step::Preset, "no language step: Preset is first");
         assert_eq!(w.confirm(), Outcome::Continue);
         assert_eq!(w.confirm(), Outcome::Continue);
         assert_eq!(w.step(), Step::Icons);
@@ -316,6 +379,7 @@ mod tests {
         assert_eq!(
             w.confirm(),
             Outcome::Done(Choices {
+                lang: None,
                 preset: Some("orthodox".into()),
                 theme: Some("default".into()),
                 icons: Some(false),
@@ -330,6 +394,26 @@ mod tests {
             },
             "leaving keeps the theme it was opened with, not `default`"
         );
+    }
+
+    /// The language goes FIRST, starts on the one already active, names
+    /// each language in itself, and confirming it asks for the write right
+    /// away instead of at the end (ADR 0188).
+    #[test]
+    fn the_language_is_asked_first_and_written_at_once() {
+        let mut w = w().with_languages(&[Lang::En, Lang::Es], Lang::Es);
+        assert_eq!(w.step(), Step::Language);
+        assert!(w.title(Lang::En).contains("1/5"), "{}", w.title(Lang::En));
+        assert_eq!(w.cursor(), 1, "starts on the active language");
+        assert_eq!(w.rows(Lang::Es), vec!["English (en)", "Español (es)"]);
+        w.up();
+        assert_eq!(w.confirm(), Outcome::Language("en".into()));
+        assert_eq!(w.step(), Step::Preset);
+        assert!(w.title(Lang::En).contains("2/5"));
+        w.back();
+        assert_eq!((w.step(), w.cursor()), (Step::Language, 0));
+        w.back();
+        assert_eq!(w.step(), Step::Language, "nothing before the first");
     }
 
     /// A click outside the rows moves nothing; one inside does.

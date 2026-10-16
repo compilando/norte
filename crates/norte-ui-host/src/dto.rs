@@ -4634,6 +4634,17 @@ pub enum NativeEffect {
     /// configuration, and a window that closes itself with a half-done
     /// copy is not a window that obeys.
     CloseWindow,
+    /// The interface language is now this one (ADR 0188): rebuild whatever
+    /// the renderer was handed translated — the catalogue's strings, its
+    /// `<html lang>`.
+    ///
+    /// Through THIS channel for the theme's reason: the catalogue is the
+    /// house's, built once and handed over; the host only says that its
+    /// language moved.
+    LanguageChanged {
+        /// The new language's tag (`es`, `en`, `pt-BR`).
+        tag: String,
+    },
 }
 
 /// What the host sends to the renderer.

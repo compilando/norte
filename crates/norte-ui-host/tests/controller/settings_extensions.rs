@@ -88,8 +88,8 @@ async fn settings_show_the_shared_registry_with_its_value() {
         );
     }
     // What applies live is said by the shared catalogue, which is what the
-    // terminal shows; and what the window cannot apply — language, fonts,
-    // motion — is said by `out_of_scope_hot` when writing.
+    // terminal shows; and what the window cannot apply — fonts, motion — is
+    // said by `out_of_scope_hot` when writing.
     let live = general
         .iter()
         .find(|r| r.id == "ui.theme")
@@ -98,13 +98,21 @@ async fn settings_show_the_shared_registry_with_its_value() {
         !live.restart_required,
         "the theme applies live when written, and the row does not say otherwise"
     );
-    let cold = general
+    let lang = general
         .iter()
         .find(|r| r.id == "ui.lang")
         .expect("the language is there");
     assert!(
+        !lang.restart_required,
+        "the language applies live too (ADR 0188)"
+    );
+    let cold = general
+        .iter()
+        .find(|r| r.id == "ui.font")
+        .expect("the font is there");
+    assert!(
         cold.restart_required,
-        "the language asks to restart the window, and the row says so"
+        "the font asks to restart the window, and the row says so"
     );
 }
 

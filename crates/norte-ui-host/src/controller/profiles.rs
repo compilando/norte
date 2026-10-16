@@ -42,7 +42,7 @@ pub(super) struct ThemeSelection {
 /// whether this window reloads its configuration live, which has its own ADR
 /// pending — so until then it is SAID, which is what this list exists to do.
 ///
-/// `[ui] lang` neither: `norte_i18n::force` runs once per process.
+/// `[ui] lang` DOES apply (ADR 0188): `apply_config` follows it.
 ///
 /// A change that stayed quiet about this would be a change that lies (ADR
 /// 0079, D8).
@@ -51,9 +51,6 @@ fn out_of_scope_hot(
     after: &norte_config::CommonConfig,
 ) -> Vec<&'static str> {
     let mut out = Vec::new();
-    if before.ui_lang != after.ui_lang {
-        out.push("ui.lang");
-    }
     if before.ui_font != after.ui_font
         || before.ui_mono_font != after.ui_mono_font
         || before.ui_font_size != after.ui_font_size
@@ -219,6 +216,20 @@ impl State {
         self.columns = norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns)
             .with_date_format(cfg.common.ui_chrome.date_format());
         self.config = cfg;
+        // The LANGUAGE (ADR 0188), before anything below composes text. A
+        // run pinned by `--lang`/`NORTE_LANG` keeps its own, and says so.
+        let mut unapplied = Vec::new();
+        match norte_frontend::language::follow(self.config.common.ui_lang.as_deref()) {
+            norte_i18n::Followed::Changed(lang) => {
+                self.lang = lang;
+                lang.tag().clone_into(&mut self.locale);
+                self.native(crate::dto::NativeEffect::LanguageChanged {
+                    tag: lang.tag().to_owned(),
+                });
+            }
+            norte_i18n::Followed::Pinned(_) => unapplied.push("ui.lang"),
+            norte_i18n::Followed::Same => {}
+        }
         self.seed_places();
         // And the LAYOUT the configuration names, if it names a different
         // one: that is what makes a profile "a different screen" and not
@@ -232,7 +243,8 @@ impl State {
         // Whatever cannot be applied without restarting is said by name: a
         // change that stayed quiet about this would be a change that lies
         // (D8).
-        out_of_scope_hot(&before, &self.config.common)
+        unapplied.extend(out_of_scope_hot(&before, &self.config.common));
+        unapplied
     }
 
     /// The configuration layers exactly as they are set NOW: the ones

@@ -22,12 +22,12 @@ pub struct Bridge {
     initial: BridgeEnvelope<UiUpdate>,
     /// Strings and colors. REPLACEABLE: the colors come from the theme, and
     /// the theme can be changed with the window open (from its picker, and
-    /// from a profile). The strings do not move — the language is fixed once
-    /// per process — but the whole catalogue travels because that is what
-    /// the renderer asks for, whole.
+    /// from a profile), and so can the language (ADR 0188). The whole
+    /// catalogue travels because that is what the renderer asks for, whole.
     catalog: std::sync::RwLock<Arc<HostCatalog>>,
-    /// The language it was built with, so it can be rebuilt the same way.
-    lang: norte_i18n::Lang,
+    /// The language it is built with, so a theme change rebuilds it the
+    /// same way. Moves with [`Bridge::change_language`].
+    lang: norte_i18n::LangCell,
 }
 
 impl Bridge {
@@ -44,12 +44,49 @@ impl Bridge {
             0,
             UiUpdate::Snapshot(Box::new(snapshot)),
         );
+        let cell = norte_i18n::LangCell::new();
+        cell.set(lang);
         Self {
             host: Arc::new(host),
             initial,
             catalog: std::sync::RwLock::new(Arc::new(catalog)),
-            lang,
+            lang: cell,
         }
+    }
+
+    fn lang(&self) -> norte_i18n::Lang {
+        self.lang.get().unwrap_or(norte_i18n::Lang::En)
+    }
+
+    /// The catalogue's WRITE guard. Both rebuilds happen under it, with the
+    /// language read inside: a theme read from a file on another thread
+    /// cannot land the old language's strings after a language change.
+    ///
+    /// A poisoned lock means another thread panicked WHILE holding the
+    /// catalogue. We carry on: what is inside is a whole, valid `Arc`, and
+    /// leaving the window unable to change theme over that would be worse.
+    fn catalog_mut(&self) -> std::sync::RwLockWriteGuard<'_, Arc<HostCatalog>> {
+        self.catalog
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Rebuilds the catalogue's strings in the language that is now active
+    /// (ADR 0188), keeping its theme and appearance. Returns whether anything
+    /// changed: an unknown tag, or the same language, leaves it as it was.
+    pub fn change_language(&self, tag: &str) -> bool {
+        let Some(lang) = norte_i18n::Lang::from_flag(tag) else {
+            return false;
+        };
+        let mut guard = self.catalog_mut();
+        if !self.lang.set(lang) {
+            return false;
+        }
+        let mut updated = (**guard).clone();
+        updated.strings = crate::catalog::strings(lang);
+        lang.tag().clone_into(&mut updated.locale);
+        *guard = Arc::new(updated);
+        true
     }
 
     /// Rebuilds the catalogue with the theme that is now set.
@@ -67,22 +104,14 @@ impl Bridge {
         let Ok(theme) = norte_frontend::theme::resolve_theme(Some(name)) else {
             return false;
         };
-        let mut updated = crate::catalog::catalog(self.host.instance(), self.lang, &theme);
+        let mut guard = self.catalog_mut();
+        let mut updated = crate::catalog::catalog(self.host.instance(), self.lang(), &theme);
         // The appearance is PRESERVED: this path changes colors, and rebuilding
         // the catalogue from scratch would reset the fonts to the system's
         // without anyone asking for that. It is the same catalogue with a
         // different theme.
-        updated.appearance = match self.catalog.read() {
-            Ok(guard) => guard.appearance.clone(),
-            Err(poisoned) => poisoned.into_inner().appearance.clone(),
-        };
-        // A poisoned lock means another thread panicked WHILE holding the
-        // catalogue. We carry on: what is inside is a whole, valid `Arc`, and
-        // leaving the window unable to change theme over that would be worse.
-        match self.catalog.write() {
-            Ok(mut guard) => *guard = Arc::new(updated),
-            Err(poisoned) => *poisoned.into_inner() = Arc::new(updated),
-        }
+        updated.appearance = guard.appearance.clone();
+        *guard = Arc::new(updated);
         true
     }
 

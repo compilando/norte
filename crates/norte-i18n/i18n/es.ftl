@@ -1,5 +1,8 @@
 # Catálogo español de norte. Paridad total con en.ftl (test).
 
+# El nombre del idioma en sí mismo (ADR 0188).
+language-name = Español
+
 # --- Modales del TUI ---
 modal-trash-title = A la papelera
 modal-trash-note = recuperable desde la papelera del sistema
@@ -293,6 +296,7 @@ msg-refresh-error = refresh: { $error }
 msg-view-error = view: { $error }
 msg-viewer-no-sibling = no hay más ficheros de esta clase en este listado
 msg-config-reloaded = config recargada
+msg-lang-pinned = config recargada; el idioma sigue en { $lang } en esta ejecución (--lang o NORTE_LANG)
 msg-profile-switched = perfil: { $profile }
 msg-profile-switched-partial = perfil: { $profile } — hace falta reiniciar para aplicar: { $keys }
 msg-profile-config-ignored = perfil: { $profile } — { $n } línea(s) del perfil no se entienden y se ignoran; mira el registro
@@ -1312,6 +1316,8 @@ msg-timeline-undo-running = deshaciendo hasta el punto elegido…
 # aún no hay norte.toml de usuario. Esc en cualquier paso = «no volver a
 # preguntar».
 wizard-title = Bienvenido a norte
+wizard-step-language = idioma
+wizard-ask-language = ¿En qué idioma te habla norte? Se cambia luego en Ajustes.
 wizard-step-preset = teclas
 wizard-step-theme = tema
 wizard-step-icons = iconos
@@ -2361,7 +2367,7 @@ cli-doctor-detail-plugin-help-shadows-topic = { $id }: su id es también una pá
 setting-ui-theme-name = Tema
 setting-ui-theme-desc = Preset de color de la interfaz (o una ruta a un fichero de tema propio, ADR 0020).
 setting-ui-lang-name = Idioma
-setting-ui-lang-desc = Idioma de la interfaz. Déjalo sin fijar para negociarlo desde el entorno. Para una sola ejecución, `--lang` y NORTE_LANG mandan sobre él.
+setting-ui-lang-desc = Idioma de la interfaz; se aplica al momento. Déjalo sin fijar para seguir el idioma del sistema. Más idiomas: `locales/<etiqueta>.ftl` en la carpeta de configuración. Para una sola ejecución, `--lang` y NORTE_LANG mandan sobre él.
 setting-ui-font-name = Tipografía de la interfaz
 setting-ui-font-desc = Familia tipográfica del chrome de la GUI (texto de ventana, no el listado). El TUI la ignora.
 setting-ui-mono-font-name = Tipografía monoespaciada

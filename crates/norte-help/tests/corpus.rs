@@ -62,7 +62,7 @@ const EXPECTED: [&str; 24] = [
 /// parses, the new page just does not exist.
 fn topics_dir(lang: Lang) -> PathBuf {
     let dir = match lang {
-        Lang::En => "en",
+        Lang::En | Lang::Extra(_) => "en",
         Lang::Es => "es",
     };
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

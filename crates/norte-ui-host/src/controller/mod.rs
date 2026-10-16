@@ -2748,6 +2748,11 @@ struct State {
     /// this flag, reloading mid-session covered what you were looking at with
     /// a welcome screen that in `home` mode stays until you touch it.
     splash_seen: bool,
+    /// The first-run wizard was opened in THIS host session: the same reason
+    /// as `splash_seen`, and a language chosen in it reloads the webview
+    /// (ADR 0188), whose `wizard_open` must neither restart it nor reopen
+    /// one already answered.
+    wizard_seen: bool,
     /// The processes panel was opened by the AUTOMATIC trigger
     /// (`[ui] processes_panel`), so the automatic trigger can close it. One
     /// the reader opened stays.
@@ -3411,10 +3416,7 @@ impl State {
 
     /// The negotiated language, for the continuations' labels.
     fn lang_de(locale: &str) -> norte_i18n::Lang {
-        match locale {
-            "es" => norte_i18n::Lang::Es,
-            _ => norte_i18n::Lang::En,
-        }
+        norte_i18n::Lang::from_flag(locale).unwrap_or(norte_i18n::Lang::En)
     }
 
     /// The startup roles.
@@ -3490,6 +3492,7 @@ impl State {
             splash: None,
             splash_until_ms: None,
             splash_seen: false,
+            wizard_seen: false,
             processes_auto: false,
             strip: norte_frontend::task_strip::TaskStrip::default(),
             enqueue: false,

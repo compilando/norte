@@ -34,11 +34,10 @@ pub enum Outcome {
     /// That cost a review round in the terminal and is inherited here
     /// already fixed.
     ///
-    /// Stores the text, not the `Error`, because `ui.lang` does NOT change on
-    /// the fly (`norte_i18n::force` runs once per process; the list of keys
-    /// out of the host's hot-reload reach says so by name). The day the
-    /// language can be changed without restarting, this has to switch to
-    /// storing the error and translating at paint time.
+    /// Stores the text, not the `Error`. Since `ui.lang` switches live (ADR
+    /// 0188) a failure already on screen keeps the old language until the
+    /// next search: storing the error instead would reach every frontend's
+    /// category function, for one transient line.
     Failed(String),
 }
 

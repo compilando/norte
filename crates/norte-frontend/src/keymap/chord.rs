@@ -432,34 +432,33 @@ pub fn unpaint_chord(painted: &str) -> String {
     out
 }
 
-static CHORD_LANG: std::sync::OnceLock<norte_i18n::Lang> = std::sync::OnceLock::new();
+static CHORD_LANG: norte_i18n::LangCell = norte_i18n::LangCell::new();
 
-/// Fixes which language keys are NAMED in ([`paint_chord`]). Once, at
-/// startup, same as [`set_mod_key`]: a key's name appears in the bar, in
-/// the palette, on the keyboard sheet and in the help prose, and two of
-/// them in different languages would contradict each other. Returns
-/// `false` if it was already fixed to another one; unfixed, English.
+/// Sets which language keys are NAMED in ([`paint_chord`]): the interface's,
+/// at startup and whenever it changes (ADR 0188). A key's name appears in the
+/// bar, in the palette, on the keyboard sheet and in the help prose, and two
+/// of them in different languages would contradict each other. Returns
+/// whether it changed; unset, English.
 ///
 /// Only changes what is READ. The keymap, [`parse_chord`] and everything
 /// stored stay in canonical form (`pgdn`, `backspace`), and
 /// [`unpaint_chord`] understands both languages.
 ///
 /// Same care as [`set_mod_key`] in tests: since the 2024 edition this
-/// crate's doctests run in ONE binary and share this `OnceLock`, so a
-/// doctest that fixed Spanish would break, depending on order,
-/// [`paint_chord`]'s that expect English. Painting in Spanish is tested in
-/// a `#[test]`, which nextest runs in its own process.
+/// crate's doctests run in ONE binary and share this cell, so a doctest that
+/// set Spanish would break, depending on order, [`paint_chord`]'s that
+/// expect English. Painting in Spanish is tested in a `#[test]`, which
+/// nextest runs in its own process.
 ///
 /// ```
 /// use norte_frontend::keymap::{paint_chord, set_chord_lang};
 /// use norte_i18n::Lang;
 ///
-/// // Unfixed, English; and fixing it to the same value changes nothing.
-/// assert!(set_chord_lang(Lang::En));
+/// set_chord_lang(Lang::En);
 /// assert_eq!(paint_chord("pgdn"), "PgDn");
 /// ```
 pub fn set_chord_lang(lang: norte_i18n::Lang) -> bool {
-    *CHORD_LANG.get_or_init(|| lang) == lang
+    CHORD_LANG.set(lang)
 }
 
 /// The Spanish name of a named token; `None` if it is not translated.
@@ -527,7 +526,7 @@ fn is_uppercase_letter(token: &str) -> bool {
 /// One token of a chord, spelled for a reader. See [`paint_chord`] for the
 /// whole table and for why nothing here can undo the masking that ran before.
 fn pretty_token(token: &str) -> String {
-    if CHORD_LANG.get() == Some(&norte_i18n::Lang::Es)
+    if CHORD_LANG.get() == Some(norte_i18n::Lang::Es)
         && let Some(name) = spanish_name(token)
     {
         return name.to_owned();

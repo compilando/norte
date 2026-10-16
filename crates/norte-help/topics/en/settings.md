@@ -31,7 +31,23 @@ The settings screen writes to your USER layer. A value a trusted project layer
 overrides goes on being overridden after you change it: the screen wrote what
 you asked, and the more specific file still wins.
 
-> 💡 A few options only take effect on a restart — a font, a language. Their row says so instead of pretending the change landed.
+> 💡 A few options only take effect on a restart — a font, for one. Their row says so instead of pretending the change landed.
+
+# Language
+
+norte speaks English and Spanish. The first run asks which; after that it is
+`[ui] lang` in the settings, and changing it switches the whole interface at
+once, no restart. Unset, norte follows your system's locale, and anything
+that is not Spanish is English. `--lang` and `NORTE_LANG` fix the language
+for one run and win over the setting.
+
+Another language is one file: copy `crates/norte-i18n/i18n/en.ftl` from
+norte's source, translate it, set its `language-name` to the language's own
+name, and save it as `locales/<tag>.ftl` in your config directory —
+`locales/fr.ftl`, `locales/pt-BR.ftl`. It shows up in the first-run question
+and in the settings on the next start. Whatever it does not translate stays
+in English, and the help pages are English for it. A file cannot replace
+English or Spanish.
 
 # Getting around the screen
 

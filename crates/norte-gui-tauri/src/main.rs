@@ -196,6 +196,17 @@ fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     ]
 }
 
+/// What the native pump runs when the host's language moves (ADR 0188):
+/// rebuild the catalogue's strings and tell the renderer, which reloads.
+fn language_changer(handle: tauri::AppHandle) -> impl Fn(&str) + Send + 'static {
+    move |tag: &str| {
+        let state: tauri::State<'_, AppState> = handle.state();
+        if state.bridge().is_ok_and(|b| b.change_language(tag)) {
+            let _ = handle.emit(EVENT_CATALOG, ());
+        }
+    }
+}
+
 fn main() -> ExitCode {
     // Before any runtime: opening the trace is blocking I/O.
     norte_gui_tauri::trace::init();
@@ -312,6 +323,7 @@ fn main() -> ExitCode {
                     native_effects,
                     bridge.host_shared(),
                     apply_theme,
+                    language_changer(app.handle().clone()),
                     close,
                 ));
             }

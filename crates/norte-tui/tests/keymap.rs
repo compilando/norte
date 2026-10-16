@@ -648,10 +648,7 @@ fn every_help_group_header_has_a_translated_label() {
                 "{id}: no translation in {lang:?} — the sidebar would paint \
                  the Fluent id as if it were the group's name. Add the entry \
                  in i18n/{}.ftl",
-                match lang {
-                    norte_i18n::Lang::Es => "es",
-                    norte_i18n::Lang::En => "en",
-                }
+                lang.tag()
             );
         }
     }

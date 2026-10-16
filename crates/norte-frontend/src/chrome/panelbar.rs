@@ -776,9 +776,9 @@ mod tests {
     /// because the name changes: "Registro" gives `R` and "Log" gives `L`.
     ///
     /// On the PURE function and not on `buttons`, which reads the global
-    /// language: that global is set once per process, so a test that
-    /// forced it would depend on who forced it earlier — and under `cargo
-    /// test`, which shares the process, that is a race.
+    /// language: that global is one per process, so a test that forced it
+    /// would depend on who forced it earlier — and under `cargo test`, which
+    /// shares the process, that is a race.
     #[test]
     fn the_letter_is_the_names_initial() {
         assert_eq!(letter_of("Sitios", "places", &[]), 'S');

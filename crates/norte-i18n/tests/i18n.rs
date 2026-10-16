@@ -140,3 +140,116 @@ fn language_negotiation() {
     assert_eq!(Lang::negotiate(Some("de_DE")), Lang::En, "en fallback");
     assert_eq!(Lang::negotiate(None), Lang::En);
 }
+
+/// Whoever downloads norte without a Spanish locale reads English: no
+/// locale, the C one, POSIX, or one norte does not speak. A word that merely
+/// STARTS like `es` is not Spanish either.
+#[test]
+fn without_a_spanish_locale_the_language_is_english() {
+    for v in [
+        "C",
+        "C.UTF-8",
+        "POSIX",
+        "",
+        "en_GB.UTF-8",
+        "fr_FR",
+        "et_EE.UTF-8",
+    ] {
+        assert_eq!(Lang::negotiate(Some(v)), Lang::En, "{v:?}");
+    }
+    assert_eq!(Lang::negotiate(Some("es_MX.UTF-8@euro")), Lang::Es);
+    assert_eq!(
+        Lang::resolve(None, None, None, Lang::negotiate(None)),
+        Lang::En
+    );
+}
+
+/// The English catalogue carries no Spanish: an English reader who sees
+/// `¿` or `ñ` is reading a string someone pasted into the wrong file.
+///
+/// Letters with accents alone are not the sign — `café` and `Tromsø` are
+/// example names — so the check is the marks only Spanish prose uses, with
+/// the keys that quote them on purpose listed.
+#[test]
+fn the_english_catalogue_has_no_spanish() {
+    const QUOTES_ON_PURPOSE: &[&str] = &["language-name"];
+    let source = include_str!("../i18n/en.ftl");
+    let spanish: Vec<&str> = source
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .filter(|l| {
+            let key = l.split(" = ").next().unwrap_or_default();
+            !QUOTES_ON_PURPOSE.contains(&key)
+        })
+        .filter(|l| l.contains(['¿', '¡', 'ñ', 'Ñ']))
+        .collect();
+    assert!(spanish.is_empty(), "Spanish in en.ftl: {spanish:?}");
+}
+
+/// An extra language is a whole interface even half translated: what it
+/// lacks is English, a bad file name or a built-in tag is refused, and the
+/// locale finds it by tag or by language.
+#[test]
+fn an_extra_language_falls_back_to_english() {
+    let notices = norte_i18n::install_extras(vec![
+        (
+            "pt-BR".into(),
+            format!(
+                "language-name = Português\nmodal-trash-title = Para a lixeira\n\
+                 help-title = \u{1b}]0;pwned\u{7}Aj\u{202e}uda\n\
+                 modal-trash-note = {{ \"\\u001B]0;owned\\u0007\" }}x{{ \"\\u202E\" }}{{ \"\\u200F\" }}y\n\
+                 amp-a = {}\n\
+                 amp-b = {}\n",
+                "x".repeat(6000),
+                "{amp-a}".repeat(4)
+            ),
+        ),
+        ("../evil".into(), "x = y\n".into()),
+        ("es".into(), "modal-trash-title = secuestrado\n".into()),
+        ("de".into(), "modal-trash-title = { broken\n".into()),
+    ]);
+    let problems: Vec<_> = notices
+        .iter()
+        .map(|n| (n.tag.as_str(), &n.problem))
+        .collect();
+    assert_eq!(
+        problems,
+        vec![
+            ("../evil", &norte_i18n::Problem::BadTag),
+            ("es", &norte_i18n::Problem::BuiltIn),
+            ("de", &norte_i18n::Problem::Syntax { errors: 1 }),
+        ]
+    );
+    let pt = Lang::from_flag("pt-br").expect("installed");
+    assert_eq!(t_in(pt, "modal-trash-title"), "Para a lixeira");
+    // A downloaded translation cannot drive the terminal: the escape that
+    // would retitle it and the bidi override are gone, the text stays.
+    assert_eq!(t_in(pt, "help-title"), "]0;pwnedAjuda");
+    // Nor through Fluent's own `\u` escapes, decoded only when formatting.
+    assert_eq!(t_in(pt, "modal-trash-note"), "]0;ownedxy");
+    // A message built from copies of a big one is cut, not multiplied.
+    assert!(t_in(pt, "amp-b").len() <= 8 * 1024);
+    assert_eq!(
+        t_in(pt, "modal-trash-subtitle-none-such"),
+        "modal-trash-subtitle-none-such"
+    );
+    assert_eq!(
+        t_in(pt, "modal-delete-title"),
+        t_in(Lang::En, "modal-delete-title"),
+        "what it lacks is English"
+    );
+    assert_eq!(
+        t_in(Lang::Es, "modal-trash-title"),
+        "A la papelera",
+        "es untouched"
+    );
+    assert_eq!(Lang::negotiate(Some("pt_BR.UTF-8")), pt);
+    let de = Lang::from_flag("de").expect("installed in part");
+    assert_eq!(
+        de.native_name(),
+        "de",
+        "no name of its own: its tag, not English's"
+    );
+    assert_eq!(pt.tag(), "pt-BR");
+    assert_eq!(Lang::all().len(), 4);
+}

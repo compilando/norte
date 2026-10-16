@@ -1,17 +1,23 @@
 //! Key names in Spanish ([`set_chord_lang`]).
 //!
-//! In its OWN binary, and it is the only thing in it: the language is fixed
-//! once per process (`OnceLock`), so alongside the tests that expect English
-//! —the unit tests and `paint_chord`'s doctests— it would break them
-//! depending on the order they run in.
+//! In its OWN binary, and it is the only thing in it: the language is one
+//! per process, so alongside the tests that expect English —the unit tests
+//! and `paint_chord`'s doctests— it would break them depending on the order
+//! they run in.
 
 use norte_frontend::keymap::{paint_chord, set_chord_lang, unpaint_chord};
 use norte_i18n::Lang;
 
 #[test]
 fn keys_are_named_in_spanish_and_the_inverse_understands_them() {
+    // Switched at run time (ADR 0188): the names follow the interface.
+    assert!(set_chord_lang(Lang::En));
+    assert_eq!(paint_chord("pgdn"), "PgDn");
     assert!(set_chord_lang(Lang::Es));
-    assert!(!set_chord_lang(Lang::En), "fixed once, it does not change");
+    assert!(
+        !set_chord_lang(Lang::Es),
+        "the same language changes nothing"
+    );
 
     assert_eq!(paint_chord("pgdn"), "AvPág");
     assert_eq!(paint_chord("pgup"), "RePág");

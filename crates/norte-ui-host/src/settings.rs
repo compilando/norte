@@ -133,6 +133,9 @@ pub(crate) struct Settings {
     state: SettingsState,
     /// The locations, already sanitized.
     paths: Vec<PathRowView>,
+    /// The same, raw: their labels are translated, so a language switch
+    /// (ADR 0188) rebuilds them from here.
+    host_paths: HostPaths,
     /// Which row the cursor is on, over the FLAT list.
     cursor: usize,
 }
@@ -152,6 +155,7 @@ impl Settings {
         Self {
             state: SettingsState::new(rows_of(cfg, lang)),
             paths: paths_of(paths, lang),
+            host_paths: paths.clone(),
             cursor: 0,
         }
     }
@@ -165,6 +169,7 @@ impl Settings {
     /// actually says.
     pub(crate) fn refresh(&mut self, cfg: &norte_frontend::config::FrontendConfig, lang: Lang) {
         self.state.refresh(rows_of(cfg, lang));
+        self.paths = paths_of(&self.host_paths, lang);
     }
 
     /// How many eligible rows there are NOW: the ones the filter lets
@@ -497,7 +502,7 @@ fn rows_of(cfg: &norte_frontend::config::FrontendConfig, lang: Lang) -> Vec<Row>
 /// each frame, the editor and the comparer when launching them, the search
 /// mode when searching, whether it asks on exit when exiting — so it
 /// changes instantly. What does not: what the host resolves once at startup
-/// — the language, the fonts, reduced motion, which is what
+/// — the fonts and reduced motion, which is what
 /// `out_of_scope_hot` names — and what gets fixed when creating
 /// each slot — the hidden files and the `..` row — which already-open slots
 /// do not reread. Marking EVERYTHING else as "requires restart" was lying
@@ -505,8 +510,7 @@ fn rows_of(cfg: &norte_frontend::config::FrontendConfig, lang: Lang) -> Vec<Row>
 fn needs_restart(id: &str) -> bool {
     matches!(
         id,
-        "ui.lang"
-            | "ui.font"
+        "ui.font"
             | "ui.mono-font"
             | "ui.font-size"
             | "ui.reduce-motion"

@@ -43,7 +43,9 @@ const LOCALES: [Lang; 2] = [Lang::En, Lang::Es];
 /// wildcard-free `match` over every [`Lang`]. Adding a variant fails to compile
 /// here, next to the list that has to grow with it.
 const _: fn(Lang) = |lang| match lang {
-    Lang::En | Lang::Es => (),
+    // An extra language (ADR 0188) is a `.ftl`, not a corpus: its help is
+    // the English one, so it is not a locale to check.
+    Lang::En | Lang::Es | Lang::Extra(_) => (),
 };
 
 /// The locale [`check_commands`] and [`check_contexts`] read.

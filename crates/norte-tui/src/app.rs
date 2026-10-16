@@ -865,6 +865,11 @@ pub struct App {
     /// returns a [`crate::navigate::Cd`] — adding a second output channel to
     /// its signature would touch every caller to serve three arms.
     pub pending_profile: Option<std::ffi::OsString>,
+    /// Reload the configuration now instead of waiting for the watcher:
+    /// the wizard just wrote `[ui] lang` (ADR 0188), and on a first run the
+    /// config dir it wrote into did not exist, so only the slow poll would
+    /// have seen it. Drained by the run loop.
+    pub reload_soon: bool,
     /// The sidebar needs the drives requested again.
     ///
     /// Same pattern as [`Self::pending_profile`] and for the same reason:
@@ -1525,6 +1530,7 @@ impl App {
             parent_row: false,
             active_profile: None,
             pending_profile: None,
+            reload_soon: false,
             places_wants_drives: false,
             connections_picker: None,
             columns_picker: None,

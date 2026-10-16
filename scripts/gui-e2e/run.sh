@@ -39,7 +39,7 @@
 #   expect-dom <probe> <text>       a probe is exactly <text>
 #   expect-dom-has <probe> <text>   a probe contains <text>
 #   expect-dom-lacks <probe> <text> a probe does not contain <text>
-#                          probes: goto active cursor slots menu context
+#                          probes: goto active cursor slots menu menubar lang context
 #                          dialog open focus tone dpr (`ui/src/probes.ts`)
 #   expect-clip <text>     the CLIPBOARD contains <text>
 #   expect-jq <filter>     `jq -s -e <filter>` over the trace holds

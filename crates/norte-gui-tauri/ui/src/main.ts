@@ -94,6 +94,9 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   const session = new Session();
   const catalog = await port.catalog();
   let currentCatalog = catalog;
+  // The document's language is the host's, not the `index.html` constant:
+  // screen readers, hyphenation and spellcheck follow it.
+  doc.documentElement.lang = catalog.locale;
   applyThemeFor(doc, catalog);
   applyAppearance(doc, catalog.appearance);
   // The window's own title bar (ADR 0136), for the screen and for the fatal
@@ -283,14 +286,22 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     }
   });
   await port.onLagged(resync);
-  // The catalogue changed: today only the THEME triggers it, and what has to
-  // be redone is its CSS variables. The strings are not re-applied because
-  // they do not move — the language is fixed once per process — and `Screen`
-  // kept its own.
+  // The catalogue changed. A THEME redoes its CSS variables in place. A
+  // LANGUAGE (ADR 0188) reloads the page: every painted string came from the
+  // old catalogue and the paint caches key on shape, not text, so in place
+  // would leave half the screen in the old language. The host outlives the
+  // reload; the flag makes the next boot ask it for a fresh frame instead of
+  // trusting the startup one.
   await port.onCatalog(() => {
     void port
       .catalog()
       .then((cat) => {
+        const view = doc.defaultView;
+        if (cat.locale !== currentCatalog.locale && view !== null) {
+          view.sessionStorage.setItem(RELOADED_FOR_LANGUAGE, "1");
+          view.location.reload();
+          return;
+        }
         currentCatalog = cat;
         applyThemeFor(doc, cat);
         applyAppearance(doc, cat.appearance);
@@ -318,6 +329,12 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     return metrics;
   }
   repaint();
+  // Back from a language reload: the startup frame is stale (see
+  // `onCatalog`), so the current one is asked for.
+  if (doc.defaultView?.sessionStorage.getItem(RELOADED_FOR_LANGUAGE) === "1") {
+    doc.defaultView.sessionStorage.removeItem(RELOADED_FOR_LANGUAGE);
+    resync();
+  }
   sendViewport(send, screen, doc);
   // The desktop switches from light to dark and the window follows (V6).
   //
@@ -593,6 +610,9 @@ function applyThemeFor(doc: Document, cat: HostCatalog): void {
  *  stylesheet says based on the bundled typeface (V1); kept while scaling so
  *  a row keeps the same feel at any size. */
 export const ROW_BY_SIZE = 22 / 14;
+
+/** The `sessionStorage` mark a language reload leaves for the next boot. */
+const RELOADED_FOR_LANGUAGE = "norte.reloaded-for-language";
 
 /**
  * Fonts and motion (`[ui] font`, `mono_font`, `font_size`,

@@ -7,7 +7,31 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **The first run asks your language.** It is now the wizard's first
+  question, already set to your system's locale, with each language named
+  in itself; the rest of the wizard follows your answer at once. If you
+  quit the wizard after that first answer, the other choices keep their
+  defaults and `ntc --setup` asks again.
+- **Changing the language no longer needs a restart.** `[ui] lang` —
+  from the settings, the wizard, a profile or by hand — switches the whole
+  interface live, in the terminal and in the window. `--lang` and
+  `NORTE_LANG` still fix it for one run, and the status bar says so if you
+  change the setting meanwhile.
+- **More languages, one file each.** Translate norte's `en.ftl` and save
+  it as `locales/<tag>.ftl` in your config directory (`locales/fr.ftl`,
+  `locales/pt-BR.ftl`): it appears in the wizard, the settings and
+  `--lang`. Whatever it does not translate stays in English. Files that
+  cannot load are named in the log.
+
 ### Fixed
+
+- **English everywhere for English readers.** The package description in
+  software centres, the launcher's comment, the `git-status` and
+  `git-panel` plugin help, and a configuration warning were in Spanish
+  whatever your language; the window also told screen readers it was
+  Spanish.
 
 - **The window's notice no longer pops up again on every cursor move.**
   After opening a file with the desktop, "opening with the desktop

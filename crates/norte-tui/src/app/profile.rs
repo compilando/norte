@@ -47,25 +47,21 @@ impl crate::app::App {
 /// mouse gets re-applied by the loop right behind it, and the layout and
 /// hidden files arrive via steps 4 and 5. The list below is the rest.
 ///
-/// **`[ui] lang` is the only thing left**, and not by oversight:
-/// `norte_i18n::force` runs ONCE per process, and the watcher's hot-reload
-/// already carries that same limitation in its signature from before there
-/// were profiles. A change that stayed quiet about this would be a change
-/// that lies.
+/// **Empty today**: `[ui] lang` was the last entry, and it applies hot since
+/// ADR 0188 (a pinned run says so itself, in `reload_config`). It stays a
+/// function because the classification test below needs somewhere to send
+/// the next field that cannot apply hot — and a change that stayed quiet
+/// about one would be a change that lies.
 ///
 /// Fonts and `reduce_motion` don't appear here because in a terminal they
 /// don't apply at all: they belong to the window, and saying "couldn't be
 /// applied" about something this frontend never applies would be noise.
 #[must_use]
 pub fn not_hot_reloadable(
-    before: &norte_config::CommonConfig,
-    after: &norte_config::CommonConfig,
+    _before: &norte_config::CommonConfig,
+    _after: &norte_config::CommonConfig,
 ) -> Vec<&'static str> {
-    let mut out = Vec::new();
-    if before.ui_lang != after.ui_lang {
-        out.push("ui.lang");
-    }
-    out
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -117,21 +113,15 @@ mod tests {
         assert_eq!(app.config_write_dir(), norte_config::user_config_dir());
     }
 
-    /// Changing the language gets ANNOUNCED; changing the theme doesn't,
-    /// because the theme DOES apply hot.
+    /// Neither the theme nor the language gets announced: both apply hot
+    /// (ADR 0020, ADR 0188).
     #[test]
-    fn only_the_language_gets_announced() {
+    fn nothing_gets_announced() {
         let base = norte_config::load(&norte_config::Layers { dirs: Vec::new() }).expect("empty");
         let mut other = base.clone();
         other.ui_theme = Some("nord".to_owned());
-        assert!(
-            not_hot_reloadable(&base, &other).is_empty(),
-            "the theme is hot-reloadable (ADR 0020)"
-        );
-
-        let mut with_lang = base.clone();
-        with_lang.ui_lang = Some("es".to_owned());
-        assert_eq!(not_hot_reloadable(&base, &with_lang), vec!["ui.lang"]);
+        other.ui_lang = Some("es".to_owned());
+        assert!(not_hot_reloadable(&base, &other).is_empty());
     }
 
     /// Every `CommonConfig` field is CLASSIFIED: either it applies hot, or
@@ -197,7 +187,7 @@ mod tests {
             //   it on every reload would send you back to square one every
             //   time the file is touched.
             profile_start: _,
-            // — GETS ANNOUNCED: `norte_i18n::force` runs once per process.
+            // — Applies hot in `reload_config` (ADR 0188).
             ui_lang: _,
             // — Belongs to the WINDOW: a terminal never applies them, so
             //   saying "couldn't be applied" would be noise.

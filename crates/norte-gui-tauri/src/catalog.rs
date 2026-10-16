@@ -159,21 +159,29 @@ impl Appearance {
     }
 }
 
+/// Every catalogue string, translated in `lang`.
+///
+/// English's ids, the complete set: an extra language (ADR 0188) that lacks
+/// one gets English's text for it, not a hole.
+#[must_use]
+pub fn strings(lang: Lang) -> BTreeMap<String, String> {
+    norte_i18n::message_ids(Lang::En)
+        .into_iter()
+        .map(|id| {
+            let text = norte_i18n::t_in(lang, &id);
+            (id, text)
+        })
+        .collect()
+}
+
 /// Builds the bundle for this instance, this language and this theme.
 #[must_use]
 pub fn catalog(instance: &InstanceId, lang: Lang, theme: &Theme) -> HostCatalog {
-    let mut strings = BTreeMap::new();
-    for id in norte_i18n::message_ids(lang) {
-        let text = norte_i18n::t_in(lang, &id);
-        strings.insert(id, text);
-    }
+    let strings = strings(lang);
     HostCatalog {
         bridge_version: BRIDGE_VERSION,
         instance_id: instance.as_str().to_owned(),
-        locale: match lang {
-            Lang::Es => "es".to_owned(),
-            Lang::En => "en".to_owned(),
-        },
+        locale: lang.tag().to_owned(),
         strings,
         theme: variables(theme),
         measure: std::env::var_os("NORTE_GUI_MEASURE").is_some_and(|v| v == "1"),

@@ -105,9 +105,11 @@ fn the_description_does_not_speak_of_a_spike() {
         !long.contains("spike"),
         "the package's description is not a development note: {long:?}"
     );
+    // In English (ADR 0188): deb and rpm carry one description, and a
+    // software centre shows it to every reader.
     assert!(
-        long.contains("ficheros"),
-        "and it says what this is: {long:?}"
+        long.contains("file manager"),
+        "and it says what this is, in English: {long:?}"
     );
 }
 
