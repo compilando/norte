@@ -2985,7 +2985,7 @@ pub fn load(layers: &Layers) -> Result<CommonConfig, ConfigError> {
                 );
             } else if parsed.profile.title.is_some() || !parsed.profile.start.is_empty() {
                 profile_warnings.push(format!(
-                    "{}: [profile] solo significa algo dentro de profiles/<nombre>/",
+                    "{}: [profile] only means something inside profiles/<name>/",
                     norte.display()
                 ));
             }

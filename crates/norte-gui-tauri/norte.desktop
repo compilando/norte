@@ -2,7 +2,9 @@
 Type=Application
 Name=norte
 GenericName=File Manager
-Comment=norte, gestor de ficheros ortodoxo
+GenericName[es]=Gestor de ficheros
+Comment=norte, an orthodox file manager
+Comment[es]=norte, gestor de ficheros ortodoxo
 # `%f` and NOT `%U`: `%U` delivers a URL (`file:///home`) and `norte-gui`
 # expects a PATH — `PathBuf::from("file:///home")` is a RELATIVE path that
 # doesn't exist, so the window would open on an error instead of the folder
@@ -24,4 +26,5 @@ Categories=System;FileTools;FileManager;
 # `x-directory/normal`: it's an old type the validator discourages, and the
 # remaining desktops understand `inode/directory`.
 MimeType=inode/directory;
-Keywords=file;manager;explorer;ficheros;archivos;
+Keywords=file;manager;explorer;
+Keywords[es]=fichero;archivo;gestor;explorador;

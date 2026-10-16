@@ -2,25 +2,23 @@
 id = "org.norte.git-panel"
 title = "Git panel"
 +++
-Pinta un panel con el estado del repositorio que estás mirando: la rama
-actual, el commit al que apunta, y los últimos movimientos del reflog —de
-dónde vienes, que es lo que cuesta recordar después de un rato saltando
-entre ramas.
+Paints a panel with the state of the repository you are looking at: the
+current branch, the commit it points to, and the latest reflog moves —
+where you came from, which is what is hard to remember after a while of
+jumping between branches.
 
-Se coloca como cualquier otro hueco: en el selector de disposiciones aparece
-como un panel más, y se puede poner al lado del listado, debajo, o en una
-pestaña.
+It is placed like any other slot: the layout picker lists it as one more
+panel, and it can sit beside the listing, below it, or in a tab.
 
-Lee la raíz del repositorio a la que el host lo confina —el ancestro que
-contiene `.git`— y nada más: `.git/HEAD` para la rama, `.git/logs/HEAD` para
-el commit y los movimientos. Nunca escribe, nunca ejecuta `git`, y no sabe
-dónde está: el host le da un token y él pide caminos relativos.
+It reads the repository root the host confines it to — the ancestor that
+holds `.git` — and nothing else: `.git/HEAD` for the branch, `.git/logs/HEAD`
+for the commit and the moves. It never writes, never runs `git`, and does not
+know where it is: the host hands it a token and it asks for relative paths.
 
-Fuera de un repositorio el panel lo dice en una línea, en vez de quedarse en
-blanco: un hueco vacío no se distingue de uno roto.
+Outside a repository the panel says so in one line instead of staying
+blank: an empty slot cannot be told apart from a broken one.
 
-Las zonas pulsables del panel ejecutan comandos de norte, y solo los que
-cualquier panel puede ejecutar: moverse entre paneles, abrir otro, cambiar el
-tamaño. Un plugin elige la etiqueta y el comando, así que norte no le deja
-nombrar nada que tú no pudieras hacer con una tecla mientras el panel tiene
-el teclado.
+The panel's clickable areas run norte commands, and only the ones any panel
+may run: moving between panels, opening another one, resizing. A plugin
+chooses the label and the command, so norte does not let it name anything
+you could not do with a key while the panel has the keyboard.

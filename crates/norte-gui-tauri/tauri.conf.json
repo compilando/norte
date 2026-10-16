@@ -50,8 +50,8 @@
       "icons/icon.ico"
     ],
     "category": "Utility",
-    "shortDescription": "norte, gestor de ficheros ortodoxo",
-    "longDescription": "Un gestor de ficheros de dos paneles con un núcleo sin interfaz, un daemon y acceso para agentes. Esta es la ventana; el paquete trae también el daemon y el cliente de terminal.",
+    "shortDescription": "norte, an orthodox file manager",
+    "longDescription": "A two-pane file manager with a headless core, a daemon and agent access. This is the window; the package also ships the daemon and the terminal client.",
     "linux": {
       "deb": {
         "desktopTemplate": "norte.desktop"
