@@ -1223,6 +1223,29 @@ describe("Screen", () => {
     expect(msg()?.textContent).toBe("otra");
   });
 
+  // The toast lives inside the bar, and the bar is rebuilt whenever ANY of
+  // its inputs changes — the cursor's size on the right does on every move.
+  // A new node replays `toast-in`, so "opening with the desktop…" popped up
+  // again on each arrow for as long as it lived.
+  it("the toast keeps its node while its text holds and the bar changes around it", () => {
+    const { screen, root } = mount();
+    const v = view({});
+    v.status = { ...v.status, message: "abriendo" };
+    screen.paint(v);
+    const msg = () => root.querySelector(".statusbar .status-message");
+    const before = msg();
+    expect(before?.textContent).toBe("abriendo");
+    screen.paint({
+      ...v,
+      status_items: [{ id: "size", text: "1.1 MiB", tooltip: "", clickable: false }],
+    });
+    expect(msg()).toBe(before);
+    expect(root.querySelector(".statusbar")?.textContent).toContain("1.1 MiB");
+    screen.paint({ ...v, status: { ...v.status, message: "otra" } });
+    expect(msg()).not.toBe(before);
+    expect(msg()?.textContent).toBe("otra");
+  });
+
   it("a command the host rejects at the boundary shows up in the status bar", () => {
     // An action that fails to deserialize dies in `dispatch`, before the
     // host ever sees it: nobody but the renderer can say so. That's how the

@@ -7,6 +7,12 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The window's notice no longer pops up again on every cursor move.**
+  After opening a file with the desktop, "opening with the desktop
+  application…" replayed its entrance on each arrow press while it lasted.
+
 ## [0.3.0-alpha.15] - 2026-10-15
 
 ### Added
