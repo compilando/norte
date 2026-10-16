@@ -116,3 +116,32 @@ fn every_release_profile_loads_without_degrading() {
         }
     }
 }
+
+/// Every `locales/<tag>.ftl` a release shipped is still read and installed
+/// WHOLE (ADR 0188): a parse rule that tightened would leave a translation
+/// half English without a word to its reader.
+#[test]
+fn every_release_language_file_still_installs_whole() {
+    let mut sources: Vec<(String, String)> = Vec::new();
+    for config in corpora() {
+        let found = norte_config::locales::read_locales(
+            &config.join(norte_config::locales::DIR),
+            norte_i18n::MAX_FTL_BYTES,
+            norte_i18n::MAX_EXTRAS,
+        );
+        assert!(
+            found.skipped.is_empty(),
+            "{}: {:?}",
+            config.display(),
+            found.skipped
+        );
+        for (tag, source) in found.sources {
+            // The same file frozen again by a later release: keep the newest.
+            sources.retain(|(t, _)| *t != tag);
+            sources.push((tag, source));
+        }
+    }
+    assert!(!sources.is_empty(), "no release froze a language file");
+    let notices = norte_i18n::install_extras(sources);
+    assert!(notices.is_empty(), "{notices:?}");
+}
