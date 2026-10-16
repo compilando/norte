@@ -1,0 +1,23 @@
+[[command]]
+id = "optimize-png"
+label = "Optimize PNGs"
+description = "Recompress the selected PNG files in place"
+argv = ["oxipng", "-o", "4", "%F"]
+run_in = "background"
+cwd = "pane"
+confirm = true
+refresh = true
+
+[[command]]
+id = "disk-usage"
+label = "Disk usage here"
+argv = ["du", "-sh", "%d"]
+run_in = "terminal"
+cwd = "/tmp"
+confirm = false
+refresh = false
+
+[[command]]
+id = "touch-one"
+label = "Touch the file"
+argv = ["touch", "%f"]
