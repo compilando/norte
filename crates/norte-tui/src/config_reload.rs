@@ -65,7 +65,11 @@ fn apply_external_programs(app: &mut App, cfg: &config::LoadedConfig) {
 /// happen if this applied. A half-applied profile is not a state that design
 /// admits, and the "all or nothing" this function already had is exactly the
 /// semantics needed.
-#[expect(clippy::too_many_arguments, reason = "hot-reload wiring, not API")]
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "hot-reload wiring, not API: one step per setting, all or nothing"
+)]
 pub async fn reload_config(
     app: &mut App,
     backend: &Backend,
@@ -73,11 +77,10 @@ pub async fn reload_config(
     viewer_resolver: &mut Resolver,
     dialog_resolver: &mut Resolver,
     help_lines: &mut Vec<ratatui::text::Line<'static>>,
-    // H3b: the negotiated language, so the rebuilt `TuiChords` answers in the
-    // same locale it did at startup. Session-fixed (`norte_i18n::force` runs
-    // once), so a `[ui] lang` edited in the file does NOT take effect here —
-    // the same restriction the rest of the i18n already has.
-    lang: norte_i18n::Lang,
+    // H3b: the active language, so the rebuilt `TuiChords` answers in it. A
+    // `[ui] lang` that changed takes effect HERE (ADR 0188), before anything
+    // below rebuilds its text, unless `--lang`/`NORTE_LANG` pinned the run.
+    lang: &mut norte_i18n::Lang,
     layers: &Layers,
     cli_preset: Option<&str>,
     quick_mode: &mut nav::Mode,
@@ -91,6 +94,16 @@ pub async fn reload_config(
     match config::load_async(layers.clone()).await {
         Ok(cfg) => match build_keymaps(&cfg, cli_preset) {
             Ok((browse, viewer, dialog)) => {
+                // FIRST: everything rebuilt below carries translated text.
+                let pinned = match norte_frontend::language::follow(cfg.common.ui_lang.as_deref()) {
+                    norte_i18n::Followed::Changed(new) => {
+                        *lang = new;
+                        None
+                    }
+                    norte_i18n::Followed::Pinned(p) => Some(p),
+                    norte_i18n::Followed::Same => None,
+                };
+                let lang = *lang;
                 // The quick search mode follows the current config (only
                 // affects NEW quick searches; an open one keeps its own).
                 // Same criterion as the theme: only if EVERYTHING applied.
@@ -216,10 +229,17 @@ pub async fn reload_config(
                 // came from the effective keymap that has just been replaced,
                 // so a surviving panel would show keys that no longer exist.
                 app.clear_pending();
-                app.message = Some(t("msg-config-reloaded"));
+                app.message = Some(match pinned {
+                    Some(p) => ta("msg-lang-pinned", &[("lang", p.tag())]),
+                    None => t("msg-config-reloaded"),
+                });
                 // The theme is also hot-reloadable (ADR 0020): if it fails,
-                // the theme's error message overrides "config reloaded".
-                apply_theme(app, &cfg);
+                // the theme's error message overrides "config reloaded". Not
+                // under the wizard: the reload its language write causes
+                // would undo the theme step's live preview.
+                if app.wizard.is_none() {
+                    apply_theme(app, &cfg);
+                }
                 // Before the security warning, which must still win.
                 if let Some(first) = undefined.first() {
                     app.message = Some(ta(
@@ -306,7 +326,7 @@ mod tests {
             &mut viewer_resolver,
             &mut dialog_resolver,
             &mut Vec::new(),
-            norte_i18n::Lang::En,
+            &mut norte_i18n::Lang::En,
             &layers,
             None,
             &mut quick_mode,
@@ -354,7 +374,7 @@ mod tests {
             &mut viewer_resolver,
             &mut dialog_resolver,
             &mut Vec::new(),
-            norte_i18n::Lang::En,
+            &mut norte_i18n::Lang::En,
             &layers,
             None,
             &mut quick_mode,
@@ -365,5 +385,51 @@ mod tests {
         assert!(applied, "the keymap loads");
         let msg = app.message.expect("a warning");
         assert!(msg.contains("gone"), "{msg}");
+    }
+
+    /// A `[ui] lang` written while running applies on the reload (ADR 0188):
+    /// the loop's language, the global one, and the text rebuilt after it.
+    #[tokio::test]
+    async fn a_reload_switches_the_language_live() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let layers = Layers {
+            dirs: vec![(dir.path().to_path_buf(), Layer::User)],
+        };
+        let mut cfg = config::load(&layers).expect("an empty layer loads");
+        let (browse, viewer, dialog) = build_keymaps(&cfg, None).expect("keymaps");
+        let (mut resolver, mut viewer_resolver, mut dialog_resolver) = (
+            Resolver::new(browse),
+            Resolver::new(viewer),
+            Resolver::new(dialog),
+        );
+        norte_i18n::force(norte_i18n::Lang::En);
+        std::fs::write(dir.path().join("norte.toml"), "[ui]\nlang = \"es\"\n").expect("write");
+        let d = norte_proto::VPath::parse("file:///x").expect("test wire");
+        let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
+        let backend = Backend::Embedded(Arc::new(norte_core::Engine::new()));
+        let (mut quick_mode, mut confirm_quit) =
+            (cfg.quick_search_mode, cfg.common.ui_confirm_quit);
+        let mut lang = norte_i18n::Lang::En;
+        let mut help_lines = Vec::new();
+        let applied = reload_config(
+            &mut app,
+            &backend,
+            &mut resolver,
+            &mut viewer_resolver,
+            &mut dialog_resolver,
+            &mut help_lines,
+            &mut lang,
+            &layers,
+            None,
+            &mut quick_mode,
+            &mut confirm_quit,
+            &mut cfg,
+        )
+        .await;
+        assert!(applied);
+        assert_eq!(lang, norte_i18n::Lang::Es, "the loop's language follows");
+        assert_eq!(norte_i18n::active(), norte_i18n::Lang::Es);
+        assert_eq!(app.message.as_deref(), Some("config recargada"));
+        assert_eq!(norte_frontend::keymap::paint_chord("enter"), "Intro");
     }
 }

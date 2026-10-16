@@ -764,7 +764,22 @@ const CATALOG: &[SettingDef] = &[
 /// manifest (S3/S4).
 #[must_use]
 pub fn catalog() -> &'static [SettingDef] {
-    CATALOG
+    static WITH_LANGUAGES: std::sync::OnceLock<Vec<SettingDef>> = std::sync::OnceLock::new();
+    // `ui.lang` offers every language this process speaks, the installed
+    // extras included (ADR 0188): a list only known once they are installed,
+    // at startup, which is before anyone opens the settings.
+    WITH_LANGUAGES.get_or_init(|| {
+        CATALOG
+            .iter()
+            .map(|d| match d.id {
+                "ui.lang" => SettingDef {
+                    kind: SettingKind::Enum(norte_i18n::tags()),
+                    ..*d
+                },
+                _ => *d,
+            })
+            .collect()
+    })
 }
 
 /// The Fluent id for a setting's display NAME: `setting-<id-dashed>-name`,

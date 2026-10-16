@@ -75,8 +75,8 @@ OPTIONS:
     --preset <NAME>      Keyboard preset (default: the config's)
     --no-splash          No splash screen on this launch
     --profile <NAME>     Config profile (default: none)
-    --lang <LANG>        Language for this run (es|en); overrides NORTE_LANG
-                         and [ui] lang
+    --lang <LANG>        Language for this run (en, es, or a locales/<tag>.ftl);
+                         overrides NORTE_LANG and [ui] lang
     --attach             Picks up the screen the terminal just handed off
                          (`app.handoff`), marks included
     -h, --help           This help
@@ -289,8 +289,12 @@ pub struct Cli {
     /// left halfway do not come back to life the next day.
     pub attach: bool,
     /// Language requested for THIS run (`--lang`), above `NORTE_LANG` and
-    /// `[ui] lang`. Already validated: `parse` refuses anything but es/en.
+    /// `[ui] lang`. Already validated: `parse` refuses a tag no installed
+    /// language carries.
     pub lang: Option<Lang>,
+    /// What installing `<config>/locales/` had to say (ADR 0188), for the
+    /// log once it opens.
+    pub locale_notes: Vec<String>,
     /// Help was requested.
     pub help: bool,
     /// The version was requested.
@@ -315,6 +319,9 @@ where
     if let Some(flag) = raw.unknown {
         return Err(StartupError::UnknownFlag(flag));
     }
+    // The extra languages first (ADR 0188): `--lang fr` names one. Before any
+    // runtime, so reading them blocks nobody.
+    let locale_notes = norte_frontend::language::install_locales();
     let lang = match raw.text("--lang") {
         Some(v) => Some(Lang::from_flag(&v).ok_or(StartupError::Unknown {
             that: "--lang",
@@ -331,6 +338,7 @@ where
         no_splash: raw.has("--no-splash"),
         attach: raw.has(norte_frontend::handoff::ATTACH),
         lang,
+        locale_notes,
         help: raw.help,
         version: raw.version,
     })
@@ -442,7 +450,8 @@ fn effects_declared(theme: &Theme) -> Vec<String> {
     theme.effect_names().unwrap_or_default()
 }
 
-/// The window's language, fixed for the whole process.
+/// The window's language at startup; a changed `[ui] lang` moves it later
+/// (ADR 0188).
 ///
 /// **`--lang` > `NORTE_LANG` > `[ui] lang` > the system's environment**
 /// ([`Lang::resolve`], shared with the terminal). The two surfaces used to
@@ -456,16 +465,7 @@ fn effects_declared(theme: &Theme) -> Vec<String> {
 /// is the system's language, and a decision written in the configuration is
 /// more specific than it.
 fn language(flag: Option<Lang>, requested: Option<&str>) -> Lang {
-    let lang = Lang::resolve(
-        flag,
-        std::env::var("NORTE_LANG").ok().as_deref(),
-        requested,
-        Lang::from_env(),
-    );
-    let _ = norte_i18n::force(lang);
-    // Keys are named in the window's language (see the TUI).
-    let _ = norte_frontend::keymap::set_chord_lang(lang);
-    lang
+    norte_frontend::language::start(flag, requested)
 }
 
 /// The two startup disk reads that are not the configuration.
@@ -726,8 +726,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // 0079).
     //
     // On the FIRST load and not through hot reload, same as the terminal:
-    // this way it applies up to `[ui] lang`, which is the only thing a
-    // running change cannot undo (`norte_i18n::force` runs once). The STICKY
+    // this way the very first frame is already the profile's. The STICKY
     // profile cannot do this — it lives in the session, and the session
     // belongs to the daemon, which is reached with the configuration we are
     // loading right now — and that is why it arrives by the other path.
@@ -847,6 +846,9 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // journal and the policy log to their own. The panel says so; keeping
     // quiet about it would make it look broken.
     let log_ring = logging(&cfg);
+    for note in &cli.locale_notes {
+        tracing::warn!(reason = %note, "language file not installed whole");
+    }
 
     let preset = if let Some(p) = &cli.preset {
         name_of(p, "--preset")?
@@ -918,10 +920,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         // same rule the terminal settled in `eb237c61`.
         initial_dir_requested: cli.dir.is_some(),
         attach: cli.attach,
-        locale: match lang {
-            Lang::Es => "es".to_owned(),
-            Lang::En => "en".to_owned(),
-        },
+        locale: lang.tag().to_owned(),
         keymap,
         keymap_viewer,
         keymap_dialog,
@@ -1236,9 +1235,11 @@ mod tests {
             Some(Lang::En)
         );
         assert_eq!(parse::<[&str; 0], &str>([]).expect("parses").lang, None);
-        let e = parse(["--lang", "fr"]).expect_err("fr is not a language of norte");
+        // `zz`, not a real language: `parse` installs the developer's own
+        // `locales/`, and someone with `fr.ftl` there would see this pass.
+        let e = parse(["--lang", "zz"]).expect_err("zz is not a language of norte");
         assert!(
-            matches!(&e, StartupError::Unknown { that, valor } if *that == "--lang" && valor == "fr"),
+            matches!(&e, StartupError::Unknown { that, valor } if *that == "--lang" && valor == "zz"),
             "{e:?}"
         );
     }

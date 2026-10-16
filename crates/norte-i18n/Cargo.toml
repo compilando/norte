@@ -11,6 +11,9 @@ authors.workspace = true
 [dependencies]
 fluent.workspace = true
 fluent-syntax.workspace = true
+# The ONE terminal-hazard set (ADR 0188): an extra `.ftl` is downloaded text
+# the TUI paints raw. A leaf crate of ours; two hazard lists would drift.
+norte-encoding.workspace = true
 unic-langid.workspace = true
 
 [lints]

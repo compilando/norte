@@ -538,7 +538,8 @@ async fn the_wizard_writes_the_release_check_off_when_enter_is_all_it_got() {
     let (h, _snap) = host_with_layers(root.path()).await;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::WizardOpen).await.expect("host alive");
-    for _ in 0..4 {
+    // Language, keys, theme, icons, updates.
+    for _ in 0..5 {
         h.dispatch(press("Enter")).await.expect("host alive");
     }
     let written = snapshot_until(&h, &mut sub, "the wizard's answers written", |_| {
@@ -546,4 +547,40 @@ async fn the_wizard_writes_the_release_check_off_when_enter_is_all_it_got() {
     })
     .await;
     assert!(written.contains("check = false"), "{written}");
+    assert!(written.contains("lang = "), "{written}");
+}
+
+/// The language is the wizard's FIRST question and is written the moment it
+/// is answered (ADR 0188): rereading it switches the host, and the house is
+/// told so it rebuilds the catalogue — while the wizard stays open on the
+/// next question. A reload's second `wizard_open` does not restart it.
+#[tokio::test]
+async fn the_wizard_switches_the_language_at_once() {
+    norte_i18n::force(norte_i18n::Lang::En);
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_with_layers(root.path()).await;
+    let mut sub = h.subscribe();
+    let mut native = h.native_effects();
+    h.dispatch(UiAction::WizardOpen).await.expect("host alive");
+    // Rows are English then Spanish; Down lands on Spanish from either.
+    h.dispatch(press("ArrowDown")).await.expect("host alive");
+    h.dispatch(press("Enter")).await.expect("host alive");
+    let effect = tokio::time::timeout(std::time::Duration::from_secs(5), native.recv())
+        .await
+        .expect("the language notice fires")
+        .expect("channel alive");
+    assert_eq!(
+        effect,
+        norte_ui_host::dto::NativeEffect::LanguageChanged { tag: "es".into() }
+    );
+    let written = toml_de(root.path()).expect("norte.toml written");
+    assert!(written.contains("lang = \"es\""), "{written}");
+    h.dispatch(UiAction::WizardOpen).await.expect("host alive");
+    let snap = snapshot_until(&h, &mut sub, "the wizard, still open", |s| s.wizard.clone()).await;
+    assert!(
+        snap.title.contains("2/5"),
+        "the keys step, in Spanish: {}",
+        snap.title
+    );
+    assert!(snap.title.contains("teclas"), "{}", snap.title);
 }

@@ -60,14 +60,21 @@ async fn main() -> Result<()> {
     // yesterday's selection is putting an `F8` over whatever was marked
     // back then.
     let cli_attach = args.has("--attach");
+    // The extra languages (ADR 0188) go in first: `--lang fr` names one.
+    // Their complaints wait for the log, which opens after the config.
+    let locale_notes = tokio::task::spawn_blocking(norte_frontend::language::install_locales)
+        .await
+        .unwrap_or_else(|e| vec![format!("reading locales/ failed: {e}")]);
     // `--lang`: this run's language, above `NORTE_LANG` and `[ui] lang`.
     // Checked here, before the terminal is taken, so a typo is a readable
     // error and not a quiet English.
     let cli_lang = match args.text("--lang") {
-        Some(v) => Some(
-            norte_i18n::Lang::from_flag(&v)
-                .with_context(|| format!("`--lang {v}`: the languages are `es` and `en`"))?,
-        ),
+        Some(v) => Some(norte_i18n::Lang::from_flag(&v).with_context(|| {
+            format!(
+                "`--lang {v}`: the languages are {}",
+                norte_frontend::language::tags()
+            )
+        })?),
         None => None,
     };
     let (cli_preset, cli_layout, cli_profile, cli_daemon, cli_socket, cli_pick, cli_cd_file) = (
@@ -86,9 +93,8 @@ async fn main() -> Result<()> {
         args.path("--cd-file"),
     );
     // An EXPLICIT `--profile` is known before connecting to anything, so it
-    // enters on the FIRST load and not through the hot reload: that way it
-    // applies even to `[ui] lang`, the one thing a live change cannot
-    // (`norte_i18n::force` runs once). The STICKY profile cannot do this —
+    // enters on the FIRST load and not through the hot reload: that way the
+    // very first frame is already the profile's. The STICKY profile cannot do this —
     // it lives in the session, and the session is the daemon's, which is
     // reached with the config we are loading now — and that is why it
     // arrives through the other path.
@@ -126,18 +132,9 @@ async fn main() -> Result<()> {
     let cfg = config::load_async(layers.clone())
         .await
         .context("invalid config")?;
-    // Language: --lang > NORTE_LANG > the config's [ui] lang > environment.
-    let lang = norte_i18n::Lang::resolve(
-        cli_lang,
-        std::env::var("NORTE_LANG").ok().as_deref(),
-        cfg.common.ui_lang.as_deref(),
-        norte_i18n::Lang::from_env(),
-    );
-    let _ = norte_i18n::force(lang);
-    // Keys are NAMED in the same language as the rest of the screen:
-    // "[Backspace] back" stays consistent instead of a mixed-language chord
-    // in a Spanish interface.
-    let _ = norte_frontend::keymap::set_chord_lang(lang);
+    // Language: --lang > NORTE_LANG > the config's [ui] lang > environment,
+    // and keys NAMED in it too ("[Backspace] back", never mixed).
+    let lang = norte_frontend::language::start(cli_lang, cfg.common.ui_lang.as_deref());
     // Roadmap item 9: the log goes to the FILE and only the file. Until now
     // this binary installed no subscriber at all and said so in a comment
     // further below: an `fmt` to stderr fights the alternate screen, so
@@ -165,6 +162,9 @@ async fn main() -> Result<()> {
         },
         norte_config::logring::RING_DEFAULT,
     );
+    for note in &locale_notes {
+        tracing::warn!(reason = %note, "language file not installed whole");
+    }
     let (browse_eff, viewer_eff, dialog_eff) = build_keymaps(&cfg, cli_preset.as_deref())?;
     // `lua:` bindings dropped from the PROJECT keymap.toml (security,
     // M4 Lua review): warned about after creating the App, never a silent
@@ -745,8 +745,8 @@ Options:
       --profile <NAME>   Start in this profile — a directory under `profiles/`
                          in your config dir. Overrides the one you were last
                          in; refuses to start if it cannot be used
-      --lang <LANG>      Language for this run (es|en); overrides NORTE_LANG
-                         and [ui] lang in norte.toml
+      --lang <LANG>      Language for this run (en, es, or a locales/<tag>.ftl);
+                         overrides NORTE_LANG and [ui] lang in norte.toml
       --daemon           Talk to the daemon instead of the embedded core
       --socket <PATH>    Daemon socket (default: $XDG_RUNTIME_DIR/norte/daemon.sock)
       --pick             print the selection, NUL-terminated, and exit

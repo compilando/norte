@@ -12,6 +12,7 @@
 pub mod command_history;
 pub mod dirs;
 pub mod load;
+pub mod locales;
 /// `tracing` setup for the binaries: a rotating file with closed permissions,
 /// and `suppaftp`'s security cap (#43, rule 10).
 ///

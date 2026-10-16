@@ -221,9 +221,9 @@ pub async fn run(
     // the same value handed to `norte_i18n::force`). The help corpus is
     // per-locale, so the overlay must open on the locale the rest of the UI
     // already speaks — `Lang::from_env()` here would hand a reader whose
-    // `[ui] lang` says `es` an English corpus inside a Spanish UI. Fixed for
-    // the session: `force` is called once, so the hot reload keeps this value.
-    lang: norte_i18n::Lang,
+    // `[ui] lang` says `es` an English corpus inside a Spanish UI. `mut`: the
+    // hot reload follows a changed `[ui] lang` (ADR 0188).
+    mut lang: norte_i18n::Lang,
     // `mut` since the profiles feature (ADR 0079): switching profile rebuilds
     // the layers hot, so this is no longer constant for the session.
     mut layers: Layers,
@@ -1442,7 +1442,7 @@ pub async fn run(
                     viewer_resolver,
                     dialog_resolver,
                     help_lines,
-                    lang,
+                    &mut lang,
                     &layers,
                     cli_preset.as_deref(),
                     &mut quick_mode,
@@ -1614,6 +1614,11 @@ pub async fn run(
                 }
             }
         }
+        // The wizard wrote `[ui] lang`: reload on the next turn, not when
+        // the watcher's slow poll gets round to a dir that did not exist.
+        if std::mem::take(&mut app.reload_soon) {
+            reload_at = Some(tokio::time::Instant::now());
+        }
         // A profile switch requested by `profile.pick`/`next`/`prev`, once
         // per turn and HERE.
         //
@@ -1632,7 +1637,7 @@ pub async fn run(
                 viewer_resolver,
                 dialog_resolver,
                 help_lines,
-                lang,
+                &mut lang,
                 &mut layers,
                 cli_preset.as_deref(),
                 &mut quick_mode,
@@ -1680,7 +1685,7 @@ async fn switches_profile(
     viewer_resolver: &mut Resolver,
     dialog_resolver: &mut Resolver,
     help_lines: &mut Vec<ratatui::text::Line<'static>>,
-    lang: norte_i18n::Lang,
+    lang: &mut norte_i18n::Lang,
     layers: &mut Layers,
     cli_preset: Option<&str>,
     quick_mode: &mut nav::Mode,

@@ -31,7 +31,23 @@ La pantalla de ajustes escribe en tu capa de USUARIO. Un valor que pisa una
 capa de proyecto en la que confías sigue pisado después de cambiarlo: la
 pantalla escribió lo que le pediste, y el fichero más específico sigue ganando.
 
-> 💡 Unas pocas opciones solo hacen efecto al reiniciar —una fuente, un idioma—. Su fila lo dice, en vez de fingir que el cambio aterrizó.
+> 💡 Unas pocas opciones solo hacen efecto al reiniciar —una fuente, por ejemplo—. Su fila lo dice, en vez de fingir que el cambio aterrizó.
+
+# Idioma
+
+norte habla inglés y español. La primera ejecución pregunta cuál; después es
+`[ui] lang` en los ajustes, y cambiarlo cambia toda la interfaz al momento,
+sin reiniciar. Sin fijar, norte sigue el idioma de tu sistema, y lo que no
+sea español es inglés. `--lang` y `NORTE_LANG` fijan el idioma de una
+ejecución y mandan sobre el ajuste.
+
+Otro idioma es un fichero: copia `crates/norte-i18n/i18n/en.ftl` del código
+de norte, tradúcelo, pon en su `language-name` el nombre del idioma en sí
+mismo y guárdalo como `locales/<etiqueta>.ftl` en tu carpeta de
+configuración —`locales/fr.ftl`, `locales/pt-BR.ftl`—. Aparece en la
+pregunta de la primera ejecución y en los ajustes al siguiente arranque. Lo
+que no traduzca queda en inglés, y las páginas de ayuda son las inglesas. Un
+fichero no puede sustituir al inglés ni al español.
 
 # Moverse por la pantalla
 

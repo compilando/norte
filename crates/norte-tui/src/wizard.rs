@@ -42,13 +42,25 @@ pub fn open(app: &mut App, cfg: &config::LoadedConfig) {
     let names = norte_frontend::theme::theme_names(&cfg.user_themes);
     let themes: Vec<&str> = names.iter().map(String::as_str).collect();
     let theme = cfg.common.ui_theme.as_deref().unwrap_or("default");
-    app.wizard = Some(Wizard::new(presets, &themes, &cfg.common.preset, theme));
+    // No language step when `--lang`/`NORTE_LANG` fixed it: the answer could
+    // not apply until the next start.
+    let languages = if norte_i18n::pinned_lang().is_some() {
+        Vec::new()
+    } else {
+        norte_i18n::Lang::all()
+    };
+    app.wizard = Some(
+        Wizard::new(presets, &themes, &cfg.common.preset, theme)
+            .with_languages(&languages, norte_i18n::active()),
+    );
 }
 
 /// A key with the wizard open: up, down, confirm, back, or exit. Returns what
-/// must be WRITTEN, if the step was the last one or the reader exited; `None`
-/// = still open. Pure except for the theme preview, which applies to the
-/// `App` immediately: what you see while moving is what you are choosing.
+/// must be WRITTEN: the language as soon as it is chosen (the wizard stays
+/// open), or everything when the last step is answered or the reader exits;
+/// `None` = nothing to write. Pure except for the theme preview, which
+/// applies to the `App` immediately: what you see while moving is what you
+/// are choosing.
 pub fn apply_key(app: &mut App, key: KeyEvent) -> Option<Outcome> {
     let plain = key.modifiers.is_empty();
     let w = app.wizard.as_mut()?;
@@ -76,10 +88,9 @@ pub fn apply_key(app: &mut App, key: KeyEvent) -> Option<Outcome> {
         }
         _ => None,
     };
-    if outcome.is_some() {
-        app.wizard = None;
-    } else {
-        preview(app);
+    match outcome {
+        Some(Outcome::Done(_) | Outcome::Dismissed { .. }) => app.wizard = None,
+        _ => preview(app),
     }
     outcome
 }
@@ -107,18 +118,26 @@ pub async fn finish(app: &mut App, backend: &norte_core::backend::Backend, outco
     // With `Dismissed` the theme the wizard was OPENED with is written, not
     // `default`: `ntc --setup` + Esc over a `theme = "nord"` used to leave it
     // at `default`, burying a system layer's theme (review B1).
-    let (preset, theme, icons, updates) = match outcome {
+    // The language is written ALONE and at once (ADR 0188): the watcher's
+    // reload switches the screen to it while the wizard goes on.
+    let mid_way = matches!(outcome, Outcome::Language(_));
+    let (lang, preset, theme, icons, updates) = match outcome {
+        Outcome::Language(tag) => (Some(tag), None, None, None, None),
         Outcome::Done(c) => (
+            None,
             c.preset,
             c.theme.or_else(|| Some("default".to_owned())),
             c.icons,
             c.updates,
         ),
-        Outcome::Dismissed { keep_theme } => (None, Some(keep_theme), None, None),
-        Outcome::Continue => (None, None, None, None),
+        Outcome::Dismissed { keep_theme } => (None, None, Some(keep_theme), None, None),
+        Outcome::Continue => (None, None, None, None, None),
     };
     let write = tokio::task::spawn_blocking(move || {
         let mut res = Ok(());
+        if let Some(l) = lang {
+            res = res.and(config::persist_set(&dir, "ui", "lang", l.into()).map(|_| ()));
+        }
         if let Some(p) = preset {
             res = res.and(config::persist_set(&dir, "keymap", "preset", p.into()).map(|_| ()));
         }
@@ -132,6 +151,7 @@ pub async fn finish(app: &mut App, backend: &norte_core::backend::Backend, outco
     })
     .await;
     match write {
+        Ok(Ok(())) if mid_way => app.reload_soon = true,
         Ok(Ok(())) => app.message = Some(t("wizard-done")),
         Ok(Err(e)) => {
             app.message = Some(norte_i18n::ta(

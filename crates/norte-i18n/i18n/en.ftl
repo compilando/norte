@@ -1,5 +1,10 @@
 # English catalog for norte. Full parity with es.ftl (tested).
 
+# The language's own name, as a chooser shows it to someone who may not read
+# the current one (ADR 0188). A translation in `<config>/locales/<tag>.ftl`
+# should carry its own.
+language-name = English
+
 # --- TUI modals ---
 modal-trash-title = To trash
 modal-trash-note = recoverable from the system trash
@@ -292,6 +297,7 @@ msg-paste-truncated = pasted the first line; { $lines } more discarded
 msg-view-error = view: { $error }
 msg-viewer-no-sibling = no more files of this kind in this listing
 msg-config-reloaded = config reloaded
+msg-lang-pinned = config reloaded; the language stays { $lang } this run (--lang or NORTE_LANG)
 msg-profile-switched = profile: { $profile }
 msg-profile-switched-partial = profile: { $profile } — needs a restart to apply: { $keys }
 msg-profile-config-ignored = profile: { $profile } — { $n } line(s) of the profile are not understood and were ignored; see the log
@@ -1379,6 +1385,8 @@ msg-timeline-undo-running = undoing back to the chosen point…
 # The first-run wizard (spec 2026-09-10): three questions when there is no
 # user norte.toml yet. Esc at any step means "do not ask again".
 wizard-title = Welcome to norte
+wizard-step-language = language
+wizard-ask-language = Which language should norte speak? You can change it later in Settings.
 wizard-step-preset = keys
 wizard-step-theme = theme
 wizard-step-icons = icons
@@ -2416,7 +2424,7 @@ cli-doctor-detail-plugin-help-shadows-topic = { $id }: its id is also a built-in
 setting-ui-theme-name = Theme
 setting-ui-theme-desc = Color preset for the UI (or a path to a custom theme file, ADR 0020).
 setting-ui-lang-name = Language
-setting-ui-lang-desc = Interface language. Leave unset to negotiate from the environment. For a single run, `--lang` and NORTE_LANG win over it.
+setting-ui-lang-desc = Interface language; applies at once. Leave unset to follow the system's locale. More languages: `locales/<tag>.ftl` in the config directory. For a single run, `--lang` and NORTE_LANG win over it.
 setting-ui-font-name = UI font
 setting-ui-font-desc = Font family for GUI chrome (window text, not the listing). Ignored by the TUI.
 setting-ui-mono-font-name = Monospace font

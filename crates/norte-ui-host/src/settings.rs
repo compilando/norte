@@ -497,7 +497,7 @@ fn rows_of(cfg: &norte_frontend::config::FrontendConfig, lang: Lang) -> Vec<Row>
 /// each frame, the editor and the comparer when launching them, the search
 /// mode when searching, whether it asks on exit when exiting — so it
 /// changes instantly. What does not: what the host resolves once at startup
-/// — the language, the fonts, reduced motion, which is what
+/// — the fonts and reduced motion, which is what
 /// `out_of_scope_hot` names — and what gets fixed when creating
 /// each slot — the hidden files and the `..` row — which already-open slots
 /// do not reread. Marking EVERYTHING else as "requires restart" was lying
@@ -505,8 +505,7 @@ fn rows_of(cfg: &norte_frontend::config::FrontendConfig, lang: Lang) -> Vec<Row>
 fn needs_restart(id: &str) -> bool {
     matches!(
         id,
-        "ui.lang"
-            | "ui.font"
+        "ui.font"
             | "ui.mono-font"
             | "ui.font-size"
             | "ui.reduce-motion"

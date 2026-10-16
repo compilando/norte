@@ -43,6 +43,7 @@ pub async fn pump(
     mut rx: tokio::sync::broadcast::Receiver<NativeEffect>,
     host: std::sync::Arc<norte_ui_host::UiHost>,
     theme: impl Fn(&str) + Send + Sync + 'static,
+    language: impl Fn(&str) + Send + 'static,
     close: impl Fn() + Send + 'static,
 ) {
     // `Sync` and in an `Arc` so it can be sent to a blocking thread: a theme
@@ -101,6 +102,9 @@ pub async fn pump(
                     tokio::task::spawn_blocking(move || theme(&name));
                 }
             }
+            // The LANGUAGE, same door as the theme (ADR 0188): the strings
+            // are the catalogue's, and the catalogue is this process's.
+            Ok(NativeEffect::LanguageChanged { tag }) => language(&tag),
             // The folder picker is the only one that ANSWERS (#284): the
             // others are fire-and-forget, but for this one the host expects a
             // path back, so its answer returns through `dispatch` like any
@@ -230,6 +234,7 @@ pub fn execute(effect: &NativeEffect) -> RunOutcome {
         NativeEffect::RunProgram { .. }
         | NativeEffect::PickDirectory { .. }
         | NativeEffect::ThemeChanged { .. }
+        | NativeEffect::LanguageChanged { .. }
         | NativeEffect::CloseWindow
         // A user command's background run (ADR 0177): `pump` runs it;
         // reached only by a hand call.

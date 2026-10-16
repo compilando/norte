@@ -188,3 +188,4 @@ edits.
 | [0185](0185-an-order-is-a-small-grammar-resolved-against-the-loaded-pane.md) | An order is a small grammar in a pure crate, resolved against the loaded pane | accepted |
 | [0186](0186-the-assistant-reads-metadata-and-writes-orders-a-human-applies.md) | The assistant reads metadata and writes orders a human applies | accepted |
 | [0187](0187-throughput-graphs-sample-on-the-strips-clock.md) | Throughput graphs sample on the strip's clock | accepted |
+| [0188](0188-the-language-is-chosen-at-first-run-switches-live-and-extends-by-ftl.md) | The language is chosen at first run, switches live, and extends by `.ftl` | accepted |

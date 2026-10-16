@@ -69,10 +69,7 @@ pub struct Hit {
 /// ```
 #[must_use]
 pub fn lang_code() -> &'static str {
-    match norte_i18n::active() {
-        norte_i18n::Lang::Es => "es",
-        norte_i18n::Lang::En => "en",
-    }
+    norte_i18n::active().tag()
 }
 
 /// The commands a panel ZONE is allowed to name.

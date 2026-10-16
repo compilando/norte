@@ -91,7 +91,9 @@ const ES: &[(&str, &str)] = &[
 /// The raw table for a locale.
 fn sources(lang: Lang) -> &'static [(&'static str, &'static str)] {
     match lang {
-        Lang::En => EN,
+        // An extra language (ADR 0188) translates the interface, not the
+        // corpus: its help is the English one.
+        Lang::En | Lang::Extra(_) => EN,
         Lang::Es => ES,
     }
 }
@@ -137,9 +139,9 @@ fn parse_one(lang: Lang, id: &str, source: &str) -> Topic {
 pub fn topics(lang: Lang) -> &'static [Topic] {
     static EN_PARSED: OnceLock<Vec<Topic>> = OnceLock::new();
     static ES_PARSED: OnceLock<Vec<Topic>> = OnceLock::new();
-    let cell = match lang {
-        Lang::En => &EN_PARSED,
-        Lang::Es => &ES_PARSED,
+    let (cell, lang) = match lang {
+        Lang::En | Lang::Extra(_) => (&EN_PARSED, Lang::En),
+        Lang::Es => (&ES_PARSED, Lang::Es),
     };
     cell.get_or_init(|| {
         sources(lang)

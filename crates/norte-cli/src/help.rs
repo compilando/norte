@@ -792,10 +792,7 @@ fn json_doc(lang: Lang, chords: &CliChords, only: Option<&str>) -> JsonDoc {
     }
     JsonDoc {
         version: JSON_VERSION,
-        lang: match lang {
-            Lang::Es => "es",
-            Lang::En => "en",
-        },
+        lang: lang.tag(),
         topics,
     }
 }

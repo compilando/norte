@@ -255,8 +255,8 @@ pub fn modal_scroll(app: &mut App, cmd: &str) -> bool {
 /// `viewer`) is the honest answer. Growing the vocabulary for those overlays
 /// would be vocabulary for a state that cannot happen.
 ///
-/// `lang` is the NEGOTIATED language (`NORTE_LANG` > `[ui] lang` >
-/// environment — the value `main` handed to `norte_i18n::force`), never
+/// `lang` is the ACTIVE language (`NORTE_LANG` > `[ui] lang` > environment,
+/// followed live since ADR 0188), never
 /// `Lang::from_env()`: the corpus is per-locale and a page in another language
 /// than the chrome around it is the same bug as a half-translated dialog.
 /// `help_lines` is the body of the synthetic keyboard entry, snapshotted from

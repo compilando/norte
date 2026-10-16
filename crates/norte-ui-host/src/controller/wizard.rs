@@ -14,6 +14,13 @@ impl State {
     /// whatever is current. The renderer sends this when the catalogue says
     /// `first_run`.
     pub(super) fn open_wizard(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // Once per host session: a webview reload — the one a language
+        // chosen here causes, too (ADR 0188) — sends this again, and must
+        // neither restart the wizard nor reopen one already answered.
+        if self.wizard_seen {
+            return (self.applied(), vec![self.parche_wizard()]);
+        }
+        self.wizard_seen = true;
         let names = norte_frontend::theme::theme_names(&self.config.user_themes);
         let themes: Vec<&str> = names.iter().map(String::as_str).collect();
         let theme = self
@@ -22,12 +29,23 @@ impl State {
             .ui_theme
             .clone()
             .unwrap_or_else(|| "default".to_owned());
-        self.wizard = Some(Wizard::new(
-            norte_frontend::keymap::presets::NAMES,
-            &themes,
-            &self.config.common.preset,
-            &theme,
-        ));
+        self.wizard = Some(
+            Wizard::new(
+                norte_frontend::keymap::presets::NAMES,
+                &themes,
+                &self.config.common.preset,
+                &theme,
+            )
+            // No language step when the run pinned one (see the terminal's).
+            .with_languages(
+                &if norte_i18n::pinned_lang().is_some() {
+                    Vec::new()
+                } else {
+                    norte_i18n::Lang::all()
+                },
+                self.lang,
+            ),
+        );
         (self.applied(), vec![self.parche_wizard()])
     }
 
@@ -331,6 +349,15 @@ impl State {
                 }
                 (self.applied(), vec![self.parche_wizard()])
             }
+            // Written NOW (ADR 0188): rereading it is what switches the
+            // language, so the questions after this one are read in it.
+            Outcome::Language(tag) => {
+                let name = norte_i18n::t_in(self.lang, "wizard-title");
+                let write = norte_frontend::settings::PendingWrite::text("ui", "lang", &tag, name);
+                let mut outgoing = vec![self.parche_wizard()];
+                outgoing.extend(self.write_setting(write, mailbox).1);
+                (self.applied(), outgoing)
+            }
             done => {
                 self.wizard = None;
                 let mut outgoing = vec![self.parche_wizard()];
@@ -361,7 +388,7 @@ impl State {
                 c.updates,
             ),
             Outcome::Dismissed { keep_theme } => (None, Some(keep_theme), None, None),
-            Outcome::Continue => (None, None, None, None),
+            Outcome::Continue | Outcome::Language(_) => (None, None, None, None),
         };
         let mut outgoing = Vec::new();
         let name = norte_i18n::t_in(self.lang, "wizard-title");

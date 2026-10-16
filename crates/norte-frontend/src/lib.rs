@@ -71,6 +71,7 @@ pub mod help_badge;
 pub mod help_chords;
 pub mod keymap;
 pub mod keysheet;
+pub mod language;
 pub mod layout;
 pub mod logpanel;
 pub mod metadata;
