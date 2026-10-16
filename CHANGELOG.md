@@ -7,6 +7,8 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+## [0.3.0-alpha.16] - 2026-10-16
+
 ### Added
 
 - **The first run asks your language.** It is now the wizard's first
@@ -8594,7 +8596,8 @@ and some daemon/socket tests are only available in CI environments.
 - Writes inside ZIP archives; list, restore, and purge operations for logical
   trash; and the M5 GUI.
 
-[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.15...HEAD
+[Unreleased]: https://github.com/compilando/norte/compare/v0.3.0-alpha.16...HEAD
+[0.3.0-alpha.16]: https://github.com/compilando/norte/compare/v0.3.0-alpha.15...v0.3.0-alpha.16
 [0.3.0-alpha.15]: https://github.com/compilando/norte/compare/v0.3.0-alpha.14...v0.3.0-alpha.15
 [0.3.0-alpha.14]: https://github.com/compilando/norte/compare/v0.3.0-alpha.13...v0.3.0-alpha.14
 [0.3.0-alpha.13]: https://github.com/compilando/norte/compare/v0.3.0-alpha.12...v0.3.0-alpha.13
