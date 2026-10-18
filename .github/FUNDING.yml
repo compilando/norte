@@ -1,0 +1,4 @@
+# The Sponsor button on the repository. There is no GitHub Sponsors listing
+# yet, so it points at the site's section on sponsoring, which says how to
+# get in touch. When a Sponsors listing exists, add `github: compilando`.
+custom: ["https://getnorte.dev/#join"]
