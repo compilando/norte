@@ -105,6 +105,12 @@ ignore = [
     # criptografía DENTRO del binario distribuido es peor trato. Ver el
     # comentario de `age` en el Cargo.toml raíz.
     "RUSTSEC-2026-0173",
+    # RUSTSEC-2026-0374 — `basic-toml` SIN MANTENER (archivado, sin versión
+    # segura). Mismo camino y mismo criterio que la anterior: entra por
+    # `age` → `i18n-embed-fl` → `i18n-config`, que lo usa para LEER su
+    # `i18n.toml` en BUILD-TIME. No parsea nada en runtime. Se va con la
+    # misma salida que #41.
+    "RUSTSEC-2026-0374",
 ]
 
 [bans]
