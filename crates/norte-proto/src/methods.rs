@@ -1460,9 +1460,23 @@ use crate::{
 /// A **0.86 client against a 0.87 daemon** never calls it and loses nothing
 /// it had. A **0.87 client against a 0.86 daemon** does not negotiate
 /// ([`version_compatible`]). A turn of a kind added later reads as
-/// [`AiChatTurn::Unknown`], so a 0.87 client inside a later window says it
-/// needs a newer norte instead of failing the result.
-pub const PROTOCOL_VERSION: &str = "0.87.0";
+/// [`AiChatTurn::Unknown`], so a client inside a later window says it needs
+/// a newer norte instead of failing the result.
+///
+/// # 1.0.0 — the beta (ADR 0182)
+///
+/// The wire of 0.87.0, unchanged in shape: what changes is the promise.
+/// From here an additive change is a MINOR and a breaking one a MAJOR, so
+/// [`version_compatible`] lets every `1.x` daemon serve every older `1.y`
+/// client.
+///
+/// A **0.87 client against a 1.0 daemon**, and the reverse, do not
+/// negotiate: the majors differ, and each gets `VERSION_MISMATCH` on connect
+/// and on reconnect. The daemon and its clients ship in one package, so this
+/// only bites a daemon left running across the upgrade: the new binaries
+/// can neither talk to it, nor stop it, nor take over from it; the frontends
+/// say so and how to end it.
+pub const PROTOCOL_VERSION: &str = "1.0.0";
 
 /// `initialize` — MANDATORY handshake before any other method
 /// (ADR 0011). Rejects incompatible versions (see
@@ -1599,12 +1613,16 @@ pub fn version_at_least(version: &str, major: u64, minor: u64) -> bool {
     (j, n) >= (major, minor)
 }
 
-/// Does a `server` core accept a `client`? N and N-1 (spec §11): same
-/// major; in 0.x the "effective major" is the minor — the same minor or
+/// Does a `server` core accept a `client`? From 1.0 (ADR 0182): the same
+/// major, with a client no newer than the server's minor. In 0.x, N and N-1
+/// (spec §11): the "effective major" is the minor, and the same minor or
 /// the immediately preceding one is accepted. The patch never matters.
 ///
 /// ```
 /// use norte_proto::methods::version_compatible;
+/// assert!(version_compatible("1.4.0", "1.0.3"));
+/// assert!(!version_compatible("1.4.0", "1.5.0"));
+/// assert!(!version_compatible("1.0.0", "0.87.0"));
 /// assert!(version_compatible("0.4.0", "0.4.9"));
 /// assert!(version_compatible("0.4.0", "0.3.0"));
 /// assert!(!version_compatible("0.4.0", "0.2.0"));

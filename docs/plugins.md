@@ -305,24 +305,28 @@ What the plugin does, in a paragraph or two.
 decoded, masked). A page may not reference norte's own commands as if they
 were its own.
 
-## WIT compatibility (ADR 0094)
+## WIT compatibility (ADR 0094, ADR 0182)
 
 The version of a WIT package is part of every interface name your component
-imports or exports (`norte:plugin/previewer@0.9.0`). **When norte moves a
-package, every binary built against the previous version stops loading.**
-This is a fact of the component model; what norte promises is what it does
-about it:
+imports or exports (`norte:plugin/previewer@1.0.0`). Every `norte:*`
+package is at `1.0.0` since the beta, and from there the component model's
+semver rule applies:
 
-- The host serves exactly one version of each package. There is no
-  compatibility window.
+- A plugin built against `1.x` loads on every norte that serves `1.y` with
+  `y ≥ x`. A compatible bump only adds; it never changes what you call or
+  export.
+- A plugin built against a NEWER minor than the host serves, or against
+  another major, does not load. Plugins built against any `0.x` package —
+  every one built before the beta — need a rebuild once.
 - The catalogue reads your binary's imports and exports. A version the host
   does not serve lists the plugin as broken — in the manager, in
   `norte plugin list`, and in `norte doctor` as `plugin-wit-mismatch` naming
   the package and both versions. It is never loaded and never silently
   skipped.
-- The CHANGELOG entry that bumps a package says which one, its new version,
-  and "plugins built against `norte:plugin@X` need a rebuild".
-- Rebuild against the new `wit/`, reinstall with `--force`, approve again.
+- The CHANGELOG entry that bumps a package says which one and its new
+  version. Only a new MAJOR says "plugins built against `norte:plugin@X`
+  need a rebuild"; then: rebuild against the new `wit/`, reinstall with
+  `--force`, approve again.
 
 ## Walk-through: from an empty directory to a running command
 

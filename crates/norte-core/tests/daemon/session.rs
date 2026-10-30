@@ -30,12 +30,16 @@ async fn initialize_negotiates_and_is_mandatory() {
 /// Hand-written (it used to be `"0.38.2"`), the window this test says it
 /// checks turned into "some old version" on the first bump and went red on
 /// the second, blaming whatever change happened to pass by. In 0.x the minor
-/// is the effective major, so N-1 is minor minus one.
+/// is the effective major, so N-1 is minor minus one; from 1.0 the window is
+/// the major (ADR 0182) and the oldest client served is `major.0.x` — at
+/// 1.0 itself, that is N.
 pub(super) fn n_minus_one() -> String {
     let (major, rest) = methods::PROTOCOL_VERSION.split_once('.').expect("semver");
     let (minor, _) = rest.split_once('.').expect("semver");
     let minor: u64 = minor.parse().expect("numeric minor");
-    assert_eq!(major, "0", "outside 0.x the major defines the N-1 window");
+    if major != "0" {
+        return format!("{major}.0.2");
+    }
     assert!(minor > 0, "0.0.x has no N-1 to ask for");
     format!("{major}.{}.2", minor - 1)
 }
@@ -49,13 +53,14 @@ async fn initialize_rejects_an_incompatible_version() {
             methods::INITIALIZE,
             &InitializeParams {
                 client_info: client_info(),
-                protocol_version: "0.1.0".into(),
+                // The last alpha: the beta's major refuses it (ADR 0182).
+                protocol_version: "0.87.0".into(),
                 encodings: vec!["json".into()],
                 agent_session: None,
             },
         )
         .await
-        .expect_err("0.1.0 is neither N nor N-1");
+        .expect_err("0.87.0 is another major");
     match err {
         ClientError::Rpc(rpc) => {
             // OUR OWN code: the upgrade signal is never parsed out of a message.

@@ -26,14 +26,15 @@ use wasmparser::{Parser, Payload};
 /// `package …;` lines of the `.wit` files: bumping a package without
 /// touching this would list freshly compiled guests as broken.
 pub const SERVED_WIT: &[(&str, &str)] = &[
-    ("norte:host", "0.1.0"),
-    ("norte:plugin", "0.10.0"),
-    ("norte:provider", "0.2.0"),
-    ("norte:location", "0.2.0"),
-    ("norte:renamer", "0.1.0"),
-    ("norte:hook", "0.2.0"),
-    ("norte:thumbnail", "0.1.0"),
-    ("norte:panel", "0.1.0"),
+    ("norte:host", "1.0.0"),
+    ("norte:plugin", "1.0.0"),
+    ("norte:provider", "1.0.0"),
+    ("norte:location", "1.0.0"),
+    ("norte:renamer", "1.0.0"),
+    ("norte:hook", "1.0.0"),
+    ("norte:thumbnail", "1.0.0"),
+    ("norte:panel", "1.0.0"),
+    ("norte:organizer", "1.0.0"),
 ];
 
 /// A guest compiled against a version of a package that the host's version
@@ -134,7 +135,7 @@ fn parse_norte_name(name: &str) -> Option<(String, String)> {
 ///
 /// ```
 /// use norte_plugin_host::wit_mismatch;
-/// let ok = vec![("norte:host".to_owned(), "0.1.0".to_owned())];
+/// let ok = vec![("norte:host".to_owned(), "1.0.0".to_owned())];
 /// assert!(wit_mismatch(&ok).is_none());
 /// let old = vec![("norte:plugin".to_owned(), "0.1.0".to_owned())];
 /// let m = wit_mismatch(&old).unwrap();

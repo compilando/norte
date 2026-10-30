@@ -888,7 +888,8 @@ async fn make_backend(
         // The argv is the shared one: whatever starts this terminal only
         // shuts down once its last client leaves.
         let spawn_cmd = norte_core::daemon::daemon_run_argv(daemon_bin, &socket);
-        let remote = RemoteBackend::connect(
+        let shown = socket.display().to_string();
+        let remote = RemoteBackend::connect_detailed(
             socket,
             Some(spawn_cmd),
             norte_proto::methods::ClientInfo {
@@ -901,7 +902,18 @@ async fn make_backend(
             },
         )
         .await
-        .map_err(|e| anyhow::anyhow!("{e}"))
+        .map_err(|e| {
+            // An older daemon left running across an upgrade (ADR 0182):
+            // the bare refusal names versions, not what to do.
+            if norte_core::daemon::is_version_mismatch(&e) {
+                anyhow::anyhow!(norte_i18n::ta(
+                    "daemon-version-mismatch",
+                    &[("socket", &shown), ("detail", &e.to_string())],
+                ))
+            } else {
+                anyhow::anyhow!("{}", norte_core::backend::remote::calls::to_taxonomy(e))
+            }
+        })
         .context("could not talk to the daemon")?;
         Ok(Backend::Remote(remote))
     }

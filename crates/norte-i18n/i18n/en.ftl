@@ -534,6 +534,8 @@ cli-daemon-stopped = shutdown requested
 # FIRST upgrade to 0.46 by definition, so it is the common case, not a corner.
 cli-daemon-handover-unsupported = this daemon speaks protocol { $version } and does not know about handovers: it was stopped instead, so open windows will not reconnect on their own
 cli-daemon-handover-requested = handover requested: the windows will come back when the replacement is up
+daemon-version-mismatch = a daemon from another norte version is running on { $socket } and this one cannot talk to it ({ $detail }). Close every norte window and terminal still open, or stop that daemon with the norte it came with (`norte daemon stop`), then start again
+
 cli-daemon-hard-shutdown = second signal: cancelling tasks…
 cli-hostkey-unknown = first connection to { $host }:{ $port } — unregistered host key
 cli-hostkey-fingerprint = fingerprint { $algo }: { $fingerprint }

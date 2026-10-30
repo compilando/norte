@@ -1438,12 +1438,29 @@ fn current_version_window() {
     // 0.86.0: `MatchInfo::offset` and `ranges`, optional. A 0.85 client
     // ignores them and reads a preview centred on the match.
     // 0.87.0: `ai.chat`, a new method. A 0.86 client never calls it.
-    assert!(version_compatible(PROTOCOL_VERSION, "0.87.9"), "N");
-    assert!(version_compatible(PROTOCOL_VERSION, "0.86.0"), "N-1");
+    // 1.0.0: the beta (ADR 0182). Same wire, a new promise: from here any
+    // older 1.x client is served, and no 0.x one.
+    assert!(version_compatible(PROTOCOL_VERSION, "1.0.9"), "N");
     assert!(
-        !version_compatible(PROTOCOL_VERSION, "0.85.9"),
-        "N-2 outside the window"
+        !version_compatible(PROTOCOL_VERSION, "0.87.0"),
+        "the last alpha does not negotiate across the major"
     );
+    assert!(
+        !version_compatible(PROTOCOL_VERSION, "1.1.0"),
+        "a client from the future"
+    );
+}
+
+/// From 1.0 the window is the whole major (ADR 0182): a 1.y daemon serves
+/// every 1.x client with x ≤ y, and nothing of another major.
+#[test]
+fn from_one_dot_oh_the_window_is_the_major() {
+    use norte_proto::methods::version_compatible;
+    assert!(version_compatible("1.7.0", "1.0.0"));
+    assert!(version_compatible("1.7.0", "1.7.3"));
+    assert!(!version_compatible("1.7.0", "1.8.0"));
+    assert!(!version_compatible("2.0.0", "1.9.0"));
+    assert!(!version_compatible("1.0.0", "0.87.0"));
 }
 
 /// A 0.85 batch — no offset, no ranges — still reads, with both absent:

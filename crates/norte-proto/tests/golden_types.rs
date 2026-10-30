@@ -5034,7 +5034,8 @@ fn method_names_frozen() {
     // 0.85.0: no new method. An error category, `Error::Busy` (#221).
     // 0.86.0: no new method. fs.search says where it matched.
     // 0.87.0: `ai.chat`, the assistant (above).
-    assert_eq!(norte_proto::PROTOCOL_VERSION, "0.87.0");
+    // 1.0.0: no new method. The beta's promise (ADR 0182).
+    assert_eq!(norte_proto::PROTOCOL_VERSION, "1.0.0");
 }
 
 /// An [`Entry`] for a comparison row: the four fields the panel paints,

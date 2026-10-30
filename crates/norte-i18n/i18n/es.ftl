@@ -532,6 +532,8 @@ cli-daemon-stopped = apagado pedido al daemon
 # caso normal y no un rincón.
 cli-daemon-handover-unsupported = este daemon habla el protocolo { $version } y no sabe de relevos: se le ha parado sin más, así que las ventanas abiertas no van a reconectar solas
 cli-daemon-handover-requested = relevo pedido: las ventanas volverán cuando el reemplazo esté en pie
+daemon-version-mismatch = en { $socket } corre un daemon de otra versión de norte y esta no puede hablar con él ({ $detail }). Cierra todas las ventanas y terminales de norte que sigan abiertas, o para ese daemon con el norte con el que vino (`norte daemon stop`), y vuelve a empezar
+
 cli-daemon-hard-shutdown = segunda señal: cancelando tasks…
 cli-hostkey-unknown = primera conexión a { $host }:{ $port } — host key sin registrar
 cli-hostkey-fingerprint = huella { $algo }: { $fingerprint }

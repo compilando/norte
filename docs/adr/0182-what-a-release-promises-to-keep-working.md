@@ -90,7 +90,12 @@ At the beta every `norte:*` package goes to `1.0.0`.
     What it cannot cover: an OLDER daemon still running across an
     upgrade keeps its statements for the old schema until it restarts.
 - **Not done here:** the `1.0.0` bumps themselves. They belong to the beta
-  release.
+  release. **Done 2026-10-30**, ahead of cutting it: `PROTOCOL_VERSION`
+  and every `norte:*` package at `1.0.0`, no shape change. Its one cost: a
+  0.87 daemon left running across the upgrade refuses the new binaries,
+  which can neither stop nor take over from it; they say how to end it
+  (`daemon-version-mismatch`). The next release built from `main` carries
+  protocol 1.0, so it should be the beta.
 - 86 wire minors in alpha say the protocol has not settled. Going to `1.0.0`
   is a bet that the beta's surface is the right one. A major later is
   allowed, but it costs every client at once.
