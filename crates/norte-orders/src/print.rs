@@ -53,6 +53,50 @@ pub fn escape_name(bytes: &[u8]) -> String {
     word(bytes)
 }
 
+/// A `cp`/`mv` destination written so it reads back as exactly these bytes,
+/// without the `>`: a folder literally called `other` or `here` stays a
+/// name.
+///
+/// ```
+/// use norte_orders::{escape_dest, parse, Dest, Stage};
+/// assert_eq!(escape_dest(b"/mnt/a b"), r"/mnt/a\x20b");
+/// let o = parse(&format!("cp >{}", escape_dest(b"other"))).expect("parse");
+/// assert_eq!(o.stages, vec![Stage::Cp(Dest::Path(b"other".to_vec()))]);
+/// ```
+#[must_use]
+pub fn escape_dest(bytes: &[u8]) -> String {
+    dest(&Dest::Path(bytes.to_vec()))
+}
+
+/// A `sel` term for this name: a bare glob when the name has no glob
+/// character nor `\` (the matcher's escape), `name=` (literal) otherwise, so
+/// `a*` never selects `ab` nor `a\b` selects `ab`. A bare glob still folds
+/// case and NFC; a caller that must not pair twins passes `literal`.
+///
+/// ```
+/// use norte_orders::name_term;
+/// assert_eq!(name_term(b"notes.txt", false), "notes.txt");
+/// assert_eq!(name_term(b"a*", false), "name=a*");
+/// assert_eq!(name_term(br"a\b", false), r"name=a\x5cb");
+/// assert_eq!(name_term(b"!x", false), "name:!x");
+/// assert_eq!(name_term(b"notes.txt", true), "name=notes.txt");
+/// ```
+#[must_use]
+pub fn name_term(bytes: &[u8], literal: bool) -> String {
+    let glob = bytes
+        .iter()
+        .any(|b| matches!(b, b'*' | b'?' | b'[' | b']' | b'{' | b'}' | b'\\'));
+    let pred = if literal || glob {
+        Pred::Literal(bytes.to_vec())
+    } else {
+        Pred::Name(bytes.to_vec())
+    };
+    term(&Term {
+        negated: false,
+        pred,
+    })
+}
+
 fn stage(s: &Stage) -> String {
     match s {
         Stage::Sel(q) => {

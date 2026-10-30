@@ -146,8 +146,11 @@ pub fn open(
     if let Some(g) = &mut app.goto {
         g.set_query(query);
     } else {
-        let mut goto =
-            Goto::new(sources(app, connections, plugins)).with_recent(&app.palette_recent);
+        let mut goto = Goto::new(sources(app, connections, plugins))
+            .with_recent(&app.palette_recent)
+            .with_order_context(norte_frontend::goto::OrderContext::of(
+                app.focused().state(),
+            ));
         goto.set_query(query);
         app.goto = Some(goto);
     }

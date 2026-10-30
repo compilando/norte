@@ -588,6 +588,18 @@ pub async fn on_key(
                 app.goto = None;
                 crate::jobs::goto::forget(work);
             }
+            // Tab takes the suggestion into the line; nothing runs (#429).
+            KeyCode::Tab if plain => {
+                if app
+                    .goto
+                    .as_mut()
+                    .is_some_and(norte_frontend::goto::Goto::accept)
+                {
+                    crate::jobs::goto::ask_the_index(app, backend, work);
+                    crate::orders::cancel_measure(app, work);
+                    crate::orders::after_edit(app);
+                }
+            }
             KeyCode::Up if plain => {
                 if let Some(g) = &mut app.goto {
                     g.up();
@@ -639,6 +651,7 @@ pub async fn on_key(
                         g.set_query(q);
                     }
                     crate::jobs::goto::ask_the_index(app, backend, work);
+                    crate::orders::cancel_measure(app, work);
                     crate::orders::after_edit(app);
                     return;
                 }

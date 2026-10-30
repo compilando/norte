@@ -7,6 +7,7 @@
 
 pub mod goto;
 pub mod history;
+mod order_suggest;
 pub mod places;
 pub mod tree;
 pub mod watch;

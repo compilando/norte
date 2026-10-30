@@ -124,6 +124,46 @@ pub(crate) fn lex(line: &str) -> (Vec<Tok>, Option<ParseError>) {
     (toks, None)
 }
 
+/// A word or a pipe of a line, where the grammar puts it.
+///
+/// ```
+/// use norte_orders::{spans, Span};
+/// assert_eq!(spans(r"sel a\ b|cp"), Some(vec![
+///     Span::Word(0..3), Span::Word(4..8), Span::Pipe(8), Span::Word(9..11),
+/// ]));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Span {
+    /// A word's byte range, quotes and escapes included.
+    Word(Range<usize>),
+    /// A pipe's byte offset.
+    Pipe(usize),
+}
+
+/// The words and pipes of `line`, split as the parser splits them: an
+/// escaped space or `|` and a quoted run stay inside their word. `None`
+/// while the line does not lex — an open quote, a `\` not finished — where
+/// no word can be said to end.
+///
+/// ```
+/// assert_eq!(norte_orders::spans("sel 'a b"), None);
+/// ```
+#[must_use]
+pub fn spans(line: &str) -> Option<Vec<Span>> {
+    let (toks, err) = lex(line);
+    if err.is_some() {
+        return None;
+    }
+    Some(
+        toks.into_iter()
+            .map(|t| match t {
+                Tok::Word { span, .. } => Span::Word(span),
+                Tok::Pipe(at) => Span::Pipe(at),
+            })
+            .collect(),
+    )
+}
+
 /// The bytes of a run of pieces.
 pub(crate) fn bytes(pieces: &[Piece]) -> Vec<u8> {
     pieces.iter().map(|p| p.byte).collect()

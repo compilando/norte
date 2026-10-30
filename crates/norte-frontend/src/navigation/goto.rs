@@ -25,6 +25,8 @@
 //! There is nowhere else to touch: filtering, headers, order and the cursor
 //! all live here.
 
+pub use super::order_suggest::{NAMES_KEPT, OrderContext, OrderName};
+
 /// The prefix that turns the box into the commands list.
 pub const PREFIX_COMMANDS: &str = ">";
 /// The prefix that turns the box into the help list.
@@ -382,6 +384,12 @@ pub struct Goto {
     cursor: usize,
     /// Command ids run lately, most recent first (without [`K_CMD`]).
     recent: Vec<String>,
+    /// The focused pane as it was on open, for completing an order.
+    order_ctx: OrderContext,
+    /// Whether the cursor row is chosen. Always, except in order mode on a
+    /// line that already parses: there the suggestions wait for Tab or an
+    /// arrow, and Enter runs the line (ADR 0189).
+    picked: bool,
 }
 
 /// By hand because [`GotoSource`] is a trait object and cannot derive
@@ -397,6 +405,8 @@ impl std::fmt::Debug for Goto {
             .field("lines", &self.lines)
             .field("cursor", &self.cursor)
             .field("recent", &self.recent)
+            .field("order_ctx", &self.order_ctx)
+            .field("picked", &self.picked)
             .finish()
     }
 }
@@ -412,9 +422,19 @@ impl Goto {
             lines: Vec::new(),
             cursor: 0,
             recent: Vec::new(),
+            order_ctx: OrderContext::default(),
+            picked: true,
         };
         goto.refresh();
         goto
+    }
+
+    /// The focused pane, for completing an order's names and folders
+    /// (`OrderContext::of`, taken on open). Seen from the next edit on.
+    #[must_use]
+    pub fn with_order_context(mut self, ctx: OrderContext) -> Self {
+        self.order_ctx = ctx;
+        self
     }
 
     /// The command ids run lately, most recent first; they lead an empty
@@ -435,6 +455,7 @@ impl Goto {
         self.rows.clear();
         self.lines.clear();
         let needle = needle(&self.query).to_owned();
+        let mut syntax_first = false;
         match self.mode() {
             Mode::Places => self.refresh_places(&needle),
             Mode::Commands => {
@@ -445,64 +466,56 @@ impl Goto {
                 );
             }
             Mode::Help => self.refresh_flat(&[SECTION_HELP.id], &needle, false),
-            Mode::Order => self.refresh_order(),
+            Mode::Order => syntax_first = self.refresh_order(),
             Mode::Ask => {}
         }
         self.cursor = self.first_row().unwrap_or(0);
+        // A line that already says something runs on Enter: a suggestion
+        // under the cursor would turn `cp >/tmp/new` into `>/tmp/newer`. On
+        // one that does not, only syntax (a verb, a key) is chosen for the
+        // reader; a destination or a name waits for Tab or an arrow.
+        self.picked = self.mode() != Mode::Order
+            || (syntax_first && self.order().is_some_and(|o| o.is_err()));
     }
 
-    /// The completions for the word being typed in an order: a verb or a
-    /// catalogue id at the start of a stage, a query key inside a `sel`.
-    /// A complete word offers nothing, so Enter runs the order.
-    fn refresh_order(&mut self) {
-        let query = self.query.clone();
-        let body = query.get(PREFIX_ORDER.len()..).unwrap_or_default();
-        // Words split where the grammar splits them: any Unicode space.
-        let word_start = body
-            .char_indices()
-            .rfind(|&(_, c)| c.is_whitespace() || c == '|')
-            .map_or(0, |(i, c)| i + c.len_utf8());
-        let word = &body[word_start..];
-        let stage = &body[body.rfind('|').map_or(0, |i| i + 1)..word_start];
-        let first = stage.split_whitespace().next();
-        let before = &query[..PREFIX_ORDER.len() + word_start];
-        let row = |text: &str, tail: &str| GotoRow {
-            section: SECTION_COMMANDS.id,
-            key: format!("{K_SET}{before}{text}{tail}"),
-            text: text.to_owned(),
-            ..GotoRow::default()
-        };
-        let rows: Vec<GotoRow> = match first {
-            // A verb typed whole is done: offering `layout.log` under `log`
-            // would turn Enter into a different command.
-            None if norte_orders::VERBS.contains(&word) => Vec::new(),
-            None => {
-                let verbs = norte_orders::VERBS.iter().map(|v| row(v, " "));
-                if word.is_empty() {
-                    verbs.collect()
-                } else {
-                    let ids = crate::keymap::catalogue::CATALOGUE
-                        .iter()
-                        .map(|d| row(d.name, " "));
-                    let mut out = rank(verbs.collect(), word, false);
-                    out.extend(rank(ids.collect(), word, false));
-                    out
-                }
+    /// What can come next in an order (#429): verbs and catalogue ids at a
+    /// stage's start, keys, their values and the pane's names in a `sel`,
+    /// `>other`/`>here` and folders after `cp`/`mv`, folders after `cd`.
+    /// Says whether the first row completes syntax.
+    fn refresh_order(&mut self) -> bool {
+        // The known places, as the places sections hold them: favorites
+        // first, they were chosen by hand.
+        let mut places: Vec<norte_proto::VPath> = Vec::new();
+        for section in [SECTION_FAVORITES, SECTION_HISTORY, SECTION_POPULAR] {
+            for source in self.sources.iter().filter(|s| s.section().id == section.id) {
+                places.extend(source.rows("").iter().filter_map(|r| match action(&r.key) {
+                    Action::Ir(p) => Some(p),
+                    _ => None,
+                }));
             }
-            Some("sel") if !word.is_empty() => norte_orders::QUERY_KEYS
-                .iter()
-                .filter(|k| k.starts_with(word))
-                .map(|k| row(k, ""))
-                .collect(),
-            Some(_) => Vec::new(),
-        };
-        for r in rows
-            .into_iter()
-            .filter(|r| r.text != word)
-            .take(CAP_PER_SECTION)
-        {
+        }
+        let query = self.query.clone();
+        let s = super::order_suggest::rows(&query, &self.order_ctx, &places);
+        for r in s.rows {
             self.push_row(r);
         }
+        s.syntax_first
+    }
+
+    /// Tab: takes the chosen suggestion, or the first, into the line; the box
+    /// stays open and nothing runs. Says whether the line changed.
+    pub fn accept(&mut self) -> bool {
+        let row = self.selected().or_else(|| {
+            self.first_row().and_then(|i| match self.lines.get(i) {
+                Some(GotoLine::Row(r)) => self.rows.get(*r),
+                _ => None,
+            })
+        });
+        let Some(Action::SetQuery(q)) = row.map(|r| action(&r.key)) else {
+            return false;
+        };
+        self.set_query(&q);
+        true
     }
 
     /// In order mode, the parsed order or why it does not parse — the error's
@@ -646,6 +659,8 @@ impl Goto {
             })
         {
             self.cursor = i;
+            // The reader chose it; a late answer does not unchoose it.
+            self.picked = true;
         }
     }
 
@@ -729,6 +744,9 @@ impl Goto {
 
     /// Moves up to the previous row, skipping headers. Stops at the top.
     pub fn up(&mut self) {
+        if self.pick() {
+            return;
+        }
         let mut i = self.cursor;
         while i > 0 {
             i -= 1;
@@ -740,7 +758,11 @@ impl Goto {
     }
 
     /// Moves down to the next row, skipping headers. Stops at the bottom.
+    /// With no row chosen yet, chooses the first.
     pub fn down(&mut self) {
+        if self.pick() {
+            return;
+        }
         let mut i = self.cursor;
         while i + 1 < self.lines.len() {
             i += 1;
@@ -769,6 +791,7 @@ impl Goto {
     pub fn home(&mut self) {
         if let Some(i) = self.first_row() {
             self.cursor = i;
+            self.picked = true;
         }
     }
 
@@ -780,16 +803,33 @@ impl Goto {
             .rposition(|l| matches!(l, GotoLine::Row(_)))
         {
             self.cursor = i;
+            self.picked = true;
         }
     }
 
-    /// Puts the cursor on `line` if it is a row (a click); says whether it did.
+    /// A hover: moves the chosen row to `line` if it is a row; says whether
+    /// it did. With nothing chosen (an order line that parses) a hover
+    /// chooses nothing — a twitch of the pointer must not turn Enter from
+    /// "run" into "complete".
     pub fn point(&mut self, line: usize) -> bool {
+        self.picked && self.choose(line)
+    }
+
+    /// A click: chooses `line` if it is a row; says whether it did.
+    pub fn choose(&mut self, line: usize) -> bool {
         let is_row = matches!(self.lines.get(line), Some(GotoLine::Row(_)));
         if is_row {
             self.cursor = line;
+            self.picked = true;
         }
         is_row
+    }
+
+    /// Chooses the row under the cursor if none was; says whether it did.
+    fn pick(&mut self) -> bool {
+        let fresh = !self.picked && matches!(self.lines.get(self.cursor), Some(GotoLine::Row(_)));
+        self.picked = true;
+        fresh
     }
 
     /// What is painted, in order.
@@ -810,9 +850,13 @@ impl Goto {
         self.cursor
     }
 
-    /// The row under the cursor, if the cursor is on one.
+    /// The row under the cursor, if the cursor is on one and it is chosen
+    /// (an order line that parses chooses none until Tab or an arrow).
     #[must_use]
     pub fn selected(&self) -> Option<&GotoRow> {
+        if !self.picked {
+            return None;
+        }
         match self.lines.get(self.cursor) {
             Some(GotoLine::Row(i)) => self.rows.get(*i),
             _ => None,
@@ -866,7 +910,7 @@ fn unmarked(mut r: GotoRow) -> GotoRow {
 /// (`sort_by` is stable). `with_desc`: a row whose desc matches still counts,
 /// at half that score — a word of a command's help line finds it, below a
 /// command whose name matches.
-fn rank(rows: Vec<GotoRow>, needle: &str, with_desc: bool) -> Vec<GotoRow> {
+pub(crate) fn rank(rows: Vec<GotoRow>, needle: &str, with_desc: bool) -> Vec<GotoRow> {
     let mut scored: Vec<(i32, usize, GotoRow)> = rows
         .into_iter()
         .filter_map(|mut r| {
@@ -2096,7 +2140,7 @@ mod help_row_tests {
 
 #[cfg(test)]
 mod order_tests {
-    use super::{Action, Goto, Mode, needle};
+    use super::{Action, Goto, Mode, SECTION_FAVORITES, needle};
     use norte_orders::{ParseErrorKind, TokenClass};
 
     fn boxed(q: &str) -> Goto {
@@ -2148,19 +2192,106 @@ mod order_tests {
         assert!(texts(&boxed(":sel *.rs | c")).contains(&"cp"));
     }
 
+    /// `sel ex` already parses (a glob), so Enter runs it and Tab completes.
     #[test]
     fn a_sel_term_completes_query_keys() {
-        let g = boxed(":sel ex");
+        let mut g = boxed(":sel ex");
         assert_eq!(texts(&g), ["ext:"]);
-        assert_eq!(g.confirm(), Some(Action::SetQuery(":sel ext:".into())));
+        assert!(matches!(g.confirm(), Some(Action::Order(_))));
+        assert!(g.accept());
+        assert_eq!(g.query(), ":sel ext:");
     }
 
     /// A no-break space separates words here as it does in the grammar.
     #[test]
     fn completion_splits_on_a_unicode_space() {
-        let g = boxed(":sel\u{a0}ex");
+        let mut g = boxed(":sel\u{a0}ex");
         assert_eq!(texts(&g), ["ext:"]);
-        assert_eq!(g.confirm(), Some(Action::SetQuery(":sel\u{a0}ext:".into())));
+        assert!(g.accept());
+        assert_eq!(g.query(), ":sel\u{a0}ext:");
+    }
+
+    /// #429: a line that parses runs on Enter whatever is offered; an arrow
+    /// chooses a suggestion and Enter then takes it, as a click would.
+    #[test]
+    fn a_line_that_parses_runs_until_a_suggestion_is_chosen() {
+        let mut g = boxed(":mv >o");
+        assert_eq!(texts(&g).first(), Some(&">other"));
+        assert!(g.selected().is_none());
+        assert!(matches!(g.confirm(), Some(Action::Order(_))));
+        g.down();
+        assert_eq!(g.confirm(), Some(Action::SetQuery(":mv >other".into())));
+    }
+
+    /// A line that does not parse cannot run. Syntax (a verb) is chosen for
+    /// the reader and Enter takes it, as before #429; a destination is a
+    /// value and waits for Tab, so `:cp` Enter Enter copies nothing.
+    #[test]
+    fn a_line_that_does_not_parse_takes_only_syntax() {
+        let g = boxed(":tr");
+        assert_eq!(g.confirm(), Some(Action::SetQuery(":trash ".into())));
+        let mut g = boxed(":cp");
+        assert_eq!(g.confirm(), Some(Action::OrderInvalid));
+        assert!(g.accept());
+        assert_eq!(g.query(), ":cp >other");
+        assert!(matches!(g.confirm(), Some(Action::Order(_))));
+    }
+
+    /// A hover chooses nothing while nothing is chosen; a click does.
+    #[test]
+    fn a_hover_does_not_choose_a_suggestion() {
+        let mut g = boxed(":mv >o");
+        assert!(!g.point(0));
+        assert!(matches!(g.confirm(), Some(Action::Order(_))));
+        assert!(g.choose(0));
+        assert_eq!(g.confirm(), Some(Action::SetQuery(":mv >other".into())));
+    }
+
+    /// A late section does not unchoose what the reader chose.
+    #[test]
+    fn a_late_section_keeps_the_choice() {
+        let mut g = boxed(":mv >o");
+        g.down();
+        g.replace_section(super::SECTION_PLUGINS, Vec::new(), false);
+        assert_eq!(g.confirm(), Some(Action::SetQuery(":mv >other".into())));
+    }
+
+    /// The pane's names arrive through the context taken on open.
+    #[test]
+    fn the_pane_names_complete_a_sel() {
+        let ctx = super::OrderContext::new(
+            norte_proto::VPath::parse("file:///x").ok(),
+            None,
+            [(b"report.pdf".to_vec(), norte_proto::EntryKind::File)],
+            true,
+        );
+        let mut g = Goto::new(Vec::new()).with_order_context(ctx);
+        g.set_query(":sel rep");
+        assert!(g.accept());
+        assert_eq!(g.query(), ":sel report.pdf");
+    }
+
+    /// Favorites are offered as destinations, typed as local paths.
+    #[test]
+    fn a_favorite_is_a_destination() {
+        let fav = super::row_path(
+            SECTION_FAVORITES.id,
+            Some("backup"),
+            &norte_proto::VPath::parse("file:///srv/backup").expect("wire"),
+            None,
+        );
+        let mut g = Goto::new(vec![Box::new(super::FixedSource::new(
+            SECTION_FAVORITES,
+            vec![fav],
+        ))])
+        .with_order_context(super::OrderContext::new(
+            norte_proto::VPath::parse("file:///x").ok(),
+            None,
+            [],
+            true,
+        ));
+        g.set_query(":cp >/srv");
+        assert_eq!(texts(&g), [">/srv/backup"]);
     }
 
     #[test]

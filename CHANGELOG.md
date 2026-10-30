@@ -7,6 +7,22 @@ independently through `PROTOCOL_VERSION`.
 
 ## [Unreleased]
 
+### Added
+
+- **The order box suggests what comes next** (#429). After `cp`/`mv` it
+  offers `>other`, `>here`, the pane's folders and the places you go to
+  often; after `cd`, folders; inside a `sel`, the keys, the pane's
+  extensions for `ext:` and its names, marked first. **Tab** takes the
+  first suggestion, or the one you chose with an arrow or a click.
+
+### Changed
+
+- **Enter in the order box runs a line that already parses**, even while
+  suggestions are shown (ADR 0189). On a line that does not parse yet, Enter
+  still completes a verb or a key, but never picks a destination or a
+  name for you: `:cp` Enter now says the destination is missing instead of
+  completing it. `:sel ex` Enter runs the glob; Tab turns it into `ext:`.
+
 ## [0.3.0-alpha.16] - 2026-10-16
 
 ### Added
