@@ -2,7 +2,7 @@
 //
 // Separate from `norte:plugin` for the reason in ADR 0041 decision 4: a
 // package's version travels INSIDE the name of each interface
-// (`norte:host/host-log@0.1.0`), so any bump of a package
+// (`norte:host/host-log@1.0.0`), so any bump of a package
 // invalidates every `.wasm` artifact compiled against it — on the
 // IMPORT side, empirically verified twice in `norte-plugin.wit`'s
 // history. While everything lived in one package, touching `provider`
@@ -12,7 +12,7 @@
 // imports them. Their package is versioned separately and, on purpose,
 // almost never: bumping it still breaks everything, which is exactly
 // what it should cost.
-package norte:host@0.1.0;
+package norte:host@1.0.0;
 
 /// The MINIMAL host gate (demonstrates host↔guest gating): a plugin can
 /// ask the host to log a line (harmless, no capability needed) and read

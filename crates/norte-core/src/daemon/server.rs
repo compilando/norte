@@ -2932,7 +2932,7 @@ async fn dispatch(req: Request, conn_id: u64, conn: &mut ConnState, shared: &Arc
                 return Err(RpcError::protocol(
                     codes::VERSION_MISMATCH,
                     format!(
-                        "incompatible protocol version: server {}, client {} (N and N-1 accepted)",
+                        "incompatible protocol version: server {}, client {} (the same major, a client no newer)",
                         methods::PROTOCOL_VERSION,
                         p.protocol_version
                     ),

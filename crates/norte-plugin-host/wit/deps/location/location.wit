@@ -17,7 +17,7 @@
 // recompiled. `norte:plugin` does NOT bump: none of its interfaces changes
 // name, only the `norte-columns` world's import does, and that does not touch
 // previewers.
-package norte:location@0.2.0;
+package norte:location@1.0.0;
 
 /// BOUNDED read under a location the host opened and confined
 /// (`openat2(RESOLVE_BENEATH)` in `norte-vfs-local`). Everything that fails

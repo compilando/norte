@@ -14,7 +14,7 @@
 // 0.1.0 → 0.2.0 (2026-10-01, ADR 0163): `vfs-error` gains `busy`. A closed
 // enum, so every guest compiled against 0.1.0 stops instantiating; the
 // embedded FTP backend is rebuilt in the same change (`just build-ftp-wasm`).
-package norte:provider@0.2.0;
+package norte:provider@1.0.0;
 
 /// `provider` interface (#30, ADR 0032): SYNCHRONOUS projection of the
 /// `norte_vfs::Provider` trait. Async streaming is projected to BOUNDED
@@ -155,7 +155,7 @@ interface provider {
 /// `host-log`. Separate from `norte-plugin` — a provider guest does not
 /// implement previewer/command.
 world norte-provider {
-    import norte:host/host-log@0.1.0;
-    import norte:host/host-config@0.1.0;
+    import norte:host/host-log@1.0.0;
+    import norte:host/host-config@1.0.0;
     export provider;
 }

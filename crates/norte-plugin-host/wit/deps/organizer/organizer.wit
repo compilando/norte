@@ -16,7 +16,7 @@
 // 0094): the version travels inside the name of each interface, and a
 // change here must not invalidate third-party renamers. It starts at
 // 0.1.0 and bumps on its own.
-package norte:organizer@0.1.0;
+package norte:organizer@1.0.0;
 
 /// An ORGANIZATION proposer. Receives the names the batch acts on — what
 /// is marked, or what is pointed at — and returns where each one goes. Only
@@ -61,11 +61,11 @@ interface organizer {
 /// The world of an `organizer` plugin: imports the same as `norte-renamer`
 /// and exports `organizer`.
 world norte-organizer {
-    import norte:host/host-log@0.1.0;
-    import norte:host/host-config@0.1.0;
+    import norte:host/host-log@1.0.0;
+    import norte:host/host-config@1.0.0;
     // ALWAYS imported, as in `norte-renamer`: the linker offers it to every
     // guest and what decides whether it SERVES anything is the approved
     // capability.
-    import norte:location/location@0.2.0;
+    import norte:location/location@1.0.0;
     export organizer;
 }

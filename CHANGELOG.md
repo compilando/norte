@@ -17,6 +17,20 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **Protocol 1.0.0 and every `norte:*` WIT package at 1.0.0** — the
+  beta's promise (ADR 0182). Nothing changes shape. From here a newer
+  daemon serves every older 1.x client, and a plugin built against 1.x
+  loads on every later 1.y norte. The jump itself breaks once: a 0.87
+  client and a 1.0 daemon refuse each other. They ship together, so only a
+  daemon left running across the upgrade notices: **run `norte daemon
+  stop` with the old norte before upgrading**, or close every old window
+  and terminal afterwards — the new ones say so if they meet it. And
+  **plugins built
+  against any 0.x package need a rebuild** — `just plugins force` for the
+  ones in this tree, then approve them again. `norte doctor` and the
+  plugin manager list the old ones as `plugin-wit-mismatch` with both
+  versions. An old organizer plugin is now listed that way too, instead of
+  failing when it runs.
 - **Enter in the order box runs a line that already parses**, even while
   suggestions are shown (ADR 0189). On a line that does not parse yet, Enter
   still completes a verb or a key, but never picks a destination or a

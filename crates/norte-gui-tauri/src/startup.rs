@@ -206,6 +206,10 @@ pub enum StartupError {
         #[source]
         source: norte_proto::Error,
     },
+    /// A daemon of another protocol major holds the socket: the sentence
+    /// says what to do, already translated.
+    #[error("{0}")]
+    OldDaemon(String),
     /// The socket's path does not fit in a Unix socket address.
     ///
     /// Said BEFORE trying: the kernel's answer surfaces as a bare "could
@@ -825,6 +829,16 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     .map_err(|e| match e {
         norte_client::ClientError::SpawnFailed { status, stderr } => {
             StartupError::DaemonDead { status, stderr }
+        }
+        // An older daemon left running across an upgrade (ADR 0182).
+        other if norte_client::is_version_mismatch(&other) => {
+            StartupError::OldDaemon(norte_i18n::ta(
+                "daemon-version-mismatch",
+                &[
+                    ("socket", &socket.display().to_string()),
+                    ("detail", &other.to_string()),
+                ],
+            ))
         }
         other => StartupError::Connect {
             socket: socket.display().to_string(),

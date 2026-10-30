@@ -20,7 +20,7 @@
 // 0.1.0 → 0.2.0 (ADR 0101): `effect` gains `write-sidecar`. A guest
 // compiled against 0.1.0 is listed as mismatched until recompiled (ADR
 // 0094). 0.1.0 never reached any third party.
-package norte:hook@0.2.0;
+package norte:hook@1.0.0;
 
 /// An observer of mutations. Receives, on each call, the journal entries
 /// that arrived since the previous one and that match the events in its
@@ -119,11 +119,11 @@ interface hook {
 /// The world of a `hook` plugin: imports the same as `norte-renamer` and
 /// exports `hook`.
 world norte-hook {
-    import norte:host/host-log@0.1.0;
-    import norte:host/host-config@0.1.0;
+    import norte:host/host-log@1.0.0;
+    import norte:host/host-config@1.0.0;
     // ALWAYS imported, as in `norte-columns`: the linker offers it to
     // every guest and what decides whether it SERVES anything is the
     // approved capability.
-    import norte:location/location@0.2.0;
+    import norte:location/location@1.0.0;
     export hook;
 }

@@ -128,7 +128,12 @@
 // name, for every previewer/command/provider of the package: the seven in this
 // tree are recompiled with `just plugins force` and re-approved. The outside
 // ones are listed as mismatched with both versions (ADR 0094).
-package norte:plugin@0.10.0;
+//
+// 0.10.0 → 1.0.0 (the beta, ADR 0182): every `norte:*` package goes to 1.0.0
+// with no change of shape. From here a compatible bump may only ADD, and a
+// guest built against 1.x links on every later 1.y host. The jump itself is
+// the last break: guests built against 0.x are listed as mismatched.
+package norte:plugin@1.0.0;
 
 /// Generates a preview of ONE resource the HOST already read and hands
 /// over (rule 9: the guest never touches the FS; it receives the bytes).
@@ -279,8 +284,8 @@ interface columns {
 /// and `command`) — a guest of a single category implements the other as
 /// not-supported. Per-category worlds = P2b debt.
 world norte-plugin {
-    import norte:host/host-log@0.1.0;
-    import norte:host/host-config@0.1.0;
+    import norte:host/host-log@1.0.0;
+    import norte:host/host-config@1.0.0;
     export previewer;
     export command;
 }
@@ -290,21 +295,21 @@ world norte-plugin {
 /// `norte-provider` — a decorator guest does not implement previewer/command/
 /// provider.
 world norte-decorator {
-    import norte:host/host-log@0.1.0;
-    import norte:host/host-config@0.1.0;
+    import norte:host/host-log@1.0.0;
+    import norte:host/host-config@1.0.0;
     export decorator;
 }
 
 /// World of a plugin-columns (ADR 0037 decision 2): exposes `columns` and
 /// imports `host-log`/`host-config`. Same pattern as `norte-decorator`.
 world norte-columns {
-    import norte:host/host-log@0.1.0;
-    import norte:host/host-config@0.1.0;
+    import norte:host/host-log@1.0.0;
+    import norte:host/host-config@1.0.0;
     // ALWAYS imported: the host's linker offers the interface to every columns
     // guest, and what decides whether it SERVES anything is the manifest's
     // approved capability (a `none` token, or an unknown-token error). An
     // extra import in the linker never breaks anything; an unresolved one
     // does.
-    import norte:location/location@0.2.0;
+    import norte:location/location@1.0.0;
     export columns;
 }

@@ -16,7 +16,7 @@
 // It also receives no raw keys. What reaches it is the COMMAND the keymap
 // already resolved: a plugin cannot bind `ctrl+s` on its own nor read what
 // the reader types in another panel.
-package norte:panel@0.1.0;
+package norte:panel@1.0.0;
 
 interface panel {
     /// A styled text span, TWIN of `norte:plugin`'s `span`.
@@ -142,8 +142,8 @@ interface panel {
 /// and auditing. Without it, a panel could only paint what the context
 /// tells it.
 world norte-panel {
-    import norte:host/host-log@0.1.0;
-    import norte:host/host-config@0.1.0;
-    import norte:location/location@0.2.0;
+    import norte:host/host-log@1.0.0;
+    import norte:host/host-config@1.0.0;
+    import norte:location/location@1.0.0;
     export panel;
 }

@@ -1758,7 +1758,7 @@ fn a_guest_built_against_another_wit_is_listed_as_broken() {
     assert!(cat.errors.is_empty(), "{:?}", cat.errors);
     assert_eq!(cat.plugins.len(), 1, "the current guest loads");
 
-    let old = support::rewrite_bytes(&bytes, b"@0.10.0", b"@0.70.0");
+    let old = support::rewrite_bytes(&bytes, b"plugin/previewer@1.0.0", b"plugin/previewer@7.0.0");
     std::fs::write(&wasm_path, old).unwrap();
     let cat = Catalog::load_dir(root.path());
     assert!(cat.plugins.is_empty(), "it does not load");
@@ -1770,8 +1770,8 @@ fn a_guest_built_against_another_wit_is_listed_as_broken() {
             served,
         } => {
             assert_eq!(package, "norte:plugin");
-            assert_eq!(built_against, "0.70.0");
-            assert_eq!(served, "0.10.0");
+            assert_eq!(built_against, "7.0.0");
+            assert_eq!(served, "1.0.0");
         }
         other => panic!("expected WitMismatch, got {other:?}"),
     }

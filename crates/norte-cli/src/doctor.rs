@@ -1569,8 +1569,9 @@ fs-read = "scoped"
     /// A plugin whose binary was built against another WIT is its own
     /// finding — a warning that names the package and both versions — and
     /// NOT the generic broken-manifest error: the author has to rebuild, not
-    /// edit (ADR 0094). Made by rewriting `@0.10.0` to `@0.70.0` in the bytes
-    /// of the real demo guest (same length, sections stay valid).
+    /// edit (ADR 0094). Made by rewriting the previewer export's `@1.0.0` to
+    /// `@7.0.0` in the bytes of the real demo guest (same length, sections
+    /// stay valid).
     #[test]
     fn a_plugin_from_another_wit_is_its_own_finding() {
         let Some(bytes) = demo_guest_bytes() else {
@@ -1578,7 +1579,7 @@ fs-read = "scoped"
         };
         let old: Vec<u8> = {
             let mut out = bytes.clone();
-            let (from, to) = (b"@0.10.0", b"@0.70.0");
+            let (from, to) = (b"plugin/previewer@1.0.0", b"plugin/previewer@7.0.0");
             let mut i = 0;
             while i + from.len() <= out.len() {
                 if &out[i..i + from.len()] == from {
@@ -1601,8 +1602,8 @@ fs-read = "scoped"
             .unwrap_or_else(|| panic!("expected plugin-wit-mismatch: {findings:?}"));
         assert_eq!(f.severity, Severity::Warn);
         assert!(f.detail.contains("org.norte.demo"), "{}", f.detail);
-        assert!(f.detail.contains("norte:plugin@0.70.0"), "{}", f.detail);
-        assert!(f.detail.contains("@0.10.0"), "{}", f.detail);
+        assert!(f.detail.contains("norte:plugin@7.0.0"), "{}", f.detail);
+        assert!(f.detail.contains("@1.0.0"), "{}", f.detail);
         assert!(
             !findings.iter().any(|f| f.code == "plugin-manifest-broken"),
             "not a broken manifest: {findings:?}"

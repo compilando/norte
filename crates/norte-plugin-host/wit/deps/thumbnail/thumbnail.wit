@@ -14,7 +14,7 @@
 // confirm it, and checks that the declared dimensions match the header
 // before they reach a `blob:`. A guest does not choose what gets painted:
 // it describes.
-package norte:thumbnail@0.1.0;
+package norte:thumbnail@1.0.0;
 
 interface thumbnail {
     /// What it is given: the file's bytes — CAPPED by the host, which
@@ -48,7 +48,7 @@ interface thumbnail {
 /// `host-log`/`host-config`. No `location`: it receives the bytes, not a
 /// path.
 world norte-thumbnail {
-    import norte:host/host-log@0.1.0;
-    import norte:host/host-config@0.1.0;
+    import norte:host/host-log@1.0.0;
+    import norte:host/host-config@1.0.0;
     export thumbnail;
 }

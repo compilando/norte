@@ -9,7 +9,7 @@
 // package's version travels inside the name of each interface, and a
 // change here must not invalidate third-party previewers. It starts at
 // 0.1.0 and bumps on its own.
-package norte:renamer@0.1.0;
+package norte:renamer@1.0.0;
 
 /// A name proposer. Receives the names the batch acts on — what is
 /// marked, or what is pointed at — and returns the `(from, to)` pairs it
@@ -48,11 +48,11 @@ interface renamer {
 /// The world of a `renamer` plugin: imports the same as `norte-columns`
 /// — logging, config and location — and exports `renamer`.
 world norte-renamer {
-    import norte:host/host-log@0.1.0;
-    import norte:host/host-config@0.1.0;
+    import norte:host/host-log@1.0.0;
+    import norte:host/host-config@1.0.0;
     // ALWAYS imported, as in `norte-columns`: the linker offers it to every
     // guest and what decides whether it SERVES anything is the approved
     // capability.
-    import norte:location/location@0.2.0;
+    import norte:location/location@1.0.0;
     export renamer;
 }

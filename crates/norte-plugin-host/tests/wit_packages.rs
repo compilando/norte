@@ -120,17 +120,21 @@ fn cross_references_carry_a_version() {
 #[test]
 fn served_wit_matches_the_package_files() {
     let mut declared: Vec<(String, String)> = Vec::new();
-    for file in [
-        "norte-plugin.wit",
-        "deps/host/host.wit",
-        "deps/provider/provider.wit",
-        "deps/location/location.wit",
-        "deps/renamer/renamer.wit",
-        "deps/hook/hook.wit",
-        "deps/thumbnail/thumbnail.wit",
-        "deps/panel/panel.wit",
-    ] {
-        let src = read_wit(file);
+    // Every package on disk, not a list by hand: one kept by hand is how
+    // `norte:organizer` went unserved.
+    let mut files = vec![wit_dir().join("norte-plugin.wit")];
+    for dep in std::fs::read_dir(wit_dir().join("deps")).expect("wit/deps") {
+        let dep = dep.expect("a deps entry").path();
+        for f in std::fs::read_dir(&dep).expect("a package dir") {
+            let f = f.expect("a package file").path();
+            if f.extension().is_some_and(|e| e == "wit") {
+                files.push(f);
+            }
+        }
+    }
+    for path in files {
+        let file = path.display().to_string();
+        let src = std::fs::read_to_string(&path).expect("reads a .wit");
         let line = src
             .lines()
             .map(str::trim)
@@ -162,11 +166,11 @@ fn wit_imports_of_a_real_guest_name_the_served_versions() {
     let bytes = std::fs::read(wasm).expect("reads the guest");
     let imports = wit_packages(&bytes);
     assert!(
-        imports.contains(&("norte:plugin".to_owned(), "0.10.0".to_owned())),
+        imports.contains(&("norte:plugin".to_owned(), "1.0.0".to_owned())),
         "{imports:?}"
     );
     assert!(
-        imports.contains(&("norte:host".to_owned(), "0.1.0".to_owned())),
+        imports.contains(&("norte:host".to_owned(), "1.0.0".to_owned())),
         "{imports:?}"
     );
     assert!(wit_mismatch(&imports).is_none());
@@ -174,31 +178,31 @@ fn wit_imports_of_a_real_guest_name_the_served_versions() {
 
 /// A guest compiled against another version of the package is a mismatch
 /// with BOTH versions in hand: its own and the served one. Built by
-/// rewriting `@0.10.0` to `@0.70.0` in the real guest's bytes — same
-/// length, so the sections stay valid and the reader walks them.
+/// rewriting one interface's version in the real guest's bytes — same
+/// length, so the sections stay valid and the reader walks them. Every
+/// package is at 1.0.0, so the rewrite names the interface, not the bare
+/// version.
 #[test]
 fn a_guest_built_against_another_version_is_a_mismatch() {
     let Some(wasm) = support::build_guest("previewer-demo") else {
         return;
     };
     let bytes = std::fs::read(wasm).expect("reads the guest");
-    // The EXPORTS side (`norte:plugin`). `0.70.0`: a version the host does
-    // not serve for any package, so confusing package and version does
-    // not happen by chance.
-    let old = support::rewrite_bytes(&bytes, b"@0.10.0", b"@0.70.0");
+    // The EXPORTS side (`norte:plugin`): a guest from a FUTURE major.
+    let old = support::rewrite_bytes(&bytes, b"plugin/previewer@1.0.0", b"plugin/previewer@7.0.0");
     let imports = wit_packages(&old);
     let m = wit_mismatch(&imports).expect("mismatch");
     assert_eq!(m.package, "norte:plugin");
-    assert_eq!(m.built_against, "0.70.0");
-    assert_eq!(m.served, "0.10.0");
+    assert_eq!(m.built_against, "7.0.0");
+    assert_eq!(m.served, "1.0.0");
 
-    // And the IMPORTS side (`norte:host`): either one can be mismatched.
-    let old = support::rewrite_bytes(&bytes, b"@0.1.0", b"@0.0.9");
+    // And the IMPORTS side (`norte:host`): a guest from before the beta.
+    let old = support::rewrite_bytes(&bytes, b"host/host-log@1.0.0", b"host/host-log@0.9.9");
     let imports = wit_packages(&old);
     let m = wit_mismatch(&imports).expect("mismatch in imports");
     assert_eq!(m.package, "norte:host");
-    assert_eq!(m.built_against, "0.0.9");
-    assert_eq!(m.served, "0.1.0");
+    assert_eq!(m.built_against, "0.9.9");
+    assert_eq!(m.served, "1.0.0");
 }
 
 /// Bytes that are not a component have no imports: neither an error nor a

@@ -414,13 +414,27 @@ pub(crate) async fn daemon_cmd(
             let mut client = Client::connect(&socket)
                 .await
                 .context("no daemon is listening on the socket")?;
-            let init = client
+            let init = match client
                 .initialize(norte_proto::methods::ClientInfo {
                     name: "norte-cli".into(),
                     version: env!("CARGO_PKG_VERSION").into(),
                 })
                 .await
-                .context("initialize")?;
+            {
+                Ok(init) => init,
+                // A daemon of another major refuses even the handshake, so
+                // this binary cannot stop it: say who can (ADR 0182).
+                Err(e) if norte_core::daemon::is_version_mismatch(&e) => {
+                    anyhow::bail!(norte_i18n::ta(
+                        "daemon-version-mismatch",
+                        &[
+                            ("socket", &socket.display().to_string()),
+                            ("detail", &e.to_string()),
+                        ],
+                    ));
+                }
+                Err(e) => return Err(e).context("initialize"),
+            };
             // A daemon older than 0.46 IGNORES `mode` and does an
             // ordinary stop: frontends are not warned and do not come
             // back on their own. Without this check the CLI would say
