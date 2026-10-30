@@ -1118,7 +1118,7 @@ pub(crate) fn draw_goto(
     // The model's cursor indexes LINES, which is what is painted: rows and
     // headers. Converting it to a "row index" here would be the same count
     // twice and the chance for them to drift apart.
-    state.select((!goto.is_empty()).then_some(goto.cursor()));
+    state.select(goto.selected().is_some().then_some(goto.cursor()));
     frame.render_stateful_widget(list, area, &mut state);
 }
 

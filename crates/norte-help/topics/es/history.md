@@ -159,6 +159,13 @@ filas que casa el `sel`; Esc devuelve las marcas que tenías. Intro ejecuta la
 última etapa por el mismo diálogo que abre su tecla: una copia sigue
 preguntando.
 
+La caja sugiere lo que puede venir después: verbos, claves, las extensiones
+y los nombres del panel (primero los marcados), `>other`, `>here` y las
+carpetas a las que vas a menudo. Tab toma la primera sugerencia, o la que
+eligió una flecha o un clic. Mientras la línea ya tiene sentido, Intro la
+ejecuta y nunca toma una sugerencia; mientras no lo tiene, Intro toma la
+primera solo si es un verbo o una clave, nunca un destino ni un nombre.
+
 - `sel` lleva términos que deben cumplirse todos: `ext:pdf,jpg`,
   `name:*borrador*` o un glob suelto, `name=NOMBRE` para un nombre exacto
   (`name=*` es el fichero que se llama `*`), `size>10M`, `age<7d`

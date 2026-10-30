@@ -154,6 +154,13 @@ order: `sel ext:pdf age<30d | cp >other`. While you type, the rows the `sel`
 matches are marked; Esc puts back the marks you had. Enter runs the last
 stage through the same dialog its key opens — a copy still asks.
 
+The box suggests what can come next: verbs, keys, the extensions and names
+of the pane (marked first), `>other`, `>here` and the folders you go to
+often. Tab takes the first suggestion, or the one an arrow or a click
+chose. While the line already makes sense Enter runs it, never a
+suggestion; while it does not, Enter takes the first one only if it is a
+verb or a key, never a destination or a name.
+
 - `sel` takes terms, all of which must hold: `ext:pdf,jpg`, `name:*draft*`
   or a bare glob, `name=NAME` for exactly one name (`name=*` is the file
   called `*`), `size>10M`, `age<7d` (`s m h d w`; `m` is minutes),

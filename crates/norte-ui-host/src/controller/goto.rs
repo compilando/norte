@@ -63,7 +63,9 @@ impl State {
         // The generation bump: a late answer meant for an earlier box has
         // nowhere to land.
         self.close_go_to();
-        let mut g = Goto::new(sources).with_recent(&self.palette_recent);
+        let mut g = Goto::new(sources)
+            .with_recent(&self.palette_recent)
+            .with_order_context(norte_frontend::goto::OrderContext::of(&self.slot().pane));
         g.set_query(query);
         self.ir_a = Some(g);
         self.request_plugin_rows(backend, mailbox);
@@ -307,6 +309,10 @@ impl State {
                 self.close_go_to();
             }
             "Enter" | "enter" => return self.enter_in_goto(backend, mailbox),
+            // Tab takes the suggestion into the line; nothing runs (#429).
+            "Tab" | "tab" if !k.ctrl && !k.alt && !k.meta && !k.shift => {
+                g.accept();
+            }
             "ArrowDown" | "down" => g.down(),
             "ArrowUp" | "up" => g.up(),
             "PageDown" | "pgdn" => g.page_down(page),
@@ -461,7 +467,7 @@ impl State {
         let Some(g) = self.ir_a.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        if !g.point(usize::try_from(row).unwrap_or(usize::MAX)) {
+        if !g.choose(usize::try_from(row).unwrap_or(usize::MAX)) {
             return (self.applied(), Vec::new());
         }
         self.enter_in_goto(backend, mailbox)
@@ -586,7 +592,7 @@ impl State {
             // Masked, as the TUI paints it: a pasted bidi control must not
             // reorder the line.
             query: clamp_display(g.query_display()),
-            cursor: (!lines.is_empty() && !g.is_empty()).then_some(g.cursor() as u64),
+            cursor: (!lines.is_empty() && g.selected().is_some()).then_some(g.cursor() as u64),
             lines,
             empty: norte_i18n::t_in(self.lang, "goto-empty"),
             mode: match g.mode() {

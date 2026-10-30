@@ -189,3 +189,4 @@ edits.
 | [0186](0186-the-assistant-reads-metadata-and-writes-orders-a-human-applies.md) | The assistant reads metadata and writes orders a human applies | accepted |
 | [0187](0187-throughput-graphs-sample-on-the-strips-clock.md) | Throughput graphs sample on the strip's clock | accepted |
 | [0188](0188-the-language-is-chosen-at-first-run-switches-live-and-extends-by-ftl.md) | The language is chosen at first run, switches live, and extends by `.ftl` | accepted |
+| [0189](0189-an-order-suggestion-is-taken-with-tab-and-enter-runs-a-line-that-parses.md) | An order suggestion is taken with Tab, and Enter runs a line that parses | accepted |
