@@ -543,14 +543,15 @@ body {
   height: 100%;
 }
 
-/* The command centre (ADR 0172): a box centred in the bar's FREE space, as
-   VS Code's. In the flow and not absolutely centred on the window: that
-   put it over "View" and "Tools" in a 1200 px window. It shrinks before it
-   touches a menu title. */
+/* The command centre (ADR 0172): a box at the RIGHT of the bar's free space,
+   just before the buttons (2026-11-01; centred, as VS Code's, it floated
+   alone in the middle of the bar). In the flow: absolutely placed, it went
+   over "View" and "Tools" in a 1200 px window. It shrinks before it touches
+   a menu title. */
 .command-center {
   flex: 0 1 420px;
   min-width: 0;
-  margin: 3px auto;
+  margin: 3px 8px 3px auto;
   align-self: stretch;
   display: flex;
   align-items: center;

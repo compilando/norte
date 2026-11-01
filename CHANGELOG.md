@@ -26,6 +26,8 @@ independently through `PROTOCOL_VERSION`.
 
 ### Changed
 
+- **The window's search box sits at the right of the title bar**, just
+  before the layout buttons, instead of alone in the middle.
 - **Protocol 1.0.0 and every `norte:*` WIT package at 1.0.0** — the
   beta's promise (ADR 0182). Nothing changes shape. From here a newer
   daemon serves every older 1.x client, and a plugin built against 1.x
