@@ -108,6 +108,7 @@ pub async fn dispatch(
                 crate::gestures::copy_paths(app, &paths).await;
             }
         }
+        Command::PaneEditPath => crate::path_edit::open(app),
         Command::PaneSwitch => app.switch_focus(),
         Command::TabNew => app.tab_new(),
         Command::TabClose => app.tab_close(),

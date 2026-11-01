@@ -294,6 +294,24 @@
     "action": "parent",
     "slot_id": 1
   },
+  "path_edit_cancel": {
+    "action": "path_edit_cancel",
+    "revision": 1,
+    "slot_id": 0
+  },
+  "path_edit_commit": {
+    "action": "path_edit_commit",
+    "revision": 1,
+    "slot_id": 0,
+    "text": "/srv/www"
+  },
+  "path_edit_complete": {
+    "action": "path_edit_complete",
+    "cursor": 6,
+    "revision": 1,
+    "slot_id": 0,
+    "text": "/srv/w"
+  },
   "picker_select_row": {
     "action": "picker_select_row",
     "generation": 3,

@@ -118,6 +118,10 @@
 # orthodox, cua and vim carry it. Here it is reached through the Go menu
 # (F9), where it is first, and through the palette.
 #
+# `pane.edit-path` (ADR 0190) is left unbound for the same reason: Far's
+# panel title is not editable, and a path is changed from its command line
+# (`cd`), which has no key of its own. Go menu (F9) and palette.
+#
 # `app.orders` (the order line, ADR 0185) is `alt+:`, a norte chord Far does
 # not attest: its command line is the shell's and takes every printable
 # key, and its fast find is Alt+letter, which `:` is not.

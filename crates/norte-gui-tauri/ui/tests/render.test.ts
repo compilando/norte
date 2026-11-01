@@ -1655,6 +1655,93 @@ describe("the header", () => {
   });
 });
 
+describe("the path line (ADR 0190)", () => {
+  const editing = (revision: number, text = "/home/oscar", marked_note = "") =>
+    view({
+      path_segments: ["⟨file⟩", "home", "oscar"],
+      path_display: "⟨file⟩/home/oscar",
+      marked_note,
+      path_edit: { text, select_all: true, cursor: text.length, revision },
+    });
+
+  it("replaces the breadcrumbs with a focused input, all of it selected", () => {
+    const { screen, root } = mount();
+    screen.paint(editing(1));
+    const input = root.querySelector<HTMLInputElement>("input.path-edit");
+    expect(input?.value).toBe("/home/oscar");
+    expect(root.querySelector(".crumb")).toBeNull();
+    expect(document.activeElement).toBe(input);
+    expect([input?.selectionStart, input?.selectionEnd]).toEqual([0, 11]);
+  });
+
+  it("Enter, Escape and Tab go to the host with the whole text", () => {
+    const { screen, sent, root } = mount();
+    screen.paint(editing(1));
+    const input = root.querySelector<HTMLInputElement>("input.path-edit");
+    if (input === null) {
+      throw new Error("no input");
+    }
+    input.value = "/srv/w";
+    input.setSelectionRange(6, 6);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(sent.at(-1)).toEqual({
+      action: "path_edit_complete",
+      slot_id: 1,
+      revision: 1,
+      text: "/srv/w",
+      cursor: 6,
+    });
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(sent.at(-1)).toEqual({
+      action: "path_edit_commit",
+      slot_id: 1,
+      revision: 1,
+      text: "/srv/w",
+    });
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(sent.at(-1)).toEqual({ action: "path_edit_cancel", slot_id: 1, revision: 1 });
+  });
+
+  it("no key reaches the keymap, and an IME's Enter commits nothing", () => {
+    const { screen, sent, root } = mount();
+    screen.paint(editing(1));
+    const input = root.querySelector<HTMLInputElement>("input.path-edit");
+    if (input === null) {
+      throw new Error("no input");
+    }
+    let reached = 0;
+    document.addEventListener("keydown", () => (reached += 1));
+    const before = sent.length;
+    for (const key of ["ArrowDown", "F8", "Insert"]) {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    }
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: true }),
+    );
+    expect(reached).toBe(0);
+    expect(sent.length).toBe(before);
+  });
+
+  it("keeps what is being typed across a repaint of the same revision", () => {
+    const { screen, root } = mount();
+    screen.paint(editing(1));
+    const input = root.querySelector<HTMLInputElement>("input.path-edit");
+    if (input === null) {
+      throw new Error("no input");
+    }
+    input.value = "/home/osc";
+    // The title repaints (a mark changed) with the same revision.
+    screen.paint(editing(1, "/home/oscar", "1 marked"));
+    expect(root.querySelector("input.path-edit")).toBe(input);
+    expect(input.value).toBe("/home/osc");
+    // A new revision (a completion) replaces it with the host's text.
+    screen.paint(editing(2, "/home/oscar/docs/"));
+    expect(root.querySelector<HTMLInputElement>("input.path-edit")?.value).toBe(
+      "/home/oscar/docs/",
+    );
+  });
+});
+
 describe("breadcrumbs, the space indicator and the toast", () => {
   it("every path segment is a button that navigates to its depth, except the current one", () => {
     const { screen, sent, root } = mount();

@@ -83,6 +83,10 @@
 # orthodox, cua and vim carry it; here, the Go menu (F9), where it is
 # first.
 #
+# `pane.edit-path` (ADR 0190) is left UNBOUND: TC has it —`cm_EditPath`,
+# the path field above the file list— but assigns it no default key; its
+# users map one themselves. Go menu (F9) and palette.
+#
 # `app.orders` (the order line, ADR 0185) is `alt+:`, a norte chord TC does
 # not attest: its command line runs programs, and a printable key starts
 # the quick search.

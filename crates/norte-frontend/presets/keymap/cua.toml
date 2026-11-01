@@ -135,6 +135,8 @@ keymap = [
     { on = ["ctrl+d"], run = "pane.hotlist" },
     # The command bar (ADR 0181): below the panes, where the arrow points.
     { on = ["ctrl+down"], run = "pane.command-line" },
+    # The location bar's key in desktop file managers and browsers (ADR 0190).
+    { on = ["ctrl+l"], run = "pane.edit-path" },
     { on = ["insert"], run = "mark.toggle" },
     { on = ["space"], run = "mark.toggle" },
     { on = ["ctrl+a"], run = "mark.all" },

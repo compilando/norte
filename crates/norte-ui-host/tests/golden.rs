@@ -258,6 +258,9 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::ContextMenuClose => "context_menu_close",
         UiAction::CommandBarFocus => "command_bar_focus",
         UiAction::CommandBarPaste { .. } => "command_bar_paste",
+        UiAction::PathEditCommit { .. } => "path_edit_commit",
+        UiAction::PathEditCancel { .. } => "path_edit_cancel",
+        UiAction::PathEditComplete { .. } => "path_edit_complete",
         UiAction::OverlayDismiss => "overlay_dismiss",
         UiAction::WizardOpen => "wizard_open",
         UiAction::SplashOpen => "splash_open",
@@ -840,6 +843,30 @@ fn context_menu_actions() -> Vec<(&'static str, UiAction)> {
             "command_bar_paste",
             UiAction::CommandBarPaste {
                 text: "make test".to_owned(),
+            },
+        ),
+        (
+            "path_edit_commit",
+            UiAction::PathEditCommit {
+                slot_id: 0,
+                revision: 1,
+                text: "/srv/www".to_owned(),
+            },
+        ),
+        (
+            "path_edit_cancel",
+            UiAction::PathEditCancel {
+                slot_id: 0,
+                revision: 1,
+            },
+        ),
+        (
+            "path_edit_complete",
+            UiAction::PathEditComplete {
+                slot_id: 0,
+                revision: 1,
+                text: "/srv/w".to_owned(),
+                cursor: 6,
             },
         ),
         ("overlay_dismiss", UiAction::OverlayDismiss),
@@ -1487,6 +1514,13 @@ fn reference_slots() -> Vec<SlotView> {
                 mode: "filter".to_owned(),
                 matches: 1,
             }),
+            // The path line (bridge 120).
+            path_edit: Some(norte_ui_host::dto::PathEditView {
+                text: "/home/ana".to_owned(),
+                select_all: true,
+                cursor: 9,
+                revision: 1,
+            }),
         })),
         // A results tab (bridge 119): the location line instead of
         // breadcrumbs, the Folder column after the name, and the status
@@ -1540,6 +1574,7 @@ fn reference_slots() -> Vec<SlotView> {
             ],
             state: SlotState::Ready,
             quick: None,
+            path_edit: None,
         })),
         SlotView::Metadata(Box::new(norte_ui_host::dto::MetadataSlotView {
             slot_id: 5,
@@ -3478,7 +3513,8 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // `SlotView::Search` with its rows, the search panel.
     // 119 (spec 2026-10-10): `results_note` on the listing and its header,
     // and `SearchPanelSlotView.open_listing_label`.
-    const SHAPE: u64 = 15_589_609_717_164_586_289;
+    // 120 (ADR 0190): `BrowserSlotView.path_edit`, the path line.
+    const SHAPE: u64 = 2_618_275_434_021_407_724;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

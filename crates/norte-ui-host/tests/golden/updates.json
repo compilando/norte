@@ -1195,6 +1195,12 @@
         "marks": 2,
         "names_note": "nombres: cp866",
         "path_display": "⟨file⟩/home/oscar",
+        "path_edit": {
+          "cursor": 9,
+          "revision": 1,
+          "select_all": true,
+          "text": "/home/ana"
+        },
         "path_hostile": false,
         "path_segments": [
           "⟨file⟩",
@@ -1329,6 +1335,7 @@
         "marks": 0,
         "names_note": "",
         "path_display": "búsqueda «aguja» en ⟨mem⟩/casa",
+        "path_edit": null,
         "path_hostile": false,
         "path_segments": [],
         "pruned_note": "",

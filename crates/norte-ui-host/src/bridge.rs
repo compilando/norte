@@ -641,7 +641,10 @@ use serde::{Deserialize, Serialize};
 ///   and `BrowserHeader.results_note`, the column id `"folder"`,
 ///   `SearchPanelSlotView.open_listing_label` and the action
 ///   `search_panel_open_listing`.
-pub const BRIDGE_VERSION: u32 = 119;
+/// - **120**: the path line (ADR 0190): `BrowserSlotView.path_edit`
+///   (`PathEditView`) and the actions `path_edit_commit`,
+///   `path_edit_cancel` and `path_edit_complete`.
+pub const BRIDGE_VERSION: u32 = 120;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

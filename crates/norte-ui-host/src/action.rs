@@ -1030,6 +1030,37 @@ pub enum UiAction {
         /// What was pasted.
         text: String,
     },
+    /// Enter in the path line (`pane.edit-path`, bridge 120): go to what it
+    /// says. The `<input>` owns the caret, so the whole text travels.
+    PathEditCommit {
+        /// The slot whose path is being edited.
+        slot_id: u32,
+        /// The `PathEditView::revision` the `<input>` was built from; an
+        /// older one is a line that is gone, and is ignored.
+        revision: u32,
+        /// The line.
+        text: String,
+    },
+    /// Escape in the path line, or the line losing focus: put it away
+    /// without going anywhere (bridge 120).
+    PathEditCancel {
+        /// The slot whose path is being edited.
+        slot_id: u32,
+        /// As in `PathEditCommit`.
+        revision: u32,
+    },
+    /// Tab in the path line: complete the folder name before `cursor`
+    /// (bridge 120). The answer comes back as a new `PathEditView`.
+    PathEditComplete {
+        /// The slot whose path is being edited.
+        slot_id: u32,
+        /// As in `PathEditCommit`.
+        revision: u32,
+        /// The line.
+        text: String,
+        /// The caret, in UTF-16 code units, as the `<input>` counts it.
+        cursor: u32,
+    },
     /// A press on the veil behind the overlay in front, outside its box
     /// (bridge 112). The host decides: a light popup (the search box, a
     /// picker, the search form, help, an output) closes as with `Escape`;

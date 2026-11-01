@@ -40,6 +40,7 @@ pub mod palette;
 pub mod panel;
 pub mod panelplugin;
 pub mod paste;
+pub mod path_edit;
 pub mod preview;
 pub mod probes;
 pub mod processes;

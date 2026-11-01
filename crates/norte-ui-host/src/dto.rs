@@ -3004,6 +3004,26 @@ pub struct BrowserSlotView {
     /// The incremental search, if open. While it is, text keys are ITS
     /// OWN: it is the listing's input context.
     pub quick: Option<QuickView>,
+    /// The path line, if this slot's path is being edited (bridge 120).
+    #[serde(default)]
+    pub path_edit: Option<PathEditView>,
+}
+
+/// The path line (`pane.edit-path`, ADR 0190): what the renderer puts in
+/// its `<input>`, in place of the breadcrumbs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PathEditView {
+    /// The text. Never a masked one: a path that cannot be shown as it is
+    /// does not open the line.
+    pub text: String,
+    /// Whether all of it is selected, as when the line opens.
+    pub select_all: bool,
+    /// The caret, in UTF-16 code units, when nothing is selected.
+    pub cursor: u32,
+    /// Bumped each time the HOST changes the text (opening, completing,
+    /// giving it back after a failed navigation). Same revision, the
+    /// renderer keeps its `<input>` and what is being typed in it.
+    pub revision: u32,
 }
 
 /// A listing's incremental search.

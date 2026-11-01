@@ -176,6 +176,10 @@ keymap = [
     # The command bar (ADR 0181), on Krusader's key: below the panes, where
     # the arrow points.
     { on = ["ctrl+down"], run = "pane.command-line" },
+    # The pane's path, editable (ADR 0190). mc has no location bar, and its
+    # nearest keys are taken here (Ctrl+L is the folder size, Alt+C the
+    # columns): `L` for location, beside `alt+l`, the log.
+    { on = ["alt+L"], run = "pane.edit-path" },
     # #138: sort by key, with Far/TC's chords (Ctrl+F3..F6). The sort menu
     # is the columns dialog, which already has its own on `alt+c`.
     { on = ["ctrl+f3"], run = "pane.sort-name" },

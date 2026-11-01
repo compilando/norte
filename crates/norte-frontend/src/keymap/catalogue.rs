@@ -384,6 +384,7 @@ pub const CATALOGUE: &[CommandDef] = &[
     live("pane.organize", false, Writes),
     live("pane.semantic-search", false, SendsOut),
     live("pane.copy-path", false, Inert),
+    live("pane.edit-path", false, Inert),
     // --- cursor (the count-aware family) ---
     live("cursor.up", true, Inert),
     live("cursor.down", true, Inert),

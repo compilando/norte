@@ -99,9 +99,32 @@ pub async fn on_key(
     if app.context_menu.is_some() && modal_wins(app) {
         app.context_menu = None;
     }
-    // The bar takes keys only with nothing in front of it, the order the
-    // window's host keeps: a menu, help or a picker opened over it own them.
-    if app.command_bar_focus
+    // The path line (ADR 0190) and the bar take keys only with nothing in
+    // front of them, the order the window's host keeps: a menu, help or a
+    // picker opened over them own them.
+    if crate::path_edit::has_keys(app) {
+        match crate::path_edit::on_key(app, key) {
+            crate::path_edit::Outcome::Kept => {}
+            crate::path_edit::Outcome::Copy(text) => {
+                crate::gestures::copy_text(app, &text).await;
+            }
+            crate::path_edit::Outcome::Go { dir, text } => {
+                let outcome = crate::navigate::cd(app, backend, events, dir).await;
+                if matches!(outcome, crate::navigate::Cd::Failed(_)) {
+                    crate::path_edit::reopen(app, text);
+                }
+                settle_cd(
+                    app,
+                    backend,
+                    &mut work.fill,
+                    &mut work.decorate,
+                    &mut work.probed,
+                    &mut work.search,
+                    outcome,
+                );
+            }
+        }
+    } else if app.command_bar_focus
         && app.context_menu.is_none()
         && app.menu.is_none()
         && !modal_wins(app)

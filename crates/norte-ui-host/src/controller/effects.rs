@@ -233,6 +233,7 @@ impl State {
             // putting text on the clipboard is as read-only as reading a
             // name.
             Effect::CopyPath => self.copy_paths(),
+            Effect::EditPath => self.open_path_edit(),
             Effect::Checksums { verify } => self.launch_checksums(verify, backend, mailbox),
             Effect::MarkPatron { mark } => self.request_patron(mark),
             Effect::OpenExternal => self.open_external(),

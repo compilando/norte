@@ -92,6 +92,9 @@
 # this preset can cite. It is in the Go menu (F9) and the palette, and
 # `[ui] command_bar = true` keeps it on screen as NC did.
 
+# `pane.edit-path` (ADR 0190) is left UNBOUND: NC had no editable path in
+# the panel, so there is no key to transcribe. Go menu (F9) and palette.
+
 dialog_from = "orthodox"
 
 [global]

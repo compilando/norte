@@ -850,6 +850,7 @@ impl State {
                 .to_owned(),
                 matches: q.visible().len() as u64,
             }),
+            path_edit: self.path_edit_view(id),
         }
     }
 }

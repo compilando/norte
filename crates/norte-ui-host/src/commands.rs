@@ -143,6 +143,7 @@ pub const IMPLEMENTED: &[&str] = &[
     "pane.compare-files",
     "pane.edit",
     "pane.copy-path",
+    "pane.edit-path",
     // The right-click menu from the keyboard (Shift+F10, the Menu key): the
     // same menu a right click opens, on the focused row.
     "pane.context-menu",
@@ -581,6 +582,8 @@ pub enum Effect {
     /// Copies the paths of what is marked (or of what is selected) to the
     /// clipboard.
     CopyPath,
+    /// Opens the path line on the active slot (`pane.edit-path`, ADR 0190).
+    EditPath,
     /// Opens what is selected with the application the desktop picks.
     OpenExternal,
     /// Edits what is selected with the editor `[ui] editor` names; without
@@ -979,6 +982,7 @@ pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
         "app.extensions" => Effect::Extensions,
         "app.agents" => Effect::Agents,
         "pane.copy-path" => Effect::CopyPath,
+        "pane.edit-path" => Effect::EditPath,
         // F4 launches the editor `[ui] editor` names, and if there is none
         // it falls back to `pane.open` — i.e. to `openers.toml` and,
         // ultimately, to the DESKTOP's application.

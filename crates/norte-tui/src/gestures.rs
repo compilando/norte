@@ -218,8 +218,22 @@ async fn spawn_detached(
 /// Puts `paths` on the clipboard (or arms OSC 52 when there is no helper)
 /// and says so: `pane.copy-path` and the context menu's Copy path.
 pub async fn copy_paths(app: &mut App, paths: &[VPath]) {
-    let bytes = norte_frontend::shell::clipboard_bytes(paths);
-    let n = paths.len().to_string();
+    copy_bytes(
+        app,
+        norte_frontend::shell::clipboard_bytes(paths),
+        paths.len(),
+    )
+    .await;
+}
+
+/// Puts the path line's `text` on the clipboard (`pane.edit-path`'s
+/// Ctrl+Insert), saying so like [`copy_paths`] does for one path.
+pub async fn copy_text(app: &mut App, text: &str) {
+    copy_bytes(app, text.as_bytes().to_vec(), 1).await;
+}
+
+async fn copy_bytes(app: &mut App, bytes: Vec<u8>, count: usize) {
+    let n = count.to_string();
     // The helper (`wl-copy`, `xclip`, `pbcopy`…) is a child process: off
     // the loop turn (rule 2).
     let sent = bytes.clone();

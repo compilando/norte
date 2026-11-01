@@ -40,6 +40,7 @@ mod orders;
 mod organize;
 mod overlay_dismiss;
 mod panels;
+mod path_edit;
 mod plugin_panes;
 mod rename;
 mod results;
