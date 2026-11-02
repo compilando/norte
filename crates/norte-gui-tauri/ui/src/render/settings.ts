@@ -946,6 +946,12 @@ export function paintPicker(this: Screen, picker: PickerView | null): void {
     });
     box.append(add);
   }
+  if (picker.hint !== "") {
+    const hint = document.createElement("footer");
+    hint.className = "picker-hint";
+    hint.textContent = picker.hint;
+    box.append(hint);
+  }
   this.pickerRoot.replaceChildren(box);
   // AFTER it is in the document: scrolling a detached node does nothing.
   if (picker.cursor !== null) {

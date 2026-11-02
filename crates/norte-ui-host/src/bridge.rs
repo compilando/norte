@@ -646,7 +646,9 @@ use serde::{Deserialize, Serialize};
 ///   `path_edit_cancel` and `path_edit_complete`.
 /// - **121**: `PickerView.add_label` and the action `picker_add`: the
 ///   favorites list's button that adds the current directory.
-pub const BRIDGE_VERSION: u32 = 121;
+/// - **122**: `PickerView.hint`, the list's own keys painted from the
+///   dialog keymap.
+pub const BRIDGE_VERSION: u32 = 122;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

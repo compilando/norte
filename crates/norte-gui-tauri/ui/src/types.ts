@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 121;
+export const BRIDGE_VERSION = 122;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -1610,6 +1610,8 @@ export interface PickerView {
   generation: number;
   /** The add-current-folder button's label; empty = no button (bridge 121). */
   add_label: string;
+  /** This list's keys, painted by the host from the keymap (bridge 122). */
+  hint: string;
 }
 
 export interface LayoutRowView {

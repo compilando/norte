@@ -284,8 +284,44 @@ impl State {
 
     /// The selector's projection.
     pub(super) fn vista_selector(&self) -> Option<crate::dto::PickerView> {
-        let mut v = self.selector.as_ref()?.vista(self.lang);
+        let s = self.selector.as_ref()?;
+        let mut v = s.vista(self.lang);
         v.generation = self.gen_selector;
+        // The verbs `key_in_selector` handles for THIS list, and no other:
+        // a footer that offers a dead key is worse than none.
+        let verbs: &[&str] = if s.es_hotlist() {
+            &[
+                "dialog.confirm",
+                "dialog.confirm-other",
+                "dialog.add",
+                "dialog.remove",
+                "dialog.cancel",
+            ]
+        } else if s.es_history() {
+            &[
+                "dialog.confirm",
+                "dialog.confirm-other",
+                "dialog.add",
+                "dialog.remove",
+                "dialog.clear",
+                "dialog.filter",
+                "dialog.cancel",
+            ]
+        } else {
+            &["dialog.confirm", "dialog.cancel"]
+        };
+        v.hint = clamp_display(
+            verbs
+                .iter()
+                .filter_map(|cmd| {
+                    let chord = self.dialog_chord(cmd);
+                    let label = format!("dialog-cmd-{}", &cmd["dialog.".len()..]);
+                    (!chord.is_empty())
+                        .then(|| format!("{chord} {}", norte_i18n::t_in(self.lang, &label)))
+                })
+                .collect::<Vec<_>>()
+                .join(" · "),
+        );
         Some(v)
     }
 

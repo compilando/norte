@@ -887,6 +887,7 @@
       "cursor": 0,
       "empty": "",
       "generation": 2,
+      "hint": "Intro confirmar · Esc cancelar",
       "rows": [
         {
           "detail": "ext4 · 12 GiB libres de 100 GiB",

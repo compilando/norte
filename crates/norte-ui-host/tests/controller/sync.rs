@@ -3644,6 +3644,43 @@ async fn the_window_saves_a_favorite_with_the_suggested_name() {
     );
 }
 
+/// Each list says its OWN keys, from the keymap (bridge 122): the
+/// favorites' `a`/`d` and history's clear and filter were painted nowhere
+/// in the window. A verb the list does not handle is not offered.
+#[tokio::test]
+async fn each_list_paints_the_keys_it_handles() {
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_with_layers(root.path()).await;
+    let hint_of = |command: &'static str| {
+        let h = &h;
+        async move {
+            let mut sub = h.subscribe();
+            run_by_palette(h, &mut sub, command).await;
+            h.dispatch(UiAction::Resync).await.expect("host alive");
+            let p = next_snapshot(&mut sub)
+                .await
+                .picker
+                .expect("the list is open");
+            h.dispatch(press("Escape")).await.expect("host alive");
+            p.hint
+        }
+    };
+
+    let favorites = hint_of("pane.hotlist").await;
+    for verb in ["añadir", "quitar", "otro panel", "confirmar", "cancelar"] {
+        assert!(
+            favorites.contains(verb),
+            "favorites offer {verb}: {favorites}"
+        );
+    }
+    assert!(!favorites.contains("vaciar"), "not history's: {favorites}");
+
+    let popular = hint_of("pane.popular").await;
+    for verb in ["vaciar", "filtrar", "quitar"] {
+        assert!(popular.contains(verb), "history offers {verb}: {popular}");
+    }
+}
+
 /// The favorites list offers adding the current directory as a BUTTON
 /// (bridge 121): the `a` key is not painted anywhere in the window, so a
 /// mouse reader never found it.
