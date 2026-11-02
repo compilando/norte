@@ -222,6 +222,7 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::TerminalRename { .. } => "terminal_rename",
         UiAction::TerminalDecorate { .. } => "terminal_decorate",
         UiAction::PickerSelectRow { .. } => "picker_select_row",
+        UiAction::PickerAdd { .. } => "picker_add",
         UiAction::PlaceActivateRow { .. } => "place_activate_row",
         UiAction::LayoutActivateRow { .. } => "layout_activate_row",
         UiAction::SearchActivateRow { .. } => "search_activate_row",
@@ -541,6 +542,7 @@ fn overlay_actions() -> Vec<(&'static str, UiAction)> {
                 generation: 3,
             },
         ),
+        ("picker_add", UiAction::PickerAdd { generation: 3 }),
         (
             "place_activate_row",
             UiAction::PlaceActivateRow {
@@ -2492,6 +2494,7 @@ fn reference_selector() -> norte_ui_host::dto::PickerView {
         cursor: Some(0),
         empty: String::new(),
         generation: 2,
+        add_label: String::new(),
     }
 }
 

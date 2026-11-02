@@ -3644,6 +3644,73 @@ async fn the_window_saves_a_favorite_with_the_suggested_name() {
     );
 }
 
+/// The favorites list offers adding the current directory as a BUTTON
+/// (bridge 121): the `a` key is not painted anywhere in the window, so a
+/// mouse reader never found it.
+#[tokio::test]
+async fn the_favorites_button_asks_for_the_current_directorys_name() {
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_with_layers(root.path()).await;
+    let mut sub = h.subscribe();
+
+    run_by_palette(&h, &mut sub, "pane.hotlist").await;
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let picker = next_snapshot(&mut sub)
+        .await
+        .picker
+        .expect("the list is open");
+    assert!(
+        !picker.add_label.is_empty(),
+        "the button is offered: {picker:?}"
+    );
+
+    let stale = h
+        .dispatch(UiAction::PickerAdd {
+            generation: picker.generation + 1,
+        })
+        .await
+        .expect("host alive");
+    assert!(
+        matches!(stale, norte_ui_host::ActionAck::Stale { .. }),
+        "a press painted over another list is refused: {stale:?}"
+    );
+
+    h.dispatch(UiAction::PickerAdd {
+        generation: picker.generation,
+    })
+    .await
+    .expect("host alive");
+    let d = next_dialogs(&mut sub).await;
+    assert_eq!(d[0].title_key, "modal-hotlist-name-title");
+    assert_eq!(d[0].input.as_deref(), Some("casa"));
+}
+
+/// Only the favorites list has it: adding means nothing on volumes.
+#[tokio::test]
+async fn other_lists_offer_no_add_button() {
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_with_layers(root.path()).await;
+    let mut sub = h.subscribe();
+
+    run_by_palette(&h, &mut sub, "pane.popular").await;
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let picker = next_snapshot(&mut sub)
+        .await
+        .picker
+        .expect("the list is open");
+    assert_eq!(picker.add_label, "");
+    let ack = h
+        .dispatch(UiAction::PickerAdd {
+            generation: picker.generation,
+        })
+        .await
+        .expect("host alive");
+    assert!(
+        !matches!(ack, norte_ui_host::ActionAck::Applied { .. }),
+        "nothing to add here: {ack:?}"
+    );
+}
+
 /// And it REMOVES one, which was the other half that was missing (#309).
 #[tokio::test]
 async fn the_window_removes_the_favorite_under_the_cursor() {

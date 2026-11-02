@@ -1115,6 +1115,7 @@ picker-popular-title = Directorios populares
 picker-popular-empty = todavía no hay directorios populares
 picker-hotlist-title = Favoritos
 picker-hotlist-empty = no hay favoritos configurados
+picker-hotlist-add = Añadir la carpeta actual
 places-favorites-empty = Aún no hay favoritos · { $chord } abre Favoritos, donde puedes añadir uno
 # La leyenda del selector de disposición, para lo que no es un panel.
 layout-legend-browser = Listado

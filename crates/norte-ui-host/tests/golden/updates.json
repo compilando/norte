@@ -972,6 +972,7 @@
       "vertical": true
     },
     "picker": {
+      "add_label": "",
       "cursor": 0,
       "empty": "",
       "generation": 2,

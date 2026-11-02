@@ -312,6 +312,10 @@
     "slot_id": 0,
     "text": "/srv/w"
   },
+  "picker_add": {
+    "action": "picker_add",
+    "generation": 3
+  },
   "picker_select_row": {
     "action": "picker_select_row",
     "generation": 3,

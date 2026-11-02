@@ -23,6 +23,9 @@ independently through `PROTOCOL_VERSION`.
   everywhere. A remote path, or one with a name that is not text, is
   edited with its scheme and `%` escapes, so Enter without changes stays
   in the same folder.
+- **The window's favorites list has an "Add current folder" button.**
+  Until now the only way in was the `a` key, which the window shows
+  nowhere. It asks the name, already suggested, as `a` does.
 
 ### Changed
 
