@@ -191,3 +191,4 @@ edits.
 | [0188](0188-the-language-is-chosen-at-first-run-switches-live-and-extends-by-ftl.md) | The language is chosen at first run, switches live, and extends by `.ftl` | accepted |
 | [0189](0189-an-order-suggestion-is-taken-with-tab-and-enter-runs-a-line-that-parses.md) | An order suggestion is taken with Tab, and Enter runs a line that parses | accepted |
 | [0190](0190-the-panes-path-is-edited-in-place-as-text-that-names-the-same-folder.md) | The pane's path is edited in place, as text that names the same folder | accepted |
+| [0191](0191-the-gate-pays-for-what-it-checks-not-for-how-tests-are-laid-out.md) | The gate pays for what it checks, not for how tests are laid out | accepted |

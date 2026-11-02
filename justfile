@@ -68,17 +68,23 @@ lint: fmt-check deny-guests
 # Advisories for the WASM guests, which are OUTSIDE the workspace and the
 # lock (see deny-guests.toml). Only `advisories`: it compiles nothing, it
 # just resolves the tree.
+#
+# In PARALLEL: fourteen manifests one after another were ~21 s of every
+# gate run, compiling nothing. The advisory database is fetched ONCE first,
+# so the fourteen do not race to clone it.
 deny-guests:
     #!/usr/bin/env bash
     set -euo pipefail
-    for m in crates/norte-plugin-host/examples-wasm/*/Cargo.toml plugins/*/Cargo.toml; do
-        # `--config` goes BEFORE `check`: in cargo-deny 0.20 it went back to
-        # being a binary option and the subcommand rejects it ("unexpected
-        # argument '--config' found"). 0.19 wanted it the other way around —
-        # and the gate went red TWICE as soon as someone updated it. If it
-        # changes again, it's this line.
-        cargo deny --manifest-path "$m" --config deny-guests.toml check -A advisory-not-detected advisories
-    done
+    cargo deny fetch db
+    # `--config` goes BEFORE `check`: in cargo-deny 0.20 it went back to
+    # being a binary option and the subcommand rejects it ("unexpected
+    # argument '--config' found"). 0.19 wanted it the other way around —
+    # and the gate went red TWICE as soon as someone updated it. If it
+    # changes again, it's this line. `-L error`: one manifest's warnings
+    # interleaved with thirteen others' say nothing; a failure still prints.
+    printf '%s\0' crates/norte-plugin-host/examples-wasm/*/Cargo.toml plugins/*/Cargo.toml \
+        | xargs -0 -P 8 -I{} cargo deny -L error --offline --manifest-path {} \
+            --config deny-guests.toml check -A advisory-not-detected advisories
 
 # --no-tests=pass: phase 1's skeleton has no tests yet; with real code the
 # coverage gate (85%) makes it impossible for a workspace with no tests to
@@ -117,6 +123,13 @@ cov:
 
 docs:
     RUSTDOCFLAGS="-D warnings" CARGO_INCREMENTAL=0 cargo doc {{core_pkgs}} --no-deps
+
+# `docs` minus the frontends, for `ci-fast`: their docs are internal, and
+# rustdoc on them (norte-tui's lib, the `norte` and `ntc` binaries,
+# norte-mcp) was ~2-3 of the push's minutes and the step that died of OOM.
+# A broken link there is found by `just ci`, at release-prep.
+docs-fast:
+    RUSTDOCFLAGS="-D warnings" CARGO_INCREMENTAL=0 cargo doc {{core_pkgs}} --exclude norte-tui --exclude norte-cli --exclude norte-mcp --no-deps
 
 # Public API breakage against the latest tag (ADR 0038, #13).
 #
@@ -166,7 +179,7 @@ ci: _disk lint test cov docs
 # Fast iteration: the whole gate MINUS coverage (cov recompiles proto/vfs/core
 # instrumented in its own target and re-runs their tests: ~34s fixed cost even
 # with no changes). The real pre-commit gate is still `just ci`.
-ci-fast: _disk lint test docs
+ci-fast: _disk lint test docs-fast
     @just _sellar
 
 # Records that this CONTENT passed the gate, so `pre-push` does not repeat

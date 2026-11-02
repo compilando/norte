@@ -47,8 +47,14 @@ the 50 runs:
 | step | observed |
 | --- | --- |
 | `just t <crate>` | ~78s |
-| `just ci-fast` | 4–8min |
+| `just ci-fast` | ~5min after a core change (was 9; ADR 0191) |
 | `just ci` | ~16min (lint 2, test 3, docs 5, cov 6) |
+
+**`ci-fast` documents no frontend** (`docs-fast`: no norte-tui, norte-cli,
+norte-mcp); `just ci` still does. **norte-core and norte-tui have ONE
+integration-test binary, `tests/it.rs`**: a new file in their `tests/` needs
+its `#[path] mod` line there, or it never compiles — a test in each crate
+fails if one is missing (ADR 0191).
 | `just gui-ci` | 1–2min |
 | a release, end to end | ~60min, most of it Windows on GitHub |
 

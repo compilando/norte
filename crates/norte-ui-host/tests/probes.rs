@@ -286,6 +286,22 @@ fn observe(kind: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Obs
     Box::pin(observe_inner(kind))
 }
 
+/// Every probed kind, observed AT ONCE: each observation starts its own
+/// host, so they share nothing. One after another, every panel that does not
+/// follow the cursor spent `wait_for_change`'s whole deadline in turn, and
+/// these tests took ~22 s each; together they spend it once.
+async fn observe_all(kinds: &[String]) -> Vec<(&str, Observation)> {
+    let probed: Vec<&str> = kinds
+        .iter()
+        .map(String::as_str)
+        .filter(|kind| {
+            !NO_WINDOW.iter().any(|(k, _)| k == kind) && !NO_PROBE.iter().any(|(k, _)| k == kind)
+        })
+        .collect();
+    let seen = futures::future::join_all(probed.iter().map(|kind| observe(kind))).await;
+    probed.into_iter().zip(seen).collect()
+}
+
 /// Opens `kind`'s panel, moves the listing's cursor, and looks at what
 /// happened.
 async fn observe_inner(kind: &str) -> Observation {
@@ -364,11 +380,7 @@ async fn every_slot_that_follows_the_cursor_has_a_probe() {
     drop(host);
     assert!(!kinds.is_empty(), "the panel bar offers nothing");
 
-    for kind in &kinds {
-        if NO_WINDOW.iter().any(|(k, _)| k == kind) || NO_PROBE.iter().any(|(k, _)| k == kind) {
-            continue;
-        }
-        let o = observe(kind).await;
+    for (kind, o) in observe_all(&kinds).await {
         if o.changes {
             assert!(
                 o.travels,
@@ -395,12 +407,8 @@ async fn the_list_of_non_followers_is_up_to_date() {
         .collect();
     drop(host);
 
-    for kind in &kinds {
-        if NO_WINDOW.iter().any(|(k, _)| k == kind) || NO_PROBE.iter().any(|(k, _)| k == kind) {
-            continue;
-        }
-        let declared = DO_NOT_FOLLOW.iter().find(|(k, _)| k == kind);
-        let o = observe(kind).await;
+    for (kind, o) in observe_all(&kinds).await {
+        let declared = DO_NOT_FOLLOW.iter().find(|(k, _)| *k == kind);
         match declared {
             Some((_, reason)) => assert!(
                 !o.changes,

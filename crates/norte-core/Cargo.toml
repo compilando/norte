@@ -7,6 +7,14 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 authors.workspace = true
+# One integration-test binary, `tests/it.rs`, that includes every file in
+# `tests/`: 73 binaries each linking the whole core were most of the gate's
+# test-build CPU. A new file needs its line in `it.rs`.
+autotests = false
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
 
 # `testing`: exposes doors that an e2e needs and an embedder must NOT have
 # (#241). `run_column_values_for_test` mints a location token with whatever
