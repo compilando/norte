@@ -2485,6 +2485,20 @@ describe("a dialog's text field", () => {
 });
 
 describe("the viewer's image", () => {
+  // jsdom has no object URLs: these tests borrowed Node's, which rejects
+  // jsdom's `Blob` since jsdom 30.1. The webview has its own; here it is
+  // stubbed, so the test does not depend on whose `Blob` the env exposes.
+  let next = 0;
+  beforeEach(() => {
+    vi.spyOn(URL, "createObjectURL").mockImplementation(
+      () => `blob:test/${String(next++)}`,
+    );
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   function withImage(image: ViewSnapshot["viewer"]): ViewSnapshot {
     const v = view({});
     v.viewer = image;
