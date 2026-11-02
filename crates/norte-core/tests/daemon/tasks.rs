@@ -706,12 +706,21 @@ async fn fs_search_hits_go_only_to_the_owner() {
 #[tokio::test]
 async fn fs_search_cancel_over_the_wire() {
     let d = spawn_daemon(None).await;
+    // A hundred folders, so the search is a hundred LISTS at 20 ms each:
+    // ~2 s for the cancel to arrive. Flat, it was one list — tens of ms —
+    // and under the gate's load the search finished first (`Completed`).
+    // The latency goes on AFTER the tree is built, or building it alone
+    // costs 20 ms per write.
+    for i in 0..100 {
+        d.mem
+            .mkdir(&vp(&format!("mem:///d{i}")))
+            .await
+            .expect("mkdir");
+        write_file(&d.mem, &format!("mem:///d{i}/f.rs"), b"x").await;
+    }
     d.mem
         .faults()
         .set_latency_per_op(Some(Duration::from_millis(20)));
-    for i in 0..200 {
-        write_file(&d.mem, &format!("mem:///f{i}.rs"), b"x").await;
-    }
     let mut c = connected_client(&d).await;
 
     let task: FsTaskResult = c
