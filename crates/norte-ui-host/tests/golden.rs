@@ -3517,7 +3517,8 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // 119 (spec 2026-10-10): `results_note` on the listing and its header,
     // and `SearchPanelSlotView.open_listing_label`.
     // 120 (ADR 0190): `BrowserSlotView.path_edit`, the path line.
-    const SHAPE: u64 = 2_618_275_434_021_407_724;
+    // 121: `PickerView.add_label`, the favorites list's add button.
+    const SHAPE: u64 = 16_683_954_613_887_461_053;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {
