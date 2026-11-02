@@ -2495,6 +2495,7 @@ fn reference_selector() -> norte_ui_host::dto::PickerView {
         empty: String::new(),
         generation: 2,
         add_label: String::new(),
+        hint: "Intro confirmar · Esc cancelar".to_owned(),
     }
 }
 
@@ -3518,7 +3519,8 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // and `SearchPanelSlotView.open_listing_label`.
     // 120 (ADR 0190): `BrowserSlotView.path_edit`, the path line.
     // 121: `PickerView.add_label`, the favorites list's add button.
-    const SHAPE: u64 = 16_683_954_613_887_461_053;
+    // 122: `PickerView.hint`, the list's keys.
+    const SHAPE: u64 = 1_608_796_430_338_028_082;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

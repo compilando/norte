@@ -24,8 +24,10 @@ independently through `PROTOCOL_VERSION`.
   edited with its scheme and `%` escapes, so Enter without changes stays
   in the same folder.
 - **The window's favorites list has an "Add current folder" button.**
-  Until now the only way in was the `a` key, which the window shows
-  nowhere. It asks the name, already suggested, as `a` does.
+  It asks the name, already suggested, as the `a` key does.
+- **The window's lists say their keys.** Favorites, history, popular and
+  the other pickers show a footer with the keys they take, from your
+  keymap: `a` adds, `d` removes, and in history also clear and filter.
 
 ### Changed
 

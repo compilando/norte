@@ -1568,6 +1568,9 @@ pub struct PickerView {
     /// translated (bridge 121). Empty = this list has no such button: only
     /// the favorites list does. It does what `dialog.add` does there.
     pub add_label: String,
+    /// The footer with this list's keys, already painted from the dialog
+    /// keymap (bridge 122). Only the verbs this list handles.
+    pub hint: String,
 }
 
 /// A row of a picker.

@@ -6670,7 +6670,8 @@ kbd.help-action-chord {
   unicode-bidi: isolate;
 }
 
-.columns-hint {
+.columns-hint,
+.picker-hint {
   flex: 0 0 auto;
   padding-top: 4px;
   color: var(--title-fg);

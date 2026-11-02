@@ -887,6 +887,8 @@ impl Selector {
             } else {
                 String::new()
             },
+            // Painted by the controller, which holds the dialog keymap.
+            hint: String::new(),
         }
     }
 }

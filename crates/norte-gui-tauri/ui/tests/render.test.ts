@@ -5373,9 +5373,11 @@ describe("the theme and the selector", () => {
       empty: "",
       generation: 1,
       add_label: "",
+      hint: "",
     };
     screen.paint(v);
     expect(document.querySelector(".picker-add"), "no button off favorites").toBeNull();
+    expect(document.querySelector(".picker-hint"), "no keys, no footer").toBeNull();
     const rows = [...document.querySelectorAll(".picker-row")];
     expect(rows).toHaveLength(2);
     expect(rows[1]?.querySelector(".picker-label")?.getAttribute("data-hostile")).toBe(
@@ -5394,6 +5396,7 @@ describe("the theme and the selector", () => {
       generation: 1,
       empty: "preguntando al host…",
       add_label: "",
+      hint: "",
     };
     screen.paint(empty);
     const note = document.querySelector(".picker-empty");
@@ -5411,8 +5414,13 @@ describe("the theme and the selector", () => {
       generation: 4,
       empty: "no hay favoritos configurados",
       add_label: "Añadir la carpeta actual",
+      hint: "a añadir · d quitar",
     };
     screen.paint(v);
+    // The keys the host painted, as given: what a mouse reader never saw.
+    expect(document.querySelector(".picker-hint")?.textContent).toBe(
+      "a añadir · d quitar",
+    );
     const add = document.querySelector<HTMLButtonElement>(".picker-add");
     expect(add?.textContent).toBe("Añadir la carpeta actual");
     add?.click();
