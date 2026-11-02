@@ -222,6 +222,7 @@ fn action_tag(a: &UiAction) -> &'static str {
         UiAction::TerminalRename { .. } => "terminal_rename",
         UiAction::TerminalDecorate { .. } => "terminal_decorate",
         UiAction::PickerSelectRow { .. } => "picker_select_row",
+        UiAction::PickerAdd { .. } => "picker_add",
         UiAction::PlaceActivateRow { .. } => "place_activate_row",
         UiAction::LayoutActivateRow { .. } => "layout_activate_row",
         UiAction::SearchActivateRow { .. } => "search_activate_row",
@@ -541,6 +542,7 @@ fn overlay_actions() -> Vec<(&'static str, UiAction)> {
                 generation: 3,
             },
         ),
+        ("picker_add", UiAction::PickerAdd { generation: 3 }),
         (
             "place_activate_row",
             UiAction::PlaceActivateRow {
@@ -2492,6 +2494,7 @@ fn reference_selector() -> norte_ui_host::dto::PickerView {
         cursor: Some(0),
         empty: String::new(),
         generation: 2,
+        add_label: String::new(),
     }
 }
 
@@ -3514,7 +3517,8 @@ fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     // 119 (spec 2026-10-10): `results_note` on the listing and its header,
     // and `SearchPanelSlotView.open_listing_label`.
     // 120 (ADR 0190): `BrowserSlotView.path_edit`, the path line.
-    const SHAPE: u64 = 2_618_275_434_021_407_724;
+    // 121: `PickerView.add_label`, the favorites list's add button.
+    const SHAPE: u64 = 16_683_954_613_887_461_053;
 
     let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {

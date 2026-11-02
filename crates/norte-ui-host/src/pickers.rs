@@ -882,6 +882,11 @@ impl Selector {
             // times the set has changed: the picker does not learn about its
             // own reopenings.
             generation: 0,
+            add_label: if self.es_hotlist() {
+                clamp_display(norte_i18n::t_in(lang, "picker-hotlist-add"))
+            } else {
+                String::new()
+            },
         }
     }
 }

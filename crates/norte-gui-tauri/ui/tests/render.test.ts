@@ -5358,8 +5358,10 @@ describe("the theme and the selector", () => {
       cursor: 1,
       empty: "",
       generation: 1,
+      add_label: "",
     };
     screen.paint(v);
+    expect(document.querySelector(".picker-add"), "no button off favorites").toBeNull();
     const rows = [...document.querySelectorAll(".picker-row")];
     expect(rows).toHaveLength(2);
     expect(rows[1]?.querySelector(".picker-label")?.getAttribute("data-hostile")).toBe(
@@ -5377,11 +5379,30 @@ describe("the theme and the selector", () => {
       cursor: null,
       generation: 1,
       empty: "preguntando al host…",
+      add_label: "",
     };
     screen.paint(empty);
     const note = document.querySelector(".picker-empty");
     expect(note?.getAttribute("role")).toBe("status");
     expect(note?.textContent).toBe("preguntando al host…");
+  });
+
+  it("the favorites list has a button that adds the current folder", () => {
+    const { screen, sent } = mount();
+    const v = view({});
+    v.picker = {
+      title: "Favoritos",
+      rows: [],
+      cursor: null,
+      generation: 4,
+      empty: "no hay favoritos configurados",
+      add_label: "Añadir la carpeta actual",
+    };
+    screen.paint(v);
+    const add = document.querySelector<HTMLButtonElement>(".picker-add");
+    expect(add?.textContent).toBe("Añadir la carpeta actual");
+    add?.click();
+    expect(sent).toEqual([{ action: "picker_add", generation: 4 }]);
   });
 
   it("closed, they cover nothing", () => {

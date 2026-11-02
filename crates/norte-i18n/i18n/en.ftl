@@ -1109,6 +1109,7 @@ picker-popular-title = Popular directories
 picker-popular-empty = no popular directories yet
 picker-hotlist-title = Favorites
 picker-hotlist-empty = no favorites configured
+picker-hotlist-add = Add current folder
 places-favorites-empty = No favorites yet · { $chord } opens Favorites, where you can add one
 # The layout picker's legend, for kinds that are not panels.
 layout-legend-browser = File list

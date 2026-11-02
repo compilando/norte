@@ -644,7 +644,9 @@ use serde::{Deserialize, Serialize};
 /// - **120**: the path line (ADR 0190): `BrowserSlotView.path_edit`
 ///   (`PathEditView`) and the actions `path_edit_commit`,
 ///   `path_edit_cancel` and `path_edit_complete`.
-pub const BRIDGE_VERSION: u32 = 120;
+/// - **121**: `PickerView.add_label` and the action `picker_add`: the
+///   favorites list's button that adds the current directory.
+pub const BRIDGE_VERSION: u32 = 121;
 
 /// Cap on a string that crosses to the renderer, in bytes.
 ///

@@ -936,6 +936,16 @@ export function paintPicker(this: Screen, picker: PickerView | null): void {
     list.setAttribute("aria-activedescendant", `picker-row-${String(picker.cursor)}`);
   }
   box.append(list);
+  if (picker.add_label !== "") {
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "picker-add";
+    add.textContent = picker.add_label;
+    add.addEventListener("click", () => {
+      this.send({ action: "picker_add", generation: picker.generation });
+    });
+    box.append(add);
+  }
   this.pickerRoot.replaceChildren(box);
   // AFTER it is in the document: scrolling a detached node does nothing.
   if (picker.cursor !== null) {

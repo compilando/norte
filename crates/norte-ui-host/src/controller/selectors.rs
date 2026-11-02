@@ -1105,6 +1105,21 @@ impl State {
         (self.applied(), vec![self.parche(vec![change])])
     }
 
+    /// The picker's add button: what `dialog.add` does on the favorites list.
+    pub(super) fn add_from_selector(
+        &mut self,
+        generation: u64,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if generation != self.gen_selector {
+            return (Self::stale(StaleAction::Generation), Vec::new());
+        }
+        // Another list paints no button: a press here is a race.
+        match self.selector.as_ref() {
+            Some(s) if s.es_hotlist() => self.request_favorite(),
+            _ => (Self::stale(StaleAction::Modal), Vec::new()),
+        }
+    }
+
     /// The connection to the daemon changed state: it is PAINTED and
     /// REPORTED.
     ///

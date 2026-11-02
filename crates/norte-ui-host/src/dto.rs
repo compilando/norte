@@ -1564,6 +1564,10 @@ pub struct PickerView {
     /// it has the same race as the sidebar: a click painted over one list
     /// and handled over another. See [`PlacesSlotView::generation`].
     pub generation: u64,
+    /// The label of the button that adds the current directory, already
+    /// translated (bridge 121). Empty = this list has no such button: only
+    /// the favorites list does. It does what `dialog.add` does there.
+    pub add_label: String,
 }
 
 /// A row of a picker.

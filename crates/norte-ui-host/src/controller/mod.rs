@@ -4386,6 +4386,7 @@ impl State {
             UiAction::PickerSelectRow { row, generation } => {
                 self.choose_row_from_selector(*row, *generation)
             }
+            UiAction::PickerAdd { generation } => self.add_from_selector(*generation),
             UiAction::PlaceActivateRow { row, generation } => {
                 self.activate_place(*row, *generation, backend, mailbox)
             }

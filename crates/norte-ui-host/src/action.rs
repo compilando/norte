@@ -675,6 +675,13 @@ pub enum UiAction {
         /// picker opens empty and fills afterward: same race.
         generation: u64,
     },
+    /// The picker's add button (bridge 121): `dialog.add` by mouse. On the
+    /// favorites list, asks the name of a favorite for the pane's directory.
+    PickerAdd {
+        /// The generation the button was painted with: a press over a list
+        /// since replaced does not add to the new one.
+        generation: u64,
+    },
     /// Chooses a row of the places sidebar (a click) and ACTIVATES it:
     /// navigates to it, or folds its section if it is a header.
     ///

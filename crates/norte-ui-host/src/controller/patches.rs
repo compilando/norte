@@ -523,8 +523,17 @@ impl State {
     /// What a mark or a scroll changes: the visible rows.
     pub(super) fn parche_rows(&mut self) -> BridgeEnvelope<UiUpdate> {
         let change = self.row_change();
+        // The rows carry the cursor only as a SELECTED row: a cursor moved
+        // outside the window (a letter's jump) would cross as no move, and
+        // the renderer would never scroll to it.
+        let cursor = ViewChange::Cursor {
+            slot_id: self.active(),
+            generation: self.generation(),
+            cursor: (!self.slot().pane.entries().is_empty())
+                .then(|| RowKey(self.slot().pane.cursor() as u64)),
+        };
         let header = self.header_of(self.active(), self.slot());
-        self.parche(vec![change, header])
+        self.parche(vec![change, cursor, header])
     }
 
     /// The active slot's ROW change, unwrapped: for whoever has to send it

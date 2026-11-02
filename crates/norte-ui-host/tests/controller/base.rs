@@ -2462,6 +2462,57 @@ async fn in_krusader_a_letter_jumps_to_the_name_starting_with_it() {
     assert_eq!(view.rows[at].display_name, "notas.txt");
 }
 
+/// The jump says WHERE the cursor went, even when it lands outside the
+/// window that travels: the rows alone carry the cursor only as a selected
+/// row, so a jump past the painted rows reached the renderer as no move at
+/// all, and the window never scrolled to it.
+#[tokio::test]
+async fn a_letter_jump_out_of_the_window_carries_the_cursor() {
+    let (host, snap) = host_krusader("simple").await;
+    let slot_id = listing(&snap).slot_id;
+    let mut sub = host.subscribe();
+    // A one-row window, on the first row: the jump lands outside it.
+    host.dispatch(UiAction::SetVisibleRange {
+        slot_id,
+        first: 0,
+        count: 1,
+    })
+    .await
+    .expect("host alive");
+
+    host.dispatch(press("n")).await.expect("host alive");
+    for _ in 0..20 {
+        let next = tokio::time::timeout(WAIT_MAX, sub.recv())
+            .await
+            .expect("a patch, not a hang")
+            .expect("the host is still alive");
+        let Update::Message(m) = next else { continue };
+        let UiUpdate::Patch(p) = &m.payload else {
+            continue;
+        };
+        let rows = p.changes.iter().find_map(|c| match c {
+            norte_ui_host::dto::ViewChange::Rows { rows, .. } => Some(rows),
+            _ => None,
+        });
+        let Some(rows) = rows else { continue };
+        if rows.iter().any(|r| r.selected) {
+            // Still the first row's patch from the range.
+            continue;
+        }
+        let cursor = p.changes.iter().find_map(|c| match c {
+            norte_ui_host::dto::ViewChange::Cursor { cursor, .. } => Some(*cursor),
+            _ => None,
+        });
+        assert!(
+            matches!(cursor, Some(Some(RowKey(k))) if k > 0),
+            "the jump's patch names the cursor: {:?}",
+            p.changes
+        );
+        return;
+    }
+    panic!("no patch for the jump ever arrived");
+}
+
 /// A host on the Krusader preset with `layout`.
 async fn host_krusader(layout: &str) -> (UiHost, norte_ui_host::ViewSnapshot) {
     UiHost::start(UiHostOptions {

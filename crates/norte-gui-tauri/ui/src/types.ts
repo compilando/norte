@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 120;
+export const BRIDGE_VERSION = 121;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -1608,6 +1608,8 @@ export interface PickerView {
   empty: string;
   /** See `PlacesSlotView.generation`: opens empty and fills afterward. */
   generation: number;
+  /** The add-current-folder button's label; empty = no button (bridge 121). */
+  add_label: string;
 }
 
 export interface LayoutRowView {
@@ -2085,6 +2087,8 @@ export type UiAction =
   | { action: "terminal_rename"; id: number; name: string }
   | { action: "terminal_decorate"; id: number; icon: string | null; color: number | null }
   | { action: "picker_select_row"; row: number; generation: number }
+  /** The favorites list's add button (bridge 121): `dialog.add` by mouse. */
+  | { action: "picker_add"; generation: number }
   | { action: "place_activate_row"; row: number; generation: number }
   | { action: "timeline_show_row"; slot_id: number; seq: number }
   | { action: "tree_activate_row"; row: number; generation: number }

@@ -5082,6 +5082,22 @@ kbd.help-action-chord {
   opacity: 0.85;
 }
 
+.picker-add {
+  align-self: flex-end;
+  margin-top: 8px;
+  font: inherit;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+
+.picker-add:hover {
+  background: var(--hover, var(--panel-focus-bg));
+}
+
 /* --- The attribute sheet and the process panel --------------------------- */
 
 .slot-note {
