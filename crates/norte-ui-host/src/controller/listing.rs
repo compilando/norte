@@ -185,6 +185,11 @@ impl State {
         // behind is the screen that already knew how to explain itself.
         if let Err(Error::SecretNeeded { conn, endpoint }) = &res {
             let (conn, endpoint) = (conn.clone(), endpoint.clone());
+            // Not a failure of the path line's text: the dialog asks, and
+            // the retry is a new navigation that gives nothing back.
+            let _ = self
+                .path_edit_retry
+                .take_if(|(s, t, _)| (*s, *t) == (slot, token));
             self.lands_on(slot, dir.clone(), res);
             // The snapshot BEFORE the dialog: the slot has just changed state
             // and the dialog stacks on top. The other way around, the
@@ -194,6 +199,9 @@ impl State {
             outside.extend(self.request_secret(conn, &endpoint, slot, dir));
             return outside;
         }
+        // The path line's navigation (ADR 0190): a failure gives the typed
+        // text back, and the snapshot below carries it.
+        self.path_edit_landed(slot, token, res.is_err());
         // A visit to the frequent list counts when the listing ARRIVES (spec
         // 2026-09-15 D6), same as in the terminal; and a directory that no
         // longer exists also drops out of it, the same way it drops out of

@@ -49,8 +49,7 @@
 # the QuickFilter/Quickselect bars, distinct from the Ctrl+F quicksearch bar
 # already bound (Ctrl+I, Ctrl+Shift+S); setting the jump-back point
 # (Ctrl+Shift+J — a ctrl+<UPPERCASE> no terminal delivers apart from Ctrl+J,
-# so `nav.set-jump-point` lives in the Go menu and the palette); the Location
-# Toolbar/address bar (Ctrl+L, a breadcrumb-bar concept); a folder-open
+# so `nav.set-jump-point` lives in the Go menu and the palette); a folder-open
 # file-picker dialog (Ctrl+O); an ambiguous "move to the lower part of the folder" distinct
 # from End (Ctrl+PgDn); jumping to the filesystem root (Ctrl+Backspace); the
 # media mount/unmount menu (Ctrl+Return); moving a tab to the other panel or
@@ -297,6 +296,8 @@ keymap = [
     { on = ["alt+U"], run = "pane.unpack" },
     { on = ["shift+f4"], run = "pane.edit-new" },
     { on = ["ctrl+down"], run = "pane.command-line" },
+    # The Location Toolbar: the panel's path, editable and selected (ADR 0190).
+    { on = ["ctrl+l"], run = "pane.edit-path" },
     { on = ["insert"], run = "mark.toggle" },
     { on = ["space"], run = "mark.toggle" },
     { on = ["ctrl+a"], run = "mark.all" },

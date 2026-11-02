@@ -24,6 +24,7 @@ mod modals;
 mod overlays;
 mod pane;
 mod panels;
+mod path_edit;
 mod pickers;
 mod status;
 mod sync;
@@ -270,6 +271,9 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
                 app.chrome.dir_indicator(),
                 app.chrome.row_stripes(),
             );
+        }
+        if let Some(rect) = cols.get(app.focus()).copied() {
+            path_edit::draw(frame, app, rect);
         }
     }
     draw_side_panels(frame, &res, app, tasks_area, status_area);

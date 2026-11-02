@@ -10,7 +10,7 @@
 // that lives in Rust (ADR 0066, decision D14).
 
 /** The contract version this renderer knows how to read. */
-export const BRIDGE_VERSION = 119;
+export const BRIDGE_VERSION = 120;
 
 /** Where a dragged pane is dropped over another (ADR 0138): on a side, or in
  *  the center to join it as a tab. */
@@ -284,6 +284,20 @@ export interface BrowserSlotView {
   columns: ColumnHeader[];
   state: SlotState;
   quick: QuickView | null;
+  /** The path line (bridge 120, ADR 0190), if this slot's path is being
+   *  edited. Absent from an older host. */
+  path_edit?: PathEditView | null;
+}
+
+/** The path line: what goes in its `<input>`, in place of the breadcrumbs. */
+export interface PathEditView {
+  text: string;
+  select_all: boolean;
+  /** The caret in UTF-16 units, when nothing is selected. */
+  cursor: number;
+  /** Bumped when the HOST changes the text; same revision, keep the
+   *  `<input>` and what is being typed in it. */
+  revision: number;
 }
 
 export interface UnsupportedSlotView {
@@ -2174,6 +2188,15 @@ export type UiAction =
   | { action: "command_bar_focus" }
   /** A paste into the focused command bar (bridge 113). */
   | { action: "command_bar_paste"; text: string }
+  | { action: "path_edit_commit"; slot_id: number; revision: number; text: string }
+  | { action: "path_edit_cancel"; slot_id: number; revision: number }
+  | {
+      action: "path_edit_complete";
+      slot_id: number;
+      revision: number;
+      text: string;
+      cursor: number;
+    }
   /** Alt pressed and released alone: folds or opens the menu (bridge 68). */
   | { action: "menu_toggle" }
   | { action: "wizard_open" }

@@ -304,6 +304,7 @@ commands! {
     "pane.rename-batch" => PaneRenameBatch,
     "pane.refresh" => PaneRefresh,
     "pane.copy-path" => PaneCopyPath,
+    "pane.edit-path" => PaneEditPath,
     "mark.toggle" => MarkToggle,
     "mark.all" => MarkAll,
     "mark.invert" => MarkInvert,

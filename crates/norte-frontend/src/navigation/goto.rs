@@ -1350,7 +1350,7 @@ fn resolver_typed(content: &str) -> Action {
 /// A typed LOCAL path: `/…` everywhere (on Windows, the current drive), or
 /// an absolute one on a drive or share. `\\.\pipe\x`, `\\.\COM1` and a
 /// non-disk `\\?\` name devices, not folders, and stay unparsed.
-fn typed_local(content: &str) -> bool {
+pub(crate) fn typed_local(content: &str) -> bool {
     use std::path::{Component, Path, Prefix};
     if content.starts_with('/') {
         return true;

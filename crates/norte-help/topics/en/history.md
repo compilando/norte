@@ -19,6 +19,7 @@ commands = [
     "nav.set-jump-point",
     "nav.jump-back",
     "pane.hotlist",
+    "pane.edit-path",
     "app.goto",
     "app.orders",
     "layout.assistant",
@@ -114,6 +115,24 @@ live in your configuration.
 
 In the window, the mouse's side buttons are back and forward. A terminal does
 not receive those buttons.
+
+# Edit the pane's path
+
+{{cmd:pane.edit-path}} turns the pane's path into an editable line, all of
+it selected, like Krusader's or a browser's location bar. Typing replaces
+it; an arrow, Home or End keeps it so you can change one part. Enter goes
+there, Esc leaves it as it was and Tab completes a folder name. To copy it:
+Ctrl+C in the window, Ctrl+Insert in the terminal, where Ctrl+C quits norte.
+
+A local folder is edited the way you would type it. A remote one, or one
+with a name that is not text, is edited with its scheme (`sftp://…`, `%E9`
+for a byte), so Enter without touching anything leaves you where you were.
+Tab only completes names in the folder the pane has on screen, the only
+listing at hand.
+
+In `krusader`, `cua` and `vim` it is `ctrl+l`; in `orthodox`, `alt+L`. The
+other three imported presets do not bind it —none of their sources has that
+key—: Go menu.
 
 # Go anywhere
 

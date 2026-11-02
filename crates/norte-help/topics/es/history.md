@@ -19,6 +19,7 @@ commands = [
     "nav.set-jump-point",
     "nav.jump-back",
     "pane.hotlist",
+    "pane.edit-path",
     "app.goto",
     "app.orders",
     "layout.assistant",
@@ -114,6 +115,24 @@ tu configuración.
 
 En la ventana, los botones laterales del ratón son atrás y adelante. Un
 terminal no recibe esos botones.
+
+# Editar la ruta del panel
+
+{{cmd:pane.edit-path}} convierte la ruta del panel en una línea editable,
+con la ruta entera seleccionada, como la barra de dirección de Krusader o
+de un navegador. Escribir la sustituye; una flecha, Inicio o Fin la
+conservan para cambiar un trozo. Intro va allí, Esc la deja como estaba y
+Tab completa el nombre de una carpeta. Para copiarla, Ctrl+C en la ventana
+y Ctrl+Insert en el terminal, donde Ctrl+C cierra norte.
+
+Una carpeta local se edita como la escribirías. Una remota, o una con un
+nombre que no es texto, se edita con su esquema (`sftp://…`, `%E9` en lugar
+de un byte), así que Intro sin tocar nada te deja donde estabas. Tab solo
+completa nombres de la carpeta que el panel tiene en pantalla, que es la
+única cuya lista está a mano.
+
+En `krusader`, `cua` y `vim` está en `ctrl+l`; en `orthodox`, en `alt+L`.
+Los otros tres importados no la atan —ninguno trae esa tecla—: menú Ir.
 
 # Ir a cualquier sitio
 

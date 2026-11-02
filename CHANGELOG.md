@@ -14,9 +14,20 @@ independently through `PROTOCOL_VERSION`.
   often; after `cd`, folders; inside a `sel`, the keys, the pane's
   extensions for `ext:` and its names, marked first. **Tab** takes the
   first suggestion, or the one you chose with an arrow or a click.
+- **Edit the pane's path in place** (`pane.edit-path`, ADR 0190), like
+  Krusader's Ctrl+L: the path becomes an editable line, all selected.
+  Type to replace it, or use the arrows to change one folder; Enter goes
+  there, Esc leaves it, Tab completes a folder of the pane. To copy it,
+  Ctrl+C in the window and **Ctrl+Insert in the terminal**. `ctrl+l` in
+  `krusader`, `cua` and `vim`, `alt+L` in `orthodox`; the Go menu
+  everywhere. A remote path, or one with a name that is not text, is
+  edited with its scheme and `%` escapes, so Enter without changes stays
+  in the same folder.
 
 ### Changed
 
+- **The window's search box sits at the right of the title bar**, just
+  before the layout buttons, instead of alone in the middle.
 - **Protocol 1.0.0 and every `norte:*` WIT package at 1.0.0** — the
   beta's promise (ADR 0182). Nothing changes shape. From here a newer
   daemon serves every older 1.x client, and a plugin built against 1.x
@@ -36,6 +47,13 @@ independently through `PROTOCOL_VERSION`.
   still completes a verb or a key, but never picks a destination or a
   name for you: `:cp` Enter now says the destination is missing instead of
   completing it. `:sel ex` Enter runs the glob; Tab turns it into `ext:`.
+
+### Fixed
+
+- **The window's listing scrolls to the cursor.** Typing an initial, an
+  arrow past the edge, PgDn or End could leave the cursor on a row out of
+  view; the listing now follows it. A view you scrolled away with the
+  wheel stays put while a directory is still loading.
 
 ## [0.3.0-alpha.16] - 2026-10-16
 

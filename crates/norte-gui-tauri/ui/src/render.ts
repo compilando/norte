@@ -12,6 +12,7 @@
 import type {
   BrowserSlotView,
   HostCatalog,
+  PathEditView,
   SlotView,
   UiAction,
   ViewerView,
@@ -69,6 +70,18 @@ import * as places from "./render/places";
  * what GNOME and KDE use by default.
  */
 const DOUBLE_CLICK_MS = 400;
+
+/** Code points that end a line: LF, CR, NEL, LINE and PARAGRAPH SEPARATOR. */
+const LINE_ENDS = new Set([0x0a, 0x0d, 0x85, 0x2028, 0x2029]);
+
+/** `text` up to its first line break, as the terminal's paste keeps it. */
+function firstLine(text: string): string {
+  let end = 0;
+  while (end < text.length && !LINE_ENDS.has(text.charCodeAt(end))) {
+    end += 1;
+  }
+  return text.slice(0, end);
+}
 
 /*
  * The members are public for TypeScript's sake because `render/*`'s
@@ -1334,6 +1347,7 @@ export class Screen {
       slot.pruned_note ?? "",
       slot.hidden_note,
       slot.marked_note ?? "",
+      slot.path_edit?.revision ?? null,
     ]);
     if (!unchanged(dom.title, titleSignature)) {
       this.paintBrowserTitle(dom, slot);
@@ -1359,8 +1373,105 @@ export class Screen {
     this.paintBrowserRest(dom, slot, cell);
   }
 
+  /** The path line's `<input>`: its keys are its own, and the host decides
+   *  where Enter leads and what Tab completes. Copying is the field's own
+   *  Ctrl+C. */
+  pathEditInput(slotId: number, edit: PathEditView): HTMLInputElement {
+    const input = document.createElement("input");
+    input.className = "path-edit";
+    input.type = "text";
+    input.spellcheck = false;
+    input.autocomplete = "off";
+    input.dataset["rev"] = String(edit.revision);
+    input.value = edit.text;
+    input.setAttribute("aria-label", this.t("help-cmd-pane-edit-path"));
+    // The revision travels back: a late action from an `<input>` the host
+    // already replaced is ignored instead of closing its successor.
+    const line = { slot_id: slotId, revision: edit.revision };
+    let gone = false;
+    input.addEventListener("keydown", (e) => {
+      // EVERY key is the line's, as in the terminal: none reaches the
+      // keymap (Up would move the listing, F8 delete what is selected).
+      e.stopPropagation();
+      // Confirming an IME composition is not confirming the path.
+      if (e.isComposing || (e.key !== "Enter" && e.key !== "Escape" && e.key !== "Tab")) {
+        return;
+      }
+      e.preventDefault();
+      if (e.key === "Enter") {
+        this.send({ action: "path_edit_commit", ...line, text: input.value });
+      } else if (e.key === "Escape") {
+        gone = true;
+        this.send({ action: "path_edit_cancel", ...line });
+      } else {
+        this.send({
+          action: "path_edit_complete",
+          ...line,
+          text: input.value,
+          cursor: input.selectionStart ?? input.value.length,
+        });
+      }
+    });
+    input.addEventListener("paste", (e) => {
+      // Its first line only, as the terminal's: an `<input>` would join the
+      // lines into one path nobody wrote.
+      const pasted = e.clipboardData?.getData("text/plain");
+      if (pasted === undefined) {
+        return;
+      }
+      e.preventDefault();
+      const first = firstLine(pasted);
+      input.setRangeText(
+        first,
+        input.selectionStart ?? 0,
+        input.selectionEnd ?? 0,
+        "end",
+      );
+    });
+    input.addEventListener("blur", () => {
+      // A click elsewhere puts it away, as Escape does. Not the whole window
+      // losing focus, and not the host's own repaint removing it.
+      if (gone || !input.isConnected || !document.hasFocus()) {
+        return;
+      }
+      gone = true;
+      this.send({ action: "path_edit_cancel", ...line });
+    });
+    return input;
+  }
+
   /** The path with its breadcrumbs and the listing's notices, in the slot's title. */
   paintBrowserTitle(dom: SlotDom, slot: BrowserSlotView): void {
+    const edit = slot.path_edit ?? null;
+    if (edit !== null) {
+      // The path line (ADR 0190), in place of the breadcrumbs. Same
+      // revision: the reader is typing in it, so it stays, caret and all.
+      const old = dom.title.querySelector<HTMLInputElement>("input.path-edit");
+      if (old?.dataset["rev"] !== String(edit.revision)) {
+        const input = this.pathEditInput(slot.slot_id, edit);
+        dom.title.replaceChildren(input);
+        const place = (): void => {
+          input.focus();
+          if (edit.select_all) {
+            input.select();
+          } else {
+            input.setSelectionRange(edit.cursor, edit.cursor);
+          }
+        };
+        place();
+        if (document.activeElement !== input) {
+          // Only into an empty focus: a dialog's field that took it
+          // meanwhile keeps it.
+          requestAnimationFrame(() => {
+            const now = document.activeElement;
+            if (now === null || now === document.body) {
+              place();
+            }
+          });
+        }
+      }
+      return;
+    }
     const path = document.createElement("span");
     path.className = "title-path";
     // Cut from the LEFT: the current folder is the segment that must show.
@@ -1612,6 +1723,56 @@ export class Screen {
       dom.canvas.replaceChildren(emptyNode(this.t("listing-empty")));
       dom.rows.clear();
     }
+    this.followCursor(dom, slot, cell.h);
+  }
+
+  /**
+   * Scrolls the listing to a cursor that moved out of view. The host never
+   * moves the window — only `set_visible_range` does — so without this a
+   * key (an arrow, PgDn, an initial) left the cursor on an unpainted row.
+   *
+   * A batch that renumbered the listing (new generation, same directory)
+   * moves the cursor's INDEX, not the reader: a view the wheel scrolled
+   * away stays put. Another directory is always followed.
+   */
+  followCursor(dom: SlotDom, slot: BrowserSlotView, h: number): void {
+    const before = dom.followed;
+    if (before !== undefined && before.cursor === slot.cursor) {
+      return;
+    }
+    const s = dom.scroller;
+    const view = s.clientHeight;
+    const inView = (c: number | null): boolean =>
+      c !== null && c * h >= s.scrollTop && (c + 1) * h <= s.scrollTop + view;
+    const own =
+      before === undefined ||
+      before.generation === slot.generation ||
+      before.path !== slot.path_display ||
+      inView(before.cursor);
+    if (own && slot.cursor !== null) {
+      if (view === 0) {
+        // Not laid out yet: a `null` cursor asks again on the next paint.
+        dom.followed = {
+          cursor: null,
+          generation: slot.generation,
+          path: slot.path_display,
+        };
+        return;
+      }
+      const top = slot.cursor * h;
+      if (top < s.scrollTop) {
+        s.scrollTop = top;
+      } else if (top + h > s.scrollTop + view) {
+        s.scrollTop = top + h - view;
+      }
+      // The rows now in view come from the host; jsdom fires no `scroll`.
+      this.scheduleRange(slot.slot_id, dom);
+    }
+    dom.followed = {
+      cursor: slot.cursor,
+      generation: slot.generation,
+      path: slot.path_display,
+    };
   }
 
   /** In `render/menus.ts`. */

@@ -1485,11 +1485,13 @@ pub fn handle(app: &mut App, ev: MouseEvent) -> After {
 }
 
 /// The command bar: a press on its row gives it the keyboard; a press
-/// anywhere else takes the keyboard back to where the pointer went.
+/// anywhere else takes the keyboard back to where the pointer went. Any
+/// press puts the path line (ADR 0190) away, as Esc does.
 fn command_bar_press(app: &mut App, ev: MouseEvent) -> Option<After> {
     if !matches!(ev.kind, MouseEventKind::Down(_)) {
         return None;
     }
+    app.path_edit = None;
     let on_bar = app
         .last_frame
         .and_then(|f| crate::ui::command_bar_area(app, f))

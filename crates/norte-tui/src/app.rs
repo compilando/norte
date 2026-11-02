@@ -783,6 +783,9 @@ pub struct App {
     pub command_bar: norte_frontend::command_bar::CommandBar,
     /// The bar has the keyboard (`pane.command-line`).
     pub command_bar_focus: bool,
+    /// The focused pane's path being edited (`pane.edit-path`, ADR 0190).
+    /// It has the keyboard while it is open.
+    pub path_edit: Option<norte_frontend::path_edit::PathEdit>,
     /// Where the bar's history is saved; `None` = not saved (tests).
     pub command_history_path: Option<std::path::PathBuf>,
     /// A bar order for the run loop to start in the terminal panel.
@@ -1518,6 +1521,7 @@ impl App {
             pending_context_verb: None,
             command_bar: norte_frontend::command_bar::CommandBar::default(),
             command_bar_focus: false,
+            path_edit: None,
             command_history_path: None,
             pending_order: None,
             pending_disk_map_enter: None,

@@ -64,6 +64,7 @@ mod palette;
 mod panel;
 mod panelplugin;
 mod patches;
+mod path_edit;
 mod places;
 mod preview;
 mod profiles;
@@ -2802,6 +2803,13 @@ struct State {
     command_bar: norte_frontend::command_bar::CommandBar,
     /// The bar has the keyboard.
     command_bar_focus: bool,
+    /// The path line, if a slot's path is being edited (ADR 0190).
+    path_edit: Option<path_edit::Open>,
+    /// What the path line sent to a navigation still in flight: the slot,
+    /// its token and the text, given back if that listing fails.
+    path_edit_retry: Option<(u32, RequestToken, String)>,
+    /// The path line's last revision (`PathEditView::revision`).
+    path_edit_revision: u32,
     /// Where the bar's history is saved; `None` = not saved.
     command_history_path: Option<std::path::PathBuf>,
     /// The bar as it last crossed the bridge, to republish only changes.
@@ -3511,6 +3519,9 @@ impl State {
                     .unwrap_or_default(),
             ),
             command_bar_focus: false,
+            path_edit: None,
+            path_edit_retry: None,
+            path_edit_revision: 0,
             command_history_path: norte_config::command_history::path(),
             last_command_bar: None,
             help: None,
@@ -4187,6 +4198,20 @@ impl State {
             UiAction::ContextMenuClose => self.close_context_menu(),
             UiAction::CommandBarFocus => self.focus_command_bar(),
             UiAction::CommandBarPaste { text } => self.paste_in_command_bar(text),
+            UiAction::PathEditCommit {
+                slot_id,
+                revision,
+                text,
+            } => self.commit_path_edit((*slot_id, *revision), text, backend, mailbox),
+            UiAction::PathEditCancel { slot_id, revision } => {
+                self.cancel_path_edit((*slot_id, *revision))
+            }
+            UiAction::PathEditComplete {
+                slot_id,
+                revision,
+                text,
+                cursor,
+            } => self.complete_path_edit((*slot_id, *revision), text, *cursor),
             UiAction::OverlayDismiss => self.dismiss_overlay(backend, mailbox),
             UiAction::ContextMenuActivateRow { row } => {
                 self.activate_context_menu(*row, backend, mailbox)

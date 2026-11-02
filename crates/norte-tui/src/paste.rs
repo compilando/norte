@@ -74,7 +74,13 @@ pub fn route_paste(app: &mut App, text: &str) {
     let (first_line, discarded) = first_pasted_line(text);
     let first_line = first_line.as_str();
 
-    let outcome = if app.command_bar_focus && app.context_menu.is_none() && !modal_wins(app) {
+    let line_keys = crate::path_edit::has_keys(app);
+    let outcome = if let Some(edit) = app.path_edit.as_mut().filter(|_| line_keys) {
+        // The path line owns the keys first (see `keys.rs`), and its model
+        // drops control characters itself.
+        edit.insert(first_line);
+        PasteOutcome::Inserted
+    } else if app.command_bar_focus && app.context_menu.is_none() && !modal_wins(app) {
         // The bar owns the keys first (see `keys.rs`); the model drops
         // control characters itself.
         app.command_bar.insert(first_line);

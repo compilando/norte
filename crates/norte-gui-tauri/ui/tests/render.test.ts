@@ -1221,6 +1221,57 @@ describe("Screen", () => {
     }
   });
 
+  // The host never moves the listing's window: only the renderer scrolls.
+  // A cursor moved by a key (an arrow, PgDn, typing an initial) to a row
+  // out of view stayed there, unpainted.
+  it("a cursor moved out of view scrolls the listing to it", () => {
+    const { screen, root } = mount();
+    screen.paint(view({ total_rows: 1000 }));
+    const scroller = root.querySelector(".scroller") as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", {
+      value: 10 * CELL_H,
+      configurable: true,
+    });
+    screen.paint(view({ total_rows: 1000, cursor: 50 }));
+    expect(scroller.scrollTop).toBe(51 * CELL_H - 10 * CELL_H);
+    screen.paint(view({ total_rows: 1000, cursor: 10 }));
+    expect(scroller.scrollTop).toBe(10 * CELL_H);
+    // Inside the view: nothing moves.
+    screen.paint(view({ total_rows: 1000, cursor: 12 }));
+    expect(scroller.scrollTop).toBe(10 * CELL_H);
+  });
+
+  it("a batch that renumbers the cursor leaves a wheel-scrolled listing alone", () => {
+    const { screen, root } = mount();
+    screen.paint(view({ total_rows: 1000, cursor: 3 }));
+    const scroller = root.querySelector(".scroller") as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", {
+      value: 10 * CELL_H,
+      configurable: true,
+    });
+    scroller.scrollTop = 500 * CELL_H;
+    screen.paint(view({ total_rows: 1000, cursor: 5, generation: 2 }));
+    expect(scroller.scrollTop).toBe(500 * CELL_H);
+    // The reader's own move (same numbering) is followed.
+    screen.paint(view({ total_rows: 1000, cursor: 6, generation: 2 }));
+    expect(scroller.scrollTop).toBe(6 * CELL_H);
+  });
+
+  it("another directory reveals its cursor even from a scrolled-away view", () => {
+    const { screen, root } = mount();
+    screen.paint(view({ total_rows: 1000, cursor: 3 }));
+    const scroller = root.querySelector(".scroller") as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", {
+      value: 10 * CELL_H,
+      configurable: true,
+    });
+    scroller.scrollTop = 500 * CELL_H;
+    screen.paint(
+      view({ total_rows: 1000, cursor: 300, generation: 2, path_display: "⟨file⟩/" }),
+    );
+    expect(scroller.scrollTop).toBe(300 * CELL_H);
+  });
+
   it("the status bar is announced without stealing focus", () => {
     const { screen, root } = mount();
     screen.paint(view({}));
@@ -1652,6 +1703,93 @@ describe("the header", () => {
     const cols = root.querySelectorAll(".slot-columns .col");
     expect(cols[0]?.querySelector(".col-grip")).toBeNull();
     expect(cols[1]?.querySelector(".col-grip")).toBeNull();
+  });
+});
+
+describe("the path line (ADR 0190)", () => {
+  const editing = (revision: number, text = "/home/oscar", marked_note = "") =>
+    view({
+      path_segments: ["⟨file⟩", "home", "oscar"],
+      path_display: "⟨file⟩/home/oscar",
+      marked_note,
+      path_edit: { text, select_all: true, cursor: text.length, revision },
+    });
+
+  it("replaces the breadcrumbs with a focused input, all of it selected", () => {
+    const { screen, root } = mount();
+    screen.paint(editing(1));
+    const input = root.querySelector<HTMLInputElement>("input.path-edit");
+    expect(input?.value).toBe("/home/oscar");
+    expect(root.querySelector(".crumb")).toBeNull();
+    expect(document.activeElement).toBe(input);
+    expect([input?.selectionStart, input?.selectionEnd]).toEqual([0, 11]);
+  });
+
+  it("Enter, Escape and Tab go to the host with the whole text", () => {
+    const { screen, sent, root } = mount();
+    screen.paint(editing(1));
+    const input = root.querySelector<HTMLInputElement>("input.path-edit");
+    if (input === null) {
+      throw new Error("no input");
+    }
+    input.value = "/srv/w";
+    input.setSelectionRange(6, 6);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(sent.at(-1)).toEqual({
+      action: "path_edit_complete",
+      slot_id: 1,
+      revision: 1,
+      text: "/srv/w",
+      cursor: 6,
+    });
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(sent.at(-1)).toEqual({
+      action: "path_edit_commit",
+      slot_id: 1,
+      revision: 1,
+      text: "/srv/w",
+    });
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(sent.at(-1)).toEqual({ action: "path_edit_cancel", slot_id: 1, revision: 1 });
+  });
+
+  it("no key reaches the keymap, and an IME's Enter commits nothing", () => {
+    const { screen, sent, root } = mount();
+    screen.paint(editing(1));
+    const input = root.querySelector<HTMLInputElement>("input.path-edit");
+    if (input === null) {
+      throw new Error("no input");
+    }
+    let reached = 0;
+    document.addEventListener("keydown", () => (reached += 1));
+    const before = sent.length;
+    for (const key of ["ArrowDown", "F8", "Insert"]) {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    }
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: true }),
+    );
+    expect(reached).toBe(0);
+    expect(sent.length).toBe(before);
+  });
+
+  it("keeps what is being typed across a repaint of the same revision", () => {
+    const { screen, root } = mount();
+    screen.paint(editing(1));
+    const input = root.querySelector<HTMLInputElement>("input.path-edit");
+    if (input === null) {
+      throw new Error("no input");
+    }
+    input.value = "/home/osc";
+    // The title repaints (a mark changed) with the same revision.
+    screen.paint(editing(1, "/home/oscar", "1 marked"));
+    expect(root.querySelector("input.path-edit")).toBe(input);
+    expect(input.value).toBe("/home/osc");
+    // A new revision (a completion) replaces it with the host's text.
+    screen.paint(editing(2, "/home/oscar/docs/"));
+    expect(root.querySelector<HTMLInputElement>("input.path-edit")?.value).toBe(
+      "/home/oscar/docs/",
+    );
   });
 });
 
