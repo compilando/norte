@@ -183,7 +183,19 @@ pub(super) async fn drain_sync(
     let mut terminal = None;
     let mut progress = None;
     loop {
-        let next = tokio::time::timeout(Duration::from_secs(10), c.notification()).await;
+        // Terminal AND close seen: nothing else belongs to this plan. Draining
+        // on until 10 s of silence made every plan cost 10 s of wall clock.
+        if terminal.is_some() && done.is_some() {
+            break;
+        }
+        // Terminal without a close: the close can still come behind it (a
+        // failed plan sends none), so a short grace instead of the long wait.
+        let wait = if terminal.is_some() {
+            Duration::from_secs(2)
+        } else {
+            Duration::from_secs(10)
+        };
+        let next = tokio::time::timeout(wait, c.notification()).await;
         let n = match next {
             Ok(Some(n)) => n,
             Ok(None) => break,
@@ -223,8 +235,7 @@ pub(super) async fn drain_sync(
                 assert!(p.current.is_none(), "no path in the broadcast");
                 progress = Some(p.entries_done);
                 terminal = Some(p.state);
-                // The close can come AFTER the terminal: draining continues
-                // until the short timeout above says nothing is left.
+                // The close can come AFTER the terminal: see the grace above.
             }
         }
     }

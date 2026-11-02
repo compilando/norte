@@ -7,6 +7,10 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 authors.workspace = true
+# Integration tests are declared, not discovered: most live in ONE binary,
+# `tests/it.rs` (62 binaries each linking the TUI and the core were most of
+# its test-build cost). See `tests/it.rs` for which keep their own.
+autotests = false
 
 # The binary is called `ntc` (norte commander): that is what gets typed daily
 # and nobody types `norte-tui` twice a day. The CRATE keeps its name —
@@ -166,6 +170,24 @@ schema = ["dep:schemars", "norte-config/schema", "norte-frontend/schema"]
 [[test]]
 name = "schema"
 required-features = ["schema"]
+
+[[test]]
+name = "it"
+path = "tests/it.rs"
+
+# The insta suites: their `.snap` files are named after the module path,
+# which `it` would change. See `tests/it.rs`.
+[[test]]
+name = "layout_anchor"
+
+[[test]]
+name = "places"
+
+[[test]]
+name = "searchpanel"
+
+[[test]]
+name = "snapshots_ui"
 
 [lints]
 workspace = true

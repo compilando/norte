@@ -37,8 +37,7 @@ use norte_core::{Actor, Engine};
 use norte_proto::{CollisionPolicy, ConflictKind, Error, TaskState, VPath};
 use norte_vfs::Provider;
 
-mod origin_on_request;
-use origin_on_request::{Command, OnRequestSource};
+use crate::origin_on_request::{Command, OnRequestSource};
 
 fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("valid wire")
