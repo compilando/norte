@@ -1221,6 +1221,57 @@ describe("Screen", () => {
     }
   });
 
+  // The host never moves the listing's window: only the renderer scrolls.
+  // A cursor moved by a key (an arrow, PgDn, typing an initial) to a row
+  // out of view stayed there, unpainted.
+  it("a cursor moved out of view scrolls the listing to it", () => {
+    const { screen, root } = mount();
+    screen.paint(view({ total_rows: 1000 }));
+    const scroller = root.querySelector(".scroller") as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", {
+      value: 10 * CELL_H,
+      configurable: true,
+    });
+    screen.paint(view({ total_rows: 1000, cursor: 50 }));
+    expect(scroller.scrollTop).toBe(51 * CELL_H - 10 * CELL_H);
+    screen.paint(view({ total_rows: 1000, cursor: 10 }));
+    expect(scroller.scrollTop).toBe(10 * CELL_H);
+    // Inside the view: nothing moves.
+    screen.paint(view({ total_rows: 1000, cursor: 12 }));
+    expect(scroller.scrollTop).toBe(10 * CELL_H);
+  });
+
+  it("a batch that renumbers the cursor leaves a wheel-scrolled listing alone", () => {
+    const { screen, root } = mount();
+    screen.paint(view({ total_rows: 1000, cursor: 3 }));
+    const scroller = root.querySelector(".scroller") as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", {
+      value: 10 * CELL_H,
+      configurable: true,
+    });
+    scroller.scrollTop = 500 * CELL_H;
+    screen.paint(view({ total_rows: 1000, cursor: 5, generation: 2 }));
+    expect(scroller.scrollTop).toBe(500 * CELL_H);
+    // The reader's own move (same numbering) is followed.
+    screen.paint(view({ total_rows: 1000, cursor: 6, generation: 2 }));
+    expect(scroller.scrollTop).toBe(6 * CELL_H);
+  });
+
+  it("another directory reveals its cursor even from a scrolled-away view", () => {
+    const { screen, root } = mount();
+    screen.paint(view({ total_rows: 1000, cursor: 3 }));
+    const scroller = root.querySelector(".scroller") as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", {
+      value: 10 * CELL_H,
+      configurable: true,
+    });
+    scroller.scrollTop = 500 * CELL_H;
+    screen.paint(
+      view({ total_rows: 1000, cursor: 300, generation: 2, path_display: "⟨file⟩/" }),
+    );
+    expect(scroller.scrollTop).toBe(300 * CELL_H);
+  });
+
   it("the status bar is announced without stealing focus", () => {
     const { screen, root } = mount();
     screen.paint(view({}));

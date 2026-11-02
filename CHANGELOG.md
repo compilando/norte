@@ -48,6 +48,13 @@ independently through `PROTOCOL_VERSION`.
   name for you: `:cp` Enter now says the destination is missing instead of
   completing it. `:sel ex` Enter runs the glob; Tab turns it into `ext:`.
 
+### Fixed
+
+- **The window's listing scrolls to the cursor.** Typing an initial, an
+  arrow past the edge, PgDn or End could leave the cursor on a row out of
+  view; the listing now follows it. A view you scrolled away with the
+  wheel stays put while a directory is still loading.
+
 ## [0.3.0-alpha.16] - 2026-10-16
 
 ### Added

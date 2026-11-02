@@ -1723,6 +1723,56 @@ export class Screen {
       dom.canvas.replaceChildren(emptyNode(this.t("listing-empty")));
       dom.rows.clear();
     }
+    this.followCursor(dom, slot, cell.h);
+  }
+
+  /**
+   * Scrolls the listing to a cursor that moved out of view. The host never
+   * moves the window — only `set_visible_range` does — so without this a
+   * key (an arrow, PgDn, an initial) left the cursor on an unpainted row.
+   *
+   * A batch that renumbered the listing (new generation, same directory)
+   * moves the cursor's INDEX, not the reader: a view the wheel scrolled
+   * away stays put. Another directory is always followed.
+   */
+  followCursor(dom: SlotDom, slot: BrowserSlotView, h: number): void {
+    const before = dom.followed;
+    if (before !== undefined && before.cursor === slot.cursor) {
+      return;
+    }
+    const s = dom.scroller;
+    const view = s.clientHeight;
+    const inView = (c: number | null): boolean =>
+      c !== null && c * h >= s.scrollTop && (c + 1) * h <= s.scrollTop + view;
+    const own =
+      before === undefined ||
+      before.generation === slot.generation ||
+      before.path !== slot.path_display ||
+      inView(before.cursor);
+    if (own && slot.cursor !== null) {
+      if (view === 0) {
+        // Not laid out yet: a `null` cursor asks again on the next paint.
+        dom.followed = {
+          cursor: null,
+          generation: slot.generation,
+          path: slot.path_display,
+        };
+        return;
+      }
+      const top = slot.cursor * h;
+      if (top < s.scrollTop) {
+        s.scrollTop = top;
+      } else if (top + h > s.scrollTop + view) {
+        s.scrollTop = top + h - view;
+      }
+      // The rows now in view come from the host; jsdom fires no `scroll`.
+      this.scheduleRange(slot.slot_id, dom);
+    }
+    dom.followed = {
+      cursor: slot.cursor,
+      generation: slot.generation,
+      path: slot.path_display,
+    };
   }
 
   /** In `render/menus.ts`. */

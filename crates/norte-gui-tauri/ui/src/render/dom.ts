@@ -267,6 +267,8 @@ export interface SlotDom {
    * change arrives, so the same object is the same slot.
    */
   painted?: { slot: unknown; size: string };
+  /** The listing's cursor last followed, with the numbering and place it had. */
+  followed?: { cursor: number | null; generation: number; path: string };
 }
 
 /**
