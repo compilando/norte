@@ -49,7 +49,7 @@ impl russh::server::Handler for ServerHandler {
     async fn auth_publickey(
         &mut self,
         user: &str,
-        public_key: &PublicKey,
+        key: russh::server::VerifiedPublicKey<'_>,
     ) -> Result<Auth, Self::Error> {
         // By `key_data` and not by `PublicKey`: its `==` includes the
         // COMMENT, which the RSA fixture carries and the key received over
@@ -57,7 +57,7 @@ impl russh::server::Handler for ServerHandler {
         let authorized = self
             .allowed_pubkey
             .as_ref()
-            .is_some_and(|k| k.key_data() == public_key.key_data());
+            .is_some_and(|k| k.key_data() == key.public_key.key_data());
         Ok(if user == USER && authorized {
             Auth::Accept
         } else {
